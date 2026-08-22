@@ -1,0 +1,20 @@
+[project]
+name = "kimi-science"
+version = "0.1.0"
+description = "开源科学Agent平台 Python kernel 与实验室模块"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+[tool.pytest.ini_options]
+pythonpath = ["backend/src"]
+addopts = "--import-mode=importlib"
+
+[tool.uv]
+package = true
+
+[dependencies]
+numpy = ">=1.26"
+pandas = ">=2.0"
+jupyter-client = ">=8.0"
+ipykernel = ">=6.29"
+rdkit = ">=2023.9"
