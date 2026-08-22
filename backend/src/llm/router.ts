@@ -71,7 +71,13 @@ export class LLMRouter {
     if (openrouter) {
       return this.callOpenRouter(messages, model, openrouter);
     }
-    return this.mockResponse(provider, model, messages);
+    return {
+      ok: false,
+      provider,
+      model,
+      content: `[error] No API key configured. Set KIMI_API_KEY or OPENROUTER_API_KEY, or use 'kimi-science auth' to configure.`,
+      mock: false,
+    };
   }
 
   private async callOpenRouter(
@@ -123,18 +129,6 @@ export class LLMRouter {
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content ?? "";
     return { ok: true, provider: "kimi", model, content: String(content), mock: false };
-  }
-
-  private mockResponse(provider: Provider, model: string, messages: ChatMessage[]): LlmResponse {
-    const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    const preview = lastUser.slice(0, 120);
-    return {
-      ok: true,
-      provider,
-      model,
-      content: `[mock:${model}] received ${messages.length} message(s). ${preview}`,
-      mock: true,
-    };
   }
 
   listModels(): Record<Provider, readonly string[]> {

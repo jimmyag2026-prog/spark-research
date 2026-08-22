@@ -11,9 +11,16 @@ import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src
 const mockLlm = {
   call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: `[mock:${model}] ${lastUser.slice(0, 120)}`, mock: true };
+    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, mock: false };
   },
-  listModels: () => ({ kimi: [LLMRouter.DEFAULT_MODEL] }),
+  listModels: () => ({
+    kimi: [LLMRouter.DEFAULT_MODEL],
+    openai: [],
+    anthropic: [],
+    deepseek: [],
+    qwen: [],
+    openrouter: [],
+  }),
 };
 
 function createOrchestrator(deps: Omit<OrchestratorDeps, "store" | "executionLog" | "graph"> = {}): {
@@ -102,12 +109,12 @@ describe("SubAgentFactory", () => {
 });
 
 describe("LLMRouter", () => {
-  test("无 KIMI_API_KEY 时返回 mock 响应（不发起网络请求）", async () => {
+  test("无 API Key 时返回错误提示", async () => {
     const original = globalThis.fetch;
     let fetchCalled = false;
     globalThis.fetch = (async () => {
       fetchCalled = true;
-      throw new Error("should not call network in mock mode");
+      throw new Error("should not call network without API key");
     }) as unknown as typeof fetch;
     try {
       const router = new LLMRouter({});
@@ -115,11 +122,8 @@ describe("LLMRouter", () => {
         { role: "system", content: "sys" },
         { role: "user", content: "hello world" },
       ]);
-      expect(res.mock).toBe(true);
-      expect(res.ok).toBe(true);
-      expect(res.provider).toBe("openrouter");
-      expect(res.model).toBe(LLMRouter.DEFAULT_MODEL);
-      expect(res.content).toContain("hello world");
+      expect(res.ok).toBe(false);
+      expect(res.content).toContain("No API key configured");
       expect(fetchCalled).toBe(false);
     } finally {
       globalThis.fetch = original;

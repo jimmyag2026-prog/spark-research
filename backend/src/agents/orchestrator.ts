@@ -280,18 +280,30 @@ export class OrchestratorAgent {
           }
         }
         case "connector": {
-          const res = await this.daemon.dispatch("mcp_call", {
-            server: String(task.params?.server ?? "pubmed"),
-            tool: String(task.params?.tool ?? "search"),
-            args: task.params?.args ?? {},
-          });
-          this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
-          return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };
+          try {
+            const res = await this.daemon.dispatch("mcp_call", {
+              server: String(task.params?.server ?? "pubmed"),
+              tool: String(task.params?.tool ?? "search"),
+              args: task.params?.args ?? {},
+            });
+            this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
+            return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.record(sessionId, "connector", "error", msg);
+            return { taskId: task.id, kind: task.kind, ok: false, output: `[connector error: ${msg}]` };
+          }
         }
         case "compute": {
-          const job = await this.daemon.compute.submit(task.params ?? {});
-          this.record(sessionId, "compute", "submit", job.id);
-          return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(job) };
+          try {
+            const job = await this.daemon.compute.submit(task.params ?? {});
+            this.record(sessionId, "compute", "submit", job.id);
+            return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(job) };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            this.record(sessionId, "compute", "error", msg);
+            return { taskId: task.id, kind: task.kind, ok: false, output: `[compute error: ${msg}]` };
+          }
         }
         case "subagent": {
           const type = (task.params?.subagent ?? "execute") as SubAgentType;

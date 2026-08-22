@@ -21,7 +21,7 @@ function resolvePython(): string {
 }
 
 export class PythonKernel {
-  private proc: Subprocess | null = null;
+  private proc: import("bun").Subprocess | null = null;
   private python: string;
   private buffer = "";
   private waiters: ((line: string) => void)[] = [];
@@ -50,7 +50,10 @@ export class PythonKernel {
 
   private startReader() {
     (async () => {
-      for await (const chunk of this.proc!.stdout) {
+      if (!this.proc) return;
+      const stdout = this.proc.stdout;
+      if (typeof stdout === "number" || !stdout) return;
+      for await (const chunk of stdout) {
         this.buffer += Buffer.from(chunk).toString();
         let idx: number;
         while ((idx = this.buffer.indexOf("\n")) >= 0) {
@@ -65,9 +68,12 @@ export class PythonKernel {
   async execute(code: string): Promise<KernelResult> {
     if (this.closed) throw new Error("PythonKernel: process exited");
     this.ensureProc();
+    if (!this.proc) throw new Error("PythonKernel: process not started");
+    const stdin = this.proc.stdin;
+    if (typeof stdin === "number" || !stdin) throw new Error("PythonKernel: stdin not available");
     const linePromise = new Promise<string>((resolve) => this.waiters.push(resolve));
-    this.proc!.stdin.write(JSON.stringify({ type: "execute", code }) + "\n");
-    this.proc!.stdin.flush();
+    stdin.write(JSON.stringify({ type: "execute", code }) + "\n");
+    stdin.flush();
     const line = await linePromise;
     if (!line) throw new Error("PythonKernel: process exited without response");
     const parsed = JSON.parse(line);
@@ -83,8 +89,11 @@ export class PythonKernel {
   dispose() {
     if (!this.proc) return;
     try {
-      this.proc.stdin.write(JSON.stringify({ type: "shutdown" }) + "\n");
-      this.proc.stdin.flush();
+      const stdin = this.proc.stdin;
+      if (typeof stdin !== "number" && stdin) {
+        stdin.write(JSON.stringify({ type: "shutdown" }) + "\n");
+        stdin.flush();
+      }
     } catch {}
     this.proc.kill();
     this.proc = null;

@@ -46,11 +46,11 @@ export class PermissionDeniedError extends Error {
 }
 
 export class PermissionManager {
-  getPermitSet(kernelType: string): string[] {
+  getPermitSet(kernelType: string): readonly string[] {
     const key = (KERNEL_TYPE_TO_PERMIT[kernelType] ?? kernelType) as keyof typeof PERMIT_SETS;
     const set = PERMIT_SETS[key];
     if (!set) throw new Error(`Unknown kernel type: '${kernelType}'`);
-    return [...set];
+    return set;
   }
 
   hasPermission(kernelType: string, method: string): boolean {

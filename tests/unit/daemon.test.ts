@@ -19,25 +19,25 @@ afterAll(() => {
 describe("PermissionManager.getPermitSet", () => {
   test("control_repl 允许 mcp_call / create_agent 等控制方法", () => {
     const pm = new PermissionManager();
-    expect(pm.getPermitSet("control_repl")).toEqual(PERMIT_SETS.control_repl);
+    expect([...pm.getPermitSet("control_repl")]).toEqual([...PERMIT_SETS.control_repl]);
     expect(pm.getPermitSet("control_repl")).toContain("mcp_call");
   });
 
   test("python_kernel 不允许 mcp_call", () => {
     const pm = new PermissionManager();
-    expect(pm.getPermitSet("python_kernel")).toEqual(PERMIT_SETS.python_kernel);
+    expect([...pm.getPermitSet("python_kernel")]).toEqual([...PERMIT_SETS.python_kernel]);
     expect(pm.getPermitSet("python_kernel")).not.toContain("mcp_call");
   });
 
   test("r_kernel 与 python_kernel 同权限", () => {
     const pm = new PermissionManager();
-    expect(pm.getPermitSet("r_kernel")).toEqual(pm.getPermitSet("python_kernel"));
+    expect([...pm.getPermitSet("r_kernel")]).toEqual([...pm.getPermitSet("python_kernel")]);
   });
 
   test("kernel 类型 python/r 映射到对应 permit set", () => {
     const pm = new PermissionManager();
-    expect(pm.getPermitSet("python")).toEqual(PERMIT_SETS.python_kernel);
-    expect(pm.getPermitSet("r")).toEqual(PERMIT_SETS.r_kernel);
+    expect([...pm.getPermitSet("python")]).toEqual([...PERMIT_SETS.python_kernel]);
+    expect([...pm.getPermitSet("r")]).toEqual([...PERMIT_SETS.r_kernel]);
   });
 });
 

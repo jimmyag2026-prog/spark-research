@@ -7,9 +7,16 @@ import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src
 const mockLlm = {
   call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: `[mock:${model}] ${lastUser.slice(0, 120)}`, mock: true };
+    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, mock: false };
   },
-  listModels: () => ({ kimi: [LLMRouter.DEFAULT_MODEL] }),
+  listModels: () => ({
+    kimi: [LLMRouter.DEFAULT_MODEL],
+    openai: [],
+    anthropic: [],
+    deepseek: [],
+    qwen: [],
+    openrouter: [],
+  }),
 };
 
 describe("Kimi Science HTTP server", () => {
