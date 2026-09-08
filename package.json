@@ -1,15 +1,15 @@
 {
-  "name": "kimi-science",
+  "name": "spark-research",
   "version": "0.1.0",
   "description": "开源科学Agent平台：干湿闭环 + 自动化实验室，对标 Claude Science",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "kimi-science": "backend/src/index.ts"
+    "spark-research": "backend/src/index.ts"
   },
   "scripts": {
     "dev": "bun --watch backend/src/index.ts",
-    "build": "bun build backend/src/index.ts --compile --outfile dist/kimi-science",
+    "build": "bun build backend/src/index.ts --compile --outfile dist/spark-research",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",

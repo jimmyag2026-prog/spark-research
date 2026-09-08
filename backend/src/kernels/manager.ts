@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { join } from "path";
-import type { KimiScienceDaemon } from "../daemon/daemon";
+import type { SparkResearchDaemon } from "../daemon/daemon";
 import { ControlRepl } from "./control_repl";
 
 export type KernelType = "python" | "r" | "control_repl";
@@ -14,7 +14,7 @@ export interface KernelResult {
 }
 
 function resolvePython(): string {
-  const env = process.env.KIMI_PYTHON;
+  const env = process.env.SPARK_PYTHON;
   if (env) return env;
   const venv = join(import.meta.dir, "../../../.venv/bin/python");
   return existsSync(venv) ? venv : "python3";
@@ -109,9 +109,9 @@ interface KernelHandle {
 export class KernelManager {
   private kernels = new Map<string, KernelHandle>();
   private seq = 0;
-  private daemon: KimiScienceDaemon | null = null;
+  private daemon: SparkResearchDaemon | null = null;
 
-  setDaemon(daemon: KimiScienceDaemon) {
+  setDaemon(daemon: SparkResearchDaemon) {
     this.daemon = daemon;
   }
 

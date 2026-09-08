@@ -15,7 +15,7 @@ export function startServer(port = 4321, deps: ServerDeps = {}): StartedServer {
   });
   const actualPort = server.port ?? 0;
   const url = `http://127.0.0.1:${actualPort}`;
-  console.log(`Kimi Science server listening at ${url}`);
+  console.log(`Spark Research server listening at ${url}`);
   console.log("Press Ctrl+C to stop");
   return {
     server,

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { KimiScienceDaemon } from "../daemon/daemon";
+import type { SparkResearchDaemon } from "../daemon/daemon";
 import type { ArtifactStore } from "../artifacts/store";
 import { LineageGraph } from "../artifacts/lineage";
 import type { ExecutionRecord } from "../artifacts/models";
@@ -116,7 +116,7 @@ function normalizeTask(raw: unknown, index: number): PlannedTask | null {
 }
 
 export class OrchestratorAgent {
-  readonly daemon: KimiScienceDaemon;
+  readonly daemon: SparkResearchDaemon;
   readonly workspaceRoot: string;
 
   private llm: Pick<LLMRouter, "call" | "listModels">;
@@ -130,7 +130,7 @@ export class OrchestratorAgent {
   private researchPrompt: string;
   private seq = 0;
 
-  constructor(daemon: KimiScienceDaemon, deps: OrchestratorDeps = {}) {
+  constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
     this.daemon = daemon;
     this.llm = deps.llm ?? new LLMRouter();
     this.subAgents = deps.subAgents ?? new SubAgentFactory();

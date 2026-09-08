@@ -11,7 +11,7 @@ import type { ExecutionRecord } from "../../backend/src/artifacts/models.ts";
 const SESSION = "s1";
 
 function makeStore(): { store: ArtifactStore; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), "kimi-reviewer-"));
+  const dir = mkdtempSync(join(tmpdir(), "spark-reviewer-"));
   const store = new ArtifactStore(join(dir, "artifacts.db"), join(dir, "storage"));
   return { store, dir };
 }

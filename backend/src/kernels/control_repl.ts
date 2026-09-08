@@ -1,4 +1,4 @@
-import type { KimiScienceDaemon } from "../daemon/daemon";
+import type { SparkResearchDaemon } from "../daemon/daemon";
 
 export const ALLOWED_MODULES = ["json", "os", "sys", "pathlib", "datetime", "uuid"] as const;
 
@@ -17,10 +17,10 @@ const MODULE_STUBS: Record<string, unknown> = {
 };
 
 export class ControlRepl {
-  private daemon: KimiScienceDaemon;
+  private daemon: SparkResearchDaemon;
   private kernelId: string;
 
-  constructor(daemon: KimiScienceDaemon, kernelId: string) {
+  constructor(daemon: SparkResearchDaemon, kernelId: string) {
     this.daemon = daemon;
     this.kernelId = kernelId;
   }

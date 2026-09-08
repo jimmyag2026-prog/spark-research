@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { KimiScienceDaemon } from "../../backend/src/daemon/daemon";
+import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import {
   OrchestratorAgent,
   type OrchestratorDeps,
@@ -24,10 +24,10 @@ const mockLlm = {
 };
 
 function createOrchestrator(deps: Omit<OrchestratorDeps, "store" | "executionLog" | "graph"> = {}): {
-  daemon: KimiScienceDaemon;
+  daemon: SparkResearchDaemon;
   orch: OrchestratorAgent;
 } {
-  const daemon = new KimiScienceDaemon();
+  const daemon = new SparkResearchDaemon();
   const orch = new OrchestratorAgent(daemon, { llm: mockLlm, ...deps });
   return { daemon, orch };
 }

@@ -11,7 +11,7 @@ describe("ArtifactStore", () => {
   let store: ArtifactStore;
 
   beforeAll(() => {
-    dir = mkdtempSync(join(tmpdir(), "kimi-artifacts-"));
+    dir = mkdtempSync(join(tmpdir(), "spark-artifacts-"));
     store = new ArtifactStore(join(dir, "artifacts.db"), join(dir, "storage"));
   });
 

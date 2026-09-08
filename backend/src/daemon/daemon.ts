@@ -141,7 +141,7 @@ class DefaultLLM implements LlmService {
   }
 }
 
-export class KimiScienceDaemon {
+export class SparkResearchDaemon {
   readonly permissions: PermissionManager;
   readonly artifacts: ArtifactStore;
   readonly lineage: LineageStore;

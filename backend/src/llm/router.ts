@@ -75,7 +75,7 @@ export class LLMRouter {
       ok: false,
       provider,
       model,
-      content: `[error] No API key configured. Set KIMI_API_KEY or OPENROUTER_API_KEY, or use 'kimi-science auth' to configure.`,
+      content: `[error] No API key configured. Set KIMI_API_KEY or OPENROUTER_API_KEY, or use 'spark-research auth' to configure.`,
       mock: false,
     };
   }
@@ -90,8 +90,8 @@ export class LLMRouter {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
-        "HTTP-Referer": "https://kimi-science.local",
-        "X-Title": "Kimi Science",
+        "HTTP-Referer": "https://spark-research.local",
+        "X-Title": "Spark Research",
       },
       body: JSON.stringify({ model, messages, temperature: 0.2 }),
     });

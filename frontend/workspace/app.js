@@ -10,8 +10,8 @@ const API = {
   protocol: "/api/lab/protocol",
 };
 
-const SESSIONS_CACHE = "kimi-science.sessions";
-const ACTIVE_CACHE = "kimi-science.active";
+const SESSIONS_CACHE = "spark-research.sessions";
+const ACTIVE_CACHE = "spark-research.active";
 
 let currentSessionId = null;
 

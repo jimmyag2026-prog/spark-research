@@ -3,27 +3,27 @@ import { join } from "path";
 import { createInterface } from "readline";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { KimiScienceDaemon } from "./daemon/daemon";
+import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
 import { OrchestratorAgent } from "./agents/orchestrator";
 import { startServer } from "./server/server";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
-const HELP = `Kimi Science v${pkg.version}
+const HELP = `Spark Research v${pkg.version}
 开源科学 Agent 平台：干湿闭环 + 自动化实验室
 
 用法:
-  kimi-science             交互式 CLI（类似 opencode）
-  kimi-science auth        配置 API Key
-  kimi-science info        模块状态与权限矩阵
-  kimi-science ping        健康检查
-  kimi-science server      启动 Web 服务（默认 4321）
-  kimi-science chat <msg>  单次对话
-  kimi-science help        显示本帮助
+  spark-research             交互式 CLI（类似 opencode）
+  spark-research auth        配置 API Key
+  spark-research info        模块状态与权限矩阵
+  spark-research ping        健康检查
+  spark-research server      启动 Web 服务（默认 4321）
+  spark-research chat <msg>  单次对话
+  spark-research help        显示本帮助
 `;
 
-const CONFIG_DIR = join(homedir(), ".kimi-science");
+const CONFIG_DIR = join(homedir(), ".spark-research");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 interface Config {
@@ -66,7 +66,7 @@ function getApiKey(): { provider: string; key: string } | null {
 async function auth() {
   const config = loadConfig();
 
-  console.log("Kimi Science API Key 配置\n");
+  console.log("Spark Research API Key 配置\n");
   console.log("当前配置:");
   for (const [name, envName] of Object.entries(KEY_NAMES)) {
     console.log(`  ${envName}: ${config[envName] ? "已设置" : "未设置"}`);
@@ -105,7 +105,7 @@ async function auth() {
     }
 
     saveConfig(config);
-    console.log("\n✅ 配置已保存到 ~/.kimi-science/config.json");
+    console.log("\n✅ 配置已保存到 ~/.spark-research/config.json");
   } finally {
     rl.close();
   }
@@ -114,21 +114,21 @@ async function auth() {
 function welcome() {
   const auth = getApiKey();
   console.log("");
-  console.log("  Kimi Science v" + pkg.version);
+  console.log("  Spark Research v" + pkg.version);
   console.log("  开源科学 Agent 平台 — 对标 Claude Science");
   console.log("");
   if (auth) {
     console.log(`  API: ${auth.provider} (已配置)`);
   } else {
-    console.log("  API: 未配置 — 运行 kimi-science auth 设置");
+    console.log("  API: 未配置 — 运行 spark-research auth 设置");
   }
   console.log("");
-  console.log("  运行 kimi-science help 查看可用命令");
+  console.log("  运行 spark-research help 查看可用命令");
   console.log("");
 }
 
 function info() {
-  const daemon = new KimiScienceDaemon();
+  const daemon = new SparkResearchDaemon();
   const python = daemon.kernelManager.createKernel("python");
   const repl = daemon.kernelManager.createKernel("control_repl");
   const permits: Record<string, readonly string[]> = {};
@@ -154,16 +154,16 @@ function info() {
 async function interactive() {
   const auth = getApiKey();
   if (!auth) {
-    console.log("❌ 未配置 API Key。运行 kimi-science auth 进行配置。");
+    console.log("❌ 未配置 API Key。运行 spark-research auth 进行配置。");
     process.exitCode = 1;
     return;
   }
 
-  const daemon = new KimiScienceDaemon();
+  const daemon = new SparkResearchDaemon();
   const orch = new OrchestratorAgent(daemon);
   const sessionId = `cli_${Date.now()}`;
 
-  console.log("Kimi Science CLI（输入 exit 退出）");
+  console.log("Spark Research CLI（输入 exit 退出）");
   console.log(`API: ${auth.provider}`);
   console.log("可用技能: literature, protein, genomics, chemistry, compute, lab");
   console.log("");
@@ -171,7 +171,7 @@ async function interactive() {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "kimi> ",
+    prompt: "spark> ",
   });
 
   rl.prompt();
@@ -200,12 +200,12 @@ async function interactive() {
 async function chatOnce(message: string) {
   const auth = getApiKey();
   if (!auth) {
-    console.log("❌ 未配置 API Key。运行 kimi-science auth 进行配置。");
+    console.log("❌ 未配置 API Key。运行 spark-research auth 进行配置。");
     process.exitCode = 1;
     return;
   }
 
-  const daemon = new KimiScienceDaemon();
+  const daemon = new SparkResearchDaemon();
   const orch = new OrchestratorAgent(daemon);
   const sessionId = `oneshot_${Date.now()}`;
   try {
@@ -239,7 +239,7 @@ function main() {
     case "chat": {
       const msg = process.argv.slice(3).join(" ");
       if (!msg) {
-        console.log("用法: kimi-science chat <消息>");
+        console.log("用法: spark-research chat <消息>");
         process.exitCode = 1;
         break;
       }
@@ -255,11 +255,11 @@ function main() {
     case "server": {
       const auth = getApiKey();
       if (!auth) {
-        console.log("⚠️  未配置 API Key，服务将返回错误。运行 kimi-science auth 进行配置。");
+        console.log("⚠️  未配置 API Key，服务将返回错误。运行 spark-research auth 进行配置。");
       }
       const port = Number(process.argv[3]) || 4321;
       const server = startServer(port);
-      console.log(`Kimi Science server listening at http://127.0.0.1:${server.port}`);
+      console.log(`Spark Research server listening at http://127.0.0.1:${server.port}`);
       console.log("Press Ctrl+C to stop");
       break;
     }

@@ -1,12 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { KimiScienceDaemon } from "../../backend/src/daemon/daemon";
+import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import { PERMIT_SETS, PermissionDeniedError, PermissionManager } from "../../backend/src/daemon/permissions";
 import { KernelManager, type KernelType } from "../../backend/src/kernels/manager";
 
 function createDaemon() {
   const permissions = new PermissionManager();
   const kernelManager = new KernelManager();
-  const daemon = new KimiScienceDaemon({ permissions, kernelManager });
+  const daemon = new SparkResearchDaemon({ permissions, kernelManager });
   return daemon;
 }
 
@@ -65,7 +65,7 @@ describe("KernelManager", () => {
   });
 });
 
-describe("KimiScienceDaemon.handleKernelCall", () => {
+describe("SparkResearchDaemon.handleKernelCall", () => {
   test("python kernel 调用 mcp_call 被拒（PermissionDeniedError）", async () => {
     const daemon = createDaemon();
     managers.push(daemon.kernelManager);

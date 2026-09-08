@@ -4,7 +4,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import { OrchestratorAgent } from "../agents/orchestrator";
-import { KimiScienceDaemon } from "../daemon/daemon";
+import { SparkResearchDaemon } from "../daemon/daemon";
 import { ArtifactStore } from "../artifacts/store";
 import { ConnectorRegistry } from "../connectors/registry";
 import { LabSafetyGate, LabOrchestrator } from "../lab/orchestrator";
@@ -62,7 +62,7 @@ function resolveStore(explicit?: ArtifactStore): () => ArtifactStore | undefined
   return () => {
     if (cached) return cached;
     try {
-      const base = process.env.KIMI_SCIENCE_DATA_DIR ?? join(homedir(), ".kimi-science");
+      const base = process.env.SPARK_RESEARCH_DATA_DIR ?? join(homedir(), ".spark-research");
       mkdirSync(base, { recursive: true });
       cached = new ArtifactStore(join(base, "artifacts.db"), join(base, "artifacts"));
     } catch {
@@ -74,7 +74,7 @@ function resolveStore(explicit?: ArtifactStore): () => ArtifactStore | undefined
 
 export function createApp(deps: ServerDeps = {}): Hono {
   const app = new Hono();
-  const agent = deps.agent ?? new OrchestratorAgent(new KimiScienceDaemon());
+  const agent = deps.agent ?? new OrchestratorAgent(new SparkResearchDaemon());
   const connectors = deps.connectors ?? new ConnectorRegistry().registerBuiltins();
   const lab =
     deps.lab ??
@@ -91,7 +91,7 @@ export function createApp(deps: ServerDeps = {}): Hono {
   const store = resolveStore(deps.store);
 
   app.get("/api/health", (c) =>
-    c.json({ status: "ok", service: "kimi-science", version: "0.1.0" }),
+    c.json({ status: "ok", service: "spark-research", version: "0.1.0" }),
   );
 
   app.get("/", () => serveFile("index.html"));

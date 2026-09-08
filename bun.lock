@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "kimi-science",
+      "name": "spark-research",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.0",
         "hono": "^4.6.0",

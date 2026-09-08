@@ -1,4 +1,4 @@
-# Kimi Science
+# Spark Research
 
 开源科学Agent平台：干湿闭环 + 自动化实验室，对标 Claude Science。
 

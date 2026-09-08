@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startServer, type StartedServer } from "../../backend/src/server/server";
 
-describe("Kimi Science frontend static serving", () => {
+describe("Spark Research frontend static serving", () => {
   let server: StartedServer;
 
   beforeAll(() => {
@@ -20,7 +20,7 @@ describe("Kimi Science frontend static serving", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
     expect(html).toContain("<html");
-    expect(html).toContain("Kimi Science");
+    expect(html).toContain("Spark Research");
   });
 
   test("GET /workspace/app.js returns JS content", async () => {

@@ -1,5 +1,5 @@
 [project]
-name = "kimi-science"
+name = "spark-research"
 version = "0.1.0"
 description = "开源科学Agent平台 Python kernel 与实验室模块"
 requires-python = ">=3.10"

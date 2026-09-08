@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { startServer, type StartedServer } from "../../backend/src/server/server";
 import { OrchestratorAgent } from "../../backend/src/agents/orchestrator";
-import { KimiScienceDaemon } from "../../backend/src/daemon/daemon";
+import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
 
 const mockLlm = {
@@ -19,11 +19,11 @@ const mockLlm = {
   }),
 };
 
-describe("Kimi Science HTTP server", () => {
+describe("Spark Research HTTP server", () => {
   let server: StartedServer;
 
   beforeAll(() => {
-    const daemon = new KimiScienceDaemon();
+    const daemon = new SparkResearchDaemon();
     const agent = new OrchestratorAgent(daemon, { llm: mockLlm });
     server = startServer(0, { agent });
   });
