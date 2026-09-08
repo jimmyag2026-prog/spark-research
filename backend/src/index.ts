@@ -7,6 +7,8 @@ import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
 import { OrchestratorAgent } from "./agents/orchestrator";
 import { startServer } from "./server/server";
+import { ProjectManager } from "./project/manager";
+import { runProjectCommand } from "./project/cli";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -16,6 +18,7 @@ const HELP = `Spark Research v${pkg.version}
 用法:
   spark-research             交互式 CLI（类似 opencode）
   spark-research auth        配置 API Key
+  spark-research project     项目管理（new / list / open / archive）
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
   spark-research server      启动 Web 服务（默认 4321）
@@ -159,12 +162,15 @@ async function interactive() {
     return;
   }
 
-  const daemon = new SparkResearchDaemon();
-  const orch = new OrchestratorAgent(daemon);
+  const projects = new ProjectManager();
+  const daemon = new SparkResearchDaemon({ projects });
+  const orch = new OrchestratorAgent(daemon, { projects });
   const sessionId = `cli_${Date.now()}`;
+  const project = orch.projectForSession(sessionId);
 
   console.log("Spark Research CLI（输入 exit 退出）");
   console.log(`API: ${auth.provider}`);
+  console.log(`项目: ${project?.slug ?? "未绑定"}`);
   console.log("可用技能: literature, protein, genomics, chemistry, compute, lab");
   console.log("");
 
@@ -205,8 +211,9 @@ async function chatOnce(message: string) {
     return;
   }
 
-  const daemon = new SparkResearchDaemon();
-  const orch = new OrchestratorAgent(daemon);
+  const projects = new ProjectManager();
+  const daemon = new SparkResearchDaemon({ projects });
+  const orch = new OrchestratorAgent(daemon, { projects });
   const sessionId = `oneshot_${Date.now()}`;
   try {
     const result = await orch.chat({ sessionId, message });
@@ -244,6 +251,11 @@ function main() {
         break;
       }
       chatOnce(msg);
+      break;
+    }
+    case "project": {
+      const code = runProjectCommand(process.argv.slice(3));
+      if (code !== 0) process.exitCode = code;
       break;
     }
     case "info":

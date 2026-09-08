@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS artifacts (
   id TEXT PRIMARY KEY,
   project TEXT NOT NULL,
+  project_slug TEXT,
   filename TEXT NOT NULL,
   version INTEGER NOT NULL,
   content_type TEXT NOT NULL,
@@ -17,6 +18,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
   UNIQUE (project, filename, version)
 );
 
+-- project_slug 上的索引在 store.ts 的 migrate() 里建，
+-- 因为老库要先 ALTER TABLE 补出这一列才能建索引。
 CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts (project, filename);
 
 CREATE TABLE IF NOT EXISTS dependencies (

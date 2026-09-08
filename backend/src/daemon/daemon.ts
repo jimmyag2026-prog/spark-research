@@ -1,6 +1,8 @@
 import { PermissionManager, PermissionDeniedError } from "./permissions";
+import { CredentialStore, credentialStatus } from "./credentials";
 import { KernelManager } from "../kernels/manager";
 import { ConnectorRegistry } from "../connectors/registry";
+import type { ProjectManager } from "../project/manager";
 
 export interface ArtifactStore {
   lookup(args: any): any;
@@ -24,7 +26,6 @@ export interface SkillsService {
 }
 export interface LlmService {
   call(args: any): any;
-  credentials(args: any): any;
 }
 
 export interface DaemonDeps {
@@ -37,6 +38,10 @@ export interface DaemonDeps {
   connectors?: Connectors;
   skills?: SkillsService;
   llm?: LlmService;
+  // AD-2：daemon 是唯一持凭据的进程。
+  credentials?: CredentialStore;
+  // AD-1：持久层的根；未注入时 daemon 不主动创建目录。
+  projects?: ProjectManager;
 }
 
 class DefaultArtifacts implements ArtifactStore {
@@ -135,10 +140,6 @@ class DefaultLLM implements LlmService {
   call(args: any) {
     return { ok: true, model: args?.model ?? "default", output: `[mock] ${args?.prompt ?? ""}` };
   }
-
-  credentials(args: any) {
-    return { ok: true, scopes: args?.scopes ?? [] };
-  }
 }
 
 export class SparkResearchDaemon {
@@ -151,6 +152,8 @@ export class SparkResearchDaemon {
   readonly skills: SkillsService;
   readonly llm: LlmService;
   readonly kernelManager: KernelManager;
+  readonly credentials: CredentialStore;
+  readonly projects?: ProjectManager;
 
   private agents = new Map<string, any>();
   private agentSeq = 0;
@@ -164,6 +167,8 @@ export class SparkResearchDaemon {
     this.connectors = deps.connectors ?? { mcp: new RealMCPConnector() };
     this.skills = deps.skills ?? new DefaultSkills();
     this.llm = deps.llm ?? new DefaultLLM();
+    this.credentials = deps.credentials ?? new CredentialStore();
+    this.projects = deps.projects;
     this.kernelManager = deps.kernelManager ?? new KernelManager();
     this.kernelManager.setDaemon(this);
   }
@@ -190,7 +195,8 @@ export class SparkResearchDaemon {
       case "artifact_lookup": return this.artifacts.lookup(a);
       case "lineage_query": return this.lineage.query(a);
       case "model_call": return this.llm.call(a);
-      case "credentials": return this.llm.credentials(a);
+      // AD-2：只回「是否已配置 + 字段名」，凭据本体永远不出 daemon。
+      case "credentials": return credentialStatus(this.credentials, a);
       case "analytic_libraries": return this.compute.libraries(a);
       default: throw new Error(`Daemon: unknown method '${method}'`);
     }

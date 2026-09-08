@@ -1,6 +1,9 @@
 export interface ArtifactVersion {
   id: string;
+  // project：历史上的自由字符串字段，保留以兼容旧数据。
   project: string;
+  // projectSlug：解析到真实 project 的引用（P1 起）；解析不出来时为 null。
+  projectSlug: string | null;
   filename: string;
   version: number;
   contentType: string;

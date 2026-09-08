@@ -10,10 +10,25 @@ import type {
   LineageMessage,
 } from "./models";
 import { LineageGraph, type VersionMeta } from "./lineage";
+import { slugify } from "../project/slug";
+
+// 只依赖「能把自由字符串解析成真实 project slug」这一能力，
+// 用结构化接口而非直接 import ProjectManager，避免 project ↔ artifacts 循环依赖。
+export interface ProjectRefResolver {
+  resolveRef(raw: string): string | null;
+}
+
+export interface ArtifactStoreOptions {
+  // 绑定到某个真实 project 时的默认 slug（Project.artifacts() 会传）。
+  projectSlug?: string;
+  // 可选解析器：把 save() 传入的自由字符串解析成真实 project 引用。
+  projects?: ProjectRefResolver;
+}
 
 interface ArtifactRow {
   id: string;
   project: string;
+  project_slug: string | null;
   filename: string;
   version: number;
   content_type: string;
@@ -73,6 +88,7 @@ function mapRow(row: ArtifactRow): ArtifactVersion {
   return {
     id: row.id,
     project: row.project,
+    projectSlug: row.project_slug ?? null,
     filename: row.filename,
     version: row.version,
     contentType: row.content_type,
@@ -114,10 +130,14 @@ function mapExecRow(row: ExecRow): ExecutionRecord {
 export class ArtifactStore {
   private db: Database;
   private storageDir: string;
+  private projectSlug?: string;
+  private projects?: ProjectRefResolver;
 
-  constructor(dbPath: string, storageDir: string) {
+  constructor(dbPath: string, storageDir: string, options: ArtifactStoreOptions = {}) {
     this.storageDir = resolve(storageDir);
     mkdirSync(this.storageDir, { recursive: true });
+    this.projectSlug = options.projectSlug;
+    this.projects = options.projects;
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
     this.initSchema();
@@ -126,6 +146,27 @@ export class ArtifactStore {
   initSchema(): void {
     const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
     this.db.exec(schema);
+    this.migrate();
+  }
+
+  // P1 迁移：老库没有 project_slug 列，补列并用旧的自由字符串回填，保证旧数据不炸。
+  private migrate(): void {
+    const columns = this.db.query("PRAGMA table_info(artifacts)").all() as { name: string }[];
+    if (!columns.some((c) => c.name === "project_slug")) {
+      this.db.exec("ALTER TABLE artifacts ADD COLUMN project_slug TEXT");
+      const rows = this.db.query("SELECT id, project FROM artifacts").all() as {
+        id: string;
+        project: string;
+      }[];
+      const update = this.db.query("UPDATE artifacts SET project_slug = ? WHERE id = ?");
+      for (const row of rows) update.run(this.resolveProjectSlug(row.project), row.id);
+    }
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_artifacts_project_slug ON artifacts (project_slug)");
+  }
+
+  // 自由字符串 → 真实 project 引用：有解析器就问解析器，否则退回 slug 归一化；都不行则 null。
+  private resolveProjectSlug(project: string): string | null {
+    return this.projects?.resolveRef(project) ?? slugify(project);
   }
 
   save(
@@ -133,7 +174,7 @@ export class ArtifactStore {
     code: string,
     messages: LineageMessage[],
     env: Record<string, unknown> | null,
-    project: string,
+    project: string = this.projectSlug ?? "default",
   ): ArtifactVersion & { content: string } {
     const filename = basename(filePath);
     const content = readFileSync(filePath);
@@ -159,14 +200,15 @@ export class ArtifactStore {
     this.db
       .query(
         `INSERT INTO artifacts
-         (id, project, filename, version, content_type, checksum, storage_path,
+         (id, project, project_slug, filename, version, content_type, checksum, storage_path,
           extracted_code, code_description, lineage_messages, environment_snapshot,
           parent_version_id, producing_cell_id, dependency_mappings, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         project,
+        this.resolveProjectSlug(project),
         filename,
         version,
         contentTypeFor(filename),
@@ -202,6 +244,14 @@ export class ArtifactStore {
     const rows = this.db
       .query("SELECT * FROM artifacts WHERE project = ? ORDER BY created_at, version")
       .all(project) as ArtifactRow[];
+    return rows.map(mapRow);
+  }
+
+  // 按真实 project 引用查询（P1 起）；旧数据回填过 project_slug，故一并可查。
+  listByProjectSlug(slug: string): ArtifactVersion[] {
+    const rows = this.db
+      .query("SELECT * FROM artifacts WHERE project_slug = ? ORDER BY created_at, version")
+      .all(slug) as ArtifactRow[];
     return rows.map(mapRow);
   }
 
@@ -254,6 +304,10 @@ export class ArtifactStore {
       .query("SELECT * FROM execution_records WHERE frame = ? ORDER BY cell_index")
       .all(frame) as ExecRow[];
     return rows.map(mapExecRow);
+  }
+
+  close(): void {
+    this.db.close();
   }
 
   private getRaw(versionId: string): ArtifactRow | null {

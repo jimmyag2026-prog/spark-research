@@ -8,6 +8,7 @@ import { ReviewerAgent } from "../reviewer/agent";
 import type { ReviewResult } from "../reviewer/rules";
 import { LLMRouter, type ChatMessage } from "../llm/router";
 import { SubAgentFactory, type SubAgentType } from "./sub_agent";
+import type { Project, ProjectManager } from "../project/manager";
 
 const TASK_KINDS = ["analysis", "code", "connector", "compute", "subagent", "skill"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
@@ -28,6 +29,8 @@ export interface ExecutionOutcome {
 
 export interface OrchestrationResult {
   sessionId: string;
+  // AD-1：session 归属的 project slug；未接入 ProjectManager 时为 null。
+  projectSlug: string | null;
   skills: string[];
   plan: PlannedTask[];
   execution: ExecutionOutcome[];
@@ -49,6 +52,8 @@ export interface OrchestratorDeps {
   reviewer?: ReviewerAdapter;
   maxReviewRounds?: number;
   workspaceRoot?: string;
+  // 注入后 session 会归属到真实 project（找不到绑定时落到默认项目）。
+  projects?: ProjectManager;
 }
 
 // skills 目录尚无正式实现，这里用内置目录作为 MVP stub；后续 skill 模块落地后替换。
@@ -128,6 +133,8 @@ export class OrchestratorAgent {
   private maxReviewRounds: number;
   private corePrompt: string;
   private researchPrompt: string;
+  private projects?: ProjectManager;
+  private projectCache = new Map<string, Project>();
   private seq = 0;
 
   constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
@@ -139,6 +146,7 @@ export class OrchestratorAgent {
     this.graph = deps.graph ?? new LineageGraph();
     this.reviewer = deps.reviewer;
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
+    this.projects = deps.projects;
     this.workspaceRoot = deps.workspaceRoot ?? join(import.meta.dir, "../../../workspaces");
     mkdirSync(this.workspaceRoot, { recursive: true });
     this.corePrompt = loadPrompt("core.txt");
@@ -148,6 +156,9 @@ export class OrchestratorAgent {
   async processRequest(userMessage: string, sessionId: string): Promise<OrchestrationResult> {
     this.record(sessionId, "orchestrator", "start", `request received: ${userMessage.slice(0, 80)}`);
     mkdirSync(join(this.workspaceRoot, sessionId), { recursive: true });
+
+    const project = this.projectForSession(sessionId);
+    if (project) this.record(sessionId, "project", "bind", `session 归属 project '${project.slug}'`);
 
     const skills = this.identifySkills(userMessage);
     const skillContext = this.loadSkillContext(skills);
@@ -181,11 +192,30 @@ export class OrchestratorAgent {
       review.approved ? "review approved" : "review vetoed",
     );
 
-    return { sessionId, skills, plan, execution, summary, review, reviewRounds };
+    return {
+      sessionId,
+      projectSlug: project?.slug ?? null,
+      skills,
+      plan,
+      execution,
+      summary,
+      review,
+      reviewRounds,
+    };
   }
 
   sessionWorkspace(sessionId: string): string {
     return join(this.workspaceRoot, sessionId);
+  }
+
+  // AD-1：session 归属 project；已绑定用绑定的，未绑定落到默认项目并写回绑定。
+  projectForSession(sessionId: string): Project | null {
+    if (!this.projects) return null;
+    const cached = this.projectCache.get(sessionId);
+    if (cached) return cached;
+    const project = this.projects.projectForSession(sessionId);
+    this.projectCache.set(sessionId, project);
+    return project;
   }
 
   private identifySkills(message: string): string[] {
@@ -360,7 +390,8 @@ export class OrchestratorAgent {
 
   private async reviewSession(sessionId: string): Promise<ReviewResult> {
     if (this.reviewer) return this.reviewer.review(sessionId);
-    const store = this.store;
+    // 没有显式注入 store 时，退到 session 所属 project 的 artifact 存储（AD-1）。
+    const store = this.store ?? this.projectForSession(sessionId)?.artifacts();
     if (!store) {
       this.record(sessionId, "reviewer", "skip", "no artifact store attached; review bypassed");
       return { approved: true, findings: [] };
