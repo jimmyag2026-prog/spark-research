@@ -194,8 +194,10 @@ export class RecordStore {
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
     const limit = filter.limit ? " LIMIT ?" : "";
     if (filter.limit) params.push(filter.limit);
+    // 次序键用 rowid 而不是 id：同一毫秒内创建的多条 record（如批量生成精读卡）
+    // created_at 完全相同，用随机 uuid 排序会让「哪条更新」不确定；rowid 就是插入顺序。
     const rows = this.db
-      .query(`SELECT * FROM records${where} ORDER BY created_at, id${limit}`)
+      .query(`SELECT * FROM records${where} ORDER BY created_at, rowid${limit}`)
       .all(...params) as RecordRow[];
     return rows.map(mapRow);
   }

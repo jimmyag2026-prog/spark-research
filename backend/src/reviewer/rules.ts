@@ -81,9 +81,13 @@ export function stripCode(markdown: string): string {
 }
 
 // 句子切分：中英文句末标点 + 换行/列表项边界。保留原文本片段（trim 后）。
+// 两个刻意的取舍：
+//  - **不**按分号切：`[@a; @b]` 是合法的并列引用形式，按分号切会把它劈成两半、漏掉后一个 key。
+//  - 英文句点只在其后**跟空白**时才算句末：这样 `10.1000/x.1` 这类 DOI/版本号不会被切碎
+//    （代价是 "et al. 2021" 会多切一刀，只影响 finding 里的引文片段长度，不影响判定）。
 export function splitSentences(text: string): string[] {
   return text
-    .split(/(?<=[。！？；!?;])\s*|\n+/)
+    .split(/(?<=[。！？!?])\s*|(?<=\.)\s+|\n+/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
