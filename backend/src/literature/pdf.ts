@@ -57,14 +57,13 @@ export function pdfCandidates(paper: Paper): PdfCandidate[] {
   const arxivId = paper.ids.arxiv;
   if (arxivId) push(`https://arxiv.org/pdf/${arxivId.replace(/^arxiv:/i, "")}`, "arxiv");
 
-  // Europe PMC：OA 子集的 PMCID 有稳定的 fullTextUrl / 后备直链。
+  // Europe PMC：OA 子集用 europepmc.org/articles/<PMCID>?pdf=render。
+  // 注意 REST 的 .../rest/<PMCID>/fullTextPdf 已实测返回 404（见 P2 devlog 真实网络验证），
+  // 不要改回那个形式。
   const pmcid = paper.ids.pmcid;
   if (pmcid && paper.isOpenAccess !== false) {
     const normalized = pmcid.startsWith("PMC") ? pmcid : `PMC${pmcid}`;
-    push(
-      `https://www.ebi.ac.uk/europepmc/webservices/rest/${normalized}/fullTextPdf`,
-      "europepmc",
-    );
+    push(`https://europepmc.org/articles/${normalized}?pdf=render`, "europepmc");
   }
 
   // 归一化时带下来的直链：OpenAlex best_oa_location.pdf_url / S2 openAccessPdf / EuropePMC fullTextUrlList。

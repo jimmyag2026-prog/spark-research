@@ -84,6 +84,24 @@ export function openAlexEntityId(raw: string): string {
   return id;
 }
 
+// OpenAlex 的 work 对象默认极其臃肿（单条可达 30 KB，大半是我们不用的 concepts/counts_by_year）。
+// 用 select 只取归一化需要的字段：响应体缩小一个数量级，对 API 也更礼貌。
+export const OPENALEX_SELECT = [
+  "id",
+  "doi",
+  "display_name",
+  "publication_year",
+  "publication_date",
+  "cited_by_count",
+  "authorships",
+  "primary_location",
+  "open_access",
+  "best_oa_location",
+  "ids",
+  "abstract_inverted_index",
+  "referenced_works",
+].join(",");
+
 export const openalexConfig: MCPConnectorConfig = {
   baseUrl: "https://api.openalex.org",
   description: "OpenAlex 开放学术图谱（作品/作者/机构，免 key，支持 polite pool）",
@@ -120,13 +138,14 @@ export class OpenAlexConnector extends MCPConnector {
       delete mapped.limit;
     }
     mapped["per-page"] ??= 10;
+    mapped.select ??= OPENALEX_SELECT;
     return super.call("search", mapped);
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
     const id = String(params.id ?? "");
     if (!id) throw new Error('Connector "openalex" tool "getPaper" 需要参数 id');
-    return super.call("getPaper", { ...params, id: openAlexEntityId(id) });
+    return super.call("getPaper", { ...params, id: openAlexEntityId(id), select: params.select ?? OPENALEX_SELECT });
   }
 
   async getReferences(params: { id?: string } & Record<string, unknown>): Promise<unknown> {

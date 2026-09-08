@@ -10,3 +10,7 @@ __pycache__/
 .DS_Store
 logs/
 .env
+
+# P2: PDF 本体不入库（只有 fixture 里的截断样本进 git）
+papers/
+*.pdf

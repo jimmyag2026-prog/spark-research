@@ -111,7 +111,8 @@ export function fromOpenAlex(raw: unknown): Paper | null {
   const pmid = asString(external?.pmid)?.replace(/^https?:\/\/\S*?\/(\d+)$/, "$1");
   if (pmid) paper.ids.pmid = pmid.replace(/\D/g, "") || pmid;
   const pmcid = asString(external?.pmcid);
-  if (pmcid) paper.ids.pmcid = pmcid.replace(/^https?:\/\/\S*?\//, "");
+  // OpenAlex 的 pmcid 是完整 URL（.../pmc/PMC8371605），取末段。
+  if (pmcid) paper.ids.pmcid = pmcid.split("/").filter(Boolean).pop() ?? pmcid;
 
   const oa = asObject(work.open_access) ?? asObject(work.best_oa_location);
   paper.isOpenAccess = typeof oa?.is_oa === "boolean" ? (oa.is_oa as boolean) : null;
@@ -161,7 +162,8 @@ export function europePmcPdfUrl(raw: unknown): string | null {
   if (pdf) return asString(pdf.url);
   const pmcid = asString(result?.pmcid);
   if (pmcid && asString(result?.isOpenAccess)?.toUpperCase() === "Y") {
-    return `https://europepmc.org/api/fulltextRepo?pprId=${pmcid}&type=FILE&fileName=EMS.pdf`;
+    // 与 pdf.ts 的候选推导保持同一形式（实测可用；REST fullTextPdf 端点返回 404）。
+    return `https://europepmc.org/articles/${pmcid}?pdf=render`;
   }
   return null;
 }
@@ -234,8 +236,10 @@ export function fromSemanticScholar(raw: unknown): Paper | null {
   return paper;
 }
 
-// AMiner 的响应体结构未在公开文档中固定（不同接口 data 层级不一），
-// 这里做防御式映射，字段名走别名表；实测口径变化时只需要改这一处。
+// AMiner /paper/search 的实测响应（2026-09 录制验证）：
+//   { code, success, msg, total, log_id,
+//     data: [{ doi, first_author, id, n_citation_bucket, title, venue_name, year }] }
+// /paper/info 的 data 层级与字段更丰富，公开文档未固定，故字段名走别名表做防御式映射。
 export function fromAMiner(raw: unknown): Paper | null {
   const item = asObject(raw);
   if (!item) return null;
@@ -244,7 +248,12 @@ export function fromAMiner(raw: unknown): Paper | null {
   const paper = emptyPaper();
   paper.title = title;
   paper.sources = ["aminer"];
-  paper.authors = authorsOf(asArray(item.authors));
+  const authorList = asArray(item.authors);
+  // search 接口只给 first_author 字符串，没有完整作者数组。
+  paper.authors =
+    authorList.length > 0
+      ? authorsOf(authorList)
+      : authorsOf([asString(item.first_author)].filter((n): n is string => n !== null));
   paper.year = yearOf(item.year) ?? yearOf(item.pub_year);
   paper.venue =
     asString(asObject(asObject(item.venue)?.info)?.name) ??
@@ -253,6 +262,8 @@ export function fromAMiner(raw: unknown): Paper | null {
     asString(item.venue_name);
   paper.doi = normalizeDoi(item.doi);
   paper.abstract = asString(item.abstract) ?? asString(item.abstract_zh);
+  // 注意：search 接口只给 n_citation_bucket（"5000+" 这种区间字符串）。
+  // 区间不是数字，硬转会凭空造出精度，故此时留 null。
   paper.citedByCount = asNumber(item.num_citation) ?? asNumber(item.n_citation) ?? asNumber(item.citation);
   const id = asString(item.id) ?? asString(item._id) ?? asString(item.paper_id);
   if (id) paper.ids.aminer = id;

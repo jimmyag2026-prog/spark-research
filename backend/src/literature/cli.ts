@@ -143,7 +143,13 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         const limit = Number(flagString(flags.limit) ?? 10) || 10;
         const result = await makeSearcher().search(query, { sources, perSource: limit, limit });
 
-        out(`检索 "${query}"：${result.totalBeforeDedupe} 条原始结果 → 去重合并 ${result.papers.length} 条`);
+        // 三个数字含义不同，不能混为一谈：原始条数 / 合并掉的条数 / 实际展示条数（受 --limit 截断）。
+        const afterDedupe = result.totalBeforeDedupe - result.mergedCount;
+        out(
+          `检索 "${query}"：${result.totalBeforeDedupe} 条原始结果 → 去重合并掉 ${result.mergedCount} 条 ` +
+            `→ 剩 ${afterDedupe} 条` +
+            (result.papers.length < afterDedupe ? `（--limit 截断后展示 ${result.papers.length} 条）` : ""),
+        );
         printSourceStatus(result.sources, out);
         out("");
         result.papers.forEach((paper, i) => printPaper(paper, i, out));

@@ -203,8 +203,18 @@ export class FixtureHttp implements HttpClient {
     };
     if (isText) {
       const text = new TextDecoder().decode(raw);
-      data.truncated = text.length > this.maxTextChars;
-      data.body = data.truncated ? text.slice(0, this.maxTextChars) : text;
+      // 文本响应体**绝不截断**：截断的 JSON 是坏 fixture，回放时 JSON.parse 会炸，
+      // 而且是那种「看起来录好了、跑起来才发现」的隐性故障。宁可当场报错，
+      // 让录制者去收窄请求（减少 page size、用 select 裁字段）。
+      if (text.length > this.maxTextChars) {
+        throw new Error(
+          `fixture 响应体过大（${text.length} > ${this.maxTextChars} 字符）: ${canonicalUrl(url)}\n` +
+            `  截断文本会产出无法解析的 fixture。请收窄请求（减小 per-page / 用 select 裁字段），` +
+            `或调大 FixtureHttp 的 maxTextChars。`,
+        );
+      }
+      data.truncated = false;
+      data.body = text;
     } else {
       // PDF 等二进制：只留头部样本（用于校验 magic bytes），本体不入库。
       data.truncated = raw.byteLength > this.maxBinaryBytes;
