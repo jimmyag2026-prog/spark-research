@@ -486,6 +486,28 @@ export interface NoveltyReportInput {
   generatedAt?: string;
 }
 
+// 一条 claim 的 sourceStatus 是「每个检索式 × 每个源」的展开，直接打出来是一串重复的
+// `openalex=ok · openalex=ok`，读者看不出哪条检索式挂了。按源汇总成
+// 「成功检索式数 / 总检索式数 + 返回条数 + 失败原因」，失败原因去重保留（它是排障入口）。
+export function summarizeSources(statuses: SourceStatus[]): string {
+  const agg = new Map<string, { ok: number; total: number; count: number; notes: Set<string> }>();
+  for (const status of statuses) {
+    const entry = agg.get(status.source) ?? { ok: 0, total: 0, count: 0, notes: new Set<string>() };
+    entry.total++;
+    if (status.outcome === "ok") entry.ok++;
+    entry.count += status.count;
+    const note = status.error ?? status.note;
+    if (note) entry.notes.add(note);
+    agg.set(status.source, entry);
+  }
+  return [...agg.entries()]
+    .map(([source, e]) => {
+      const notes = e.notes.size > 0 ? `，${[...e.notes].join("；")}` : "";
+      return `${source} ${e.ok}/${e.total} 成功，${e.count} 条${notes}`;
+    })
+    .join(" · ");
+}
+
 const RATING_LABEL: Record<NoveltyRating, string> = {
   novel: "novel（检索范围内未见实质相同工作）",
   incremental: "incremental（已有工作很接近）",
@@ -570,11 +592,10 @@ export function renderNoveltyReport(input: NoveltyReportInput): string {
 
   lines.push("## 检索源状态");
   lines.push("");
+  lines.push("（每条 claim 有多个检索式，下面按源汇总「成功的检索式数 / 总检索式数」与返回条数）");
+  lines.push("");
   for (const retrieval of retrievals) {
-    const summary = retrieval.sources
-      .map((s) => `${s.source}=${s.outcome}${s.outcome === "ok" ? `(${s.count})` : ""}`)
-      .join(" · ");
-    lines.push(`- ${retrieval.claim.id}: ${summary}`);
+    lines.push(`- ${retrieval.claim.id}: ${summarizeSources(retrieval.sources)}`);
   }
   lines.push("");
   lines.push("## 口径说明");

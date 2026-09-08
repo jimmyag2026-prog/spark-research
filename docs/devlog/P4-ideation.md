@@ -124,18 +124,18 @@ $ bun run typecheck
 （无输出，clean）
 
 $ bun test tests/unit/
- 365 pass
+ 366 pass
  0 fail
- 1415 expect() calls
-Ran 365 tests across 23 files. [967.00ms]
+ 1419 expect() calls
+Ran 366 tests across 23 files. [1068.00ms]
 ```
 
-- 基线 **275 个一个没动、全绿**；新增 **90** 个：
+- 基线 **275 个一个没动、全绿**；新增 **91** 个：
 
 | 文件 | 数量 | 覆盖 |
 |------|------|------|
 | `tests/unit/ideation.test.ts` | 31 | idea 卡 schema（8 类非法 payload）、grounding 检查、共探重试/拒绝/失败区分、多轮历史、证据边方向、IdeaStore（前缀取卡与歧义、状态回写、库漂移、过滤）、状态聚合与渲染 |
-| `tests/unit/novelty.test.ts` | 38 | 词尾归并与中文分词、覆盖率、候选身份、claim/报告 schema 各 5 类非法输入、**评级校验层 5 条规则逐条 + 边界 + 阈值注入**、key 分配不撞车、报告渲染、管线（回写/cites 边/检索空/schema 失败不落库/dry-run） |
+| `tests/unit/novelty.test.ts` | 39 | 词尾归并与中文分词、覆盖率、候选身份、claim/报告 schema 各 5 类非法输入、**评级校验层 5 条规则逐条 + 边界 + 阈值注入**、key 分配不撞车、报告渲染、管线（回写/cites 边/检索空/schema 失败不落库/dry-run）、检索源状态汇总 |
 | `tests/unit/novelty_e2e.test.ts` | 8 | 上一节的双向对照矩阵 |
 | `tests/unit/ideation_cli.test.ts` | 13 | `idea new/-m/--json/交互式`、空库警告、生成失败退出码、`list` 过滤、`check` 全链路与报告文件、结论不可用退出码 1、参数错误 |
 

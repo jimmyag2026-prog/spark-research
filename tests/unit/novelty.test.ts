@@ -12,6 +12,7 @@ import {
   buildComparePrompt,
   constrainRating,
   renderNoveltyReport,
+  summarizeSources,
   validateAssessmentPayload,
   validateClaimsPayload,
   type ClaimRetrieval,
@@ -339,6 +340,21 @@ describe("报告渲染", () => {
     expect(md).toContain("[@k1]");
     // 相似度由代码算出来写进报告，读者能自己核
     expect(md).toContain("0.95");
+  });
+
+  test("检索源状态按源汇总，失败原因保留（排障入口）", () => {
+    const summary = summarizeSources([
+      { source: "openalex", outcome: "ok", count: 5, elapsedMs: 1 },
+      { source: "openalex", outcome: "ok", count: 3, elapsedMs: 1 },
+      { source: "semanticscholar", outcome: "failed", count: 0, error: "HTTP 429", elapsedMs: 1 },
+      { source: "semanticscholar", outcome: "failed", count: 0, error: "HTTP 429", elapsedMs: 1 },
+      { source: "aminer", outcome: "skipped", count: 0, note: "未配置凭据", elapsedMs: 0 },
+    ]);
+    expect(summary).toContain("openalex 2/2 成功，8 条");
+    // 同一个失败原因只出现一次，但必须出现
+    expect(summary).toContain("semanticscholar 0/2 成功，0 条，HTTP 429");
+    expect(summary.match(/HTTP 429/g)).toHaveLength(1);
+    expect(summary).toContain("未配置凭据");
   });
 
   test("结论不可用时报告明说状态维持 unchecked", () => {
