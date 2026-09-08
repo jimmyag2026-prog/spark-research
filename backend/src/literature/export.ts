@@ -58,6 +58,29 @@ export function assignBibtexKeys(papers: Paper[]): string[] {
   });
 }
 
+// 库内论文 ↔ bibtex key 的双向索引（P3：综述引用只认库内 key）。
+// key 由 assignBibtexKeys 在**同一份有序列表**上计算，所以调用方必须传 `library.list()`
+// 的完整输出（按 created_at,id 排序，确定性）；只传子集会让冲突后缀 a/b/c 错位。
+export interface BibtexKeyIndex {
+  // 论文 id → key
+  byId: Map<string, string>;
+  // key → 论文
+  byKey: Map<string, LibraryPaper>;
+  keys: string[];
+}
+
+export function libraryKeyIndex(papers: LibraryPaper[]): BibtexKeyIndex {
+  const keys = assignBibtexKeys(papers);
+  const byId = new Map<string, string>();
+  const byKey = new Map<string, LibraryPaper>();
+  papers.forEach((paper, i) => {
+    const key = keys[i]!;
+    byId.set(paper.id, key);
+    byKey.set(key, paper);
+  });
+  return { byId, byKey, keys };
+}
+
 function bibtexAuthors(authors: PaperAuthor[]): string {
   return authors.map((a) => a.name.trim()).filter(Boolean).join(" and ");
 }
