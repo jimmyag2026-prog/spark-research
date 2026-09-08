@@ -20,7 +20,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research             交互式 CLI（类似 opencode）
   spark-research auth        配置 API Key
   spark-research project     项目管理（new / list / open / archive）
-  spark-research lit         文献域（search / add / list / pdf / export / sources）
+  spark-research lit         文献域（search / add / list / pdf / read / review / export / sources）
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
   spark-research server      启动 Web 服务（默认 4321）

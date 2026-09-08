@@ -2,11 +2,16 @@ import { writeFileSync } from "node:fs";
 import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
+import { LLMRouter } from "../llm/router";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
-import { exportLibrary, type ExportFormat } from "./export";
+import { LlmCitationJudge } from "../reviewer/citation_judge";
+import { citationIntegrity, type CitationJudge } from "../reviewer/rules";
+import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
 import { LibraryStore, type LibraryPaper } from "./library";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, type LiteratureSource, type Paper } from "./models";
 import { PdfDownloader } from "./pdf";
+import { ReadingCardGenerator, listReadingCards, renderReadingCard } from "./reading";
+import { ReviewDraftGenerator, baselinesFrom } from "./review";
 import { LiteratureSearcher } from "./search";
 
 // `spark-research lit ...` 子命令。风格与 project/cli.ts 一致：
@@ -19,6 +24,10 @@ export const LIT_HELP = `用法:
   spark-research lit list [--tag 标签] [--status unread|reading|read] [--json]
                                                   列出项目文献库
   spark-research lit pdf <paper-id>               下载该论文的 OA PDF
+  spark-research lit read <paper-id> [--all] [--tag 标签] [--json]
+                                                  生成结构化精读卡（入证据图）
+  spark-research lit review [--topic 主题] [--out 文件] [--no-judge]
+                                                  由精读卡生成综述草稿并跑 citation-integrity
   spark-research lit export --format bibtex|csl [--out 文件]  导出文献库
   spark-research lit sources                      列出可用文献源与凭据状态
 `;
@@ -33,6 +42,11 @@ export interface LitCliDeps {
   searcher?: LiteratureSearcher;
   // 未注入时用默认 CredentialStore（AD-2：只在 daemon/CLI 进程内读取）。
   credentials?: CredentialStore;
+  // P3：精读卡 / 综述生成用的模型。测试一律注入 fake，不打真实 API。
+  llm?: Pick<LLMRouter, "call">;
+  model?: string;
+  // 引用一致性判定器；不注入时用 LlmCitationJudge 包住上面的 llm。
+  judge?: CitationJudge;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
@@ -249,6 +263,123 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         library.close();
         project.close();
         return result.ok ? 0 : 1;
+      }
+
+      case "read": {
+        const { project, library } = openLibrary(manager);
+        const records = project.records();
+        const targets: LibraryPaper[] = [];
+        if (flags.all === true) {
+          targets.push(...library.list({ tag: flagString(flags.tag) }));
+        } else {
+          const paperId = positional[0];
+          if (!paperId) {
+            err("用法: spark-research lit read <paper-id> | --all [--tag 标签]");
+            library.close();
+            project.close();
+            return 1;
+          }
+          const match = library.get(paperId) ?? library.list().find((p) => p.id.startsWith(paperId));
+          if (!match) {
+            err(`❌ 论文 '${paperId}' 不在库中`);
+            library.close();
+            project.close();
+            return 1;
+          }
+          targets.push(match);
+        }
+        if (targets.length === 0) {
+          err("❌ 没有可精读的论文（库为空或标签无匹配）");
+          library.close();
+          project.close();
+          return 1;
+        }
+
+        const generator = new ReadingCardGenerator({
+          llm: deps.llm ?? new LLMRouter(),
+          library,
+          records,
+          model: deps.model,
+          projectContext: project.meta.description || undefined,
+        });
+        const { cards, failures } = await generator.generateMany(targets.map((p) => p.id));
+
+        if (flags.json === true) {
+          out(JSON.stringify({ cards, failures }, null, 2));
+        } else {
+          for (const card of cards) {
+            out(renderReadingCard(card));
+            out(`\n（record: ${card.recordId}）\n`);
+          }
+          out(`✅ 生成 ${cards.length} 张精读卡（项目 ${project.slug}）`);
+          // 失败必须可见，不能被「成功 N 张」盖过去。
+          for (const failure of failures) err(`❌ ${failure.paperId}: ${failure.error}`);
+          if (failures.length > 0) err(`共 ${failures.length} 篇精读卡生成失败`);
+        }
+        library.close();
+        project.close();
+        return failures.length > 0 && cards.length === 0 ? 1 : 0;
+      }
+
+      case "review": {
+        const { project, library } = openLibrary(manager);
+        const records = project.records();
+        const cards = listReadingCards(records, library);
+        if (cards.length === 0) {
+          err("❌ 项目里还没有精读卡。先跑 spark-research lit read <paper-id> 或 lit read --all");
+          library.close();
+          project.close();
+          return 1;
+        }
+
+        const llm = deps.llm ?? new LLMRouter();
+        const generator = new ReviewDraftGenerator({
+          llm,
+          library,
+          records,
+          artifacts: project.artifacts(),
+          model: deps.model,
+          workDir: project.paths.artifactsDir,
+        });
+        const topic = flagString(flags.topic);
+        const draft = await generator.generate(cards, {
+          topic,
+          sessionId: flagString(flags.session) ?? null,
+        });
+
+        // 兜底核验：无论草稿是谁写的，引用一律逐条对照库内 key + 精读卡。
+        const judge = flags["no-judge"] === true ? undefined : (deps.judge ?? new LlmCitationJudge(llm, deps.model));
+        const check = await citationIntegrity({
+          draft: draft.markdown,
+          knownKeys: libraryKeyIndex(library.list()).keys,
+          baselines: baselinesFrom(cards),
+          judge,
+          artifactId: draft.artifactId ?? "",
+          location: "text/markdown",
+        });
+
+        const target = flagString(flags.out);
+        if (target) writeFileSync(target, draft.markdown);
+
+        out(`✅ 综述草稿已生成（项目 ${project.slug}，基于 ${cards.length} 张精读卡）`);
+        out(`  引用 ${draft.citedKeys.length} 条 · artifact ${draft.artifactId ?? "未入库"} · record ${draft.recordId ?? "未入库"}`);
+        out(`  文件: ${target ?? draft.path}`);
+        out("");
+        out(`citation-integrity: 解析引用 ${check.citations.length} 处，判定 ${check.judgedCount} 处` +
+          (check.judgeErrors > 0 ? `（${check.judgeErrors} 处判定失败）` : ""));
+        const hard = check.findings.filter((f) => f.severity === "hard");
+        const soft = check.findings.filter((f) => f.severity === "soft");
+        for (const finding of check.findings) {
+          out(`  ${finding.severity === "hard" ? "⛔" : "⚠️ "} ${finding.message}`);
+        }
+        if (hard.length > 0) {
+          err(`⛔ Review vetoed: ${hard.length} 条 hard finding（伪造/库外引用），草稿不可用于交付`);
+        } else {
+          out(`✅ 无 hard finding${soft.length > 0 ? `（${soft.length} 条 soft 提示，不否决）` : ""}`);
+        }
+        library.close();
+        project.close();
+        return hard.length > 0 ? 1 : 0;
       }
 
       case "export": {
