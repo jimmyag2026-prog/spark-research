@@ -86,7 +86,7 @@ OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限�
 ### 域 A：文献调研与写作
 
 **A1 文献检索（多源聚合）**
-- Connector 层扩展：现有 arXiv/PubMed + 新增 OpenAlex、CrossRef、EuropePMC、Semantic Scholar（全部免 key，参照 OpenScience 的 literature 域清单）
+- Connector 层扩展：现有 arXiv/PubMed + 新增 OpenAlex、CrossRef、EuropePMC、Semantic Scholar（参照 OpenScience 的 literature 域清单。P2 实测：S2 匿名请求持续 429，实际使用建议配置免费 API key——走凭据服务，connector id `semanticscholar`；无 key 时统一检索自动降级为其余源）
 - **AMiner connector**（带凭据，走 §2.3 凭据分层）：29 个 API 已在调研中验证可用
 - CNKI/万方从占位升级为真实实现（依赖可获得的 API 渠道，无渠道则保持占位并明示）
 - 统一检索接口：跨源查询 → 去重（DOI/标题模糊匹配）→ 合并排序

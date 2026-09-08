@@ -1,4 +1,4 @@
-import { MCPConnector, type MCPConnectorConfig } from "./base";
+import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
 
 export const uniprotConfig: MCPConnectorConfig = {
   baseUrl: "https://rest.uniprot.org",
@@ -12,8 +12,8 @@ export const uniprotConfig: MCPConnectorConfig = {
 };
 
 export class UniProtConnector extends MCPConnector {
-  constructor() {
-    super("uniprot", uniprotConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("uniprot", uniprotConfig, options);
   }
 }
 
@@ -29,8 +29,8 @@ export const pdbConfig: MCPConnectorConfig = {
 };
 
 export class PDBConnector extends MCPConnector {
-  constructor() {
-    super("pdb", pdbConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("pdb", pdbConfig, options);
   }
 
   async searchStructures(params: { query?: string; rows?: number } & Record<string, unknown>): Promise<unknown> {

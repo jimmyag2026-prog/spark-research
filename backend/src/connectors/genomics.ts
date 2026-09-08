@@ -1,4 +1,4 @@
-import { MCPConnector, type MCPConnectorConfig } from "./base";
+import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
 
 export const ensemblConfig: MCPConnectorConfig = {
   baseUrl: "https://rest.ensembl.org",
@@ -12,8 +12,8 @@ export const ensemblConfig: MCPConnectorConfig = {
 };
 
 export class EnsemblConnector extends MCPConnector {
-  constructor() {
-    super("ensembl", ensemblConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("ensembl", ensemblConfig, options);
   }
 
   async search(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
@@ -36,8 +36,8 @@ export const ncbiConfig: MCPConnectorConfig = {
 };
 
 export class NCBIConnector extends MCPConnector {
-  constructor() {
-    super("ncbi", ncbiConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("ncbi", ncbiConfig, options);
   }
 
   async search(params: { query?: string; db?: string; retmax?: number } & Record<string, unknown>): Promise<unknown> {

@@ -1,4 +1,4 @@
-import { MCPConnector, type MCPConnectorConfig } from "./base";
+import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
 
 // 国家基因组科学数据中心（CNCB/NGDC）
 // 真实 API：
@@ -18,8 +18,8 @@ export const cncbConfig: MCPConnectorConfig = {
 };
 
 export class CNCBConnector extends MCPConnector {
-  constructor() {
-    super("cncb", cncbConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("cncb", cncbConfig, options);
   }
 }
 
@@ -38,8 +38,8 @@ export const cnkiConfig: MCPConnectorConfig = {
 };
 
 export class CNKIConnector extends MCPConnector {
-  constructor() {
-    super("cnki", cnkiConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("cnki", cnkiConfig, options);
   }
 }
 
@@ -54,7 +54,7 @@ export const wanfangConfig: MCPConnectorConfig = {
 };
 
 export class WanFangConnector extends MCPConnector {
-  constructor() {
-    super("wanfang", wanfangConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("wanfang", wanfangConfig, options);
   }
 }

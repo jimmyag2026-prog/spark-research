@@ -1,4 +1,4 @@
-import { MCPConnector, type MCPConnectorConfig } from "./base";
+import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
 
 export const chemblConfig: MCPConnectorConfig = {
   baseUrl: "https://www.ebi.ac.uk/chembl/api/data",
@@ -11,8 +11,8 @@ export const chemblConfig: MCPConnectorConfig = {
 };
 
 export class ChemBLConnector extends MCPConnector {
-  constructor() {
-    super("chembl", chemblConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("chembl", chemblConfig, options);
   }
 
   async search(params: { query?: string; q?: string; limit?: number } & Record<string, unknown>): Promise<unknown> {
@@ -37,8 +37,8 @@ export const pubchemConfig: MCPConnectorConfig = {
 };
 
 export class PubChemConnector extends MCPConnector {
-  constructor() {
-    super("pubchem", pubchemConfig);
+  constructor(options: ConnectorOptions = {}) {
+    super("pubchem", pubchemConfig, options);
   }
 
   async search(params: { name?: string; query?: string } & Record<string, unknown>): Promise<unknown> {

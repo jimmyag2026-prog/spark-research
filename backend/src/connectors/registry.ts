@@ -1,6 +1,26 @@
-import { MCPConnector, type ConnectorMetadata, type MCPConnectorConfig, type MCPTool } from "./base";
+import {
+  MCPConnector,
+  type ConnectorMetadata,
+  type ConnectorOptions,
+  type MCPConnectorConfig,
+  type MCPTool,
+} from "./base";
 import { PDBConnector, UniProtConnector, pdbConfig, uniprotConfig } from "./proteins";
-import { arXivConnector, PubMedConnector, arxivConfig, pubmedConfig } from "./literature";
+import {
+  arXivConnector,
+  CrossRefConnector,
+  EuropePMCConnector,
+  OpenAlexConnector,
+  PubMedConnector,
+  SemanticScholarConnector,
+  arxivConfig,
+  crossrefConfig,
+  europepmcConfig,
+  openalexConfig,
+  pubmedConfig,
+  semanticscholarConfig,
+} from "./literature";
+import { AMinerConnector, aminerConfig } from "./aminer";
 import { CNCBConnector, CNKIConnector, WanFangConnector, cncbConfig, cnkiConfig, wanfangConfig } from "./china";
 import { EnsemblConnector, NCBIConnector, ensemblConfig, ncbiConfig } from "./genomics";
 import { ChemBLConnector, PubChemConnector, chemblConfig, pubchemConfig } from "./chemistry";
@@ -33,16 +53,26 @@ export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: MC
   literature: [
     { name: "pubmed", config: pubmedConfig },
     { name: "arxiv", config: arxivConfig },
+    { name: "openalex", config: openalexConfig },
+    { name: "crossref", config: crossrefConfig },
+    { name: "europepmc", config: europepmcConfig },
+    { name: "semanticscholar", config: semanticscholarConfig },
+    { name: "aminer", config: aminerConfig },
     { name: "cnki", config: cnkiConfig },
     { name: "wanfang", config: wanfangConfig },
   ],
 };
 
-const CONNECTOR_CLASSES: Record<string, new () => MCPConnector> = {
+const CONNECTOR_CLASSES: Record<string, new (options?: ConnectorOptions) => MCPConnector> = {
   uniprot: UniProtConnector,
   pdb: PDBConnector,
   pubmed: PubMedConnector,
   arxiv: arXivConnector,
+  openalex: OpenAlexConnector,
+  crossref: CrossRefConnector,
+  europepmc: EuropePMCConnector,
+  semanticscholar: SemanticScholarConnector,
+  aminer: AMinerConnector,
   cnki: CNKIConnector,
   cncb: CNCBConnector,
   wanfang: WanFangConnector,
@@ -54,19 +84,29 @@ const CONNECTOR_CLASSES: Record<string, new () => MCPConnector> = {
 
 export class ConnectorRegistry {
   private connectors = new Map<string, MCPConnector>();
+  private options: ConnectorOptions;
 
-  registerBuiltins(): this {
+  // options 在这里注入一次，之后所有内置 connector 共用同一个 http / 凭据提供方。
+  constructor(options: ConnectorOptions = {}) {
+    this.options = options;
+  }
+
+  registerBuiltins(options?: ConnectorOptions): this {
+    if (options) this.options = { ...this.options, ...options };
     for (const defs of Object.values(BUILTIN_CONNECTORS)) {
       for (const { name, config } of defs) {
         const Cls = CONNECTOR_CLASSES[name];
-        this.connectors.set(name, Cls ? new Cls() : new MCPConnector(name, config));
+        this.connectors.set(
+          name,
+          Cls ? new Cls(this.options) : new MCPConnector(name, config, this.options),
+        );
       }
     }
     return this;
   }
 
   registerCustom(name: string, config: MCPConnectorConfig): MCPConnector {
-    const connector = new MCPConnector(name, config);
+    const connector = new MCPConnector(name, config, this.options);
     this.connectors.set(name, connector);
     return connector;
   }
@@ -105,6 +145,11 @@ export class ConnectorRegistry {
       metadata: connector.config.metadata ?? null,
       tools: connector.listTools(),
     }));
+  }
+
+  listDomain(domain: string): MCPConnector[] {
+    const names = (BUILTIN_CONNECTORS[domain] ?? []).map((d) => d.name);
+    return names.map((name) => this.connectors.get(name)).filter((c): c is MCPConnector => c !== undefined);
   }
 
   private domainOf(name: string): string {

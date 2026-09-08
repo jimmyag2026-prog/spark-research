@@ -1,3 +1,5 @@
+import { defaultHttp, type HttpClient } from "../http/client";
+
 export type ToolResponseType = "json" | "text";
 
 export interface MCPTool {
@@ -21,16 +23,47 @@ export interface MCPConnectorConfig {
   metadata?: ConnectorMetadata;
 }
 
+// 凭据提供方的结构化契约。connector 层刻意不 import daemon 的 CredentialStore，
+// 避免 connector → daemon 的反向依赖；CredentialStore 结构上满足此接口（AD-2）。
+export interface CredentialProvider {
+  has(connectorId: string): boolean;
+  get(connectorId: string): Record<string, string> | null;
+}
+
+export interface ConnectorOptions {
+  // 可注入的 http 层，供 fixture 回放使用；默认走真实网络。
+  http?: HttpClient;
+  // 只有带凭据的 connector（如 aminer）需要；其余忽略。
+  credentials?: CredentialProvider;
+  // 礼貌头联系邮箱（OpenAlex/CrossRef 的 polite pool）。
+  contactEmail?: string;
+  userAgent?: string;
+}
+
 export class MCPConnector {
   readonly name: string;
   readonly config: MCPConnectorConfig;
+  protected readonly http: HttpClient;
+  protected readonly options: ConnectorOptions;
 
-  constructor(name: string, config: MCPConnectorConfig) {
+  constructor(name: string, config: MCPConnectorConfig, options: ConnectorOptions = {}) {
     this.name = name;
     this.config = config;
+    this.options = options;
+    this.http = options.http ?? defaultHttp;
   }
 
   private __handlingTool = "";
+
+  // 子类可覆写：为请求追加礼貌头 / 鉴权头。
+  protected headersFor(_toolName: string): Record<string, string> {
+    return {};
+  }
+
+  // 子类可覆写：为请求追加查询参数（如 mailto）。
+  protected queryFor(_toolName: string): Record<string, string> {
+    return {};
+  }
 
   async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
     const tool = this.config.tools.find((t) => t.name === toolName);
@@ -66,7 +99,14 @@ export class MCPConnector {
       : new URL(path.replace(/^\//, ""), this.config.baseUrl.endsWith("/") ? this.config.baseUrl : this.config.baseUrl + "/");
     const isText = tool.responseType === "text";
     const isPost = (tool.method ?? "GET") === "POST";
-    const headers: Record<string, string> = { Accept: isText ? "*/*" : "application/json" };
+    const headers: Record<string, string> = {
+      Accept: isText ? "*/*" : "application/json",
+      ...this.headersFor(toolName),
+    };
+
+    for (const [key, value] of Object.entries(this.queryFor(toolName))) {
+      url.searchParams.set(key, value);
+    }
 
     if (isPost) {
       headers["Content-Type"] = "application/json";
@@ -76,12 +116,13 @@ export class MCPConnector {
       }
     }
 
-    const response = await fetch(url, {
+    const response = await this.http.request(url.toString(), {
       method: tool.method ?? "GET",
       headers,
       body: isPost ? JSON.stringify(remaining) : undefined,
     });
     if (!response.ok) {
+      // 错误消息只带状态码，绝不回显响应体或请求头（可能含凭据）。
       throw new Error(
         `Connector "${this.name}" tool "${toolName}" failed: HTTP ${response.status}`,
       );
