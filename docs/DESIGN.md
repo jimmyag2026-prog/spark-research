@@ -113,6 +113,15 @@ P3 落地口径（record 类型映射，不新增 record 类型）：
 - 产出物：**Idea 卡**（假设陈述 + 支持文献 + 反对文献 + 待验证点）入思路库
 - 调研反馈：对用户已有的思路/草稿给出基于文献的批判性反馈（引用真实文献，标注证据类型）
 
+P4 落地口径：
+- Idea 卡 = `idea` record，`evidence=inferred`，`metadata.kind="idea_card"`；不新增 record 类型
+- 证据边方向按**语义**读（「A 支持 B」）：`paper --supports--> idea` / `paper --contradicts--> idea`。
+  与 P3 的 `cites`（新产物 → 被引论文）方向相反是有意的——查一条 idea 的支撑文献看它的 incoming 边
+- 两条硬门（schema 校验层，违反即重试一次、仍违反则拒绝落卡）：
+  ① 每条证据要么给库内 bibtex key，要么显式 `inferred:true`；库外 key 视同伪造引用（与 A3-4 同口径）
+  ② `contradicting` 至少 1 条——给不出反面证据的「共探」只是附和；库里没有反证就明说并标 inferred
+- 会话模式挂在 orchestrator 上（`chat({mode:"coexplore"})`），与默认 chat 并列，不走规划/执行/review 循环
+
 ### 域 B：实验验证
 
 **B1 干实验（in silico）**
@@ -163,12 +172,30 @@ Record 类型：
 ### 域 D：创新性验证与梳理
 
 **D1 Novelty check pipeline**
-1. Claim 提取：从 idea 卡或结论卡提取可检验的创新点陈述
+1. Claim 提取：从 idea 卡或结论卡提取可检验的创新点陈述（P4：1-5 条，每条配 2-3 个英文检索式）
 2. 密集检索：针对每个 claim 多源检索（含语义近邻检索，Semantic Scholar/OpenAlex 的相关论文 API）
 3. 对比报告：逐 claim 列出最接近的已有工作 + 相同点 + 差异点 + 新颖性评级（novel / incremental / existing，附证据）
-4. Reviewer 复核：报告里每条「已有工作」引用必须真实存在（走 A3-4 同一套引用核验）
+4. **评级校验层（P4 新增，确定性代码）**：模型给的评级要被检索结果的可计算特征约束，否则「新颖性」等于让模型给自己的想法打分。规则见下表
+5. Reviewer 复核：报告里每条「已有工作」引用必须真实存在（走 A3-4 同一套引用核验；knownKeys = 库内 key ∪ 本次检索候选）
 
-**D2 与思路库联动**：每个 Idea 卡有 novelty 状态字段（unchecked / checked-novel / checked-overlap），检查结果作为 record 挂到证据图。
+评级校验规则（每条都是纯函数，可单测）：
+
+| 规则 | 触发 | 后果 |
+|------|------|------|
+| `no_candidates` | 检索一条候选都没返回 | 结论不可用（**检索不到 ≠ 新颖**） |
+| `rating_without_nearest` | 有候选却不列最近邻 | 结论不可用 |
+| `unknown_work` | 引用了候选清单外的 key | 结论不可用 |
+| `existing_without_high_affinity` | 评 existing 却没引到高相似候选 | 降级为 incremental |
+| `novel_despite_high_affinity` | 存在高相似候选却评 novel | 升级为 existing |
+
+「相似度」是确定性计算（claim/检索式与候选标题+摘要的内容词覆盖率），不是模型给的分；报告里模型评级与校正后评级都列出。
+
+**D2 与思路库联动**：每个 Idea 卡有 novelty 状态字段（unchecked / checked-novel / checked-incremental / checked-overlap），检查结果作为 record 挂到证据图。
+
+P4 落地口径：
+- 报告 = artifact + `artifact` record（`metadata.kind="novelty_report"`，`evidence=inferred`），`derives_from` 边连 idea，`cites` 边连命中库内的候选论文
+- 状态取最保守的一条：任一 claim `existing` → checked-overlap；否则任一 `incremental` → checked-incremental；全 `novel` → checked-novel
+- 任一 claim 结论不可用 → 状态**维持 unchecked**，但报告指针仍写回 idea（「查过但没查出来」与「没查过」必须能区分）
 
 ### 域 E：结论分析与 Review
 
@@ -231,6 +258,7 @@ Record 类型：
 | AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批 |
 | AD-7 | 前端保持轻量 vanilla JS 到 P7，API 先行 | CLI/API 是能力真源，UI 是投影；避免过早绑定框架 |
+| AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 

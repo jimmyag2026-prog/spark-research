@@ -9,9 +9,26 @@ import type { ReviewResult } from "../reviewer/rules";
 import { LLMRouter, type ChatMessage } from "../llm/router";
 import { SubAgentFactory, type SubAgentType } from "./sub_agent";
 import type { Project, ProjectManager } from "../project/manager";
+import { LibraryStore } from "../literature/library";
+import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
+import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 
 const TASK_KINDS = ["analysis", "code", "connector", "compute", "subagent", "skill"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
+
+// 会话模式（P4）：chat = P1-P3 的规划/执行/review 循环；coexplore = 思路共探。
+export const SESSION_MODES = ["chat", "coexplore"] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
+export interface CoExploreSessionResult {
+  sessionId: string;
+  projectSlug: string | null;
+  // 批判性讨论正文（就是给用户看的回复）。
+  response: string;
+  card: IdeaCard | null;
+  stored: StoredIdeaCard | null;
+  grounding: GroundingReport | null;
+}
 
 export interface PlannedTask {
   id: string;
@@ -99,6 +116,14 @@ const SKILL_CATALOG: SkillDef[] = [
     context:
       "Drive lab devices through the lab protocol layer with the safety gate enabled. Record observed device readings.",
     keywords: ["lab", "experiment", "dry-wet", "仪器", "实验", "湿实验", "反应", "合成"],
+  },
+  {
+    name: "ideation",
+    context:
+      "Co-explore a research idea Socratically against the project library, then check its novelty. " +
+      "Every claim carries a [@key] citation to a library paper or an explicit (inferred) marker. " +
+      "Produces idea cards and novelty reports as records in the evidence graph.",
+    keywords: ["idea", "hypothesis", "novelty", "co-explore", "思路", "假设", "新颖", "创新点"],
   },
 ];
 
@@ -438,7 +463,81 @@ export class OrchestratorAgent {
     this.daemon.executionLog.record({ ts: new Date().toISOString(), sessionId, actor, action, message });
   }
 
-  async chat(req: { sessionId: string; message: string; model?: string }): Promise<{ response: string; review?: ReviewResult }> {
+  // ── Co-explore 会话模式（P4，DESIGN 域 A4）──────────────────────────────────
+  //
+  // 与默认 chat 是**并列**的会话模式，不是它的一个分支：co-explore 不做规划/执行/review 循环，
+  // 它只做一件事——围绕用户的思路做有文献支撑的批判性探讨，并产出结构化 Idea 卡。
+  // 默认路径（mode 缺省 = "chat"）的行为与 P1-P3 完全一致。
+  async coexplore(req: {
+    sessionId: string;
+    message: string;
+    model?: string;
+    // false = 只讨论不落库（多轮共探的中间轮）。
+    persist?: boolean;
+  }): Promise<CoExploreSessionResult> {
+    this.record(req.sessionId, "coexplore", "start", req.message.slice(0, 80));
+    const project = this.projectForSession(req.sessionId);
+    if (!project) {
+      // 没有 ProjectManager 就没有文献库，也就没有 grounding 的对象。
+      // 如实说明而不是退化成一次没有证据的闲聊。
+      return {
+        sessionId: req.sessionId,
+        projectSlug: null,
+        response:
+          "[coexplore] 当前会话没有绑定项目，无法读取项目文献库；" +
+          "co-explore 的观点必须能回链到库内论文，请先 spark-research project new 建立项目。",
+        card: null,
+        stored: null,
+        grounding: null,
+      };
+    }
+
+    const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
+    try {
+      const session = new CoExploreSession({
+        llm: this.llm,
+        library,
+        records: project.records(),
+        model: req.model,
+        projectContext: project.meta.description || undefined,
+        promptDir: join(import.meta.dir, "prompt"),
+      });
+      const turn = await session.turn(req.message, { sessionId: req.sessionId });
+      const stored =
+        req.persist === false ? null : session.save(turn.card, { sessionId: req.sessionId, model: turn.model });
+      this.record(
+        req.sessionId,
+        "coexplore",
+        "card",
+        stored ? `idea record ${stored.recordId}` : "候选卡（未落库）",
+      );
+      return {
+        sessionId: req.sessionId,
+        projectSlug: project.slug,
+        response: turn.card.critique,
+        card: turn.card,
+        stored,
+        grounding: turn.grounding,
+      };
+    } finally {
+      library.close();
+    }
+  }
+
+  async chat(req: {
+    sessionId: string;
+    message: string;
+    model?: string;
+    // 会话模式。缺省 = "chat"，行为与 P1-P3 完全一致。
+    mode?: SessionMode;
+  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null }> {
+    if (req.mode === "coexplore") {
+      const result = await this.coexplore(req);
+      return {
+        response: `[coexplore ${req.sessionId}]\n${result.response}`,
+        ideaRecordId: result.stored?.recordId ?? null,
+      };
+    }
     const result = await this.processRequest(req.message, req.sessionId);
     return {
       response: `[session ${req.sessionId}]\n${result.summary}`,
