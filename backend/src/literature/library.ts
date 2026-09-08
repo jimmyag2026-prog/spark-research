@@ -318,8 +318,12 @@ export class LibraryStore {
       params.push(like, like);
     }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+    // 次序键用 rowid 而不是 id：同一次入库的多篇论文 created_at 完全相同，
+    // 用随机 uuid 排序会让 list() 的顺序**每次进程都不一样**。
+    // 这不只是显示顺序问题——bibtex key 的冲突后缀（a/b/c）按列表顺序分配，
+    // 顺序不定就意味着同一篇论文的引用 key 可能在两次运行之间互换。rowid 即插入顺序，确定。
     const rows = this.db
-      .query(`SELECT * FROM papers${where} ORDER BY created_at, id`)
+      .query(`SELECT * FROM papers${where} ORDER BY created_at, rowid`)
       .all(...params) as PaperRow[];
     let papers = rows.map(mapRow);
     // 标签存 JSON 数组，SQL 层不好过滤，放到应用层做。

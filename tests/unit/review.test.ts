@@ -63,7 +63,8 @@ describe("ReviewDraftGenerator", () => {
     const result = await generator.generate(cards, { topic: "结构预测", sessionId: "s1" });
 
     expect(result.attempts).toBe(1);
-    expect(result.citedKeys.sort()).toEqual([cards[0]!.bibtexKey, cards[1]!.bibtexKey].sort());
+    // 注意：不要用 result.citedKeys.sort()——sort 原地改数组，会污染后面对持久化值的断言
+    expect([...result.citedKeys].sort()).toEqual([cards[0]!.bibtexKey, cards[1]!.bibtexKey].sort());
     expect(result.unknownKeys).toHaveLength(0);
     expect(existsSync(result.path!)).toBe(true);
     // 参考文献区由库内真实条目生成

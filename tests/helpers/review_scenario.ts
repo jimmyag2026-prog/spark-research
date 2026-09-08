@@ -95,7 +95,9 @@ export interface Fixture {
   project: Project;
   library: LibraryStore;
   paperIds: string[];
+  // keys[i] 对应 paperIds[i]（依赖 library.list() 的确定性插入序）
   keys: string[];
+  keyOf: (paperId: string) => string;
 }
 
 // n 篇确定性论文的项目（标题/作者/年份固定 → bibtex key 固定）。
@@ -111,7 +113,8 @@ export function makeProjectWithPapers(n = 3, slug = "p3"): Fixture {
     const added = library.add(
       paperFrom({
         title: `Paper ${i + 1} on protein structure prediction`,
-        authors: [{ name: `${surname} Author` }],
+        // 姓在最后（authorSurname 取最后一个词），保证 key 形如 jumper2020paper
+        authors: [{ name: `Alice ${surname}` }],
         year: 2020 + (i % 5),
         venue: "Nature",
         doi: `10.1000/p3.${i + 1}`,
@@ -121,5 +124,14 @@ export function makeProjectWithPapers(n = 3, slug = "p3"): Fixture {
     );
     paperIds.push(added.paper.id);
   }
-  return { root, manager, project, library, paperIds, keys: libraryKeyIndex(library.list()).keys };
+  const index = libraryKeyIndex(library.list());
+  return {
+    root,
+    manager,
+    project,
+    library,
+    paperIds,
+    keys: index.keys,
+    keyOf: (paperId: string) => libraryKeyIndex(library.list()).byId.get(paperId)!,
+  };
 }

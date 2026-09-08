@@ -79,7 +79,7 @@ describe("extractJsonObject", () => {
 
 describe("ReadingCardGenerator", () => {
   test("生成卡片 → 落 record → cites 边连到 paper record → 阅读状态推进", async () => {
-    const { project, library, paperIds, keys } = fixture();
+    const { project, library, paperIds, keyOf } = fixture();
     const llm = new FakeLlm([cardJson()]);
     const records = project.records();
     const generator = new ReadingCardGenerator({ llm, library, records, projectContext: "蛋白结构预测" });
@@ -88,7 +88,7 @@ describe("ReadingCardGenerator", () => {
 
     expect(attempts).toBe(1);
     expect(card.paperId).toBe(paperIds[0]!);
-    expect(card.bibtexKey).toBe(keys[0]!);
+    expect(card.bibtexKey).toBe(keyOf(paperIds[0]!));
     expect(card.keyFindings.length).toBeGreaterThan(0);
 
     const record = records.get(card.recordId)!;
@@ -186,7 +186,7 @@ describe("ReadingCardGenerator", () => {
 
 describe("卡片读取与渲染", () => {
   test("listReadingCards 取回卡片、每篇只留最新一张、key 按当前库重算", async () => {
-    const { project, library, paperIds, keys } = fixture(2);
+    const { project, library, paperIds, keyOf } = fixture(2);
     const records = project.records();
     const generator = new ReadingCardGenerator({
       llm: new FakeLlm([cardJson(), cardJson({ researchQuestion: "第二版问题" })]),
@@ -199,8 +199,7 @@ describe("卡片读取与渲染", () => {
     const cards = listReadingCards(records, library);
     expect(cards.length).toBe(1);
     expect(cards[0]!.researchQuestion).toBe("第二版问题");
-    expect(cards[0]!.bibtexKey).toBe(keys[0]!);
-    expect(keys[1]).toBeTruthy();
+    expect(cards[0]!.bibtexKey).toBe(keyOf(paperIds[0]!));
   });
 
   test("论文被移出库后，其残留卡片不再参与综述", async () => {
