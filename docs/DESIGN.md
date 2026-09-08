@@ -103,6 +103,11 @@ OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限�
 3. 综述草稿：基于精读卡组织，**每条引用必须能回链到库内真实论文**
 4. 引用核验：Reviewer 检查草稿中每个引用是否存在于库中且内容对得上（扩展现有 rules——这是现有「检测伪造引用」测试的自然延伸）
 
+P3 落地口径（record 类型映射，不新增 record 类型）：
+- 精读卡 = `observation` record，`evidence=sourced`，`metadata.kind="reading_card"`，`cites` 边指向该论文的 `paper` record；卡片里唯一的推断字段 `relationToProject` 在 `metadata.inferredFields` 中标出，**不参与**引用核验的对照基准
+- 综述草稿 = artifact + `artifact` record，`evidence=inferred`，`derives_from` 边连每张精读卡、`cites` 边连每篇被引论文
+- 引用标记形式为 `[@bibtexKey]`，key 与 `lit export --format bibtex` 完全一致（读者可直接对照 .bib）
+
 **A4 Co-explore（思路共探）**
 - 对话模式：围绕研究问题的苏格拉底式探讨，agent 主动检索文献 grounding 自己的观点
 - 产出物：**Idea 卡**（假设陈述 + 支持文献 + 反对文献 + 待验证点）入思路库
@@ -169,10 +174,11 @@ Record 类型：
 **E1 Reviewer 强化**（在现有 veto 机制上叠加）
 - 现有：lineage 版本冲突检测（stale_input/version_mix）、trace-don't-recompute、否决完成
 - 新增检查器（每个都是独立 rule，可单测）：
-  - 引用真实性（服务域 A/D）
+  - 引用真实性（服务域 A/D）—— P3 已落地为 `citation-integrity`：库外 key（含编造 key 与库外真文献）= hard veto；与精读卡冲突 = soft（LLM 辅助，标 inferred）；强断言无引用 = soft
   - 数据-结论一致性：结论卡引用的 observation 是否真实存在于执行记录
   - 统计合理性提示（soft finding）：样本量、多重比较、p-hacking 模式的启发式提示
-- 按位置加权保留：figure/report 中的 claim 比 chat 中的严格
+- 按位置加权保留：figure/report 中的 claim 比 chat 中的严格。
+  **例外**：`citation-integrity` 的 finding 严重度由规则自身定义，不参与位置加权——否则综述草稿（text/markdown）里所有 soft 提示都会被升成 veto，与「soft 只提示不否决」直接冲突（P3 决策 D3）
 
 **E2 结论卡（Conclusion card）**
 - 结构：claim + 证据列表（record 链接）+ limitations + confidence + review 状态（pending / approved / vetoed）
