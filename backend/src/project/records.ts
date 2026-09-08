@@ -171,6 +171,26 @@ export class RecordStore {
     return row ? mapRow(row) : null;
   }
 
+  // 窄口更新：只允许改 title / content / metadata（浅合并）。
+  // type / evidence / origin / artifactId / createdAt 一律不可变——它们是这条 record
+  // 「是什么、从哪来」的身份，改了就不是同一条证据了（要改用 supersedes 边另立一条）。
+  //
+  // 为什么需要它（P4）：idea 卡的 novelty 状态是**生命周期字段**（unchecked → checked-*），
+  // 与 library.reading_status 同类；审计痕迹由 novelty 报告 record + derives_from 边承担，
+  // 不靠在思路库里堆同一个 idea 的历史副本。
+  update(
+    id: string,
+    patch: { title?: string; content?: string; metadata?: Record<string, unknown> },
+  ): ResearchRecord {
+    const existing = this.get(id);
+    if (!existing) throw new RecordValidationError(`record '${id}' not found`);
+    const metadata = patch.metadata ? { ...existing.metadata, ...patch.metadata } : existing.metadata;
+    this.db
+      .query("UPDATE records SET title = ?, content = ?, metadata = ? WHERE id = ?")
+      .run(patch.title ?? existing.title, patch.content ?? existing.content, JSON.stringify(metadata), id);
+    return this.get(id)!;
+  }
+
   list(filter: RecordFilter = {}): ResearchRecord[] {
     const clauses: string[] = [];
     const params: (string | number)[] = [];
