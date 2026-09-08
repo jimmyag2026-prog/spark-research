@@ -36,8 +36,8 @@ backend/src/skills/
 | paper-download | A | P2 落地 |
 | library-curation | A | P2 落地 |
 | literature-review | A | P3 落地 |
-| idea-coexplore | A | P4 |
-| novelty-check | D | P4 |
+| idea-coexplore | A | P4 落地 |
+| novelty-check | D | P4 落地 |
 | protein-analysis | B | P5 |
 | dry-experiment | B | P5 |
 | wet-protocol | B | P6 |
