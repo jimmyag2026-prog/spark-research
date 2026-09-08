@@ -181,3 +181,9 @@ LLM 调用**全部注入 fake**；文献数据来自 P2 的 `search-alphafold` c
   2. Semantic Scholar API key 走凭据服务接上，把「语义近邻检索」这一步真正补齐（偏差 6）
   3. 中文 claim 的检索路径（AMiner），当前只支持英文检索式
   4. 多轮共探的历史压缩：`turn()` 的 history 会随轮数线性增长，长会话下 prompt 会过长
+
+## 主会话验收批注（2026-09-09）
+
+- **边方向（paper→idea）维持**：按字面语义读图最自然；`graph()` 本就双向 BFS，P8 遍历不受影响。方向约定以 DESIGN 本次同步为准。
+- **`RecordStore.update()` 接受**：唯一调用方是 novelty 状态回写，content 变更是按新状态的整卡重渲染（派生视图）；身份字段不可变。生命周期字段可变是设计固有（experiment 状态机、conclusion review 状态同理，P5/P8 复用此口）。审计痕迹由报告 record + derives_from 边承担。
+- **相似度语义化留 backlog**：0.75 词面阈值 + 评级校验层「保留模型原判、违规可见」的兜底可用；语义嵌入牵涉 embedding provider 依赖决策，与「模式 B 真实模型判准率」一并排 P8 前验证清单。
