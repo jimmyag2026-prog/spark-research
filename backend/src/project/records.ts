@@ -1,0 +1,280 @@
+import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ArtifactVersion } from "../artifacts/models";
+import {
+  EDGE_TYPES,
+  EVIDENCE_LABELS,
+  ORIGIN_KINDS,
+  RECORD_TYPES,
+  type EdgeType,
+  type EvidenceLabel,
+  type RecordEdge,
+  type RecordFilter,
+  type RecordGraphData,
+  type RecordInput,
+  type RecordOrigin,
+  type RecordType,
+  type ResearchRecord,
+} from "./models";
+
+interface RecordRow {
+  id: string;
+  project: string;
+  type: string;
+  title: string;
+  content: string;
+  evidence: string;
+  origin_kind: string;
+  origin_ref: string | null;
+  origin_connector: string | null;
+  session_id: string | null;
+  artifact_id: string | null;
+  metadata: string;
+  created_at: string;
+}
+
+interface EdgeRow {
+  source_id: string;
+  target_id: string;
+  type: string;
+  created_at: string;
+}
+
+export class RecordValidationError extends Error {
+  constructor(message: string) {
+    super(`RecordValidation: ${message}`);
+    this.name = "RecordValidationError";
+  }
+}
+
+function mapRow(row: RecordRow): ResearchRecord {
+  const origin: RecordOrigin = {
+    kind: row.origin_kind as RecordOrigin["kind"],
+    sessionId: row.session_id,
+    ref: row.origin_ref,
+    connector: row.origin_connector,
+  };
+  return {
+    id: row.id,
+    project: row.project,
+    type: row.type as RecordType,
+    title: row.title,
+    content: row.content,
+    evidence: row.evidence as EvidenceLabel,
+    origin,
+    artifactId: row.artifact_id,
+    metadata: JSON.parse(row.metadata),
+    createdAt: row.created_at,
+  };
+}
+
+function mapEdgeRow(row: EdgeRow): RecordEdge {
+  return {
+    sourceId: row.source_id,
+    targetId: row.target_id,
+    type: row.type as EdgeType,
+    createdAt: row.created_at,
+  };
+}
+
+// Research Record 存储：7 种 record 类型 + 5 种边（DESIGN 域 C1）。
+// 与 ArtifactStore 同样用 bun:sqlite，schema 见同目录 schema.sql；
+// AD-3：record 与 artifact 同一张证据图、不同表，artifact 类型 record 靠 artifactId 互链。
+export class RecordStore {
+  private db: Database;
+  readonly project: string;
+
+  constructor(dbPath: string, project: string) {
+    this.project = project;
+    this.db = new Database(dbPath);
+    this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA foreign_keys = ON;");
+    this.initSchema();
+  }
+
+  initSchema(): void {
+    const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
+    this.db.exec(schema);
+  }
+
+  create(input: RecordInput): ResearchRecord {
+    const type = input.type;
+    if (!RECORD_TYPES.includes(type)) {
+      throw new RecordValidationError(`unknown record type '${type}'`);
+    }
+    const evidence = input.evidence ?? "inferred";
+    if (!EVIDENCE_LABELS.includes(evidence)) {
+      throw new RecordValidationError(`unknown evidence label '${evidence}'`);
+    }
+    const origin: RecordOrigin = input.origin ?? { kind: "manual" };
+    if (!ORIGIN_KINDS.includes(origin.kind)) {
+      throw new RecordValidationError(`unknown origin kind '${origin.kind}'`);
+    }
+    const artifactId = input.artifactId ?? null;
+    // AD-3：artifact 类型的 record 必须指向 artifacts 表里的某个版本，否则图会断链。
+    if (type === "artifact" && !artifactId) {
+      throw new RecordValidationError("record type 'artifact' requires artifactId");
+    }
+
+    const id = randomUUID();
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    this.db
+      .query(
+        `INSERT INTO records
+         (id, project, type, title, content, evidence, origin_kind, origin_ref,
+          origin_connector, session_id, artifact_id, metadata, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        this.project,
+        type,
+        input.title ?? "",
+        input.content ?? "",
+        evidence,
+        origin.kind,
+        origin.ref ?? null,
+        origin.connector ?? null,
+        origin.sessionId ?? null,
+        artifactId,
+        JSON.stringify(input.metadata ?? {}),
+        createdAt,
+      );
+    return this.get(id)!;
+  }
+
+  // 便捷入口：把一个 artifact 版本登记成证据图上的 artifact record。
+  createFromArtifact(
+    artifact: Pick<ArtifactVersion, "id" | "filename" | "producingCellId">,
+    extra: Partial<RecordInput> = {},
+  ): ResearchRecord {
+    const sessionId = artifact.producingCellId?.split(":")[0] ?? null;
+    return this.create({
+      type: "artifact",
+      title: extra.title ?? artifact.filename,
+      content: extra.content ?? `artifact ${artifact.filename}`,
+      evidence: extra.evidence ?? "computed",
+      origin: extra.origin ?? {
+        kind: artifact.producingCellId ? "cell" : "manual",
+        sessionId,
+        ref: artifact.producingCellId,
+      },
+      artifactId: artifact.id,
+      metadata: extra.metadata ?? {},
+    });
+  }
+
+  get(id: string): ResearchRecord | null {
+    const row = this.db.query("SELECT * FROM records WHERE id = ?").get(id) as RecordRow | null;
+    return row ? mapRow(row) : null;
+  }
+
+  list(filter: RecordFilter = {}): ResearchRecord[] {
+    const clauses: string[] = [];
+    const params: (string | number)[] = [];
+    if (filter.type) {
+      const types = Array.isArray(filter.type) ? filter.type : [filter.type];
+      clauses.push(`type IN (${types.map(() => "?").join(", ")})`);
+      params.push(...types);
+    }
+    if (filter.evidence) {
+      clauses.push("evidence = ?");
+      params.push(filter.evidence);
+    }
+    if (filter.sessionId) {
+      clauses.push("session_id = ?");
+      params.push(filter.sessionId);
+    }
+    if (filter.artifactId) {
+      clauses.push("artifact_id = ?");
+      params.push(filter.artifactId);
+    }
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const limit = filter.limit ? " LIMIT ?" : "";
+    if (filter.limit) params.push(filter.limit);
+    const rows = this.db
+      .query(`SELECT * FROM records${where} ORDER BY created_at, id${limit}`)
+      .all(...params) as RecordRow[];
+    return rows.map(mapRow);
+  }
+
+  count(): number {
+    const row = this.db.query("SELECT COUNT(*) AS n FROM records").get() as { n: number };
+    return row.n;
+  }
+
+  // 建边前两端都必须存在，避免证据图出现悬空引用。
+  link(sourceId: string, targetId: string, type: EdgeType): RecordEdge {
+    if (!EDGE_TYPES.includes(type)) {
+      throw new RecordValidationError(`unknown edge type '${type}'`);
+    }
+    if (sourceId === targetId) {
+      throw new RecordValidationError("self edge is not allowed");
+    }
+    if (!this.get(sourceId)) {
+      throw new RecordValidationError(`source record '${sourceId}' not found`);
+    }
+    if (!this.get(targetId)) {
+      throw new RecordValidationError(`target record '${targetId}' not found`);
+    }
+    const createdAt = new Date().toISOString();
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO record_edges (source_id, target_id, type, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(sourceId, targetId, type, createdAt);
+    return { sourceId, targetId, type, createdAt };
+  }
+
+  edgesOf(id: string): { outgoing: RecordEdge[]; incoming: RecordEdge[] } {
+    const outgoing = this.db
+      .query("SELECT * FROM record_edges WHERE source_id = ? ORDER BY created_at")
+      .all(id) as EdgeRow[];
+    const incoming = this.db
+      .query("SELECT * FROM record_edges WHERE target_id = ? ORDER BY created_at")
+      .all(id) as EdgeRow[];
+    return { outgoing: outgoing.map(mapEdgeRow), incoming: incoming.map(mapEdgeRow) };
+  }
+
+  listEdges(type?: EdgeType): RecordEdge[] {
+    const rows = type
+      ? (this.db
+          .query("SELECT * FROM record_edges WHERE type = ? ORDER BY created_at")
+          .all(type) as EdgeRow[])
+      : (this.db.query("SELECT * FROM record_edges ORDER BY created_at").all() as EdgeRow[]);
+    return rows.map(mapEdgeRow);
+  }
+
+  // 以 rootId 为中心按 depth 双向展开，得到一张可直接渲染的子图。
+  graph(rootId: string, depth = 2): RecordGraphData {
+    const root = this.get(rootId);
+    if (!root) throw new RecordValidationError(`record '${rootId}' not found`);
+    const visited = new Map<string, ResearchRecord>([[rootId, root]]);
+    const edges = new Map<string, RecordEdge>();
+    let frontier = [rootId];
+    for (let level = 0; level < depth && frontier.length > 0; level++) {
+      const next: string[] = [];
+      for (const id of frontier) {
+        const { outgoing, incoming } = this.edgesOf(id);
+        for (const edge of [...outgoing, ...incoming]) {
+          edges.set(`${edge.sourceId}->${edge.targetId}:${edge.type}`, edge);
+          for (const side of [edge.sourceId, edge.targetId]) {
+            if (visited.has(side)) continue;
+            const rec = this.get(side);
+            if (!rec) continue;
+            visited.set(side, rec);
+            next.push(side);
+          }
+        }
+      }
+      frontier = next;
+    }
+    return { rootId, nodes: [...visited.values()], edges: [...edges.values()] };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}

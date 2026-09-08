@@ -207,7 +207,8 @@ Record 类型：
 │  存储层（本地优先）                                            │
 │  ~/.spark-research/projects/<slug>/                          │
 │    project.json  · library.db · records.db ·                 │
-│    papers/ · artifacts/ · experiments/                       │
+│    papers/ · artifacts/(含 artifacts.db) · experiments/       │
+│  ~/.spark-research/state.json (当前项目 + session→project)    │
 │  ~/.spark-research/credentials.json (0600, daemon-only)      │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -217,8 +218,8 @@ Record 类型：
 | # | 决策 | 理由 |
 |---|------|------|
 | AD-1 | Project 为持久层根，session 挂在 project 下 | 科研单位是课题；差异化主张 §3.1 |
-| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt |
-| AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致 |
+| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt。P1 落地口径：daemon 的 `credentials` 方法只回「是否已配置 + 字段名」，值本体不出 daemon；无该 permit 的 kernel 连元数据都拿不到 |
+| AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致。P1 落地：`records.artifact_id` → `artifacts.id`，且 `artifacts.project_slug` 指向真实 project |
 | AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
 | AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批 |
