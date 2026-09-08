@@ -104,7 +104,7 @@ OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限�
 4. 引用核验：Reviewer 检查草稿中每个引用是否存在于库中且内容对得上（扩展现有 rules——这是现有「检测伪造引用」测试的自然延伸）
 
 P3 落地口径（record 类型映射，不新增 record 类型）：
-- 精读卡 = `observation` record，`evidence=sourced`，`metadata.kind="reading_card"`，`cites` 边指向该论文的 `paper` record；卡片里唯一的推断字段 `relationToProject` 在 `metadata.inferredFields` 中标出，**不参与**引用核验的对照基准
+- 精读卡 = `reading` record（P3 起独立类型，与实验 `observation` 分离），`evidence=sourced`，`metadata.kind="reading_card"`，`cites` 边指向该论文的 `paper` record；卡片里唯一的推断字段 `relationToProject` 在 `metadata.inferredFields` 中标出，**不参与**引用核验的对照基准
 - 综述草稿 = artifact + `artifact` record，`evidence=inferred`，`derives_from` 边连每张精读卡、`cites` 边连每篇被引论文
 - 引用标记形式为 `[@bibtexKey]`，key 与 `lit export --format bibtex` 完全一致（读者可直接对照 .bib）
 
@@ -144,6 +144,7 @@ Record 类型：
   decision     决策点（为什么选方案 A 不选 B）
   experiment   实验（干/湿，含参数、状态机状态）
   observation  观察（实验产出的原始发现）
+  reading      精读卡（文献的结构化阅读笔记）
   conclusion   结论卡（claim + evidence + limitations + review 状态）
   paper        文献（库内论文的引用锚点）
   artifact     产物（现有：代码/图/数据文件，带 lineage）

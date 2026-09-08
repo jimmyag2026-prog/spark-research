@@ -103,7 +103,7 @@ describe("P3 e2e 回放 · 10 篇文献 → 精读卡 → 综述 → 引用核�
     expect(cards).toHaveLength(PAPER_COUNT);
     expect(llm.cardPrompts).toHaveLength(PAPER_COUNT);
     // 每张卡片一条 observation record + 一条指向 paper record 的 cites 边
-    expect(records.list({ type: "observation" })).toHaveLength(PAPER_COUNT);
+    expect(records.list({ type: "reading" })).toHaveLength(PAPER_COUNT);
     expect(records.listEdges("cites").length).toBeGreaterThanOrEqual(PAPER_COUNT);
     expect(library.list().every((p) => p.readingStatus === "read")).toBe(true);
 

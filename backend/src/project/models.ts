@@ -5,6 +5,7 @@ export const RECORD_TYPES = [
   "decision",
   "experiment",
   "observation",
+  "reading",
   "conclusion",
   "paper",
   "artifact",

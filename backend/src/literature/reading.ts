@@ -304,7 +304,7 @@ export class ReadingCardGenerator {
     // record 类型选 observation：精读卡是「对一篇文献的观察」，evidence=sourced 表明
     // 它的内容锚在一个外部来源上（区别于实验产出的 observed）。见 devlog P3 决策 D1。
     const record = records.create({
-      type: "observation",
+      type: "reading",
       title: `精读卡：${paper.title}`,
       content: renderReadingCard(card),
       evidence: "sourced",
@@ -358,7 +358,7 @@ function cardFromRecord(record: ResearchRecord, keyById: Map<string, string>): S
 export function listReadingCards(records: RecordStore, library: LibraryStore): StoredReadingCard[] {
   const keyById = libraryKeyIndex(library.list()).byId;
   const latest = new Map<string, StoredReadingCard>();
-  for (const record of records.list({ type: "observation" })) {
+  for (const record of records.list({ type: "reading" })) {
     const card = cardFromRecord(record, keyById);
     // 库里已删除的论文，其残留卡片不再参与综述与核验。
     if (!card || !library.get(card.paperId)) continue;

@@ -92,7 +92,7 @@ describe("ReadingCardGenerator", () => {
     expect(card.keyFindings.length).toBeGreaterThan(0);
 
     const record = records.get(card.recordId)!;
-    expect(record.type).toBe("observation");
+    expect(record.type).toBe("reading");
     expect(record.evidence).toBe("sourced");
     expect(record.metadata.kind).toBe("reading_card");
     expect(record.metadata.libraryPaperId).toBe(paperIds[0]!);

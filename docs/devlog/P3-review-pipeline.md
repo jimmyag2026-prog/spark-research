@@ -147,3 +147,10 @@ LLM 调用**全部注入 fake**（`tests/helpers/review_scenario.ts` 的 `FakeLl
 - `ReviewerAgent` 的 `citations` 配置已就位，P8 做报告导出时把 knownKeys/baselines 接上即可，无需再改 reviewer。
 - `tests/helpers/review_scenario.ts` 的 `FakeLlm` / `FakeJudge` 是 P4 起所有 LLM 相关测试的通用脚手架（按 prompt 分派的 `ScriptedLlm` 见 `review_e2e.test.ts`）。
 - **backlog 建议**：真实模型下的 B 类（真 key 假内容）判准率评估，需要一批人工标注的「冲突/一致」样本；这是把 soft finding 升级为可信信号的前提。
+
+## 主会话验收批注（2026-09-09）
+
+- **D1 改判**：采纳「新增 `reading` record 类型」——`observation` 保留给实验产出（P5 即将使用），精读卡独立为 `reading` 类型，避免 P8 报告按证据类型组织时混淆。已随本 PR 修改（models/reading/tests/DESIGN 四处）。
+- **D3 维持**：citation findings 豁免位置加权，保住「模式 B = soft 提示不否决」的设计语义；白名单制重构留到有第二个例外出现时再做。
+- **rowid 次序键改动**：接受，属真 bug 修复（bibtex key 确定性）。
+- **backlog**：模式 B（真 key 假内容）在真实模型下的判准率未测量，排入 P8 前的验证清单。
