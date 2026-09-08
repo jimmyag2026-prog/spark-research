@@ -137,9 +137,10 @@ describe("P3 e2e 回放 · 10 篇文献 → 精读卡 → 综述 → 引用核�
       artifactId: draft.artifactId!,
       location: "text/markdown",
     });
-    expect(check.citations.length).toBeGreaterThanOrEqual(PAPER_COUNT);
+    // 正文 11 处引用 + 参考文献区 10 条条目 = 21 处；条目不做一致性判定，故只判 11 处
+    expect(check.citations).toHaveLength(PAPER_COUNT * 2 + 1);
     expect(check.unknownKeys).toHaveLength(0);
-    expect(check.judgedCount).toBe(check.citations.length);
+    expect(check.judgedCount).toBe(PAPER_COUNT + 1);
     expect(check.findings.filter((f) => f.severity === "hard")).toHaveLength(0);
 
     // ④ 走完整 Reviewer：草稿 artifact 在同一 session 下必须 approved

@@ -35,7 +35,7 @@ backend/src/skills/
 | literature-search | A | P2 落地 |
 | paper-download | A | P2 落地 |
 | library-curation | A | P2 落地 |
-| literature-review | A | P3 |
+| literature-review | A | P3 落地 |
 | idea-coexplore | A | P4 |
 | novelty-check | D | P4 |
 | protein-analysis | B | P5 |

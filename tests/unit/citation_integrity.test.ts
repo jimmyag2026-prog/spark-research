@@ -148,6 +148,23 @@ describe("citationIntegrity", () => {
     expect(result.findings).toHaveLength(0);
   });
 
+  test("参考文献条目不送去做一致性判定（省调用 + 防误报），但仍查 key 是否在库", async () => {
+    const judge = new FakeJudge();
+    const result = await citationIntegrity({
+      draft:
+        "正文陈述[@k1]。\n## 参考文献\n- [@k1] Some Title. Author. 2021. Nature.\n- [@ghost2019fake] Fake. 2019.",
+      knownKeys: ["k1"],
+      baselines: baselines("k1"),
+      judge,
+    });
+    // 只判正文那一处，参考文献那一行跳过
+    expect(judge.seen).toHaveLength(1);
+    expect(judge.seen[0]!.statement).toContain("正文陈述");
+    // 参考文献里的库外 key 照样 hard
+    expect(result.findings.filter((f) => f.severity === "hard")).toHaveLength(1);
+    expect(result.unknownKeys).toEqual(["ghost2019fake"]);
+  });
+
   test("判定器故障 → 汇总成一条可见的 soft finding，不静默当作一致", async () => {
     const result = await citationIntegrity({
       draft: "陈述一[@k1]。陈述二[@k1]。",

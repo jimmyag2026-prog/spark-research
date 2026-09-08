@@ -311,10 +311,12 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             out(renderReadingCard(card));
             out(`\n（record: ${card.recordId}）\n`);
           }
-          out(`✅ 生成 ${cards.length} 张精读卡（项目 ${project.slug}）`);
-          // 失败必须可见，不能被「成功 N 张」盖过去。
+          if (cards.length > 0) out(`✅ 生成 ${cards.length} 张精读卡（项目 ${project.slug}）`);
+          // 失败必须可见，不能被「成功 N 张」盖过去；全失败时更不该先报一个 ✅。
           for (const failure of failures) err(`❌ ${failure.paperId}: ${failure.error}`);
-          if (failures.length > 0) err(`共 ${failures.length} 篇精读卡生成失败`);
+          if (failures.length > 0) {
+            err(`共 ${failures.length}/${targets.length} 篇精读卡生成失败`);
+          }
         }
         library.close();
         project.close();

@@ -132,6 +132,12 @@ export function isStrongClaim(sentence: string): boolean {
   return STRONG_CLAIM_PATTERNS.some((p) => p.test(sentence));
 }
 
+// 参考文献条目：引用标记就是这一行的开头（`- [@key] 标题. 作者. 年. venue.`），
+// 前面没有任何对该文献的陈述。这类行不做一致性判定。
+export function isReferenceEntry(sentence: string, key: string): boolean {
+  return new RegExp(`^[-*\\d.)\\s]*\\[@${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[;,\\]]`).test(sentence.trim());
+}
+
 // 引用核验的对照基准：来自精读卡（reading.ts 的 cardBaselineText）。
 export interface CitationBaseline {
   key: string;
@@ -215,6 +221,10 @@ export async function citationIntegrity(input: CitationIntegrityInput): Promise<
     for (const citation of citations) {
       const baseline = input.baselines.get(citation.key);
       if (!known.has(citation.key) || !baseline) continue;
+      // 参考文献条目（`- [@key] 标题. 作者...`）不是对该文献的陈述，只是条目本身：
+      // 拿它去判「陈述是否与卡片冲突」既浪费一次模型调用，也容易凭空造出误报。
+      // key 是否在库仍然要查（上面 ① 已覆盖），这里只跳过语义判定。
+      if (isReferenceEntry(citation.sentence, citation.key)) continue;
       judgedCount++;
       let judgement: CitationJudgement;
       try {

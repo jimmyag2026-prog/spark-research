@@ -212,6 +212,9 @@ export class ReadingCardGenerator {
     const userPrompt = buildReadingCardPrompt(paper, this.deps.projectContext);
     let lastErrors: string[] = [];
     let lastRaw = "";
+    // 区分「模型没答上来」与「答了但不合 schema」——两种失败的处理动作完全不同
+    // （前者查 key/网络，后者查 prompt/模型能力），错误消息不能把它们混成一句。
+    let lastFailure: "call" | "schema" = "schema";
 
     // 最多两次：第一次正常生成，第二次把校验失败原因回灌给模型（DEVELOPMENT_PLAN 要求「重试一次」）。
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -234,13 +237,14 @@ export class ReadingCardGenerator {
 
       if (!response.ok) {
         lastErrors = [`模型调用失败: ${response.content}`];
-        lastRaw = response.content;
+        lastFailure = "call";
         continue;
       }
       lastRaw = response.content;
       const validation = validateReadingCardPayload(extractJsonObject(response.content));
       if (!validation.ok) {
         lastErrors = validation.errors;
+        lastFailure = "schema";
         continue;
       }
 
@@ -257,10 +261,11 @@ export class ReadingCardGenerator {
       return { card: stored, paper: this.deps.library.get(paper.id)!, attempts: attempt };
     }
 
-    // 如实报错：带上校验失败清单与原始输出的截断片段，便于人工判断是 prompt 问题还是模型问题。
+    // 如实报错：区分失败类型；只有模型确实产出过内容时才附原始片段（否则只是把错误消息复读一遍）。
+    const reason = lastFailure === "call" ? "模型两次都没能返回内容" : "重试 1 次后输出仍不合 schema";
     throw new ReadingCardError(
-      `论文 '${paper.title}' 的精读卡生成失败（重试 1 次后仍不合 schema）: ${lastErrors.join("; ")}` +
-        `\n原始输出（截断 300 字）: ${lastRaw.slice(0, 300)}`,
+      `论文 '${paper.title}' 的精读卡生成失败（${reason}）: ${lastErrors.join("; ")}` +
+        (lastFailure === "schema" && lastRaw ? `\n原始输出（截断 300 字）: ${lastRaw.slice(0, 300)}` : ""),
       { attempts: 2, validationErrors: lastErrors },
     );
   }
