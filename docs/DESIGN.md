@@ -144,8 +144,9 @@ P5 落地口径：
   `prepared/<specHash>/params.json` 存归一化输入。`poll` **先看 done.json 再看 pid**——
   任务写完结果才退出，所以结果在就以结果为准，PID 复用最坏只让已死任务多「运行中」一会儿，
   不会把失败报成成功
-- 不复用 `compute/providers.ts` 的 `ComputeProvider`：那套 `wait()` 是阻塞语义、状态全在内存，
-  跨进程接不上，与 AD-4 要的生命周期契约不是一回事
+- 不复用 v0.1 的 `compute/providers.ts`（`ComputeProvider`）：那套 `wait()` 是阻塞语义、状态全在
+  内存，跨进程接不上，与 AD-4 要的生命周期契约不是一回事。该模块已在 P8（BACKLOG G6）连同其
+  v0.1 测试一并删除——留着两套「提交任务」抽象只会让下一个人选错
 
 **B2 湿实验（wet lab）**
 - 现有：protocol compiler（自然语言 → 设备指令）+ safety gate（试剂兼容/浓度上限/生物安全）+ mock 设备
