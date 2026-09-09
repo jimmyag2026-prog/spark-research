@@ -1,0 +1,4136 @@
+# Spark Research
+
+> 面向科研人群的开源科研工作台（v0.2.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+
+核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
+
+## 文档
+
+- [README](README.md)：安装、快速上手、CLI 一览
+- [产品设计](docs/DESIGN.md)：定位、五大功能域、系统架构、8 条架构决策（AD-1..AD-8）——设计真源
+- [扩展指南](docs/EXTENDING.md)：六个扩展点各一节：契约 + 最小可运行示例 + 怎么测 + 放哪里
+- [开发与验证计划](docs/DEVELOPMENT_PLAN.md)：阶段划分 P0-P9、每阶段的验证与退出标准、工程纪律 9 条
+- [外部评审简报](docs/REVIEW_BRIEF.md)：15 分钟进入状态：架构、方法、已知缺陷、最想被挑战的问题
+- [Backlog](docs/BACKLOG.md)：未决事项唯一登记处（v0.3 候选 / 等外部输入）
+- [CHANGELOG](CHANGELOG.md)：版本变更
+- [llms-full.txt](llms-full.txt)：上述文档 + 全部技能手册的全量纯文本
+
+## CLI
+
+```
+spark-research project new|list|open|archive
+    项目管理。文献库/思路库/实验/结论都挂在项目下
+spark-research lit search|add|list|pdf|read|review|export|sources
+    文献域：跨源检索、入库、PDF、精读卡、综述、导出
+spark-research idea new|list|check
+    思路库：Co-explore 产出 Idea 卡 + novelty check
+spark-research exp new|run|status|list|platforms
+    干实验闭环：设计 → 提交 → 回收 → 分析（断点可续跑）
+spark-research lab compile|approve|reject|simulate|status|backends
+    湿实验：编译 → 安全门 → **人工批准** → 模拟器执行
+spark-research conclusion list|show|review
+    结论卡评审。只有 approved 进报告结论区
+spark-research report export|stats
+    证据图 → 带证据链接的 Markdown 报告
+spark-research capabilities [--json] [--probe]
+    能力自描述：从真实注册表生成的清单
+spark-research config list|get|set|unset|path
+    用户配置（env > config.json > 默认值）
+spark-research new skill|connector|platform <name>
+    脚手架：生成带测试桩的扩展点模板
+spark-research mcp
+    以 MCP server 模式运行（stdio），供外部 agent 接入
+spark-research server [port]
+    启动 HTTP API + Web 工作台（默认 4321）
+```
+
+## 作为 MCP 工具箱接入
+
+```bash
+spark-research mcp    # stdio 传输
+```
+
+暴露 24 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+
+- `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
+- `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
+- `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
+- `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
+- `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
+- `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
+- `lit_review_draft`（长任务，同步等待）：精读卡已经齐了，要产出一份带真实引用的综述草稿时。生成后立即跑 citation-integrity 核验，返回体里 vetoed=true 表示草稿里有伪造引用或库外引用——**那份草稿不能拿去用**，要先修引用。
+- `lit_export`：要把项目文献库交给写作工具（LaTeX / Zotero）时。
+- `idea_coexplore`（长任务，同步等待）：用户抛出一个研究想法、想被挑毛病、想判断方向值不值得做时。这不是「附和式头脑风暴」：产出的 Idea 卡**强制**包含至少一条反对证据，每条观点要么给库内 bibtexKey，要么显式标 inferred。
+- `idea_list`：要看项目里已经有哪些想法、哪些还没做过创新性核验时。
+- `idea_novelty_check`（长任务，同步等待）：一个想法成形后、投入实验之前，问「有没有人做过 / 我们新在哪」时。流程是：抽 claim → 每条 claim 多路检索真实文献 → 逐条列最近邻 + 相同点 + 不同点 + 评级。
+- `exp_design`：要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
+- `exp_run`（长任务，同步等待）：exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
+- `exp_list`：要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
+- `lab_compile`：要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
+- `lab_status`：要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
+- `records_timeline`：要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
+- `record_get`：要核对某条记录的证据链时——「这个结论是基于什么」「这个观察来自哪次运行」。返回记录本体 + 出入边 + 关联 artifact 内容。
+- `conclusion_list`：要看项目里的结论卡及其评审状态时。只有 review=approved 的结论才会进研究报告的「结论」区，pending / vetoed 进「待验证」区。
+- `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
+- `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
+- `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
+
+**刻意不暴露的动作**（设计声明，不是未实现清单）：
+
+- `lab_approve`：AD-6：湿实验执行前的人工审批是硬门。若 agent 能自己批准，它就能自己编译、自己批准、自己执行，approve gate 退化成注释。 人来做：`spark-research lab approve <id> --actor <名字>（或在工作台实验面板点「批准」）`
+- `lab_reject`：拒绝同样是记名决策，会落一条 decision record；由人署名才有审计意义。 人来做：`spark-research lab reject <id> --actor <名字> --reason <理由>`
+- `lab_simulate`：执行协议是物理世界动作的模拟入口，且只允许从 awaiting_approval 经人工批准进入。开放它等于绕过 approve gate。 人来做：`spark-research lab simulate <id>（须先经人工 approve）`
+- `conclusion_review`：结论卡能否进报告结论区是可信度的最后一道闸。让外部 agent 给自己产出的结论盖章，等于取消这道闸。预评估已通过 conclusion_get 只读开放。 人来做：`spark-research conclusion review <id> --actor <名字>`
+- `project_archive`：归档会把项目移出默认视图，是破坏性的组织动作，不应由外部 agent 代劳。 人来做：`spark-research project archive <slug>`
+
+## 能力面
+
+### 数据源 Connector（17）
+
+- **chemistry**：chembl / pubchem
+- **genomics**：ensembl / ncbi / cncb
+- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang
+- **proteins**：uniprot / pdb / alphafold
+
+可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。
+
+### 干实验平台（2，默认 pyref）
+
+- pyref / openmm
+
+### 湿实验后端（2，默认 opentrons_simulate）
+
+- opentrons_simulate / mock_devices
+
+### 技能（10）
+
+- **dry-experiment**（域 B）：先在计算机上验一遍 / 跑一个 MD 算例 / 设计一个仿真 / 实验跑挂了能不能续跑
+- **idea-coexplore**（域 A）：我有个想法 / 帮我挑毛病 / 这个方向值不值得做 / 陪我想清楚这个假设
+- **library-curation**（域 A）：把这篇加进文献库 / 整理文献库 / 导出 BibTeX / 标记已读 / 给这批论文打标签
+- **literature-review**（域 A）：写一篇综述 / 相关工作章节 / 把这些论文串成一段叙述 / 帮我核对引用是不是真的
+- **literature-search**（域 A）：找相关工作 / 背景调研 / 这个领域有哪些工作 / 帮我查文献 / 为综述准备候选池
+- **novelty-check**（域 D）：这个想法有没有人做过 / 我们相对已有工作新在哪 / 查一下新颖性 / 有没有撞车的论文
+- **paper-download**（域 A）：下载这篇论文 / 把 PDF 拿到本地 / 库里哪些论文有全文 / 补全文献库的 PDF
+- **protein-analysis**（域 B）：这个蛋白长什么样 / 有没有可用的结构 / AlphaFold 模型信得过吗 / 查一下这个 UniProt
+- **research-report**（域 C/E）：整理成一份报告 / 导出研究报告 / 评审这张结论卡 / 这个结论能不能写进论文
+- **wet-protocol**（域 B）：把这个实验方案变成协议 / 先在模拟器上验一遍 / 编译成 Opentrons 脚本 / 这个协议安全吗
+
+### 规则
+
+- 湿实验安全门（拦截）：chemical_compatibility / concentration_limit / biosafety / volume_capacity
+- 引用真实性：citation-integrity（库外 key = hard veto）
+- 结论卡评审：data-consistency / capability-labeling / stats-plausibility（任一 hard → vetoed）
+- novelty 评级校验（确定性覆盖模型评级）：no_candidates / rating_without_nearest / unknown_work / existing_without_high_affinity / novel_despite_high_affinity
+
+## 证据图
+
+- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact
+- 边类型：supports / contradicts / derives_from / cites / supersedes
+- 证据标签：observed / sourced / computed / inferred
+- 边方向按语义读：`paper --supports--> idea`（查一条 idea 的支撑文献看它的 incoming 边）；`cites` 是新产物 → 被引论文；`derives_from` 是产物 → 来源。
+
+## 配置
+
+优先级：环境变量 > `~/.spark-research/config.json` > 默认值。
+
+- `defaultModel`（默认 moonshotai/kimi-k2.6，env `SPARK_RESEARCH_MODEL`）：所有 LLM 调用的默认模型（provider 由模型名推断）
+- `defaultProvider`（默认 —）：`spark-research auth` 记录的默认 provider（key 选取顺序）
+- `contactEmail`（默认 spark-research@example.invalid，env `SPARK_RESEARCH_CONTACT_EMAIL`）：文献 API 礼貌头里的联系邮箱（OpenAlex/CrossRef 的 polite pool）
+- `userAgent`（默认 —，env `SPARK_RESEARCH_USER_AGENT`）：文献 connector 的 User-Agent（默认由版本号 + 项目地址 + contactEmail 拼出）
+- `wetBackend`（默认 opentrons_simulate，env `SPARK_RESEARCH_WET_BACKEND`）：湿实验默认执行后端
+- `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
+- `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
+- `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
+- `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
+- `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
+
+## 用这个工作台时必须知道的几条
+
+1. **湿实验执行前的人工批准是硬门**（AD-6）。安全门通过 ≠ 可以执行；approve / reject / simulate 不对外部 agent 开放。
+2. **引用必须能回链到项目文献库内的真实论文**。库外 key 会被 citation-integrity 判为伪造引用并 veto；写引用只能用 `lit list` 给出的 bibtexKey。
+3. **检索不到 ≠ 新颖**。novelty check 在一条候选都没检到时给出「结论不可用」，不会因此评 novel。
+4. **失败的数据源不许被静默吞掉**。检索结果里每个源有 ok / skipped（未配凭据，不是失败）/ failed 三档；有 failed 就要如实说明覆盖面不全。
+5. **只有 review approved 的结论卡才进报告结论区**，pending 与 vetoed 进「待验证」区并列出阻塞它的 hard finding。报告不替评审人按通过键。
+6. **模拟不是真实数据**。Opentrons 模拟器的读数是 0.0；引用 `simulated=true` 的 observation 却不标注，结论会被 capability-labeling 判 hard。
+
+==============================================================================
+# 全量文档
+==============================================================================
+
+------------------------------------------------------------------------------
+## 文件：README.md
+------------------------------------------------------------------------------
+
+# Spark Research
+
+**面向科研人群的开源科研工作台。** 用自然语言驱动一个可审计的研究代理，走完
+「文献调研 → 思路共探 → 实验验证 → 数据记录 → 创新性核验 → 结论评审 → 报告」的完整循环，
+全过程本地优先、证据可溯源。
+
+> 一句话主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。**
+
+设计与开发文档：[docs/DESIGN.md](docs/DESIGN.md) · [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) ·
+[docs/BACKLOG.md](docs/BACKLOG.md) · [各阶段 devlog](docs/devlog/)
+
+---
+
+## 它和别的东西不一样在哪
+
+三个赌注（详见 DESIGN §3）：
+
+1. **项目是持久层的根，不是聊天记录的标签。** 所有产出挂在 project 下：文献库、思路库、
+   实验、观察、结论、产物，构成一张可查询的证据图（`records.db`）。换台机器、隔半年回来，
+   每条结论都还能追回到产生它的那次执行。
+2. **模型说的话要被确定性代码约束。** 凡是「模型给结论、结论会影响下游动作」的地方，
+   都有一层零 IO 的纯函数按可计算特征卡它（AD-8）：引用必须在库内、novelty 评级要被检索
+   结果约束、结论引用的观察必须真实存在于执行记录。模型判断可以当输入，不能既当运动员又当裁判。
+3. **干湿闭环里物理世界的操作永远不自动化审批。** 湿实验的安全门是必要非充分条件，
+   通过之后停在 `awaiting_approval` 等一个**具名的人**按批准，批的是某一版协议的 hash（AD-6）。
+
+---
+
+## 五大功能域
+
+| 域 | 做什么 | 主要入口 |
+|----|-------|---------|
+| **A 文献调研与写作** | 9 个文献源跨源检索去重入库、OA PDF 下载、结构化精读卡、综述草稿、BibTeX/CSL 导出 | `spark-research lit` |
+| **B 实验验证** | 干实验：仿真平台适配（OpenMM / pyref），`design→dry_run→collect→analyze→conclude` 状态机，断点续跑<br>湿实验：自然语言协议 → Opentrons Python Protocol v2 → 安全门 → 人工 approve → 官方模拟器执行 | `spark-research exp` / `lab` |
+| **C 全流程数据记录** | 8 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
+| **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
+| **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
+
+界面上，CLI 与 HTTP API 是能力真源，Web 工作台是它们的投影（AD-7）——
+UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（有对照测试守着）。
+
+---
+
+## 安装
+
+需要 [Bun](https://bun.sh) ≥ 1.3 与 Python ≥ 3.11。
+
+```bash
+git clone <repo> && cd spark-research
+bun install
+
+# Python 侧（干实验仿真 + 湿实验模拟器）。依赖清单见 pyproject.toml [dependencies]
+uv venv --python 3.12 .venv
+VIRTUAL_ENV=.venv uv pip install numpy pandas jupyter-client ipykernel pytest
+VIRTUAL_ENV=.venv uv pip install openmm      # 可选：OpenMM 干实验平台（pyref 零依赖，不装也能跑）
+VIRTUAL_ENV=.venv uv pip install opentrons   # 可选：湿实验真模拟器（默认后端；会把 numpy 钉到 1.26.x）
+
+bun run build:web                                  # Web 工作台（构建产物不入 git）
+```
+
+配置模型（BYOK，模型无关）：
+
+```bash
+spark-research auth          # 交互式写入 ~/.spark-research/config.json
+# 或直接给环境变量
+export OPENROUTER_API_KEY=…  # 默认路由，默认模型 moonshotai/kimi-k2.6
+export KIMI_API_KEY=…
+```
+
+带 key 的文献源（如 AMiner）走凭据服务，**凭据只在 daemon 进程内**，
+存在 `~/.spark-research/credentials.json`（0600），永不进入 kernel/env/prompt（AD-2）。
+
+---
+
+## 快速开始
+
+一条完整研究线索（就是下面这些命令，`scripts/demo-research-thread.ts` 把它们串成了可重放演练）：
+
+```bash
+# ① 建项目 —— 项目描述就是你的研究问题，它会成为报告的第一节
+spark-research project new 折叠预测 --description "端到端方法能否不依赖 MSA？"
+
+# ② 文献调研入库（跨源检索 + 去重 + 分配 bibtex key）
+spark-research lit search "protein structure prediction" --add
+spark-research lit pdf <paper-id>            # OA PDF 下载
+spark-research lit read --all                # 结构化精读卡
+spark-research lit review --topic 折叠预测    # 综述草稿 + 引用真伪核验
+
+# ③ 思路共探与新颖性核验
+spark-research idea new -m "能不能完全丢掉 MSA？"
+spark-research idea check <idea-id>          # → novel / incremental / existing（带最近邻）
+
+# ④ 干实验闭环（真跑仿真，进程挂了能 --resume 接回来）
+spark-research exp new "阻尼振子基线" --platform pyref --param steps=200
+spark-research exp run <exp-id>              # dry_run → collect → analyze
+
+# ⑤ 湿实验（安全门 → 人工批准 → Opentrons 模拟器）
+spark-research lab compile "取样品50µL加入96孔板，37°C孵育1小时，600nm读取OD"
+spark-research lab approve <exp-id> --actor 张三
+spark-research lab simulate <exp-id>
+
+# ⑥ 结论评审门槛 —— 只有 approved 的结论能进报告的「结论」区
+spark-research conclusion list
+spark-research conclusion review <conclusion-id> --actor 张三
+
+# ⑦ 导出带证据链的研究报告
+spark-research report export --out report.md
+
+# Web 工作台
+spark-research server                        # http://127.0.0.1:4321
+```
+
+亲手跑一遍完整演练（用录制的 cassette + fake 模型 + 真 pyref，零网络）：
+
+```bash
+bun scripts/demo-research-thread.ts
+```
+
+---
+
+## 能力概览
+
+**文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
+AMiner（需 key）· CNKI / 万方（占位，无公开 API）
+**科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
+**仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
+**湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
+**技能（10）**：literature-search · paper-download · library-curation · literature-review ·
+idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-protocol · research-report
+**Reviewer 检查器（4）**：`citation-integrity` · `data-consistency` · `capability-labeling` ·
+`stats-plausibility`（前三条出 hard，最后一条只出 soft 提示）
+
+能力位会一路传到报告措辞里：证据来自非确定性平台就写「区间/趋势对账」而不是「逐位可复现」；
+证据来自模拟执行（Opentrons 全 0.0 读数）就必须在结论里标注，否则检查器直接否决。
+
+---
+
+## 数据放在哪
+
+```
+~/.spark-research/
+  state.json                      当前项目 + session→project 归属
+  credentials.json                0600，仅 daemon 可读
+  projects/<slug>/
+    project.json                  项目元信息
+    library.db                    文献库（论文/作者/标签/笔记/阅读状态）
+    records.db                    证据图：8 类 record + 5 类边
+    papers/                       PDF（不入 git）
+    artifacts/                    产物 + artifacts.db（版本与 lineage）
+    experiments/<platform>/       仿真状态真源：prepared/ 与 runs/
+```
+
+状态真源在磁盘，不在内存：编排进程死了任务还在，重启能接回来。
+
+---
+
+## 测试
+
+```bash
+bun run typecheck        # tsc（后端 + 前端各一次）
+bun test tests/unit/     # 单元 + 契约 + fixture 回放 e2e
+bun test tests/integration/
+bun run test:py          # pytest（仿真 kernel + Opentrons 后端）
+bun run test:e2e         # Playwright 浏览器全流程（会自动构建前端）
+```
+
+LLM 与网络在测试里一律走 fake / 录制回放，**没有一条 CI 路径打真实模型或外部 API**。
+唯一的例外是 `scripts/measure-citation-judge.ts`（真实模型判准率测量），它单独跑、不进 CI。
+
+---
+
+## 扩展（v0.3 预告）
+
+六个扩展点已经在架构上就位，`docs/EXTENDING.md` 与脚手架命令排在下一阶段（P9）：
+
+| 扩展点 | 现在的位置 | 加一个新的要写什么 |
+|--------|-----------|------------------|
+| Skill | `backend/src/skills/<name>/SKILL.md` | 一份带 frontmatter 的说明 + 配套 e2e（AD-5：没有验证不算完成） |
+| Connector | `backend/src/connectors/` | 实现 Connector 契约；要 key 就走 CredentialStore |
+| 仿真平台 | `backend/src/simulation/<id>/` | 实现 `SimulationPlatform`，直接复用现成的契约测试套件当验收 |
+| 湿实验后端 | `backend/src/lab/wet_backend.ts` | 同设备族即插即用；换设备族要把「结构化步骤→设备语言」下沉进 backend |
+| 安全门规则 | `backend/src/lab/orchestrator.ts` | 一个纯函数 + 一条对抗单测 |
+| Prompt 与模型路由 | `backend/src/agents/prompt/` | 双层 prompt（core + workflow），子代理可配独立模型 |
+
+P9 还会补：`spark-research capabilities --json`（机器可读能力清单）、
+llms.txt / llms-full.txt、MCP server 模式（把工作台当工具箱接入任意 MCP 客户端）。
+
+---
+
+## License
+
+Apache 2.0
+
+------------------------------------------------------------------------------
+## 文件：docs/DESIGN.md
+------------------------------------------------------------------------------
+
+# Spark Research v0.2 产品设计
+
+> 状态：随实现更新 · 终稿核对于 P8 收口（2026-09-09）
+> 上游输入：OpenScience 架构分析、AMiner 集成调研（2026-09-07）、Claude Science 产品形态、现有 v0.1 代码资产
+> 配套文档：[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（开发与验证计划）
+
+---
+
+## 一、定位
+
+**Spark Research 是面向科研人群的开源科研工作台**：科研人员用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 实验验证 → 数据记录 → 创新性核验 → 结论评审 → 写作」的完整循环，全过程本地优先、证据可溯源。
+
+一句话主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。**
+
+### 1.1 目标用户
+
+| 用户 | 核心痛点 | Spark Research 的回答 |
+|------|---------|---------------------|
+| 研究生 / 博士后 | 文献调研耗时、综述引用管理混乱 | 项目文献库 + 综述 pipeline + 引用真伪核验 |
+| PI / 课题组长 | 学生结论可信度难核查 | Research Record 证据链 + Reviewer 否决机制 |
+| 企业研发（药物/材料） | 干湿实验数据割裂 | 干湿闭环 + 全流程数据记录 |
+| 独立研究者 | 缺少讨论伙伴、思路难验证新颖性 | Co-explore + Novelty check |
+
+### 1.2 非目标（v0.x 明确不做）
+
+- 不做云端多租户 SaaS（本地优先，单用户/单课题组）
+- 不做通用 IDE / 代码助手（科研任务专用）
+- 不自研模型（模型无关路由，BYOK）
+- 不做文献全文托管服务（只存用户合法获取的 PDF 到本地库）
+
+---
+
+## 二、参照系：吸收什么、不吸收什么
+
+### 2.1 来自 Claude Science（产品形态）
+
+**吸收**：研究循环的产品化表达（literature / data / experiment / write-up 四类工作 + review pass）；「给一个目标就能完成整个循环」的交互心智。
+**不吸收**：托管闭源环境。我们本地优先、数据不出用户机器。
+
+### 2.2 来自 OpenScience（内核架构，已源码级分析）
+
+**吸收**：
+1. **单一 research agent + 隐藏任务型子代理**（explore/execute/review 按工作类型委派，不按学科分身）—— v0.1 已实现，保留
+2. **双层 prompt**（provider-neutral system contract + agent workflow prompt）—— v0.1 已实现，保留
+3. **Connector 统一契约**（id/domain/search/fetch，按学科域组织）—— v0.1 有雏形，v0.2 强化
+4. **技能本地优先加载**（instruction bundle 按需加载，不预填 context）—— v0.1 目录为空，v0.2 落地
+5. **Provenance 信封**（每个产物带 lineage）—— v0.1 已实现 SQLite 版
+
+**不吸收**：
+- 313 技能的铺量路线 —— 我们走「少而深、每个技能有 e2e 验证」路线
+- Modal 单一云算力绑定 —— 保留 provider 抽象，落地顺序按需求定
+
+### 2.3 来自 AMiner 集成调研（凭据架构教训，实测得出）
+
+OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限）导致自定义付费数据源无法在 agent 内使用，只能 fork 改源码。**Spark Research 把这个教训变成原生设计**：
+
+> **凭据分层原则**：所有带凭据的外部访问（AMiner、CNKI、付费 API）只发生在 daemon 进程内的 connector 中；kernel/沙箱子进程永远拿不到凭据本体，只能通过 permit set 授权的 `mcp_call` 请求 daemon 代为访问。凭据存储在 `~/.spark-research/credentials.json`（0600）或系统 Keychain，不进 env、不进 prompt、不进日志。
+
+这让付费/授权数据源成为一等 connector，而不是要开安全口子的例外。
+
+### 2.4 现有 v0.1 资产盘点（直接复用的地基）
+
+| 资产 | 位置 | v0.2 角色 |
+|------|------|----------|
+| Daemon + permit set | `backend/src/daemon/` | 控制核心，扩展凭据服务 |
+| 有状态 Python kernel | `backend/src/kernels/` | 干实验执行引擎 |
+| Artifact + lineage（SQLite） | `backend/src/artifacts/` | 扩展为 Research Record 存储 |
+| Reviewer veto（trace-don't-recompute） | `backend/src/reviewer/` | 结论评审 + 引用核验的载体 |
+| 11 个 connector + registry | `backend/src/connectors/` | 扩展凭据层 + 文献域增强 |
+| Orchestrator + swarm | `backend/src/agents/` | 保留，接入新子代理配置 |
+| Lab protocol compiler + safety gate | `backend/src/lab/` | 湿实验域，mock → 模拟器 |
+| 84 个单元测试 | `tests/unit/` | 测试基线，只增不减（P8 收口时 706） |
+| v0.1 的 `compute/` 任务抽象 | `backend/src/compute/` | **P8 删除**（内存态阻塞契约，被 `SimulationPlatform` 取代） |
+
+---
+
+## 三、差异化主张（相对 OpenScience / Claude Science 的三个赌注）
+
+1. **Project-centric，不是 session-centric**。OpenScience 和 Claude Science 以 workspace/会话为单位；科研的真实单位是**课题**——一个课题横跨数月、数百次会话。Spark Research 的持久层以 Project 为根：文献库、思路库、实验记录、结论卡都挂在项目下跨会话积累。
+2. **全流程 Research Record**。不只记录代码产物（artifact），还记录**思路（idea）、决策（decision）、观察（observation）、结论（conclusion）**，全部进同一张证据图。副产品：天然的电子实验记录本（ELN）+ 可审计的 research trail，直接支撑创新性核验和论文写作。
+3. **干湿闭环**。protocol compiler + safety gate + 设备抽象已有雏形；连同仿真平台 connector，形成「AI 设计 → 干实验仿真 → 湿实验执行 → 数据回传 → 迭代」闭环。这是两个参照系都没有的。
+
+---
+
+## 四、五大功能域设计
+
+### 域 A：文献调研与写作
+
+**A1 文献检索（多源聚合）**
+- Connector 层扩展：现有 arXiv/PubMed + 新增 OpenAlex、CrossRef、EuropePMC、Semantic Scholar（参照 OpenScience 的 literature 域清单。P2 实测：S2 匿名请求持续 429，实际使用建议配置免费 API key——走凭据服务，connector id `semanticscholar`；无 key 时统一检索自动降级为其余源）
+- **AMiner connector**（带凭据，走 §2.3 凭据分层）：29 个 API 已在调研中验证可用
+- CNKI/万方从占位升级为真实实现（依赖可获得的 API 渠道，无渠道则保持占位并明示）
+- 统一检索接口：跨源查询 → 去重（DOI/标题模糊匹配）→ 合并排序
+
+**A2 个人科研项目文献库（Project Library）**
+- 每个 Project 一个 `library.db`（SQLite）：论文元数据、作者、venue、标签、阅读状态、笔记
+- PDF 下载管线（复用已验证的 paper-download 经验：arXiv/EuropePMC OA 直下、bioRxiv 403 自救）；PDF 落 `papers/` 目录，库中存路径 + checksum
+- 引用关系：库内论文互引边（数据来自 OpenAlex/Semantic Scholar 引文 API）
+- 导出：BibTeX / CSL-JSON
+
+**A3 综述与写作 pipeline**
+1. 背景调研：给定研究问题 → 多源检索 → 候选论文清单（人审 or 自动入库）
+2. 逐篇精读卡：每篇生成结构化卡片（问题/方法/结论/局限/与本项目关系），卡片是 record，带来源锚点
+3. 综述草稿：基于精读卡组织，**每条引用必须能回链到库内真实论文**
+4. 引用核验：Reviewer 检查草稿中每个引用是否存在于库中且内容对得上（扩展现有 rules——这是现有「检测伪造引用」测试的自然延伸）
+
+P3 落地口径（record 类型映射，不新增 record 类型）：
+- 精读卡 = `reading` record（P3 起独立类型，与实验 `observation` 分离），`evidence=sourced`，`metadata.kind="reading_card"`，`cites` 边指向该论文的 `paper` record；卡片里唯一的推断字段 `relationToProject` 在 `metadata.inferredFields` 中标出，**不参与**引用核验的对照基准
+- 综述草稿 = artifact + `artifact` record，`evidence=inferred`，`derives_from` 边连每张精读卡、`cites` 边连每篇被引论文
+- 引用标记形式为 `[@bibtexKey]`，key 与 `lit export --format bibtex` 完全一致（读者可直接对照 .bib）
+
+**A4 Co-explore（思路共探）**
+- 对话模式：围绕研究问题的苏格拉底式探讨，agent 主动检索文献 grounding 自己的观点
+- 产出物：**Idea 卡**（假设陈述 + 支持文献 + 反对文献 + 待验证点）入思路库
+- 调研反馈：对用户已有的思路/草稿给出基于文献的批判性反馈（引用真实文献，标注证据类型）
+
+P4 落地口径：
+- Idea 卡 = `idea` record，`evidence=inferred`，`metadata.kind="idea_card"`；不新增 record 类型
+- 证据边方向按**语义**读（「A 支持 B」）：`paper --supports--> idea` / `paper --contradicts--> idea`。
+  与 P3 的 `cites`（新产物 → 被引论文）方向相反是有意的——查一条 idea 的支撑文献看它的 incoming 边
+- 两条硬门（schema 校验层，违反即重试一次、仍违反则拒绝落卡）：
+  ① 每条证据要么给库内 bibtex key，要么显式 `inferred:true`；库外 key 视同伪造引用（与 A3-4 同口径）
+  ② `contradicting` 至少 1 条——给不出反面证据的「共探」只是附和；库里没有反证就明说并标 inferred
+- 会话模式挂在 orchestrator 上（`chat({mode:"coexplore"})`），与默认 chat 并列，不走规划/执行/review 循环
+
+### 域 B：实验验证
+
+**B1 干实验（in silico）**
+- 执行引擎：现有 stateful Python kernel（RDKit/pandas/numpy 已配）
+- **Simulation adapter 接口**：统一的 `SimulationPlatform` 契约（prepare/submit/poll/collect），参照 connector 模式
+- 能力位 `deterministic`：同一 spec 是否逐位可复现（pyref=true；OpenMM CPU=false，多线程浮点归约所致，P5 实测）。observation record 携带该位，E1 检查器与 P8 报告据此选「重算对账」或「区间对账」
+- 首批参考实现（2 个，证明接口通用性）：
+  - 本地进程型：OpenMM（分子动力学，pip 可装，纯本地）
+  - 命令行型：GROMACS（若本机可装）或退一档用 Python 内置仿真脚本作第二实现
+- 后续按需求接：材料计算（VASP/LAMMPS）、EDA 等——接口先行，实现按用户真实课题拉动
+
+P5 落地口径：
+- 两个实现分别是 `openmm`（水盒子能量最小化 + 短时 NVT 平衡，实测 OpenMM 8.6 有 PyPI wheel，
+  纯 CPU 秒级）与 `pyref`（阻尼谐振子 RK4，**零外部依赖 + 有解析解可对照**）。
+  第二实现选 pyref 而不是 GROMACS：契约测试需要一个在任何环境都跑得通的实现，
+  否则 CI 里 openmm 一缺就整套 skip，等于没有契约测试
+- 两个 adapter 都是**子进程型**而非 kernel 内执行：MD 任务动辄数分钟起，占着 stateful kernel
+  会把会话堵死；更关键的是「编排进程被 kill 后任务还在跑」要求任务是独立进程
+- 状态真源在磁盘：`experiments/<platform>/runs/<runId>/{run.json,params.json,done.json,stdout.log}`，
+  `prepared/<specHash>/params.json` 存归一化输入。`poll` **先看 done.json 再看 pid**——
+  任务写完结果才退出，所以结果在就以结果为准，PID 复用最坏只让已死任务多「运行中」一会儿，
+  不会把失败报成成功
+- 不复用 v0.1 的 `compute/providers.ts`（`ComputeProvider`）：那套 `wait()` 是阻塞语义、状态全在
+  内存，跨进程接不上，与 AD-4 要的生命周期契约不是一回事。该模块已在 P8（BACKLOG G6）连同其
+  v0.1 测试一并删除——留着两套「提交任务」抽象只会让下一个人选错
+
+**B2 湿实验（wet lab）**
+- 现有：protocol compiler（自然语言 → 设备指令）+ safety gate（试剂兼容/浓度上限/生物安全）+ mock 设备
+- v0.2 目标：**用 Opentrons 官方模拟器（`opentrons_simulate`）替换 mock**，跑通一次真实协议编译 → 模拟执行 → 结果回传
+- 物理设备对接留 v0.3+（需要真实硬件）
+
+P6 落地口径：
+- 编译目标是 **Opentrons Flex** / Python Protocol API v2（`apiLevel 2.21`），不是 OT-2。
+  两条理由：① opentrons 9.x 已移除 OT-2 支持，`simulate()` 对 OT-2 协议直接 `RuntimeError`；
+  ② OT-2 没有吸光度读板模块，「600 nm 读 OD」在 Flex 上才有真模块，不必退化成注释
+- 执行后端两个：`opentrons_simulate`（**默认**，官方模拟器）与 `mock_devices`（单测后端，
+  零依赖）。mock 验管线、不验协议合法性——一个 opentrons 拒绝解析的脚本在 mock 上一样「跑成功」，
+  所以默认必须是真模拟器
+- **Opentrons 上没有的硬件不假装有**：离心、非四档波长读数、<37 °C 孵育、离机配液一律编译成
+  `[spark-note]` 注释并标 `execution: "manual"`，run log 里是 note 不是执行记录
+- run log 锚定：编译器在每步前注入 `protocol.comment("[spark-step] <id> <action>")`，
+  结构化解析靠这个锚点把每条命令绑回编译产物里的某一步，不依赖 opentrons 的文案措辞
+- `protocolHash` = sha256(生成的脚本源码)，源码里刻意不含编译时间戳——approve gate 批的是这个
+  hash，带时间戳则每次编译都换 hash，approve 永远失效
+- 安全门从三段 if 拆成**四条彼此独立的纯函数规则**（`chemical_compatibility` /
+  `concentration_limit` / `biosafety` / **新增 `volume_capacity`**）。`volume_capacity` 吃编译产物：
+  「单孔累计溢孔」在自然语言层面看不出来，只有排完 deck 累加才知道
+
+**B3 干湿闭环引擎**
+- 状态机：`design → dry_run → (approve gate) → wet_run → collect → analyze → iterate | conclude`
+- 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
+- 断点续跑：状态持久化到 Project 存储，进程重启可恢复
+- 人在环：湿实验执行前强制 approve gate（安全门通过 ≠ 自动执行）
+
+P5 落地口径（干实验部分；`wet_run` 与 approve gate 留 P6）：
+- 状态集 7 个：`design / dry_run / collect / analyze / concluded / iterated / failed`。
+  `iterate` 与 `conclude` 实现为**终态**而不是动作名——iterate 的语义是「这条实验到此为止，
+  另起一条」，新实验是新的 experiment record，用 `supersedes` 边连回旧的
+- 合法转移只有 7 条（`design→dry_run`、`dry_run→collect|failed`、`collect→analyze`、
+  `analyze→concluded|iterated`、`failed→dry_run`）；表外一律拒绝，**不做「顺手纠正」**
+- 状态回写全部走 `RecordStore.update()` 窄口（P4 定的口径：生命周期字段可变，
+  `type/evidence/origin/artifactId/createdAt` 不可变）；每次转移在
+  `metadata.history` 与 `metadata.timestamps` 留时间戳
+- 断点续跑的三种情形由 `resume()` 区分：**任务仍在跑**（无 done.json 且 pid 活着）→ 保持 dry_run；
+  **任务已完成**（有 done.json）→ 直接 collect；**任务已丢失**（无 done.json 且 pid 没了）→
+  标 `failed` 且 `recoverable=true`，可 `retry` 换新 run。
+  「随进程一起被杀」与「算例本身跑挂」必须能分开——前者重跑就好，后者要改参数
+- 证据图：`artifact record --derives_from--> experiment`（每个产出一条）、
+  `observation --derives_from--> experiment` 与各 artifact record、
+  `conclusion --derives_from--> observation/experiment`。
+  experiment 的 evidence 是 `inferred`（设计是推的），observation 是 `computed`（结果是算的）
+- 结论卡在 P5 只落最小结构且 `review` 一律 `pending`（完整 review 门槛见域 E2/P8）
+
+P6 落地口径（湿实验半边 + approve gate）：
+- 湿实验用**另一张状态机**，11 个状态：`design / compile / safety_check / awaiting_approval /
+  wet_run / collect / analyze / concluded / iterated / rejected / failed`，18 条合法转移。
+  与 P5 干实验状态机**刻意分表**：两条链的状态集不同，而且 P5 的转移表被一组穷举测试锁死，
+  往里加状态会把那组测试的语义悄悄改掉。两者共用的是 record 存储、边语义与
+  `RecordStore.update()` 窄口——那些才是该复用的
+- **AD-6 的落点在转移表**：`wet_run` 的唯一入边是 `awaiting_approval → wet_run`，
+  而这条边只有 `approve()` 会走。安全门通过后 `safetyCheck()` 连做两条转移
+  （`compile → safety_check` 与 `safety_check → awaiting_approval`），
+  「门过了」与「停下来等人」在证据图上分得开
+- approve / reject 各落一条 `decision` record（`evidence=inferred`，`derives_from` 边连实验），
+  metadata 记 **谁 / 何时 / 批的是哪个 protocolHash**；正文里列出批的那一版步骤表与当时的安全门结论
+- **重新编译一律清掉已有的 approve/reject 与安全门结论**：协议在改，旧批准不能跨版本存活。
+  另有第二道防线——`execute()` 在执行前把审批的 hash 与当前编译产物的 hash 再对一次，
+  防的是状态机之外的路径（有人直接改了 record、并发编译）
+- 干湿闭环接通两条路径：干实验在 `analyze` → 干线转 `iterated`、湿线 `supersedes` 接棒；
+  干实验已 `concluded` → 只连 `derives_from`（结论成立、拿去湿实验验证）
+- 湿实验的执行产出与 observation 的 `evidence` 是 **`observed`**（run log 记的是设备做了什么），
+  与干实验的 `computed` 区分。模拟器执行同样算 observed，但正文与 metadata 里明写
+  「硬件为模拟」——数据来源必须能被读图的人分辨
+- 湿实验模拟是秒级同步任务（实测单协议 30–60 ms），所以 `execute()` await 子进程结束，
+  不做 P5 那套 detach + poll。磁盘仍是真源（`protocol.py` / `runlog.json` / `done.json`
+  由 python 侧原子写），换进程照样能接回来
+
+### 域 C：全流程数据记录（Research Record）
+
+**C1 数据模型**（扩展现有 artifact/lineage 架构，同一张图）
+
+```
+Record 类型：
+  idea         思路卡（来自 Co-explore 或手动）
+  decision     决策点（为什么选方案 A 不选 B）
+  experiment   实验（干/湿，含参数、状态机状态）
+  observation  观察（实验产出的原始发现）
+  reading      精读卡（文献的结构化阅读笔记）
+  conclusion   结论卡（claim + evidence + limitations + review 状态）
+  paper        文献（库内论文的引用锚点）
+  artifact     产物（现有：代码/图/数据文件，带 lineage）
+
+边类型：
+  supports / contradicts / derives_from / cites / supersedes
+```
+
+- 每条 record 带：类型、内容、时间戳、来源（会话/cell/connector 调用）、证据类型标签（observed/sourced/computed/inferred —— 现有 core.txt 已定义此分类）
+- 存储：`records.db`（每 Project 一个），与 `artifacts` 表通过 id 互链
+
+**C2 时间线与导出**
+- 项目时间线视图（前端）：按时间/类型过滤的 record 流
+- 导出：Markdown 研究报告（按证据图组织：问题 → 思路 → 实验 → 结论，每条带证据链接）；后续可加 PDF
+
+P7 落地口径：
+- 时间线端点 `GET /api/records`，过滤维度 `type`（多选）/ `evidence` / `session` / `since` / `until`，
+  分页 `limit` + `offset`。过滤谓词在 `RecordStore` 里抽成单一真源，`list()` 与 `count()` 共用——
+  否则「这一页」与「总数」两套口径，翻页时总数会自相矛盾
+- 证据子图 `GET /api/records/:id/graph?depth`（1-5），前端用**确定性环形布局**渲染：
+  力导向每次打开长得不一样、截图对不上，不适合做审计用的图
+- record 详情附带 artifact 内容（AD-3 的 id 互链在 API 层一次取到）
+
+P8 落地口径（报告导出，`backend/src/report/export.ts`）：
+- 分区：一、问题（项目描述 + idea 卡的 openQuestions + 文献基础统计）／二、思路（每张 idea 卡的
+  假设、novelty 状态、支持与反对文献，走 supports/contradicts 边）／三、实验（干湿实验的状态、
+  平台或后端、假设、摘要、观察）／四、结论（**只有 review approved 的卡**）／五、待验证
+  （pending 与 vetoed，逐条列出阻塞它的 hard finding）／附录 A 证据索引／附录 B 参考文献
+- **正文全部由代码渲染，不经过模型**。让模型写报告等于给它一次改数据的机会；
+  同一条纪律已经用在 experiment record 与 novelty 报告上
+- 每条陈述带 record id，读者可用 `conclusion show <id>` 或 `GET /api/records/<id>` 回原始记录核对；
+  附录 A 的每个 id 都必须在 records.db 里解析得到（有测试守着，不许有幽灵条目）
+- 能力位进措辞：`deterministic=false` → 「区间/趋势对账」；`simulated=true` → 结论标题挂
+  `[模拟数据]` 并附「模拟器不验证生物学」。混合证据取最保守的一条
+- 出口：`spark-research report export|stats`、`GET /api/report[?format=markdown]`、工作台导出按钮
+
+### 域 D：创新性验证与梳理
+
+**D1 Novelty check pipeline**
+1. Claim 提取：从 idea 卡或结论卡提取可检验的创新点陈述（P4：1-5 条，每条配 2-3 个英文检索式）
+2. 密集检索：针对每个 claim 多源检索（含语义近邻检索，Semantic Scholar/OpenAlex 的相关论文 API）
+3. 对比报告：逐 claim 列出最接近的已有工作 + 相同点 + 差异点 + 新颖性评级（novel / incremental / existing，附证据）
+4. **评级校验层（P4 新增，确定性代码）**：模型给的评级要被检索结果的可计算特征约束，否则「新颖性」等于让模型给自己的想法打分。规则见下表
+5. Reviewer 复核：报告里每条「已有工作」引用必须真实存在（走 A3-4 同一套引用核验；knownKeys = 库内 key ∪ 本次检索候选）
+
+评级校验规则（每条都是纯函数，可单测）：
+
+| 规则 | 触发 | 后果 |
+|------|------|------|
+| `no_candidates` | 检索一条候选都没返回 | 结论不可用（**检索不到 ≠ 新颖**） |
+| `rating_without_nearest` | 有候选却不列最近邻 | 结论不可用 |
+| `unknown_work` | 引用了候选清单外的 key | 结论不可用 |
+| `existing_without_high_affinity` | 评 existing 却没引到高相似候选 | 降级为 incremental |
+| `novel_despite_high_affinity` | 存在高相似候选却评 novel | 升级为 existing |
+
+「相似度」是确定性计算（claim/检索式与候选标题+摘要的内容词覆盖率），不是模型给的分；报告里模型评级与校正后评级都列出。
+
+**D2 与思路库联动**：每个 Idea 卡有 novelty 状态字段（unchecked / checked-novel / checked-incremental / checked-overlap），检查结果作为 record 挂到证据图。
+
+P4 落地口径：
+- 报告 = artifact + `artifact` record（`metadata.kind="novelty_report"`，`evidence=inferred`），`derives_from` 边连 idea，`cites` 边连命中库内的候选论文
+- 状态取最保守的一条：任一 claim `existing` → checked-overlap；否则任一 `incremental` → checked-incremental；全 `novel` → checked-novel
+- 任一 claim 结论不可用 → 状态**维持 unchecked**，但报告指针仍写回 idea（「查过但没查出来」与「没查过」必须能区分）
+
+### 域 E：结论分析与 Review
+
+**E1 Reviewer 强化**（在现有 veto 机制上叠加）
+- 现有：lineage 版本冲突检测（stale_input/version_mix）、trace-don't-recompute、否决完成
+- 新增检查器（每个都是独立 rule，可单测）：
+  - 引用真实性（服务域 A/D）—— P3 已落地为 `citation-integrity`：库外 key（含编造 key 与库外真文献）= hard veto；与精读卡冲突 = soft（LLM 辅助，标 inferred）；强断言无引用 = soft
+  - 数据-结论一致性：结论卡引用的 observation 是否真实存在于执行记录
+  - 统计合理性提示（soft finding）：样本量、多重比较、p-hacking 模式的启发式提示
+- 按位置加权保留：figure/report 中的 claim 比 chat 中的严格。
+  **例外**：`citation-integrity` 的 finding 严重度由规则自身定义，不参与位置加权——否则综述草稿（text/markdown）里所有 soft 提示都会被升成 veto，与「soft 只提示不否决」直接冲突（P3 决策 D3）
+
+**E2 结论卡（Conclusion card）**
+- 结构：claim + 证据列表（record 链接）+ limitations + confidence + review 状态（pending / approved / vetoed）
+- 只有 review approved 的结论卡才能进入导出报告的「结论」区（vetoed/pending 的进「待验证」区）
+
+P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_rules.ts`）：
+
+三个新检查器（与 `citation-integrity` 同形态：零 IO、可单测、**豁免位置加权**——
+结论卡正文是 markdown，位置加权会把所有 soft 升成 veto，直接毁掉「启发式只提示不否决」）：
+
+| rule | 严重度 | 判据 |
+|------|--------|------|
+| `data-consistency` | hard / soft | 证据必须是本项目里真实存在的 observation：断链 / 跨项目 / 类型不对 / 零证据 = hard；无 runId 与 experimentId 锚点（手工登记）、证据图上没连 derives_from 边 = soft |
+| `capability-labeling` | hard | 引用 `simulated=true` 的 observation 却没在 claim/limitations 标注 = hard；证据来自 `deterministic=false` 的平台却声称逐位/完全一致 = hard |
+| `stats-plausibility` | **只有 soft** | 启发式：样本量 < 6 / 多重比较未校正 / p ∈ [0.04, 0.05] / 强因果断言 + 弱证据基础。每条 finding 带 `heuristic: true`，误报漏报都在预期内 |
+
+- **判定规则不可协商**：任一 hard → `vetoed`，零 hard → `approved`。不提供「人工推翻 hard」
+  的路径——三条 hard 全部是可核对的事实判断，不是审美问题；反方向提供 `--veto`
+  （人挡下一条本来会自动通过的结论，理由必填）
+- 每次评审落一条 `decision` record（`kind=conclusion_review`，derives_from → 结论卡），
+  记谁、何时、判了什么、依据哪些 finding。CLI 落 `$USER` 时 `actorSource` 记 `env:USER`；
+  HTTP 缺 actor 直接 400 并记 `http:explicit`（AD-6 的 P7 补充）
+- **报告看的是卡上已落的 review 状态，不是「现在跑一遍会通过」**。没评审就是没评审，
+  报告不替评审人按通过键
+- `review` 字段兼容 P5/P6 的裸字符串形态；解析不出来一律落回 `pending`——
+  一个读不懂的 review 字段绝不能被当成 approved
+
+---
+
+## 五、系统架构
+
+### 5.1 分层图
+
+```
+┌────────────────────────────────────────────────────────────┐
+│  界面层                                                      │
+│  CLI（完整功能）· Web 工作台（项目导航+会话+时间线+实验面板）    │
+│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 是它的投影）     │
+├────────────────────────────────────────────────────────────┤
+│  Agent 层（TypeScript）                                      │
+│  research agent（唯一用户可见）                               │
+│   └ 任务型子代理：explore / execute / review（现有）           │
+│     + literature / lab（新增配置，同一委派机制）               │
+│  双层 prompt：core.txt（provider-neutral）+ workflow prompt   │
+├────────────────────────────────────────────────────────────┤
+│  Daemon 控制层（TypeScript，唯一持凭据进程）                   │
+│  permit set · 凭据服务(新) · Project 管理(新) ·               │
+│  Record/Artifact 存储 · 执行记录 · Reviewer                   │
+├────────────┬──────────────┬──────────────┬─────────────────┤
+│ Kernel 层   │ Connector 层  │ Simulation   │ Lab 层           │
+│ Python      │ 文献×8 蛋白×3 │ adapter 接口  │ protocol compiler│
+│ (stateful)  │ 基因×3 化学×2 │ +OpenMM 等   │ +safety gate     │
+│ control_repl│ +AMiner(凭据) │              │ +Opentrons 模拟器 │
+├────────────┴──────────────┴──────────────┴─────────────────┤
+│  存储层（本地优先）                                            │
+│  ~/.spark-research/projects/<slug>/                          │
+│    project.json  · library.db · records.db ·                 │
+│    papers/ · artifacts/(含 artifacts.db) ·                   │
+│    experiments/<platform>/{prepared,runs}/  (P5 仿真状态真源)  │
+│  ~/.spark-research/state.json (当前项目 + session→project)    │
+│  ~/.spark-research/credentials.json (0600, daemon-only)      │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 5.2 关键架构决策（ADR 摘要）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| AD-1 | Project 为持久层根，session 挂在 project 下 | 科研单位是课题；差异化主张 §3.1 |
+| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt。P1 落地口径：daemon 的 `credentials` 方法只回「是否已配置 + 字段名」，值本体不出 daemon；无该 permit 的 kernel 连元数据都拿不到 |
+| AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致。P1 落地：`records.artifact_id` → `artifacts.id`，且 `artifacts.project_slug` 指向真实 project |
+| AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
+| AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
+| AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
+| AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
+| AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
+
+### 5.3 技能目录（v0.2 首批，共 10 个）
+
+| 技能 | 域 | 验证方式 |
+|------|-----|---------|
+| literature-search | A | 真实多源检索 e2e（fixture 回放进 CI） |
+| paper-download | A | arXiv+EuropePMC 真实下载（已有验证经验） |
+| library-curation | A | 入库/去重/BibTeX 导出单测 |
+| literature-review | A | 10 篇文献 → 综述 → 引用核验全过 |
+| idea-coexplore | A | 对话产出 Idea 卡 + 文献 grounding 检查 |
+| novelty-check | D | 已知领域 idea → 对比报告 → 引用真实性核验 |
+| protein-analysis | B | UniProt/PDB/AlphaFold 链路（P5：真实录制 fixture 回放 e2e，12 用例） |
+| dry-experiment | B | OpenMM 最小 MD 任务端到端（P5：契约测试 ×2 实现 + 真实 SIGKILL 恢复 e2e） |
+| wet-protocol | B | 协议编译 → Opentrons 模拟器执行（P6：2 类协议真模拟器 e2e + 安全门 4 条规则对抗矩阵 + approve gate 单测） |
+| research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效（P8：三检查器单测 + 报告分区归属 + 全链路演练脚本） |
+
+### 5.4 模型路由
+
+- 保持模型无关（现有 LLMRouter：kimi/openai/anthropic/deepseek/qwen/openrouter）
+- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）
+- 默认模型保持 OpenRouter 路由，用户 BYOK
+
+---
+
+## 六、风险与缓解
+
+| 风险 | 缓解 |
+|------|------|
+| CNKI/万方无公开 API | 保持占位 + 文档明示；AMiner 覆盖中文文献检索需求的主路径 |
+| 仿真平台差异大，adapter 过度抽象 | 先 2 个参考实现验证契约，不预设第 3 个 |
+| 证据图复杂化拖慢日常使用 | record 写入全部走 daemon 异步落库；agent 端只感知「记录成功」 |
+| Reviewer 误杀（false veto）拖慢研究 | hard/soft 分级已有；soft 只提示不否决；veto 必须给出可操作的修复指引 |
+| 单人维护 + 上游参照系快速迭代 | 每阶段 devlog 记录与 OpenScience 的架构 diff，季度性对齐一次 |
+
+---
+
+## 七、成功标准（v0.2 发布判据）
+
+1. 一条真实研究线索可以完整走通：提出问题 → 文献调研入库 → Co-explore 出 idea → novelty check → 干实验（OpenMM）→ 结论卡过 review → 导出带证据链的研究报告
+2. 湿实验路径：一个自然语言协议 → 编译 → 安全门 → Opentrons 模拟器执行成功
+3. 测试基线：单元测试从 84 只增不减；每个技能有 e2e 验证；CI 全绿
+4. 文档：README 重写 + 每阶段 devlog + 本设计文档随实现更新
+
+P8 核验结论（逐条证据见 [devlog/P8-wrapup.md](devlog/P8-wrapup.md)）：
+
+| 判据 | 结论 | 证据 |
+|------|------|------|
+| 1 完整研究线索 | ✅ | `scripts/demo-research-thread.ts`（可重放、零网络、CI 入口 `tests/unit/demo_thread.test.ts`）+ 浏览器版 Playwright ①–⑫。**一处偏差**：干实验用 pyref 而非 OpenMM——CI 里不能依赖 openmm 装没装，OpenMM 走的是同一套契约测试 |
+| 2 湿实验路径 | ✅ | `tests/unit/wet_e2e.test.ts` 两类协议在**真** `opentrons.simulate` 下执行；安全门 4 条规则对抗矩阵；Playwright ⑦⑧⑨ 走浏览器版 |
+| 3 测试基线 | ✅ | 单元 706（基线 84 → 655 → 706；P8 删除 v0.1 compute 模块的 12 条属 G6 授权清理）· pytest 48 · Playwright 12 · typecheck 干净 |
+| 4 文档 | ✅ | README 重写、CHANGELOG v0.2.0、9 篇 devlog、本文档随实现更新 |
+
+------------------------------------------------------------------------------
+## 文件：docs/EXTENDING.md
+------------------------------------------------------------------------------
+
+# 扩展 Spark Research
+
+> 面向想把自己的数据源 / 仿真平台 / 实验设备 / 领域知识接进来的科研人员与开发者。
+> 状态：P9（v0.2.0）· 配套：[DESIGN.md](DESIGN.md)（设计真源）· [BACKLOG.md](BACKLOG.md)（未决事项）
+
+Spark Research 有**六个扩展点**。每一节的结构相同：契约 → 最小可运行示例 → **怎么测** → **放哪里**。
+
+先跑一次这条命令，看清当前这台机器上已经有什么：
+
+```bash
+spark-research capabilities            # 人看的表格
+spark-research capabilities --json     # agent 看的清单（schema + 可用性）
+spark-research capabilities --probe    # 顺带真去探测 openmm / opentrons 装没装
+```
+
+清单**从真实注册表生成**，不是手写的。你按本文档接进来的东西，注册之后会自动出现在里面。
+
+三个扩展点有脚手架，别手抄：
+
+```bash
+spark-research new skill <name>
+spark-research new connector <name> [--with-key]
+spark-research new platform <name>
+```
+
+脚手架生成的模板里注释比代码多，那是有意的：样板不长，但样板里的纪律很长，而那些纪律是 P2–P6 实测踩出来的。
+
+---
+
+## 0. 先理解三条贯穿全局的纪律
+
+接任何东西之前，这三条会反复出现：
+
+**① 凭据只在 daemon 进程（AD-2）。**
+带凭据的外部访问只发生在 daemon 内的 connector 里。凭据存在 `~/.spark-research/credentials.json`（0600），不进环境变量、不进 prompt、不进日志、不进错误消息。kernel / 沙箱子进程永远拿不到凭据本体，只能请 daemon 代为访问。
+这条不是洁癖：它来自对 OpenScience 沙箱的实测——那套三层隔离让自定义付费数据源在 agent 内根本用不了，只能 fork 改源码。我们把这个教训做成了原生设计。
+
+**② 失败要可分辨。**
+「没配凭据」不是「调用失败」，「检索不到」不是「不存在」，「进程被杀」不是「算例跑挂」。每一处降级都要留下能区分这些情况的字段，因为下游的判断完全不同（重试 / 换源 / 改参数 / 告诉用户去配 key）。
+
+**③ 模型给的结论要被确定性代码约束（AD-8）。**
+凡是「模型给结论、结论会影响下游动作」的地方，都要有一层零 IO、纯函数、可单测的代码按可计算特征约束它，并把「模型原判」与「校正后」都留在产物里。
+
+---
+
+## 1. Skill
+
+技能是**给 agent 看的操作手册**：怎么组合已有能力、什么情况下不该做什么。它不实现能力——能力在 `backend/src/` 里，文档漂移了以代码为准。
+
+### 契约
+
+一个目录，一个 `SKILL.md`，YAML frontmatter + 正文。frontmatter 的 schema 真源是 `backend/src/skills/frontmatter.ts`，CI 门是 `tests/unit/skill_frontmatter.test.ts`。
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `name` | 是 | 小写 kebab-case，**必须与目录名一致** |
+| `description` | 是 | 同时说清「做什么 + 何时用」，≥40 字符。agent 靠它决定是否加载 |
+| `category` | 是 | `literature` / `ideation` / `experiment` / `report` |
+| `domain` | 是 | DESIGN 的五大功能域 A–E，可用 `/` 连接（`C/E`） |
+| `triggers` | 是 | **用户会怎么开口**。机器可读，是 agent 选技能的第一判据；至少一条 |
+| `connectors` | 是 | 依赖的 connector id（校验器核对其真实存在）；无依赖写 `[]` |
+| `platforms` | 否 | 依赖的仿真平台 id |
+| `validation` | 是 | 配套验证的测试文件路径。**校验器会去磁盘核对文件存在** |
+| `allowed-tools` | 否 | 预期用到的工具 |
+
+三条容易忽略的约束：
+
+- **未知字段一律拒绝**。拼错的 `trigger:`（少个 s）静默失效比报错糟糕得多。
+- `triggers` 写「用户会怎么开口」（"这个想法有没有人做过"），不是能力名（"novelty check"）。agent 匹配的是用户的话。
+- `validation` 让 AD-5「技能必须有配套 e2e 才算完成」从口号变成一道门。写一个还不存在的测试文件路径，CI 立刻红。
+
+正文必须有 **反模式** 小节。说清什么时候**不**该用，比说清用法更能防止 agent 越界——现有 10 个技能全部遵守这条。
+
+### 最小可运行示例
+
+```bash
+spark-research new skill hello-source
+```
+
+生成两个文件：`SKILL.md`（frontmatter 已合规，正文是待填的骨架）与一个配套测试。生成的测试当场就能跑——它先验 frontmatter 合规，然后留一个 TODO 提醒你把技能声称的能力逐条验起来。
+
+参照现成的写法：`backend/src/skills/literature-search/SKILL.md`（能力边界表 + 读懂 `sources` 状态那一步 + 四条反模式）是最完整的一个。
+
+### 怎么测
+
+```bash
+bun test tests/unit/skill_frontmatter.test.ts     # schema 门：10 个技能逐个过
+bun test tests/unit/skill_hello_source.test.ts    # 你新技能的配套验证
+```
+
+frontmatter 合规只是起点。AD-5 要的是「文档说的能力真的存在」：技能说「检索失败时会明确报告 failed 而不是静默吞掉」，那就写一个注入失败源的用例断言 `outcome === "failed"`。
+
+### 放哪里
+
+```
+backend/src/skills/<name>/
+  SKILL.md          必需
+  scripts/          可选：技能专用脚本
+  references/       可选：按需加载的长文档（不预填 context）
+tests/unit/skill_<name>.test.ts    配套验证
+```
+
+装好之后在 `backend/src/skills/README.md` 的技能表里加一行。`spark-research capabilities` 会自动列出它。
+
+---
+
+## 2. Connector
+
+Connector 是**幂等的数据读取**：给定参数返回数据，没有生命周期。需要长任务生命周期的东西（提交、轮询、回收）是 SimulationPlatform，不是 connector——这是 AD-4 的分界。
+
+### 契约
+
+契约只有三件事（基类 `backend/src/connectors/base.ts` 把 HTTP 调用、路径参数替换、错误处理都做完了）：
+
+1. 一份 `MCPConnectorConfig`：`baseUrl` + `tools[]` + `metadata`
+2. 可选覆写 `headersFor(toolName)` / `queryFor(toolName)`：礼貌头、鉴权头、`mailto`
+3. 可选覆写与 tool 同名的方法：需要自定义解析或降级时
+
+`tools[].endpoint` 里的 `{name}` 是路径参数占位符，基类会用同名入参替换并 URL-encode，剩下的入参进查询串。
+
+`metadata` 三个字段决定它在 `capabilities` 里长什么样：
+
+| 字段 | 作用 |
+|------|------|
+| `apiKeyRequired` | 决定可用性档位：需要凭据但没配 → `needs_credential`（检索时被 **skip**，不是失败） |
+| `status` | `available` / `placeholder`（占位实现，调用会失败——cnki / wanfang 是这一档） |
+| `caveat` | **已知的坑**。`available` 说的是「接口实现了」，不等于「无条件可用」 |
+
+`caveat` 值得单独说：Semantic Scholar 的 `apiKeyRequired` 是 `false`，但 P2 实测匿名请求持续 429（7 次尝试全挂）。这种「能调但会撞墙」的事实必须让使用者在选源之前就看到，所以它是元数据的一部分，会原样出现在 `capabilities` 输出里。
+
+> ⚠️ 命名历史包袱：基类叫 `MCPConnector`，但它与 Model Context Protocol **毫无关系**，是一个普通的 HTTP 客户端基类（名字来自 v0.1 的早期设想）。真正的 MCP 实现在 `backend/src/mcp/`。v0.3 会把它改名为 `HttpConnector` 并保留别名，见 BACKLOG V15。
+
+### 最小可运行示例（免 key）
+
+```bash
+spark-research new connector openfree
+```
+
+核心就这么点：
+
+```ts
+export const openfreeConfig: MCPConnectorConfig = {
+  baseUrl: "https://api.example.org/v1",
+  description: "（一句话说清覆盖什么、不覆盖什么）",
+  tools: [
+    { name: "search", description: "检索。参数示例：{ q: 'crispr off-target', limit: 10 }", endpoint: "/search" },
+    { name: "getRecord", description: "按 id 取单条。参数示例：{ id: 'ABC123' }", endpoint: "/records/{id}" },
+  ],
+  metadata: { domain: "api.example.org", apiKeyRequired: false, status: "available" },
+};
+
+export class OpenfreeConnector extends MCPConnector {
+  constructor(options: ConnectorOptions = {}) {
+    super("openfree", openfreeConfig, options);
+  }
+
+  protected headersFor(): Record<string, string> {
+    // 礼貌头：免 key 的公共 API 靠它认出你是谁。别硬编码个人邮箱——走配置。
+    return politeHeaders({ userAgent: this.options.userAgent, contactEmail: this.options.contactEmail });
+  }
+}
+```
+
+参照实现：`backend/src/connectors/literature.ts` 的 `OpenAlexConnector`（`queryFor` 里加 `mailto` 进 polite pool）。
+
+### 最小可运行示例（带 key，走 AD-2）
+
+```bash
+spark-research new connector paidsource --with-key
+```
+
+带凭据的版本多两段，两段都是纪律：
+
+```ts
+  // 凭据分层（AD-2）：connector 只声明自己需要什么，值本体由 daemon 内的
+  // CredentialStore 提供。能拿到值是因为 connector 本来就跑在 daemon 进程里。
+  private credential(): string | null {
+    return this.options.credentials?.get("paidsource")?.api_key ?? null;
+  }
+
+  protected headersFor(): Record<string, string> {
+    const key = this.credential();
+    return {
+      ...politeHeaders({ userAgent: this.options.userAgent }),
+      // 没配凭据时不要塞空 Authorization 头：那会把 401 变成更难查的 400。
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+    };
+  }
+
+  // 未配置凭据 → 明确回「未配置」，不是抛错。统一检索据此标 skipped 而非 failed。
+  async search(params: Record<string, unknown>): Promise<unknown> {
+    if (!this.credential()) {
+      return { configured: false, source: "paidsource", results: [], note: "未配置凭据…" };
+    }
+    return super.call("search", params);
+  }
+```
+
+配置凭据（值以 connector id 为键存进 `credentials.json`，0600）：
+
+```bash
+# 凭据由 daemon 的 CredentialStore 管理；CLI 侧只看得到「是否已配置」
+spark-research lit sources          # 看哪些源需要 key、哪些已配
+```
+
+参照实现：`backend/src/connectors/aminer.ts`（29 个 API 里先接 search / paper-detail 两个核心，未配置时统一降级）。
+
+### 怎么测
+
+**不打真实网络。** 注入一个假的 `HttpClient`，断言「发出去的请求长什么样」与「响应被怎么解析」。真实验证只在本地跑一次并录制成 fixture（`tests/fixtures/literature/`），CI 永远回放。
+
+脚手架生成的测试已经覆盖五件事：工具清单形态、查询参数进 URL、路径参数被替换而不是拼成查询串、未知工具名报错、（带 key 时）未配置的降级路径 + **凭据值不出现在任何错误消息里**。
+
+```bash
+bun test tests/unit/connector_openfree.test.ts
+bun test tests/unit/connectors.test.ts        # 全体 connector 的公共契约
+```
+
+### 放哪里
+
+```
+backend/src/connectors/<name>.ts                 实现 + config
+tests/unit/connector_<name>.test.ts              契约测试
+tests/fixtures/<domain>/<cassette>.json          真实响应录制（可选）
+```
+
+注册两处（漏了第二处会静默退化成不带自定义头的通用 `MCPConnector`）：
+
+- `backend/src/connectors/registry.ts` 的 `BUILTIN_CONNECTORS`：按域加 `{ name, config }`
+- 同文件的 `CONNECTOR_CLASSES`：加 `name: YourConnector`
+
+注册后 `spark-research capabilities` 自动列出，无需手写清单。
+
+---
+
+## 3. SimulationPlatform
+
+干实验平台。与 connector 的分界（AD-4）：connector 是幂等读取，仿真是**长任务生命周期**——prepare / submit / poll / collect / cancel。
+
+### 契约
+
+继承 `SubprocessSimulationPlatform`（`backend/src/simulation/platform.ts`）后只剩三个抽象方法：
+
+| 方法 | 职责 |
+|------|------|
+| `normalize(kind, params)` | 参数归一化 + 预期产出清单。非法参数当场抛 `SimulationSpecError` |
+| `entryPointFor(kind)` | runner 脚本的绝对路径 |
+| `probeCode()` | 可用性探测：一段跑得通就算可用的 python |
+
+外加三个属性：`id` / `description` / `deterministic` / `kinds`。
+
+生命周期、磁盘状态真源、断点续跑全在基类里，**不要在子类里重新发明**。
+
+四条来自 P5 实测的硬要求：
+
+1. **submit 不阻塞**（基类保证）。编排进程被杀之后，任务还得活着。
+2. **runner 自己写 `done.json`，且写完全部结果才写它**。`poll` 先看 `done.json` 再看 pid：结果在就以结果为准，PID 复用最坏只让已死任务多「运行中」一会儿，不会把失败报成成功。
+3. **失败也要写 `done.json`**（`status: "failed"` + `error`），否则编排侧只能猜。用「先写临时文件再 rename」的原子写，避免 poll 读到半个 JSON。
+4. **`deterministic` 位要诚实**：同一 spec 逐位可复现才是 `true`。pyref 是 `true`；OpenMM 在 CPU 上是 `false`（多线程浮点归约）。填错会让下游结论用「逐位对账」的措辞去描述一个不可复现的结果——P8 的 `capability-labeling` 检查器会因此把结论判成 hard veto。
+
+`normalize` 里还有一个容易漏的点：**警告 ≠ 拒绝**。参数合法但大概率跑不通的组合（步长远大于固有周期、截断半径超过半盒长）要在 prepare 阶段就说出来，而不是等算例跑挂了让人从 stderr 里猜。
+
+### 最小可运行示例
+
+```bash
+spark-research new platform demoplat
+```
+
+生成实现 + `runner.py` + 契约测试接线三个文件，**当场全绿**。
+
+参照实现：`backend/src/simulation/pyref/`（阻尼谐振子，零依赖 + 有解析解可对照）与 `backend/src/simulation/openmm/`（真实 MD）。
+
+### 怎么测
+
+**新平台的验收 = 直接复用 P5 的契约测试套件**，不需要自己发明测试：
+
+```ts
+import { describeSimulationContract } from "../helpers/simulation_contract";
+
+describeSimulationContract({
+  name: "demoplat",
+  make: (root: string) => new DemoplatPlatform({ root }),
+  okSpec: { platform: "demoplat", kind: "demo-run", params: { steps: 50 } },
+  equivalentSpec: { /* 显式写出默认值 + 换书写顺序 → specHash 必须相同 */ },
+  differentSpec: { /* → specHash 必须不同 */ },
+  slowSpec: { /* 跑得够久，让 cancel 有机会打断 */ },
+  failingSpec: { /* 参数合法但算例真的会失败 */ },
+  invalidSpec: { /* prepare 就该拒绝 */ },
+  expectedOutputs: ["series.csv", "final_state.json"],
+  summaryKeys: ["steps", "final"],
+  runTimeoutMs: 60_000,
+});
+```
+
+openmm 与 pyref 跑的是逐字节相同的断言（13 条）：平台自述、可用性探测、prepare 幂等与 specHash、submit 非阻塞、poll 状态机、collect 校验产出、cancel、跨实例重连、参数非法当场拒、算例失败与进程丢失可分辨。填对 case 就全跑在你的实现上。
+
+填 case 时最容易错的两处：
+
+- `failingSpec` 要一条**参数合法但算例真的会失败**的路径（数值发散、约束冲突），不是人为的 error 开关。假的失败开关验不出真实的失败处理。
+- `slowSpec` 要跑得足够久。太快的话 cancel 测试会在任务已经结束之后才发出。
+
+```bash
+bun test tests/unit/platform_demoplat.test.ts
+bun test tests/unit/simulation_contract.test.ts   # 内置两个实现
+```
+
+### 放哪里
+
+```
+backend/src/simulation/<name>/
+  index.ts       平台实现
+  runner.py      子进程 runner
+tests/unit/platform_<name>.test.ts    契约测试接线
+```
+
+注册：`backend/src/simulation/registry.ts` 的 `SIMULATION_PLATFORM_IDS` 加 id，`get()` 的 switch 里接上类。
+
+---
+
+## 4. WetLabBackend
+
+湿实验执行端。**这一节请先读完再动手**——当前契约有一个已知的形状问题（BACKLOG V6）。
+
+### 契约
+
+```ts
+export interface WetLabBackend {
+  readonly id: string;
+  readonly description: string;
+  available(): Promise<WetBackendAvailability>;
+  execute(program: OpentronsProgram, options: WetExecuteOptions): Promise<WetRunResult>;
+}
+```
+
+现有两个实现在 `backend/src/lab/wet_backend.ts`：`OpentronsSimulatorBackend`（**默认**，官方模拟器）与 `MockDeviceBackend`（单测后端，零依赖）。
+
+保留 mock 的理由与 P5 保留 pyref 相同：契约测试需要一个在任何环境都跑得通的实现。但**默认必须是真模拟器**——mock 只验「管线通不通」，验不了「协议合不合法」。一个 opentrons 拒绝解析的脚本在 mock 上一样会「跑成功」，那是最危险的假绿。
+
+三条 `execute()` 的实现纪律：
+
+1. **执行的就是落盘的那个文件**。把 `program.source` 写成 `protocol.py` 再执行它，审计时能拿到与 run log 逐行对得上的源码。
+2. **run log 要能锚回编译产物**。编译器在每步前注入 `protocol.comment("[spark-step] <id> <action>")`，解析靠这个锚点绑回步骤，不依赖设备软件的文案措辞（措辞会随版本变）。
+3. **没有的硬件不假装有**。Opentrons 上没有的能力（离心、非四档波长读数、低温孵育）编译成 `[spark-note]` 注释并标 `execution: "manual"`，run log 里是 note 不是执行记录。
+
+### 同设备族：即插即用
+
+接另一台 Opentrons（真机、不同型号、别人的模拟器）时，实现上面四个成员即可，`execute()` 照常吃 `OpentronsProgram`。
+
+### 非 Opentrons 设备族：需要先做一次重构（BACKLOG V6）
+
+问题在 `execute()` 的入参类型：`OpentronsProgram` 不是设备无关的中间表示，它已经是 Opentrons 的 deck 布局 + Python 脚本。接一个 Hamilton / Tecan / 自研设备时，你拿到的是「别人家的字节码」。
+
+施工说明（等第二个真实设备族选定再动，遵循 AD-4 的教训：两个真实实现才能验证接口）：
+
+1. **把设备无关的中间表示提出来**。真源是 `backend/src/lab/protocol.ts` 的 `Protocol`（结构化步骤：action / device / params / expectedOutput），它本来就是设备无关的。
+2. **把「结构化步骤 → 设备语言」的编译下沉进 backend**。现在这一步在 `backend/src/lab/opentrons_protocol.ts` 里、在 backend 之外完成；重构后每个 backend 自带一个 `compile(protocol) → 自家程序`。
+3. **接口改成 `execute(protocol: Protocol, options)`**，backend 内部先 compile 再执行。
+4. **`protocolHash` 的语义要跟着搬**：现在它是 `sha256(生成的脚本源码)`，approve gate 批的就是这个 hash。下沉之后，每个 backend 编译出的源码不同、hash 不同——这是**正确的**：换了设备就是换了协议，旧批准本来就不该跨设备存活。但要确保 hash 的计算仍然不含时间戳（含时间戳则每次编译都换 hash，approve 永远失效）。
+5. **安全门要能吃新设备的编译产物**。`volume_capacity` 规则依赖 deck 布局；新设备族要么提供等价信息，要么这条规则在该设备上明确降级并说明（不许静默跳过）。
+
+### 怎么测
+
+```bash
+bun test tests/unit/wet_loop.test.ts      # 状态机 + approve gate
+bun test tests/unit/wet_e2e.test.ts       # 两类协议在**真** opentrons.simulate 下执行
+bun test tests/unit/lab_safety.test.ts    # 安全门对抗矩阵
+.venv/bin/python -m pytest tests/lab/     # python 侧后端
+```
+
+新后端至少要过三关：`available()` 在缺依赖时给出**可操作**的原因（装什么命令）、`execute()` 产出的 `entries` 能锚回 `stepId`、失败时不抛裸异常而是留下 run 目录与 `done.json`。
+
+### 放哪里
+
+```
+backend/src/lab/wet_backend.ts     实现（现有两个都在这一个文件里）
+backend/src/lab/<name>_backend.py  python 侧执行器（如果需要）
+tests/unit/wet_e2e.test.ts         端到端
+```
+
+注册：同文件的 `WET_BACKEND_IDS` 与 `wetBackend()` 工厂。默认后端由 `spark-research config set wetBackend <id>` 决定。
+
+### ⚠️ 这一节唯一不可协商的一条
+
+**执行前的人工 approve 是硬门（AD-6）。** 它由状态机守：`wet_run` 的唯一入边是 `awaiting_approval → wet_run`，而这条边只有 `approve()` 会走；`execute()` 还会在执行前把审批的 hash 与当前编译产物的 hash 再对一次（防的是状态机之外的路径）。
+
+新 backend **不许**提供任何绕过这条边的入口。同理，`lab approve` / `lab reject` / `lab simulate` 刻意**不**暴露为 MCP 工具——外部 agent 若能自己批准，approve gate 就退化成注释。详见第 6 节末尾。
+
+---
+
+## 5. 安全门规则
+
+加一条安全规则 = 写一个纯函数 + 一个单测。
+
+### 契约
+
+```ts
+export interface SafetyRule {
+  id: string;                                        // 机器读，进 record metadata
+  check: string;                                     // 人读，显示名
+  description: string;
+  evaluate(input: SafetyRuleInput): SafetyCheckResult; // { check, passed, detail? }
+}
+
+export interface SafetyRuleInput {
+  protocol: Protocol;              // 结构化协议
+  program?: OpentronsProgram | null; // 编译产物（给了就能看真实 deck 布局）
+}
+```
+
+三个特点：
+
+1. **纯函数**：零 IO、不读文件、不打网络、不看时间。所以它可以被穷举地对抗测试。
+2. **一条规则一个 id**：混在别的规则里的 if 分支没法被单独打——测「超温被拦」时你其实同时依赖了另外几条规则没误报。P6 就是因此把 v0.1 埋在 orchestrator 里的三段 if 拆成了四条独立规则。
+3. **有些规则必须吃编译产物**：「这一孔会被加到 600 µL」在自然语言层面完全正常，只有排完 deck、把同一孔的多次加液累加起来才知道会溢。这就是 `SafetyRuleInput.program` 存在的理由。
+
+### 最小可运行示例
+
+完整代码：`examples/extending/flammable_over_heat_rule.ts`（易燃试剂不得在高温步骤中出现）。核心部分：
+
+```ts
+export const flammableOverHeatRule: SafetyRule = {
+  id: "flammable_over_heat",
+  check: "flammable over heat",
+  description: `易燃试剂不得出现在高于 ${HEAT_THRESHOLD_C} °C 的加热步骤中`,
+  evaluate({ protocol }) {
+    const violations: string[] = [];
+    for (const step of protocol.steps) {
+      const temperature = temperatureOf(step);
+      if (temperature === null || temperature <= HEAT_THRESHOLD_C) continue;
+      for (const reagent of reagentsOfStep(step)) {
+        // 按 reagentId 匹配而不是按 name：name 是自然语言里抄下来的，
+        // 「无水乙醇」「Ethanol (200 proof)」是同一个东西，靠 name 匹配必漏。
+        const flashPoint = reagent.reagentId ? FLAMMABLE_FLASH_POINT_C[reagent.reagentId] : undefined;
+        if (flashPoint === undefined) continue;
+        violations.push(`${step.id}: ${reagent.name}（闪点 ${flashPoint} °C）在 ${temperature} °C 加热`);
+      }
+    }
+    return {
+      check: "flammable over heat",
+      passed: violations.length === 0,
+      // detail 写给人看：说清哪一步、哪个试剂、什么温度。
+      // 用户拿到一句「不安全」只能全协议重读。
+      detail: violations.length ? `flammable reagents heated above limit: ${violations.join("; ")}` : undefined,
+    };
+  },
+};
+```
+
+阈值定在 60 °C 而不是闪点（13 °C），是因为定在闪点会把 37 °C 孵育里的微量乙醇全部误杀——**一条只会说「不」的规则会在两周内被人注释掉**。
+
+### 怎么测
+
+对抗样例与阴性对照**同等重要**。`tests/unit/extending_examples.test.ts` 里这条规则有 11 个用例：
+
+- 对抗：高温 + 易燃 → 拦下；多个试剂全部列出；阈值边界（等于放行、+1 拦下）
+- 阴性对照：37 °C 孵育不拦、高温但试剂不易燃、没有温度参数、试剂没有 `reagentId`
+- 形态：纯函数（反复求值结果相同且不改入参）、id 唯一、加进规则集后不误杀合法协议
+
+```bash
+bun test tests/unit/extending_examples.test.ts
+bun test tests/unit/lab_safety.test.ts        # 内置四条规则的对抗矩阵
+```
+
+### 放哪里
+
+```
+backend/src/lab/safety.ts          规则实现 + SAFETY_RULES 数组
+tests/unit/lab_safety.test.ts      对抗矩阵
+```
+
+装上它只要在 `SAFETY_RULES` 数组里加一项。加进去之后 `spark-research capabilities` 会自动列出它。
+
+### 相邻的扩展点：Reviewer 检查器
+
+同样是「一条规则一个纯函数」，但作用对象不是协议而是产物：
+
+| 位置 | 检查什么 |
+|------|---------|
+| `backend/src/reviewer/rules.ts` | `citation-integrity`：草稿引用 ↔ 库内论文 |
+| `backend/src/reviewer/conclusion_rules.ts` | `data-consistency` / `capability-labeling` / `stats-plausibility` |
+| `backend/src/ideation/novelty.ts` | 五条 novelty 评级校验规则（AD-8 的第一例） |
+
+写新检查器时的两条口径：**hard 必须是可核对的事实判断**（不提供人工推翻 hard 的路径），**启发式一律只出 soft** 并带 `heuristic: true`。另外，这几个检查器都**豁免位置加权**——结论卡与综述草稿正文都是 markdown，位置加权会把所有 soft 升成 veto，直接毁掉「soft 只提示不否决」。（这个豁免目前靠调用路径隔离实现，改白名单制已登记为 BACKLOG V14。）
+
+---
+
+## 6. Prompt 与模型路由
+
+### 契约：双层 prompt
+
+| 层 | 文件 | 内容 |
+|----|------|------|
+| provider-neutral 契约 | `backend/src/agents/prompt/core.txt` | 与模型厂商无关的操作契约与诚信规则 |
+| agent workflow | `backend/src/agents/prompt/research.txt` | 主 research agent 的工作流 |
+| 会话模式 | `backend/src/agents/prompt/coexplore.txt` | Co-explore 的苏格拉底式批判工作流 |
+| 子代理 | `backend/src/agents/prompt/reviewer.txt` | 独立 reviewer（trace-don't-recompute） |
+
+加一个会话模式或子代理 prompt = 加一个 `.txt` 文件。`backend/src/agents/sub_agent.ts` 的 `SubAgentFactory` 按类型加载；给不到文件时回落到内联 prompt（不会静默变成空 prompt）。
+
+改 prompt 前先读 `core.txt` 的 Integrity rules——那几条（不编造引用、标注证据类型、失败要如实报告）是整套可信度机制的语言侧，改动它们等于改变系统的承诺。
+
+### 契约：模型路由
+
+`backend/src/llm/router.ts` 的 `LLMRouter` 是模型无关的：支持 kimi / openai / anthropic / deepseek / qwen / openrouter，provider 由模型名推断，BYOK。
+
+每个子代理可以配独立模型（`SubAgentConfig.model`，默认全部落到 `LLMRouter.DEFAULT_MODEL`）：重任务用强模型、检索摘要用快模型。**这一层目前是代码内配置**，暴露成用户配置项已登记为 BACKLOG（与 V7 Agent Swarm 一起评估）。
+
+### 用户配置面
+
+`~/.spark-research/config.json` 是配置真源，设置表在 `backend/src/config/index.ts`。优先级一律 **环境变量 > config.json > 默认值**。
+
+```bash
+spark-research config list          # 全部配置项：当前值 / 来源 / 改了影响什么
+spark-research config get <key>     # 单项详情（含「影响」段）
+spark-research config set <key> <v>
+```
+
+| 键 | 默认 | 改了影响什么 |
+|----|------|------------|
+| `defaultModel` | `moonshotai/kimi-k2.6` | 精读卡、综述、Co-explore、novelty claim 提取与引用判定。换弱模型会直接降低引用核验判准率 |
+| `defaultProvider` | — | 没有显式指定模型时挑哪把 key |
+| `contactEmail` | 占位邮箱 | OpenAlex/CrossRef 的 polite pool。未配置时请求照走但进不了 polite pool，高频检索更易被限流 |
+| `userAgent` | 自动拼 | 文献 connector 的 UA。自定义时请保留可联系到你的信息 |
+| `wetBackend` | `opentrons_simulate` | **改成 mock_devices 会让协议不再被 Opentrons 解析**——管线照绿，非法协议也「执行成功」。除非在写单测，否则不要改 |
+| `simulationPlatform` | `pyref` | `exp new` 的缺省平台。openmm 的 `deterministic=false`，下游结论会被要求按「区间对账」措辞 |
+| `mcpTimeoutMs` | `300000` | MCP 工具同步等待长任务的上限。调小会让综述/novelty 经常走任务句柄路径 |
+| `dataDir` | `~/.spark-research` | 一切持久化的根。**只能用 `SPARK_RESEARCH_DATA_DIR` 设**（先有目录才有文件） |
+| `KIMI_API_KEY` / `OPENROUTER_API_KEY` | — | 凭据。值永不打印、永不进 env、永不进 prompt |
+
+### 怎么测
+
+```bash
+bun test tests/unit/config.test.ts        # 优先级三档、凭据不泄漏、设置表与常量一致
+bun test tests/unit/orchestrator.test.ts  # prompt 加载与子代理委派
+```
+
+### 放哪里
+
+```
+backend/src/agents/prompt/<name>.txt   prompt 文件
+backend/src/agents/sub_agent.ts        子代理类型、默认模型、permit set
+backend/src/config/index.ts            设置表（单一真源）
+```
+
+---
+
+## 7. 把工作台接进外部 agent（MCP）
+
+上面六节是「往里加东西」。反方向——把 Spark Research 当工具箱接进 Claude Code 或其他 MCP 客户端：
+
+```bash
+spark-research mcp    # stdio 传输
+```
+
+MCP 客户端配置（以 Claude Code 为例）：
+
+```json
+{
+  "mcpServers": {
+    "spark-research": { "command": "spark-research", "args": ["mcp"] }
+  }
+}
+```
+
+外部 agent 接进来之后的第一步应该是 `research_capabilities`——一次调用即可 introspect 整个工作台。
+
+工具实现上只是对 HTTP 端点的一次进程内调用（`backend/src/mcp/tools.ts`），不重实现任何业务逻辑：CLI / HTTP / UI / MCP 四个入口共享同一套 service 层，任何一处修了业务规则四个入口同时生效。
+
+### 刻意不暴露的动作
+
+| 不给 | 为什么 | 人怎么做 |
+|------|--------|---------|
+| `lab_approve` | AD-6：若 agent 能自己批准，它就能自己编译、自己批准、自己执行，approve gate 退化成注释 | `spark-research lab approve <id> --actor <名字>` |
+| `lab_reject` | 拒绝同样是记名决策，由人署名才有审计意义 | `spark-research lab reject <id> --actor <名字> --reason <理由>` |
+| `lab_simulate` | 执行只允许从 `awaiting_approval` 经人工批准进入 | `spark-research lab simulate <id>` |
+| `conclusion_review` | 结论能否进报告结论区是可信度的最后一道闸，不交给外部 agent 自评 | `spark-research conclusion review <id> --actor <名字>` |
+| `project_archive` | 破坏性的组织动作 | `spark-research project archive <slug>` |
+
+这张表不是「未实现清单」，是**设计声明**：它进 `capabilities` 输出，也进 MCP server 的 instructions，外部 agent 读到的是「这些必须人来做，以及人该怎么做」，而不是调用失败后自己猜。`lab_compile` 的返回体里会直接给出该执行哪条命令。
+
+守这条边界的不止是「没做这几个工具」：`tests/unit/mcp_server.test.ts` 里有一条结构性防线，遍历全部已暴露工具的请求构造函数，断言没有任何一个能打到 approve / reject / simulate / archive / 结论评审端点。将来有人加一个叫 `lab_finish` 的工具、内部却 POST 到 `/approve`，那条测试会立刻红。
+
+---
+
+## 8. 提交前自查
+
+```bash
+bun run typecheck
+bun test tests/unit/
+.venv/bin/python -m pytest tests/ -q
+spark-research capabilities        # 你加的东西出现了吗？
+```
+
+四条通用要求（`docs/DEVELOPMENT_PLAN.md` 〇 工程纪律）：新模块必须带单测；真实外部依赖本地跑通一次后录制成 fixture，CI 永远回放；对抗测试优先于 happy path；凭据永不进 repo / prompt / 日志。
+
+------------------------------------------------------------------------------
+## 文件：docs/DEVELOPMENT_PLAN.md
+------------------------------------------------------------------------------
+
+# Spark Research v0.2 开发与验证计划
+
+> 状态：随 [DESIGN.md](DESIGN.md) 定稿 · 2026-09-09
+> 原则：每阶段一个分支一个 PR，squash merge；测试只增不减；每阶段留 devlog；先验证后进入下一阶段。
+
+---
+
+## 〇、工程纪律（全阶段生效）
+
+1. **分支流**：`main` 不直推。每阶段开 `feat/p<N>-<slug>` 分支 → PR → squash merge → 删分支。
+2. **测试门槛**：进入 PR 前 `bun run typecheck` + `bun test tests/unit/` 必须全绿；新模块必须带单测；e2e 用 fixture 回放进 CI（真实网络请求只在本地验证跑，录制后回放）。
+3. **devlog**：每阶段完成时写 `docs/devlog/P<N>-<slug>.md`：做了什么、关键决策、测试结果（含失败与修复）、与设计的偏差。
+4. **凭据纪律**：任何凭据不进 repo/prompt/日志；新增文件 commit 前跑密钥 grep。
+5. **模型分工**：设计与验收评审用 Fable 5（主会话）；实现类任务可委派 Opus 5 子代理，子代理产出必须经主会话审查 + 测试验证后才 merge。
+6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
+7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
+8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
+9. **阶段性成果及时保存**（P7 后新增，用户要求）：每完成一个逻辑块就 commit **并 push feature 分支**到远端。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
+
+---
+
+## 一、阶段总览
+
+```
+P0 设计入库（本 PR）
+P1 Project 基座 ──────────► 一切持久化的根
+P2 文献域·检索与文献库 ────► 域 A 前半（A1/A2）
+P3 文献域·综述与引用核验 ──► 域 A 后半（A3）+ 域 E 引用检查器
+P4 Co-explore 与 Novelty ──► 域 A4 + 域 D
+P5 干实验闭环 ─────────────► 域 B1/B3 + 域 C 实验记录
+P6 湿实验模拟器 ───────────► 域 B2
+P7 前端工作台 ─────────────► 时间线 + 项目导航 + 实验面板升级
+P8 功能收口 ───────────────► 报告导出 + README + P8-gate 清偿 + 判据核验
+P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabilities + MCP + 发布 v0.2.0
+```
+
+依赖关系：P1 是所有阶段前置；P2→P3→P4 串行（同域递进）；P5、P6 可在 P1 后与文献域并行；P7 需要 P1-P5 的 API 稳定；P8 收口。
+
+---
+
+## 二、各阶段明细
+
+### P1 Project 基座
+
+**范围**
+- `backend/src/project/`：Project 管理器（create/open/list/archive），目录布局 `~/.spark-research/projects/<slug>/`
+- `records.db` schema：record 表（7 类型）+ 边表（5 边类型）+ 与 artifacts 互链（AD-3）
+- 凭据服务：daemon 内 `CredentialStore`（`credentials.json` 0600 读写，按 connector id 取用；AD-2）
+- CLI：`spark-research project new|list|open`；session 归属 project
+- 现有 artifact store 迁移：`project` 字段从自由字符串变为真实 project 引用
+
+**验证**
+- 单测：project 生命周期、record CRUD、边一致性、凭据文件权限（0600 断言）、permit set 拦截 kernel 直读凭据
+- e2e：CLI 建项目 → 会话产生 artifact + record → 重启进程 → 数据完整可查
+
+**退出标准**：全部测试绿；devlog P1 落库。
+
+### P2 文献域 · 检索与文献库
+
+**范围**
+- Connector 扩展：OpenAlex、CrossRef、EuropePMC、Semantic Scholar（免 key）；AMiner（走凭据服务，29 API 中先接 search/paper-detail 两个核心）
+- 跨源统一检索：并发查询 → DOI/标题去重 → 归一化 Paper 模型
+- Project Library：`library.db`（论文/作者/标签/笔记/阅读状态）+ PDF 下载管线（arXiv/EuropePMC OA 直下，403 降级策略）+ checksum
+- 引文关系抓取（OpenAlex citations API）
+- BibTeX / CSL-JSON 导出
+- 技能：literature-search、paper-download、library-curation
+
+**验证**
+- 单测：去重逻辑（DOI 相同/标题模糊）、归一化、BibTeX 输出格式
+- 本地真实 e2e：一次跨 5 源检索 + 2 篇 OA PDF 真实下载入库；请求响应录制为 fixture
+- CI e2e：fixture 回放跑同一链路
+
+**退出标准**：真实检索+下载 e2e 通过并录制；AMiner connector 在有 key 环境验证、无 key 环境优雅降级（明确报「未配置」而非报错）。
+
+### P3 文献域 · 综述与引用核验
+
+**范围**
+- 精读卡 pipeline：库内论文 → 结构化卡片（record: paper 锚点）
+- 综述草稿生成：基于精读卡组织，引用只允许指向库内论文
+- Reviewer 新检查器：`citation-integrity`（草稿引用 ↔ 库内论文匹配；不匹配 = hard finding → veto）
+- 技能：literature-review
+
+**验证**
+- 单测：citation-integrity 规则（真引用过 / 伪造引用 veto / 库外引用 veto）
+- e2e：10 篇真实文献 → 综述 → 故意注入一条伪造引用 → Reviewer 必须抓到（对抗测试）
+
+**退出标准**：对抗测试稳定通过（伪造引用检出率 100%，注入 3 种伪造模式：不存在 DOI、真标题假结论、库外真文献）。
+
+### P4 Co-explore 与 Novelty
+
+**范围**
+- Co-explore 会话模式：批判性探讨 workflow prompt + 文献 grounding（观点必须带来源或标注 inferred）
+- Idea 卡：产出、入库（record: idea）、支持/反对文献边
+- Novelty pipeline：claim 提取 → 密集检索（复用 P2 统一检索）→ 对比报告（novel/incremental/existing 评级）→ 引用核验（复用 P3 检查器）
+- 技能：idea-coexplore、novelty-check
+
+**验证**
+- 单测：claim 提取结构、报告 schema、评级逻辑
+- e2e 双向对照：(a) 拿一个**已发表工作的核心 idea** 跑 novelty check → 必须评为 existing 且找到原文；(b) 拿一个**刻意杜撰的组合 idea** → 应评 novel/incremental 且给出最近邻
+
+**退出标准**：双向对照 e2e 通过；Idea 卡在证据图中与文献正确连边。
+
+### P5 干实验闭环
+
+**范围**
+- `SimulationPlatform` 接口（prepare/submit/poll/collect；AD-4）
+- 参考实现 ×2：OpenMM（进程内）+ 第二实现（GROMACS 或纯 Python 仿真脚本，视本机环境定，devlog 记录选择理由）
+- 闭环状态机：`design → dry_run → collect → analyze → iterate|conclude`，状态持久化（record: experiment）、断点续跑
+- Kernel 集成：仿真产出自动进 artifact + observation record
+- 技能：dry-experiment、protein-analysis（把现有蛋白 connector 链路补上技能与 e2e）
+
+**验证**
+- 单测：状态机转移全覆盖、断点恢复、adapter 契约 mock 测试
+- e2e：OpenMM 最小 MD 任务（如水盒子平衡）端到端：设计 → 运行 → 数据回收 → observation 入图 → 中途 kill 进程 → 恢复续跑
+
+**退出标准**：e2e 含断点恢复通过；两个 adapter 实现共用同一契约测试套件全绿。
+
+### P6 湿实验模拟器
+
+**范围**
+- Opentrons 集成：`opentrons_simulate` 替换 `mock_devices.py` 作为默认湿实验后端（mock 保留用于单测）
+- 协议编译目标：现有 protocol compiler 输出 → Opentrons Python protocol API v2 脚本
+- approve gate 落地：湿实验执行前 CLI/API 强制确认（AD-6）
+- 干湿闭环状态机接通：`dry_run → approve → wet_run → collect`
+- 技能：wet-protocol
+
+**验证**
+- 单测：编译输出合法性（opentrons_simulate 解析通过即合法）、safety gate 拦截清单（超浓度/不兼容试剂/缺 approve 各一例）
+- e2e：自然语言协议（「取样品 50µL 加入 96 孔板，37°C 孵育…」）→ 编译 → 安全门 → approve → 模拟器执行 → 执行日志入 record
+
+**退出标准**：至少 2 个不同类型协议在真实 `opentrons_simulate` 下执行成功；safety gate 对抗样例全部拦截。
+
+### P7 前端工作台
+
+**范围**（2026-09-09 用户修订：UI 详细程度参考 OpenScience 工作台，非冒烟版）
+- **第一步 API 层**（仍是重点）：P1-P6 全部能力补齐 HTTP API（project/lit/idea/exp/lab 端点 + SSE 会话流），server/app.ts 从 v0.1 形态升级；无 API 能力不许只存在于 UI
+- **第二步 UI 升级为 SolidJS 工作台**（AD-7 的「到 P7 再迁」触发）：对标 OpenScience `frontend/workspace` 的体验水准与交互模式（本地 clone 可研究其组件组织/主题/会话流渲染，Apache 2.0 可参考但代码自研）：
+  - 左：项目切换 + 文献库/思路库/实验导航树
+  - 中：会话流（含 coexplore 模式）+ 精读卡/综述/novelty 报告的富渲染
+  - 右：record 时间线（按类型/时间过滤）+ artifact/证据图浏览
+  - 底：实验面板——干湿状态机可视化 + approve/reject 按钮（decision record 联动）
+  - 明暗主题、键盘可用性、加载与错误态完整
+- 科学渲染以轻量为限（表格/曲线/run log），分子/结构 3D 渲染排 v0.3
+
+**验证**
+- API 层：每个新端点单测（现有 server.test.ts 模式）
+- e2e：浏览器全流程（建项目 → 检索入库 → 精读/综述 → idea/novelty → 干实验 approve→湿实验模拟 → 时间线完整呈现），Playwright 或等价
+- UI 与 CLI 行为对照：同一操作两侧产生相同 record/artifact
+
+**退出标准**：全流程浏览器 e2e 通过；UI 全部是 API 投影；体验对照 OpenScience workspace 无明显断档（会话流/导航/时间线三项主观验收由用户过目）。
+
+### P8 收口发布 v0.2
+
+**范围**
+- 研究报告导出：证据图 → Markdown（问题/思路/实验/结论分区，结论卡 review 门槛生效）
+- 技能：research-report
+- README 重写（对齐新定位与五域）、DESIGN.md 终稿核对、CHANGELOG
+- 发布判据核验：DESIGN.md §7 的 4 条逐条打勾，记入 devlog P8
+
+**验证**：§7 成功标准即验收清单——特别是那条完整研究线索的全流程演练（文献 → idea → novelty → 干实验 → 结论 → 报告），作为最终 e2e 保存为可重放脚本。
+
+**退出标准**：4 条判据全过。（2026-09-09 修订：tag 与 Release 移至 P9 末尾——发布必须带完整的扩展性故事。）
+
+### P9 扩展面梳理与 LLM 友好化（2026-09-09 用户新增，发布前最后一阶段）
+
+> 用户原话口径：梳理 skill / tool / connector 这些方便科研人员自己配置和修改的地方，并进行 LLM 友好的封装和适配。
+
+**范围**
+
+一、扩展面梳理（面向科研人员的自助配置）
+- `docs/EXTENDING.md`：六个扩展点各一节，每节 = 契约说明 + 最小可运行示例 + 测试方法 + 文件放置位置：
+  1. **Skill**（`backend/src/skills/<name>/SKILL.md`，规范化 frontmatter：name/description/triggers/所需 connector）
+  2. **Connector**（Connector 契约 + 凭据经 CredentialStore，AD-2；免 key 与带 key 两个示例）
+  3. **SimulationPlatform**（干实验平台，P5 契约测试套件直接复用作新平台的验收）
+  4. **WetLabBackend**（湿实验执行端；含 V6 施工说明：非 Opentrons 设备族需把设备语言编译下沉进 backend）
+  5. **安全门规则**（纯函数规则，加一条 = 一个函数 + 单测）
+  6. **Prompt 与模型路由**（agents/prompt/*.txt 双层结构 + 每子代理独立模型配置）
+- 脚手架：`spark-research new skill|connector|platform <name>` 生成带测试桩的模板
+- 用户配置面收口：`~/.spark-research/config.json` 统一登记（默认模型、politeness header 的 mailto、backend 选择），文档写清哪些能改、改了影响什么
+
+二、LLM 友好封装与适配
+- **能力自描述**：`spark-research capabilities --json` 输出机器可读清单（全部 connectors/platforms/backends/skills/安全规则 + 各自的输入 schema 与可用性状态）——agent 一次调用即可 introspect 整个工作台
+- **llms.txt + llms-full.txt**（对标 OpenScience docs 的做法）：纯文本全量文档，外部 LLM 可直接消化
+- **SKILL.md 规范化**：统一 frontmatter schema，校验进 CI；agent 按需加载（技能目录 = LLM 的操作手册，不预填 context）
+- **MCP server 模式**：`spark-research mcp` 把核心能力（lit search/library/idea/novelty/exp/lab/records）暴露为 MCP tools——任何外部 LLM agent（Claude Code、其他 MCP 客户端）可直接把 Spark Research 当科研工具箱接入。approve 类危险动作在 MCP 层保持人工确认语义
+- 工具描述打磨：每个 MCP tool / API 端点的 description 按「LLM 第一次见就会用」标准写（参数示例 + 常见错误 + 何时不该用）
+
+**验证**
+- EXTENDING.md 六节各带的最小示例真实可跑（CI 里跑通示例 skill/connector/规则各一个）
+- `capabilities --json` schema 校验 + 与实际注册表一致性测试（清单里的每一项真实存在）
+- MCP server：用 MCP 客户端真实连接跑通 lit search → idea → novelty 链路的 e2e；approve 动作在 MCP 层被要求确认的对抗测试
+- llms.txt 生成脚本幂等（文档变更后重新生成 diff 干净）
+
+**退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
+
+| 层 | 工具 | 网络 | 运行时机 |
+|----|------|------|---------|
+| 单元 | bun test | 无 | 每次 commit |
+| 契约（adapter/connector） | bun test + mock | 无 | 每次 commit |
+| e2e 回放 | bun test + fixture | 无（回放） | CI |
+| e2e 真实 | bun test（tagged） | 有 | 本地验证 + 录制 fixture 时 |
+| 对抗 | 专用测试（伪造引用/安全门样例） | 无 | CI |
+| Python（kernel/lab） | pytest | 无 | 每次 commit |
+
+**模拟测试原则**（用户要求「分步骤有逻辑的自己做模拟测试和验证」的落点）：
+1. 每阶段先写「验证」小节列出的测试，再实现（测试即验收口径）
+2. 真实外部依赖（网络 API、模拟器）本地跑通一次 → 录制 → CI 永远回放，杜绝 flaky
+3. 对抗测试优先于 happy path：伪造引用、安全门违规、断点 kill 都是一等测试用例
+
+## 四、执行方式
+
+- 每阶段启动时：主会话（Fable 5）确认范围 → 委派 Opus 5 子代理实现 → 主会话跑测试 + 审代码 + 对照设计验收 → PR → squash merge → devlog
+- 阶段间与用户同步一次进度与下阶段范围（「后面商议的需求」的插入点：新需求进 backlog，评估后排进阶段或 v0.3）
+- 本地目录 `~/Desktop/AI4S/spark-research` 与 GitHub `jimmyag2026-prog/spark-research` 实时同步（每个 PR merge 即推送）
+
+------------------------------------------------------------------------------
+## 文件：docs/REVIEW_BRIEF.md
+------------------------------------------------------------------------------
+
+# Spark Research · 外部评审简报
+
+> 面向不了解本项目的评审者（人或 agent）。目标：15 分钟内进入状态，直接指出真问题。
+> 快照时间：2026-09-09 · 对应 commit：`b4aab02`（main，P1–P7 已合入；P8 在 `feat/p8-wrapup` 分支进行中）
+> 配套文档：[DESIGN.md](DESIGN.md)（设计真源）· [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（阶段计划）· [BACKLOG.md](BACKLOG.md)（未决事项）· [devlog/](devlog/)（每阶段实施记录与验收批注）
+
+---
+
+## 0. 一分钟速览
+
+**是什么**：面向科研人员的开源科研工作台。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性验证 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先，模型无关，Apache 2.0。
+
+**当前状态**：v0.2 开发中。P1–P7 已合入 main（项目基座、文献域、综述与引用核验、思路库与 novelty、干实验闭环、湿实验闭环、API 层 + SolidJS 工作台）。P8（功能收口）进行中，P9（扩展面与 LLM 友好化）待启动。
+
+**规模**：后端 TypeScript ~18k 行（14 个域模块）+ Python（kernel/仿真/实验室后端）· 前端 SolidJS ~3.1k 行 · 66 个 HTTP 端点 · 18 个 connector · 9 个技能（第 10 个在 P8）· 测试：655 bun unit + 48 pytest + 10 Playwright，全绿。
+
+**最想被挑战的**：见 §7。简报刻意包含了全部已知缺陷与未决判断——**发现我们没写在 §7 里的问题，价值最大**。
+
+---
+
+## 1. 定位与三个差异化赌注
+
+参照系是 Anthropic 的 Claude Science（闭源托管）与 OpenScience（`synthetic-sciences/openscience`，Apache 2.0，3.5k★，本项目的架构蓝本）。相对两者，我们押三件事：
+
+1. **Project-centric，不是 session-centric**。两个参照系都以会话/workspace 为单位；科研的真实单位是**课题**——横跨数月、数百次会话。本项目的持久层以 Project 为根：文献库、思路库、实验记录、结论卡跨会话累积。
+2. **全流程 Research Record**。不只记录代码产物，还记录思路（idea）、决策（decision）、精读（reading）、观察（observation）、结论（conclusion），全部进同一张证据图（8 种 record 类型 + 5 种边）。副产品是天然的电子实验记录本与可审计 research trail。
+3. **干湿闭环**。协议编译器 + 安全门 + 人工审批 + 设备抽象，AI 设计 → 干实验仿真 → 湿实验执行 → 数据回传 → 迭代。两个参照系都没有。
+
+**明确不做**（v0.x）：云端多租户 SaaS、通用 IDE、自研模型、文献全文托管。
+
+---
+
+## 2. 架构
+
+```
+界面层    CLI（能力真源） · SolidJS 工作台（API 投影）
+             ↓
+Agent 层  research agent（唯一用户可见）+ 任务型子代理（explore/execute/review）
+          会话模式：chat / coexplore
+          双层 prompt：provider-neutral 契约 + agent workflow
+             ↓
+Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
+          Record/Artifact 存储 · 执行记录 · Reviewer
+             ↓
+能力层    Kernel(Python stateful) · Connector×18 · SimulationPlatform · WetLabBackend
+             ↓
+存储层    ~/.spark-research/projects/<slug>/{project.json, records.db, library.db,
+          artifacts/, papers/, experiments/}  ·  credentials.json (0600, daemon-only)
+```
+
+### 架构决策（ADR，完整列表见 DESIGN §5.2）
+
+| # | 决策 | 理由 |
+|---|------|------|
+| AD-1 | Project 为持久层根 | 科研单位是课题 |
+| AD-2 | 凭据只在 daemon 进程，kernel 经 `mcp_call` 代访问 | 源于对 OpenScience 沙箱的实测：它的三层隔离使自定义付费数据源无法在 agent 内使用，只能 fork。我们把这个教训变成原生设计 |
+| AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制 |
+| AD-4 | SimulationPlatform 独立于 Connector | connector 是幂等数据读取，仿真是长任务生命周期（prepare/submit/poll/collect） |
+| AD-5 | 技能少而深：每个技能必须有 e2e 才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
+| AD-6 | 湿实验执行前强制人工 approve | 安全门通过是必要非充分条件 |
+| AD-7 | 前端 vanilla → P7 迁 SolidJS，API 先行 | CLI/API 是能力真源，UI 是投影 |
+| AD-8 | Novelty 评级由确定性代码校验，不由 LLM 独断 | 见 §4 |
+
+---
+
+## 3. 五大功能域与实现状态
+
+| 域 | 能力 | 状态 |
+|----|------|------|
+| **A 文献调研与写作** | 多源统一检索（OpenAlex/CrossRef/EuropePMC/S2 + AMiner 带凭据）、DOI+标题模糊去重、项目文献库、PDF 下载管线、BibTeX/CSL 导出、精读卡、综述草稿 | ✅ P2/P3 |
+| **B 实验验证** | 干：SimulationPlatform 契约 + OpenMM（真实 MD）+ pyref（确定性参考实现）+ 7 态状态机 + 断点续跑；湿：自然语言→Opentrons Protocol API v2 编译 + 4 条安全规则 + approve gate + 真模拟器执行 | ✅ P5/P6 |
+| **C 全流程记录** | 8 类 record + 5 类边的证据图、时间线（类型/时间过滤）、证据子图展开 | ✅ P1/P7 |
+| **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → 评级（novel/incremental/existing）+ 确定性评级校验层 | ✅ P4 |
+| **E 结论与评审** | citation-integrity 检查器（引用真伪）✅ P3；结论卡 review 门槛、数据-结论一致性、统计合理性提示 🔄 P8 进行中 |
+
+---
+
+## 4. 工程方法（本项目的特色，也是评审时可攻击的面）
+
+**对抗测试优先于 happy path**。每个涉及可信度的功能都配对抗用例：
+- 引用核验：3 种伪造模式（编造 key / 真 key 假内容 / 库外真文献）× 3 变体 = **9/9 检出**，外加 4 个阴性对照防误杀
+- 安全门：超浓度 / 不兼容试剂 / 超 BSL / 单次溢孔 / **累计溢孔**（单看每步都合法）+ 绕过状态机直改协议原文（被协议 hash 复核拦下）
+- Novelty 评级：反向对抗——fake LLM 硬说已发表工作是 novel，被确定性校验层**按证据升级为 existing**；反之硬说杜撰组合是 existing 则**降级**。这就是 AD-8
+
+**真实验证一次，fixture 回放到永远**。真实网络/仿真跑通后录制，CI 只回放。真实验证抓到的 bug 包括：EuropePMC 官方 PDF 端点已死、bibtex key 因随机排序在两次运行间**互换**（会让引用悄悄指错论文）、fixture 录制器把超大响应截断成坏 JSON。
+
+**诚实记录不可复现性**。OpenMM 同一 spec 三次运行 E_min 各不相同（CPU 多线程浮点归约）→ 抽象成 `deterministic` 能力位写进 record，下游据此区分「逐位对账」与「区间对账」。同理 Opentrons 模拟读数全 0.0 → `simulated` 位。
+
+---
+
+## 5. 代码库导航
+
+| 路径 | 职责 | 规模 |
+|------|------|------|
+| `backend/src/project/` | Project 管理、records 证据图 | 880 |
+| `backend/src/literature/` | 统一检索、文献库、PDF、精读卡、综述、导出 | 2670 |
+| `backend/src/ideation/` | Idea 卡、思路库、相似度、novelty pipeline | 1969 |
+| `backend/src/experiment/` | 干实验闭环状态机 | 1110 |
+| `backend/src/simulation/` | SimulationPlatform 契约 + OpenMM/pyref | 1357 |
+| `backend/src/lab/` | 协议编译、安全门、湿实验状态机、Opentrons 后端 | 4060 |
+| `backend/src/reviewer/` | veto 机制、citation-integrity、LLM 辅助判定 | 514 |
+| `backend/src/connectors/` | 18 个数据源 + registry | 1026 |
+| `backend/src/server/` | 66 端点 API、SSE、长任务句柄 | 2236 |
+| `backend/src/daemon/` | permit set、凭据服务 | 465 |
+| `frontend/workspace/src/` | SolidJS 工作台（零运行时第三方库） | 3127 |
+
+**建议的阅读顺序**：`DESIGN.md` → `project/records.ts`（证据图是全局枢纽）→ `reviewer/rules.ts`（可信度机制）→ 任一域的 pipeline（`literature/review.ts` 或 `ideation/novelty.ts`）→ `experiment/loop.ts` + `lab/wet_loop.ts`（两个状态机）。
+
+---
+
+## 6. 未完成与已知缺陷（完整清单见 BACKLOG.md）
+
+**P8 进行中**：结论卡 review 门槛、数据-结论一致性检查器、统计合理性提示、能力位消费端、真实模型判准率测量、报告导出。
+
+**P9 待启动**：EXTENDING.md（六个扩展点的自助配置文档）、脚手架 CLI、`capabilities --json` 能力自描述、llms.txt、**MCP server 模式**。
+
+**已知缺陷（我们自己发现并记录的）**：
+- Semantic Scholar 匿名请求持续 429（7 次尝试全挂），实际需要 API key
+- Novelty 相似度是**词面**而非语义（覆盖率 + 中文二元组），阈值 0.75，标定样本仅 2 个 claim，最近邻余量 0.08
+- 「真 key 假内容」的检出此前只用确定性 FakeJudge 验证管线，**真实模型判准率尚未测量**（P8 G5 正在做）
+- HTTP 层 approve 的 actor 是「谁自称就是谁」，单用户本地诚实，**多用户前必须换真实身份认证**
+- 长任务句柄不落盘，进程重启后任务列表丢失（实验状态本身在磁盘上，可 resume）
+- SSE 是生命周期事件而非 token 流（orchestrator 尚未流式化）
+- WetLabBackend 的 `execute()` 入参是 `OpentronsProgram`——接**非 Opentrons 设备族**时需要把设备语言编译下沉进 backend（已知重构点，等第二个设备族选定再动）
+- arXiv/PubMed 尚未接入统一检索（缺 XML parser）；CNKI/万方仍是占位（无公开 API）
+- 中文检索式召回极差，novelty 的检索式限定英文
+
+**流程事故（已记录在 devlog）**：P6 期间主会话在共享工作树切分支，把子代理半成品卷进 docs PR 推上 main，绕过审查门 → 新增工作树隔离纪律。P7 期间 worktree 目录中途变为不可访问导致未提交成果全丢 → 新增 worktree 路径与「阶段性成果及时推送」纪律。
+
+---
+
+## 7. 希望评审重点看的问题
+
+按我们自己的不确定程度排序。**发现不在此列的问题，价值最大**。
+
+1. **证据图的设计是否站得住**：8 类 record + 5 类边能否覆盖真实科研流程？边方向约定（`supports`/`contradicts` 是 paper→idea，`cites` 是新产物→旧文献）是否会在图遍历时造成歧义？`RecordStore.update()` 允许改 content（用于结论/状态的整卡重渲染）是否破坏了「可审计证据链」的承诺？
+2. **可信度机制是否真的可信**：citation-integrity + 评级校验层 + 安全门，这套「用确定性代码约束 LLM 输出」的路子，边界在哪里？哪些地方我们其实还是在信任 LLM 而不自知？
+3. **两个状态机的口径**：干实验 7 态、湿实验 11 态；湿实验 `approve` 直达 `wet_run`（无 approved 中间态）、「进入 compile 一律清空 approve」、唯一守卫回边 `wet_run→compile`（仅 runId 为空时）。这套口径有没有能绕过审批的路径？
+4. **抽象是否过早或过晚**：SimulationPlatform 由两个实现验证过；WetLabBackend 只有 Opentrons 一族（已知重构点）；Connector 契约承载了 18 个源。哪个抽象是错的？
+5. **相对参照系的判断**：我们不吸收 OpenScience 的 313 技能铺量路线而走「少而深 + 每技能 e2e」，这个赌注对吗？Project-centric 是真需求还是过度设计？
+6. **安全边界**：凭据只在 daemon（AD-2）、Markdown 渲染是唯一 innerHTML 写入点（已审计+10 个 XSS 回归测试）、协议 hash 复核。还有哪些面没覆盖？
+
+## 8. 如何跑起来
+
+```bash
+git clone https://github.com/jimmyag2026-prog/spark-research && cd spark-research
+bun install && bun run typecheck
+bun test tests/unit/                       # 655 pass
+.venv/bin/python -m pytest tests/ -q       # 48 passed（需先建 .venv 装 openmm/opentrons）
+bun run test:e2e                           # Playwright 10 pass（需 bunx playwright install chromium）
+bun run dev                                # 工作台 http://127.0.0.1:4321
+```
+
+CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / `report`）。
+
+------------------------------------------------------------------------------
+## 文件：docs/BACKLOG.md
+------------------------------------------------------------------------------
+
+# Backlog
+
+> 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
+> 分级：**P8-gate** = v0.2 发布前必须消化；**v0.3** = 下版本候选；**待定** = 等外部输入/用户拍板。
+> 最后更新：2026-09-09（P8 收口：G1-G7 全部消化，见 devlog/P8-wrapup.md；新增 v0.3 候选 V12/V13）
+
+## P8-gate（发布前验证清单）—— **已全部消化（P8，2026-09-09）**
+
+| # | 项 | 来源 | 结果 |
+|---|-----|------|------|
+| G1 | E2 结论卡 review 门槛：pending/approved/vetoed，仅 approved 进报告结论区 | DESIGN E2，P5 只落了最小 conclusion record | ✅ `conclusion/` 模块 + CLI/API/UI 三入口；判定不可协商（任一 hard → vetoed） |
+| G2 | E1 数据-结论一致性检查器（结论引用的 observation 必须真实存在于执行记录） | DESIGN E1 | ✅ `data-consistency`；四种对抗（伪造 / 已删除 / 跨项目 / 类型不对）全部 hard |
+| G3 | E1 统计合理性 soft 提示检查器 | DESIGN E1 | ✅ `stats-plausibility`；只出 soft，带 `heuristic:true`，含阴性对照 |
+| G4 | 能力位消费端：`deterministic`（区间 vs 逐位对账）与 `simulated`（模拟读数 0.0 不得当真实数据进结论）在 E1 检查器与 P8 报告中的消化 | P5/P6 验收批注 | ✅ `capability-labeling`；模拟未标注与非确定性平台上声称逐位复现均为 hard；报告措辞随能力位变 |
+| G5 | 「真 key 假内容」（模式 B）在真实模型下的判准率测量 | P3 devlog 批注 | ✅ 已测量（三档分级，5 次运行）：precision 全档全轮 100%；easy/medium recall 100%；hard recall 71–100%。详见 devlog |
+| G6 | 删除 deprecated 的 `compute/providers.ts` 及其 v0.1 测试 | P5 验收批注 | ✅ `backend/src/compute/` 三个文件 + 测试删除，无引用残留 |
+| G7 | 证据图 → Markdown 报告导出 + research-report 技能（§5.3 第 10 个技能） | PLAN P8 | ✅ `report/export.ts` + `report` CLI + `/api/report` + 工作台导出按钮 + research-report 技能 |
+
+## v0.3 候选
+
+| # | 项 | 备注 |
+|---|-----|------|
+| V14 | 位置加权豁免改白名单制 | P3 D3 说「第二个例外再重构」；P8 三条新 rule 一起成了例外，阈值已到。当前靠调用路径隔离，能工作但不显式 |
+
+| # | 项 | 备注 |
+|---|-----|------|
+| V1 | arXiv/PubMed 接入统一检索 | 缺 XML parser，目前统一检索只有 4 个 JSON 源 |
+| V2 | novelty 相似度语义化（embedding provider 决策 + 集成） | 词面 0.75 阈值余量 0.08；与 G5 一起看 |
+| V3 | poll 的进程 start-time 交叉核验 | 现状「done.json 优先」方向安全，只会多报 running |
+| V4 | 远端算力真实实现（Docker/SSH/Modal/火山引擎） | DESIGN 明示按需求拉动 |
+| V5 | R kernel | v0.1 遗留 permit set 已有位置 |
+| V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。施工说明：同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（P6 验收核对：当前 execute() 入参为 OpentronsProgram），等第二设备族选定再动（AD-4 教训：两个真实实现验证接口） |
+| V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估 |
+| V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差 |
+| V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
+| V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘 |
+| V9 | AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200） |
+| V12 | LLM 结构化输出（`response_format` / JSON mode） | P8-G5 实测：kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON（`finish_reason` 不是 `length`，不是截断）。已加「解析失败重试一次」但治标不治本。根治要么让 LLMRouter 支持 `response_format: json_object`，要么给判定器配一个支持结构化输出的模型。现状是安全的（降级为可见的 `citation_judge_unavailable` soft finding，不假装通过），代价是这部分引用本轮没被检查 |
+| V13 | 判定 prompt 对「凭空归因」的口径 | P8-G5 实测：难档唯一稳定的漏报模式是「草稿给出卡片里没有的归因解释」。prompt 写的是「声称了卡片里明确没有的结果 = conflict」，模型读成「卡片没覆盖 → unclear」。两种读法都讲得通，是 prompt 的歧义而非模型的错。改口径前要先想清楚：收紧会不会把合法的概括也扫进来（那正是 P3 刻意避免的误报） |
+
+## 待定（等外部输入 / 用户拍板，2026-09-09 用户确认入册）
+
+| # | 项 | 等什么 |
+|---|-----|--------|
+| D1 | 第三个仿真平台 adapter（材料计算 VASP/LAMMPS？EDA？） | 用户真实课题拉动；SimulationPlatform 契约已被两实现验证 |
+| D2 | Semantic Scholar API key 接入 | 用户申请免费 key（connector 走凭据服务，id `semanticscholar`） |
+| D3 | CNKI / 万方真实 API | 用户有无 API 渠道；AMiner 目前是中文文献主路径 |
+
+------------------------------------------------------------------------------
+## 文件：CHANGELOG.md
+------------------------------------------------------------------------------
+
+# Changelog
+
+本文件记录面向用户可见的变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [0.2.0] — 未发布（tag 与 GitHub Release 在 P9 末尾一并打出）
+
+从「科学 Agent 平台」重新定位为**面向科研人群的开源科研工作台**：项目成为持久层的根，
+五大功能域（文献 / 实验 / 记录 / 创新性 / 评审）围绕一张可审计的证据图组织。
+
+### 新增
+
+**P1 · Project 基座**
+- `spark-research project new|list|open|archive`；数据布局 `~/.spark-research/projects/<slug>/`
+- Research Record 存储 `records.db`：8 类 record（idea / decision / experiment / observation /
+  reading / conclusion / paper / artifact）+ 5 类边（supports / contradicts / derives_from /
+  cites / supersedes），与 artifact 表 id 互链（AD-3）
+- 凭据服务 `CredentialStore`：`credentials.json` 0600，**只在 daemon 进程内**；
+  kernel 走 permit set 代访问，值本体不出 daemon（AD-2）
+
+**P2 · 文献检索与文献库**
+- 文献源扩到 9 个：OpenAlex / CrossRef / EuropePMC / Semantic Scholar / PubMed / arXiv /
+  AMiner（走凭据服务）/ CNKI / 万方（后两个是占位，无公开 API）
+- 跨源并发检索 + DOI/标题去重 + 归一化；项目文献库 `library.db`（标签 / 笔记 / 阅读状态）
+- OA PDF 下载管线（arXiv / EuropePMC）+ checksum；BibTeX / CSL-JSON 导出
+- `spark-research lit search|add|list|pdf|export|sources`
+- 技能：literature-search、paper-download、library-curation
+
+**P3 · 综述与引用核验**
+- 结构化精读卡 pipeline（schema 校验是硬门，不合格不落半成品 record）
+- 综述草稿生成：引用白名单双保险（prompt 层 + 生成后校验）
+- Reviewer 检查器 `citation-integrity`：库外 key = hard veto；与精读卡冲突 = soft；
+  强断言无引用 = soft；判定器故障 = 可见的 soft（不静默当「通过」）
+- `spark-research lit read|review`；技能：literature-review
+
+**P4 · Co-explore 与 Novelty check**
+- 批判性共探会话 → Idea 卡（观点必须带库内来源或显式标 inferred）
+- Novelty pipeline：claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**
+  （检索不到 ≠ 新颖；模型原判与校正后评级都留在产物里，AD-8）
+- Idea 卡 novelty 状态：unchecked / checked-novel / checked-incremental / checked-overlap
+- `spark-research idea new|list|check`；技能：idea-coexplore、novelty-check
+
+**P5 · 干实验闭环**
+- `SimulationPlatform` 契约（prepare / submit / poll / collect，AD-4）+ 两个参考实现：
+  OpenMM 与 pyref（纯标准库，零依赖）；两者共用同一套契约测试
+- 状态机 `design → dry_run → collect → analyze → concluded | iterated`，
+  **状态真源在磁盘**：编排进程被 SIGKILL 后 `exp run --resume` 能接回来
+- 能力位 `deterministic` 随 observation 落库，供报告与检查器区分对账口径
+- `spark-research exp new|run|status|list|platforms`；技能：dry-experiment、protein-analysis
+
+**P6 · 湿实验**
+- Opentrons 官方模拟器（`opentrons_simulate`）成为默认湿实验后端，取代 mock
+- 协议编译：自然语言 → Opentrons Flex Python Protocol API v2；
+  平台上没有的硬件编译成 `[spark-note]` 人工步骤，**不假装执行过**
+- 安全门 4 条独立纯函数规则（试剂兼容 / 浓度上限 / 生物安全等级 / 体积容量）
+- **approve gate（AD-6）**：安全门通过只到 `awaiting_approval`；唯一进入执行的门是
+  记名的 `approve()`，批的是协议 hash，协议一改批准立刻作废
+- 能力位 `simulated` 随 observation 落库
+- `spark-research lab compile|approve|reject|simulate|status|backends`；技能：wet-protocol
+
+**P7 · 前端工作台**
+- HTTP API 层补齐 P1-P6 全部能力（域端点 + 长任务句柄 + SSE 生命周期事件）
+- Web 工作台从 vanilla JS 换成 SolidJS + Vite（AD-7）：项目导航 / 会话流 / record 时间线 /
+  证据子图（确定性环形布局）/ 干湿实验面板 / 明暗主题
+- HTTP 层的 approve **不接受环境变量兜底**：缺 actor 直接 400，`actorSource` 记 `http:explicit`
+
+**P8 · 功能收口**
+- **结论卡 review 门槛（域 E2）**：review 状态 pending / approved / vetoed。
+  判定规则不可协商——任一 hard finding → vetoed，零 hard → approved；每次评审落一条
+  记名的 decision record。`spark-research conclusion list|show|review`
+- **新增 3 个 Reviewer 检查器**：
+  - `data-consistency`：结论引用的 observation 必须真实存在于执行记录
+    （断链 / 跨项目 / 类型不对 = hard；无执行锚点 / 图上没连边 = soft）
+  - `capability-labeling`：模拟读数没标注 = hard；在非确定性平台上声称逐位复现 = hard
+  - `stats-plausibility`：**只出 soft** 的启发式提示（样本量过小 / 多重比较未校正 /
+    p 值边缘 0.04–0.05 / 结论强度超过数据支撑）
+- **研究报告导出（域 C2）**：证据图 → Markdown（问题 / 思路 / 实验 / 结论 / 待验证 +
+  证据索引 + 参考文献）。正文由代码渲染不经过模型；结论区只收 approved 的卡。
+  `spark-research report export|stats`、`GET /api/report[?format=markdown]`、工作台导出按钮
+- 技能 research-report（第 10 个，凑齐设计里的技能目录）
+- `scripts/demo-research-thread.ts`：一条完整研究线索的可重放演练（CI 可跑，零网络）
+- `scripts/measure-citation-judge.ts`：真实模型下的引用一致性判准率测量（分三档报告，不进 CI）
+
+### 变更
+
+- 报告与检查器统一「可复现性口径」措辞：证据来自非确定性平台一律写**区间/趋势对账**，
+  不再出现「逐位可复现」这类承诺
+- 结论卡 `review` 字段从裸字符串升级为结构化评审记录（谁 / 何时 / 依据哪些 finding）。
+  **向后兼容**：P5/P6 落的旧形态照常读得出来，解析不了的一律落回 `pending`，不会被当成 approved
+
+### 移除
+
+- 删除 v0.1 遗留的 `backend/src/compute/`（`providers.ts` / `manager.ts` / `job_manager.ts`）
+  及其测试。这套内存态、阻塞 `wait()` 的任务抽象自 P5 起就标了 DEPRECATED，
+  干实验已全部走 `SimulationPlatform`；留着两套「提交任务」抽象只会让下一个人选错
+
+### 修复
+
+- bibtex key 非确定性（`LibraryStore.list()` 用随机 uuid 参与排序，导致同姓同年论文的
+  引用 key 可能在两次运行间互换）——次序键改为 rowid，`RecordStore` 同一问题一并修
+- 句子切分把并列引用 `[@a; @b]` 劈成两半，导致后一个 key 逃过引用核验
+- 综述草稿（无产生它的 cell）被 trace-don't-recompute 规则误判为 hard finding
+- pytest 静默收集 0 个用例（测试文件名 `*.test.py` 不匹配默认模式）——
+  P0-P4 期间 Python 侧其实没有测试门禁
+
+---
+
+## [0.1.0]
+
+Daemon-Worker 架构 + permit set、有状态 Python kernel、Artifact 与 lineage、
+Reviewer veto（trace-don't-recompute）、11 个科学 connector、协议编译器与安全门、
+vanilla JS 三栏 Web 界面。
+
+==============================================================================
+# 技能手册（agent 的操作手册，按需加载）
+==============================================================================
+
+------------------------------------------------------------------------------
+## 技能：dry-experiment（backend/src/skills/dry-experiment/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: dry-experiment
+description: "干实验（in silico）闭环：从一个假设出发设计仿真算例 → 提交到仿真平台 → 回收产出进 artifact → 产出 observation → 迭代或下结论。全程状态持久化，编排进程被杀也能续跑。用于「这个想法能不能先在计算机上验一遍」「跑一个 MD / ODE 算例并把结果留成证据」。"
+category: experiment
+domain: B
+triggers: [先在计算机上验一遍, 跑一个 MD 算例, 设计一个仿真, 实验跑挂了能不能续跑]
+connectors: []
+platforms: [pyref, openmm]
+validation: [tests/unit/experiment.test.ts, tests/unit/experiment_e2e.test.ts, tests/unit/simulation_contract.test.ts, tests/sim/oscillator.test.py]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Dry experiment（干实验闭环）
+
+## 何时用这个技能
+
+- 用户有一个**可计算的**假设，想先在计算机上验一遍再谈湿实验
+- 需要跑分子动力学 / 数值积分类算例，并把结果留成可审计的证据
+- 已经跑过一轮，要改参数再跑一轮并保留两轮的对照关系
+
+**不适用**：需要动物理设备的湿实验 → `wet-protocol`；只想查文献 → `literature-search`；
+想知道某个蛋白有没有可用结构 → `protein-analysis`（那是本技能的**前置**）。
+
+## 铁律（先读这段）
+
+1. **先有假设，再有算例**。`--hypothesis` 不是可选的装饰：一个说不出「预期看到什么」的算例，
+   跑出任何数字都能被解释成成功。设计阶段写不出来，就是还没想清楚。
+2. **检索不到 ≠ 不存在，跑不出来 ≠ 不成立**。仿真失败先分清是「算例本身错了」还是
+   「任务随进程一起没了」——状态机把这两件事分开了（`failed` + `recoverable`），别混着报。
+3. **结果要能对照**。pyref 有解析解，OpenMM 有能量守恒/温度这类物理判据。
+   「跑完没报错」不是结论；报告里必须有一个**可判定**的对照量。
+4. **改参数 = 新实验**。不要在同一条 record 上反复重跑覆盖结果。
+   `exp` 的 `iterate` 会新建一条 record 并用 `supersedes` 边连回旧的——两轮都留在证据图里。
+5. **状态在磁盘上，不在你脑子里**。任何时候都可以 `exp status <id>` 问当前状态；
+   进程死了就 `exp run <id> --resume`。不要凭记忆推断「刚才跑到哪了」。
+
+## 用法
+
+```bash
+spark-research exp platforms                       # 先看哪个仿真平台可用
+spark-research exp new "水盒子平衡" --platform openmm \
+    --param steps=500 --param boxSizeNm=2.0 \
+    --hypothesis "300K 下 1ps 平衡后势能稳定在 -1.4e4 kJ/mol 量级"
+spark-research exp run <id> --note "首轮基线"       # dry_run → collect → analyze
+spark-research exp run <id> --resume                # 进程被杀之后接上
+spark-research exp status <id>                      # 看正文 + 当前 run 状态
+spark-research exp list --state failed              # 挑出要重试的
+```
+
+退出码 1 = 仿真失败或参数非法。**不要**把它当成「跑完了」。
+
+## 状态机
+
+```
+design ──► dry_run ──► collect ──► analyze ──► concluded
+             │                                └► iterated ──► （新实验，supersedes 旧的）
+             └► failed ──► dry_run（retry）
+```
+
+- 表外的转移**一律拒绝**，不做「顺手纠正」。状态机悄悄自愈等于没有状态机。
+- `concluded` / `iterated` 是终态，之后什么都不能做。
+- 每次转移都在 `metadata.history` 与 `metadata.timestamps` 留时间戳。
+
+## 断点续跑：三种情形
+
+`exp run <id> --resume` 会 poll 仿真任务，按结果分三条路走：
+
+| 情形 | 判据 | 动作 |
+|------|------|------|
+| 任务仍在跑 | 无 `done.json`，pid 还活着 | 保持 `dry_run`，继续等 |
+| 任务已完成 | 有 `done.json`（status=completed） | 直接进 `collect` |
+| 任务已丢失 | 无 `done.json`，pid 已消失 | 标 `failed` 且 `recoverable=true`，可 `retry` |
+
+判据的顺序是**先看结果文件再看 pid**：任务写完结果才退出，所以只要结果在，
+无论进程是死是活都以结果为准（PID 复用最坏只会让一个已死的任务多「运行中」一会儿，
+不会把失败报成成功）。
+
+## 两个仿真平台
+
+| 平台 | 任务种类 | 说明 | 依赖 |
+|------|---------|------|------|
+| `pyref` | `damped-oscillator` | 阻尼谐振子 RK4 积分，**有解析解可对照** | 无（纯标准库） |
+| `openmm` | `water-box-md` | 显式溶剂水盒子，能量最小化 + 短时 NVT 平衡 | `uv pip install openmm` |
+
+`pyref` 不是玩具占位：它是契约的第二实现，也是 CI 里永远跑得通的那一个。
+需要「先把闭环走通再谈物理」的时候用它。
+
+## 证据图
+
+```
+artifact record  --derives_from--> experiment      （每个产出文件一条）
+observation      --derives_from--> experiment
+observation      --derives_from--> artifact record （每个产出各一条）
+conclusion       --derives_from--> observation / experiment
+新 experiment    --supersedes-->   旧 experiment   （iterate）
+```
+
+- experiment record 的 `evidence` 是 `inferred`（设计是推出来的）
+- observation 的 `evidence` 是 `computed`（结果是算出来的，不是看出来的）
+- 结论卡一律 `review: "pending"` —— 干实验不给自己发通过证（review 门槛见域 E2）
+
+## 反模式
+
+- ❌ 不写假设就 `exp new`，跑完再回头解释数字
+- ❌ 仿真失败了就改小 steps 直到「跑通」，然后当成结果
+- ❌ 在同一条实验上反复重跑覆盖上一轮（要对照就 `iterate`）
+- ❌ `iterate` 时传和上一轮完全相同的参数（工具会拒——那是重跑不是迭代）
+- ❌ 进程被杀之后重新 `exp new` 建一条新实验，把跑了一半的那条丢掉不管
+- ❌ 把 `analyze` 当成结论：observation 是「看到了什么」，conclusion 是「因此认为什么」
+- ❌ 拿 `maxAbsErrorVsAnalytic` 之外的「感觉对」当数值正确性判据
+- ❌ OpenMM 只跑几百步就宣称「已平衡」——1 ps 远不足以让水盒子达到目标温度
+
+## 验证方式（AD-5）
+
+- 契约测试：`tests/unit/simulation_contract.test.ts` —— **同一组 13 个用例参数化跑在
+  `pyref` 与 `openmm` 两个实现上**（prepare 确定性 / submit 非阻塞 / 跨实例重连 /
+  运行中拒绝 collect / cancel / 真实失败路径）
+- 状态机单测：`tests/unit/experiment.test.ts` —— 合法转移全覆盖 + 非法转移逐条拒绝
+  + 断点恢复三情形（任务仍在跑 / 已完成 / 已丢失）
+- e2e：`tests/unit/experiment_e2e.test.ts` —— 另起一个 bun 进程当编排进程，
+  提交仿真后**真实 SIGKILL** 掉它，重启后接回同一个 run 续跑到 conclude
+- Python 侧：`tests/sim/oscillator.test.py` —— 与解析解对照、能量守恒、发散保护、
+  `done.json` 原子写与失败信封
+
+------------------------------------------------------------------------------
+## 技能：idea-coexplore（backend/src/skills/idea-coexplore/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: idea-coexplore
+description: "思路共探：围绕用户的研究想法做苏格拉底式批判性探讨，每个观点都锚在项目文献库里的真实论文上（[@key]）或显式标注 inferred，产出结构化 Idea 卡入思路库。用于「我有个想法，帮我想清楚 / 帮我挑毛病 / 这个方向值不值得做」。"
+category: ideation
+domain: A
+triggers: [我有个想法, 帮我挑毛病, 这个方向值不值得做, 陪我想清楚这个假设]
+connectors: []
+validation: [tests/unit/ideation.test.ts, tests/unit/ideation_cli.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Co-explore（思路共探）
+
+## 何时用这个技能
+
+- 用户抛出一个还没成形的研究想法，需要人帮他想清楚
+- 用户要你**挑毛病**：这个方向哪里会塌、谁已经做过、最便宜的证伪实验是什么
+- 用户已有一段草稿式的思路，需要基于文献的批判性反馈
+
+**不适用**：只想找几篇论文 → `literature-search`；想知道这个 idea 新不新 → `novelty-check`
+（先用本技能出卡，再拿卡去查）；想写综述 → `literature-review`。
+
+## 铁律（先读这段）
+
+1. **你的角色不是鼓励师**。每一次回应都必须至少给出一条**反对或复杂化**的证据。
+   给不出反面证据时要明说「库里没有反证」，并把复杂化点标成 `(inferred)` 写清推理过程——
+   沉默不是同意，是漏了一次检查。管线会拒绝 `contradicting` 为空的卡。
+2. **每个实质性观点带来源**：`[@key]`（库内论文）或显式 `(inferred)`。没有第三种。
+   「众所周知」不是来源。
+3. **只能引用项目文献库里的论文**。库外的文献无论多真、你多确定它存在，都不能引——
+   读者没法从这个项目里核对它。要引它就先 `lit search`/`lit add` 入库。
+4. **不要替文献说话**。库里那条记录没写的结论、数字、baseline，就当它没说。
+
+## 用法
+
+```bash
+# 单条消息模式（适合已经想清楚要问什么）
+spark-research idea new -m "我想用蛋白语言模型的注意力图直接预测别构位点"
+
+# 多轮交互（适合边聊边收敛；/card 定卡入库，exit 退出）
+spark-research idea new
+
+# 看思路库
+spark-research idea list
+spark-research idea list --status unchecked
+```
+
+程序化调用：
+
+```ts
+import { CoExploreSession } from "backend/src/ideation/coexplore";
+const session = new CoExploreSession({ llm, library, records, projectContext });
+const turn = await session.turn(message, { history });   // 只讨论，不落库
+const stored = session.save(turn.card, { sessionId });   // 定卡入库
+```
+
+## 产出物：Idea 卡
+
+| 字段 | 含义 |
+|------|------|
+| 假设陈述 | 收敛成一句**可证伪**的话 |
+| 支持文献 | `[@key]` + 为什么支持 |
+| 反对 / 复杂化证据 | `[@key]` 或 `(inferred)` + 为什么反对。**至少 1 条** |
+| 待验证点 | 还没被证据回答、必须先验证的点 |
+| novelty 状态 | `unchecked` → 跑过 `novelty-check` 后变 `checked-*` |
+
+落成一条 `idea` record（`evidence=inferred`），并建证据边：
+
+```
+paper --supports--> idea        （这篇论文支持这条思路）
+paper --contradicts--> idea     （这篇论文反对/复杂化这条思路）
+```
+
+边的方向按**语义**读（「A 支持 B」），所以论文是起点。查一条 idea 的支撑文献 = 看它的 incoming 边。
+
+## 有用的苏格拉底动作
+
+- **收紧**：把「我想做 X 方向」变成「若 M 机制成立，则在 D 数据上应观察到 O」
+- **定位**：这条思路最接近哪一条已有工作线？差在哪一步？
+- **进攻**：它最可能怎么塌？谁已经试过类似的？
+- **成本**：下周就能做的最便宜的证伪实验是什么？
+
+## 反模式
+
+- ❌ 用「这是个很有意思的方向」开头然后顺着用户说下去——那不是共探，是复读
+- ❌ 因为库里没有反证就不给反对意见（应该说清「库里没有反证」并给出推断性的复杂化点）
+- ❌ 引用一篇你「记得存在」但库里没有的经典论文（这是伪造引用，schema 校验会拒）
+- ❌ 把 `(inferred)` 当成万能豁免：整张卡全是推断会被拒（库非空时至少要有一条文献支撑）
+- ❌ 库为空时假装有证据基础——应该先说「这次共探没有文献基础，建议先入库」
+- ❌ 把「待验证点」写成客套话（「需要更多实验」）；它应该是具体到可以排期的
+
+## 验证方式（AD-5）
+
+- 单测：`tests/unit/ideation.test.ts`（schema 硬门、grounding、重试与拒绝、证据边方向、思路库读写）
+- CLI：`tests/unit/ideation_cli.test.ts`（`-m` 模式、交互式 `/card`、空库警告、失败退出码）
+- e2e：`tests/unit/novelty_e2e.test.ts` 里共探出的 idea 卡直接进 novelty check 全链路
+
+------------------------------------------------------------------------------
+## 技能：library-curation（backend/src/skills/library-curation/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: library-curation
+description: "维护项目文献库（library.db）：按标识符或检索结果入库并自动去重合并，打标签、维护阅读状态与笔记，抓取库内互引边（OpenAlex referenced_works），导出 BibTeX / CSL-JSON。每篇入库论文自动在证据图中创建 type=paper 的 record 锚点。"
+category: literature
+domain: A
+triggers: [把这篇加进文献库, 整理文献库, 导出 BibTeX, 标记已读, 给这批论文打标签]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# 项目文献库维护
+
+## 心智模型
+
+文献库是**项目级**的（`~/.spark-research/projects/<slug>/library.db`），不是会话级的。
+一个课题横跨数月，文献库跨会话积累——这是 Spark Research 相对 session-centric 工具的核心差异（DESIGN §3.1）。
+
+每篇入库论文有两个身份：
+1. `library.db` 里的 `papers` 行：完整元数据 + 标签 + 阅读状态 + 笔记 + PDF 路径
+2. `records.db` 里的一条 `type: paper` record：证据图上的锚点，`evidence: sourced`
+
+**入库时自动建立两者关联**（`papers.record_id`）。后续综述的每条引用、结论卡的每条证据，都必须能回链到这个 record——这就是 P3 引用核验的地基。
+
+## 入库
+
+```bash
+# 按标识符（DOI / arXiv id / PMID），跨源取元数据后合并入库
+spark-research lit add 10.1038/s41586-021-03819-2 --tag alphafold,methods
+
+# 检索后批量入库
+spark-research lit search "protein structure prediction" --limit 20 --add --tag background
+```
+
+### 去重语义（入库前必读）
+
+| 情况 | 行为 |
+|------|------|
+| DOI 与库内某篇相同 | **合并**字段，不新建行 |
+| 两篇都有 DOI 且不同 | 一定是两篇，即使标题一模一样也**不合并** |
+| 无 DOI，归一化标题相同 | 合并 |
+| 无 DOI，标题 Jaccard 相似度 ≥ 0.9 且年份/第一作者不冲突 | 合并 |
+
+字段冲突时按源可信度取值：CrossRef > OpenAlex > Europe PMC > Semantic Scholar > AMiner。
+摘要取更长的一方；OA PDF 直链谁有算谁的（OA 链接稀缺，不按优先级挑）。
+
+**合并是幂等的**：同一篇反复入库只会更新字段，不会产生重复行。放心重跑。
+
+## 组织
+
+```bash
+spark-research lit list                       # 全部
+spark-research lit list --tag methods         # 按标签
+spark-research lit list --status unread       # 按阅读状态
+spark-research lit list --q folding           # 标题/摘要子串
+spark-research lit list --json                # 结构化输出，给程序消费
+```
+
+阅读状态：`unread` → `skimmed` / `reading` → `read`。
+标签建议按**在本课题中的角色**打，而不是按学科：`background` / `methods` / `baseline` / `contradicts-h1`。
+学科分类各大数据库已经做了，重复劳动没有价值；「这篇在我的课题里扮演什么角色」才是文献库的增量。
+
+## 引文边
+
+库内互引边来自 OpenAlex 的 `referenced_works`，入库时随元数据一起存进 `references_raw`。
+
+```ts
+library.rebuildCitations();   // 重算全库互引边；每次批量入库后跑一次
+```
+
+重要性质：**边只在库内两端都存在时才建立**。新入库一篇论文可能让之前存下的引用关系突然可解析，所以 `rebuildCitations()` 要在入库后跑，而不是只在初始化时跑。CLI 的 `lit add` / `lit search --add` 已经自动调用。
+
+两端 record 都存在时，会同步在证据图上补一条 `cites` 边——文献的引用结构因此进入同一张证据图。
+
+## 导出
+
+```bash
+spark-research lit export --format bibtex --out refs.bib
+spark-research lit export --format csl --out refs.json
+spark-research lit export --format bibtex --tag methods    # 按标签子集导出
+```
+
+**BibTeX key 规则**：`第一作者姓 + 年份 + 标题首词`（全小写去非字母数字），如 `jumper2021highly`。
+冲突时追加后缀：第一条无后缀，之后依次 `a` / `b` / `c`…
+标题首词跳过冠词与介词（a/an/the/on/of/in/for/and）和纯数字。
+
+key 规则是**确定性**的：同一个库导出两次得到同样的 key。引用可以放心写进论文草稿。
+
+## 反模式
+
+- ❌ 手工往 `library.db` 里 INSERT——绕过去重与 record 联动，证据图会断链
+- ❌ 检索到的东西无差别全量 `--add`——文献库是精选集，不是检索日志
+- ❌ 把笔记写在外部文件里——笔记进 `notes` 字段，才能跟着 record 进证据图和最终报告
+- ❌ 靠记忆填 BibTeX 条目——只从库导出，导出不出来说明没入库，那就先入库
+
+## 验证方式
+
+- 单测：`tests/unit/literature.test.ts` 的 CRUD、去重、引文边、record 联动、BibTeX/CSL 格式用例
+- e2e 回放：`tests/unit/literature_e2e.test.ts` 跑 检索 → 去重 → 入库 → 引文边 → 导出 全链路
+
+------------------------------------------------------------------------------
+## 技能：literature-review（backend/src/skills/literature-review/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: literature-review
+description: "综述全链路：检索 → 入库 → 逐篇精读卡 → 综述草稿 → 引用真伪核验。每条引用都必须能回链到项目文献库内的真实论文；伪造引用与库外引用会被 citation-integrity 检查器 veto。用于写文献综述、相关工作章节、背景调研报告。"
+category: literature
+domain: A
+triggers: [写一篇综述, 相关工作章节, 把这些论文串成一段叙述, 帮我核对引用是不是真的]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/reading.test.ts, tests/unit/review.test.ts, tests/unit/review_e2e.test.ts, tests/unit/citation_integrity.test.ts, tests/unit/citation_adversarial.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# 文献综述与引用核验
+
+## 何时用这个技能
+
+- 用户要一份某个方向的文献综述 / 相关工作章节 / 背景调研报告
+- 用户已经有一批文献想让你「读完并组织起来」
+- 需要对一份已有草稿做引用核验（草稿是谁写的都行——你写的、用户写的、别的 agent 写的）
+
+**不适用**：只是找几篇论文 → `literature-search`；只是把某篇 PDF 拿下来 → `paper-download`；
+判断一个 idea 新不新 → `novelty-check`（P4，复用本技能的核验器）。
+
+## 铁律（先读这段）
+
+1. **引用只能指向项目文献库里的论文**。库里没有的文献，无论你多确定它存在、多适合放在这里，都不能引。
+   要引它 → 先 `lit search` / `lit add` 入库 → 再重新生成。
+2. **不要凭记忆写文献的结论**。综述里对某篇文献的每一句陈述，都必须能在它的精读卡里找到依据。
+3. **hard finding 出现即停**。`citation-integrity` 报 hard 说明草稿里有读者无法核对的引用，
+   这时候不要「改改措辞再交」——把假引用删掉或把文献真正入库，然后重跑。
+4. **soft finding 不要无视**。soft 是「可能有问题」，需要你逐条看过并说明处理方式，
+   而不是因为不否决就当没看见。
+
+## 全链路
+
+### 1. 检索与入库（用 literature-search / library-curation）
+
+```bash
+spark-research lit search "<研究问题的核心概念>" --limit 20 --add --tag background
+spark-research lit list                      # 确认入库结果与 id
+```
+
+综述的覆盖面 = 库的覆盖面。库里只有 3 篇就别写「本领域的全面综述」，
+说清楚「基于项目库内 N 篇文献」——这是诚实，不是免责声明。
+
+### 2. 逐篇精读卡
+
+```bash
+spark-research lit read <paper-id>           # 单篇
+spark-research lit read --all --tag background   # 批量（按标签）
+```
+
+每张卡片是结构化的五段：研究问题 / 方法 / 核心结论 / 局限 / 与本项目的关系，
+落成一条 `observation` record（`evidence=sourced`），并用 `cites` 边连到该论文的 `paper` record。
+
+**卡片是后续所有环节的对照基准**：综述里说这篇文献「说了什么」，核验器就拿卡片来对。
+所以卡片本身不能糊弄——摘要没提到的数字、baseline 名称一律写「摘要未提及」，
+生成器对不合 schema 的模型输出会重试一次，仍不合格就报错而不是产出半成品。
+
+程序化调用：
+
+```ts
+import { ReadingCardGenerator, listReadingCards } from "backend/src/literature/reading";
+const gen = new ReadingCardGenerator({ llm, library, records, projectContext });
+const { cards, failures } = await gen.generateMany(paperIds);   // 逐篇独立结算
+```
+
+`failures` 必须如实汇报给用户，不能被「成功 N 张」盖过去。
+
+### 3. 综述草稿
+
+```bash
+spark-research lit review --topic "<综述主题>" --out review.md
+```
+
+- 引用写作 `[@bibtexKey]`，key 来自库内论文（与 `lit export --format bibtex` 的 key 完全一致，读者可直接对照 .bib）
+- 草稿落成 artifact + `artifact` record（`evidence=inferred`），
+  并连 `derives_from` 边到每张精读卡、`cites` 边到每篇被引论文——证据链从综述一路回溯到原文
+- 生成器自带白名单校验：出现库外 key 会带着越界清单重试一次，仍越界就**报错且不落 artifact**
+
+### 4. 引用核验（citation-integrity）
+
+`lit review` 会自动跑；也可以对任何草稿单独跑：
+
+```ts
+import { citationIntegrity } from "backend/src/reviewer/rules";
+const result = await citationIntegrity({ draft, knownKeys, baselines, judge });
+```
+
+三类检查与分级：
+
+| 情况 | 严重度 | 含义与处理 |
+|------|--------|-----------|
+| key 不在库内（编造的 key、或库外真文献） | **hard → veto** | 读者无法核对。入库或删引用，不要改措辞绕过 |
+| key 在库但陈述与精读卡冲突 | soft（inferred） | LLM 辅助判定，可能误报；逐条看，确认后改写或保留并说明 |
+| 强断言句无引用支撑（证明/首次/显著优于…） | soft | 要么补引用，要么把话说软 |
+
+**判定器失效会产生一条显式的 soft finding**（`citation_judge_unavailable`）：
+没跑成的检查会明说没跑，不会伪装成「全部通过」。看到它就知道第二类检查这次是缺失的。
+
+## 反模式
+
+- ❌ 把「我知道这篇论文存在」当成可以引用的理由——库内没有就是不能引
+- ❌ hard finding 出现后换个 key 硬凑一个库内文献来「消掉」告警（这是把伪造引用变成错误引用，更糟）
+- ❌ 用综述草稿的措辞去迁就检查器，而不是修事实
+- ❌ 对没有精读卡的论文直接写进综述（没有对照基准 = 第二类检查对它完全失效，核验形同虚设）
+- ❌ 因为 soft 不否决就跳过不看
+- ❌ 声称「已全面综述该领域」——你综述的是**项目文献库**，说清库的边界
+
+## 验证方式（AD-5）
+
+- 单测：`tests/unit/reading.test.ts`（精读卡 schema 与重试）、`tests/unit/review.test.ts`（草稿生成与 CLI）、
+  `tests/unit/citation_integrity.test.ts`（检查器与 Reviewer 接入）
+- 对抗测试：`tests/unit/citation_adversarial.test.ts`——3 种伪造模式 × 3 变体检出率 100% + 4 条阴性对照
+- e2e 回放：`tests/unit/review_e2e.test.ts`——P2 fixture 的 10 篇文献走完整链路，再注入伪造引用验证 veto
+
+------------------------------------------------------------------------------
+## 技能：literature-search（backend/src/skills/literature-search/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: literature-search
+description: "跨源文献检索：并发查询 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（以及已配置凭据时的 AMiner），归一化为统一 Paper 模型，按 DOI 与标题模糊匹配去重合并，返回带来源标注的候选清单。用于背景调研、找相关工作、为综述或创新性核验准备候选池。"
+category: literature
+domain: A
+triggers: [找相关工作, 背景调研, 这个领域有哪些工作, 帮我查文献, 为综述准备候选池]
+connectors: [openalex, crossref, europepmc, semanticscholar, aminer]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts, tests/integration/literature_record.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# 跨源文献检索
+
+## 何时用这个技能
+
+- 用户提出一个研究问题，需要摸清已有工作
+- 需要为综述（literature-review）或创新性核验（novelty-check）准备候选论文池
+- 需要交叉验证某篇论文的元数据（同一篇被多个源命中 = 元数据更可信）
+
+**不适用**：用户已经给出确定的 DOI/arXiv id 只想入库 —— 那是 `library-curation` 的 `lit add`。
+
+## 能力边界（先读这段，别做超出的承诺）
+
+| 源 | 覆盖 | 是否需要凭据 | 已知限制 |
+|----|------|------------|---------|
+| OpenAlex | 全学科，含引文图（referenced_works） | 否 | 摘要是倒排索引，还原后偶有词序问题 |
+| CrossRef | 所有注册 DOI 的正式发表物 | 否 | 不收预印本；摘要覆盖率低 |
+| Europe PMC | 生命科学 + 部分预印本 | 否 | 非生物医学领域覆盖差 |
+| Semantic Scholar | 全学科 + OA PDF 链接 | 否 | 无 key 时共享公共限流额度，高频会 429 |
+| AMiner | 中文文献与中国学者覆盖强 | **是**（`aminer` / `api_key`） | 未配置时自动跳过，不报错 |
+
+**凭据纪律（AD-2）**：凭据只在 daemon 进程内读取。你永远看不到、也不需要看到 key 本身。AMiner 未配置时统一检索会把它标成 `skipped`，其余源照常返回——**不要因此声称检索失败**。
+
+## 工作流
+
+### 1. 把研究问题拆成检索式
+
+不要把用户的整句话直接扔进检索。先拆：
+- 核心概念（2-4 个）→ 每个概念一次检索，而不是拼成长句
+- 同义词/术语变体（如 "protein structure prediction" / "protein folding"）分别跑
+- 需要限定年份或领域时，在结果侧过滤，而不是塞进 query 字符串
+
+### 2. 执行检索
+
+```bash
+spark-research lit search "AlphaFold protein structure prediction" --limit 20
+# 指定源（逗号分隔）
+spark-research lit search "<query>" --sources openalex,crossref,europepmc,semanticscholar
+# 检索并直接入库
+spark-research lit search "<query>" --limit 20 --add --tag background
+```
+
+程序化调用（在 agent 的执行环境里）：
+
+```ts
+import { LiteratureSearcher } from "backend/src/literature/search";
+const result = await new LiteratureSearcher().search(query, { perSource: 20, limit: 30 });
+// result.papers      去重合并后的 Paper[]
+// result.sources     每个源的 ok / failed / skipped + 计数 + 错误摘要
+// result.mergedCount 合并掉了多少条
+```
+
+### 3. 读懂 `sources` 状态（这一步不能跳）
+
+汇报检索结果前，先看每个源的 outcome：
+
+- `ok` —— 正常返回
+- `skipped` —— 未配置凭据，或该 id 形态该源不认。**不是失败**
+- `failed` —— 真失败（HTTP 429/5xx、网络错误）。必须在给用户的回答里如实说明「某源本次未返回，结果可能不完整」
+
+**禁止**：把 `failed` 的源静默吞掉后声称「已全面检索」。覆盖面不全就说不全。
+
+### 4. 判读去重结果
+
+- `sources` 字段有多个源 = 跨源交叉验证过，元数据可信度更高，排序上自动靠前
+- 只有单源命中的条目，引用前最好用 `lit add <doi>` 再取一次确认
+- `mergedCount` 异常高（> 输入的 50%）通常说明检索式太宽泛，收窄再来
+
+### 5. 交付
+
+给用户的候选清单必须包含：标题、第一作者、年份、venue、DOI、命中源。
+**每条都要能回链到真实来源**——没有 DOI 也没有 URL 的条目不要放进清单。
+
+## 反模式
+
+- ❌ 凭记忆补全检索结果里缺失的字段（年份、venue）——缺就标「未知」
+- ❌ 把某源的失败包装成「该领域没有相关工作」
+- ❌ 一次检索几百条然后全量入库——先人审，`--add` 是有意的显式动作
+- ❌ 对同一 query 反复重试失败的源（尤其 Semantic Scholar 429）——换源，别轰炸
+
+## 验证方式（AD-5：技能必须有配套验证）
+
+- 单测：`tests/unit/literature.test.ts` 的归一化与去重用例
+- e2e 回放：`tests/unit/literature_e2e.test.ts`，全链路走 `tests/fixtures/literature/` 的录制响应
+- 真实网络：本地 `FIXTURE_MODE=record bun test tests/integration/literature_record.test.ts`
+
+------------------------------------------------------------------------------
+## 技能：novelty-check（backend/src/skills/novelty-check/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: novelty-check
+description: "创新性核验：从 Idea 卡抽出可检验的创新点 claim → 每条 claim 多路检索真实文献 → 逐条给出最接近的已有工作 + 相同点 + 不同点 + 评级（novel/incremental/existing）→ 引用核验 → 回写思路库状态。用于「这个想法有没有人做过 / 我们相对已有工作新在哪」。"
+category: ideation
+domain: D
+triggers: [这个想法有没有人做过, 我们相对已有工作新在哪, 查一下新颖性, 有没有撞车的论文]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/novelty.test.ts, tests/unit/novelty_e2e.test.ts, tests/integration/novelty_record.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Novelty check（创新性核验）
+
+## 何时用这个技能
+
+- 用户问「这个想法有没有人做过」「我们和已有工作差在哪」
+- 立项前要判断一个方向值不值得投入
+- 论文 related work 章节要先摸清最近邻
+
+**不适用**：还没有成形的 idea → 先 `idea-coexplore` 出卡；只想找论文 → `literature-search`。
+
+## 铁律（先读这段）
+
+1. **检索不到 ≠ 新颖**。这是这条管线要防的头号失效模式。检索为空时结论是「没查出来」，
+   不是「novel」——管线会把该 claim 标成结论不可用，并且**不推进** idea 的 novelty 状态。
+2. **任何评级都要点名最近邻**。哪怕你认为它全新，也必须说清「最接近的是什么、差在哪」。
+   「没有相关工作」不是结论，是没做功课。
+3. **只能引用本次检索真的返回的工作**。不许引用你记得的经典论文——它没出现在这次检索里，
+   就不是这次检索的证据。生成器会拒，`citation-integrity` 还会再验一遍。
+4. **评级不是你说了算**。有一层确定性代码会拿检索结果的可计算特征校正你的评级（见下）。
+   与其被校正，不如一开始就按证据说话。
+
+## 用法
+
+```bash
+spark-research idea list                     # 找到 idea 的 record id
+spark-research idea check <record-id>        # 跑核验
+spark-research idea check <record-id> --sources openalex,crossref --per-source 5 --out novelty.md
+```
+
+退出码 1 = 报告有 hard finding（伪造引用），或本次未得出可用结论。两种都不该当成「通过」。
+
+## 管线六步
+
+| 步 | 做什么 | 谁说了算 |
+|----|--------|---------|
+| ① claim 提取 | idea 卡 → 1-5 条**可被一篇论文证伪**的陈述，每条配 2-3 个英文检索式 | 模型（过 schema 校验） |
+| ② 密集检索 | 每条检索式走 P2 统一检索（多源并发 + 去重合并） | 真实 API |
+| ③ 相似度 | claim/检索式 与 候选标题+摘要 的内容词覆盖率 | **确定性代码** |
+| ④ 对比 | 逐 claim：最近邻 + 相同点 + 不同点 + 评级 | 模型（key 必须来自候选清单） |
+| ⑤ 评级校验 | 用 ③ 的数字约束 ④ 的结论 | **确定性代码** |
+| ⑥ 引用核验 | 报告里每个 `[@key]` 必须在「库内 ∪ 本次候选」中 | P3 `citation-integrity` |
+
+## 评级校验层（这层是重点）
+
+| 规则 | 触发条件 | 后果 |
+|------|---------|------|
+| `no_candidates` | 检索一条候选都没返回 | 结论不可用，状态不推进 |
+| `rating_without_nearest` | 有候选却一条最近邻都不列 | 结论不可用 |
+| `unknown_work` | 引用了候选清单之外的 key | 结论不可用 |
+| `existing_without_high_affinity` | 评 `existing` 却没引到高相似候选 | **降级**为 `incremental` |
+| `novel_despite_high_affinity` | 明明检索到高相似候选却评 `novel` | **升级**为 `existing` |
+
+「高相似」= 候选的标题+摘要覆盖了 claim（或它某条检索式）**3/4 以上**的内容词。
+这是词面覆盖率，不是语义相似度：它会把用词高度重合的邻近工作算得偏高，所以只拿它做
+**约束**（不许在有高相似候选时说 novel），不拿它直接下结论。
+
+报告里模型给的评级与校正后的评级**都会列出来**——谁改了谁看得见。
+
+## 回写思路库
+
+```
+所有 claim 结论都可用 → 取最保守的一条：
+  任一 existing      → checked-overlap
+  否则任一 incremental → checked-incremental
+  全部 novel          → checked-novel
+任一 claim 结论不可用 → 维持 unchecked（但报告指针照样写回，「查过没查出来」≠「没查过」）
+```
+
+证据图：
+
+```
+novelty 报告 --derives_from--> idea
+novelty 报告 --cites--> 命中库内论文的 paper record
+```
+
+## 反模式
+
+- ❌ 检索空了就写「未见相关工作，属于原创」——这是本管线存在的理由
+- ❌ 为了显得新颖，故意挑冷门检索式（检索式覆盖面 = 结论的边界，要在报告里说清）
+- ❌ 三条检索式写成同一句话的三种说法（等于只检索了一次）
+- ❌ 相同点写「都用了深度学习」这种不产生信息的话
+- ❌ 引用一篇没检索到但你确信相关的论文来「补强」报告
+- ❌ 只跑一次就当定论：库和检索式变了，结论就该重跑（状态字段会告诉你上次查于何时）
+- ❌ 把 `checked-novel` 当成「可以去写论文了」——它只说明这几条检索式没查到
+
+## 验证方式（AD-5）
+
+- 单测：`tests/unit/novelty.test.ts`——相似度、claim/报告 schema、**评级校验层五条规则逐条**、
+  管线（回写、cites 边、检索空、schema 失败不落库、dry-run）
+- e2e 双向对照：`tests/unit/novelty_e2e.test.ts`（fixture 回放真实检索结果）
+  - (a) 已发表工作的核心 idea（自注意力替代循环做序列转导）→ 评 `existing` 且最近邻命中
+    *Attention Is All You Need* 原文
+  - (b) 刻意杜撰的组合 idea → 评 `novel`，但必须给出最近邻；空手评 novel 会被判结论不可用
+  - 反向：模型硬说 novel/existing 时，校验层按检索证据升/降级
+- 真实网络录制：`tests/integration/novelty_record.test.ts`（`FIXTURE_MODE=record`）
+
+------------------------------------------------------------------------------
+## 技能：paper-download（backend/src/skills/paper-download/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: paper-download
+description: "下载库内论文的开放获取（OA）PDF：解析 arXiv /pdf/ 直链、Europe PMC fullTextPdf、OpenAlex best_oa_location 三类候选，落盘到项目 papers/ 目录并记录 sha256 checksum。拿不到时明确标注不可得原因（403 / 无 OA / 非 PDF）并写回库，不重试轰炸。"
+category: literature
+domain: A
+triggers: [下载这篇论文, 把 PDF 拿到本地, 库里哪些论文有全文, 补全文献库的 PDF]
+connectors: [openalex, europepmc, arxiv]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts]
+allowed-tools: [Bash, Read]
+---
+
+# OA 论文 PDF 下载
+
+## 何时用这个技能
+
+- 论文已经在项目文献库里（先跑 `library-curation`），需要全文做精读卡或方法复现
+- 需要给用户一份可离线阅读的本地文献集
+
+**前置**：论文必须已入库。下载管线以库内 `paper-id` 为输入，落盘后把 `pdf_path` / `checksum` 写回同一条记录。
+
+## 核心纪律：拿不到就说拿不到
+
+这条比「下到」更重要。
+
+- **每个候选直链只试一次**。403/404 记原因、换下一个候选，全部失败即收手。**不做退避重试**——OA 服务器是公共资源，轰炸它会让整个项目被封 IP。
+- **只下 OA 直链**。不绕付费墙、不伪造 referer、不走镜像站。
+- 失败原因写回库内 `pdf_status = unavailable` + `pdf_reason`，**下次不再重试**。要重试必须是用户显式要求。
+- bioRxiv / 出版商站点返回 403 是**预期行为**，不是 bug。如实报告「该源拒绝程序化下载，需人工获取」。
+
+## 候选直链的推导顺序
+
+| 顺序 | 来源 | 推导方式 | 成功率 |
+|-----|------|---------|-------|
+| 1 | arXiv | 由 `ids.arxiv` 拼 `https://arxiv.org/pdf/<id>` | 高 |
+| 2 | Europe PMC | 由 `ids.pmcid` 拼 `.../europepmc/webservices/rest/<PMCID>/fullTextPdf` | 高（限 OA 子集） |
+| 3 | 归一化直链 | OpenAlex `best_oa_location.pdf_url` / S2 `openAccessPdf.url` / EuropePMC `fullTextUrlList` | 中 |
+
+前两条是**由标识符推导**的，不依赖源 API 返回的链接字段，所以最稳。
+
+## 用法
+
+```bash
+# 单篇（paper-id 支持前 8 位前缀，就是 lit list 里显示的那个）
+spark-research lit pdf 3f2a91b4
+
+# 先看哪些还没下
+spark-research lit list --json | jq '.[] | select(.pdfStatus == "absent") | {id, title}'
+```
+
+程序化：
+
+```ts
+import { PdfDownloader } from "backend/src/literature/pdf";
+const downloader = new PdfDownloader({ papersDir: project.paths.papersDir, library });
+const result = await downloader.downloadMany(ids);   // 串行，不并发打同一服务器
+```
+
+## 读懂返回结果
+
+```
+{ ok: true,  path, checksum: "sha256:…", bytes, url, origin, attempts }
+{ ok: false, reason, message, attempts }
+```
+
+`reason` 的取值与该说的话：
+
+| reason | 含义 | 对用户怎么说 |
+|--------|------|------------|
+| `no_oa_link` | 三类候选一条都推不出来 | 「这篇没有可用的开放获取版本」 |
+| `http_403` | 服务器拒绝程序化下载 | 「该出版商拒绝自动下载，需你手动获取」 |
+| `http_404` | 直链失效 | 「OA 链接已失效，元数据可能过期」 |
+| `not_a_pdf` | 返回的是落地页/登录页 | 「拿到的是网页而非 PDF，多半需要订阅」 |
+| `network_error` | 网络层失败 | 「网络请求失败，可稍后重试」——这是**唯一**可以建议重试的 |
+
+`attempts` 里逐条记了试过哪些 URL、各自什么状态。排障时先看它。
+
+## 校验
+
+下载成功后 checksum 是 `sha256:<hex>`，记录在库内 `checksum` 字段。
+它的用途：(1) 精读卡引用某个 PDF 时锚定具体文件版本；(2) 检测文件被替换/损坏。
+**不要**把 checksum 当作论文身份标识——同一篇论文不同来源的 PDF checksum 不同。
+
+## 反模式
+
+- ❌ 循环重试同一个 403 直到「成功」
+- ❌ 下载失败后凭摘要编造全文内容——没有全文就只用摘要，并标注证据类型为 `sourced`（摘要级）
+- ❌ 把 PDF 提交进 git（`papers/` 已在 .gitignore 里）
+- ❌ 并发下载几十篇——串行，慢一点没关系
+
+## 验证方式
+
+- 单测：`tests/unit/literature.test.ts` 的候选推导与失败降级用例（403 / 非 PDF / 无链接）
+- 真实网络：本地 record 模式实下 arXiv 与 Europe PMC 各一篇，fixture 只留截断样本（PDF 本体不入库）
+
+------------------------------------------------------------------------------
+## 技能：protein-analysis（backend/src/skills/protein-analysis/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: protein-analysis
+description: "蛋白结构调研链路：UniProt 查询确定身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与 pLDDT 置信度 → 给出「拿哪个结构去做下游计算」的判断。用于「这个蛋白长什么样」「有没有可用的结构」「AlphaFold 模型信得过吗」。"
+category: experiment
+domain: B
+triggers: [这个蛋白长什么样, 有没有可用的结构, AlphaFold 模型信得过吗, 查一下这个 UniProt]
+connectors: [uniprot, pdb, alphafold]
+validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Protein analysis（蛋白结构调研）
+
+## 何时用这个技能
+
+- 用户问某个蛋白「有没有实验结构」「分辨率够不够」「AlphaFold 模型能不能用」
+- 准备跑 MD / 对接 / 设计之前，要先确定用哪个构象作为起点
+- 想快速拿到一个蛋白的身份卡（accession / 基因 / 物种 / 长度 / 功能注释）
+
+**不适用**：要跑仿真 → `dry-experiment`（本技能是它的前置）；找论文 → `literature-search`。
+
+## 铁律（先读这段）
+
+1. **先确定身份，再谈结构**。自然语言蛋白名极易撞车（同名基因、跨物种同源）。
+   链路第一步是把查询收敛到**唯一一个 UniProt accession**，后两步全部以它为准。
+   拿不到唯一条目就停下问清楚，不要猜一个继续。
+2. **pLDDT 不是分辨率**。它是模型对自己的置信度，不是与实验的一致性。
+   `< 70` 的区域不该当结构用；`> 90` 也只说明局部折叠可信，不保证相对取向对。
+3. **有好的实验结构就别用预测模型**。分辨率 ≤ 2.5 Å 的晶体结构在，AlphaFold 没有增量。
+   反过来，实验结构分辨率差时，两者不一致的区域要**单独标出来**，不许挑一个顺眼的用。
+4. **取不到东西是结论，不是故障**。「没有实验结构」和「AlphaFold 未收录」都是有信息量的答案，
+   链路不会因为某一段拿不到就整体失败——但也不会把空结果粉饰成「结构可用」。
+
+## 用法
+
+链路是三个 connector 的组合（都不带凭据，全部公开 API）：
+
+```
+uniprot.search    → accession / entryName / 基因 / 物种 / 长度 / FUNCTION 注释
+pdb.searchByUniProt → 该 accession 的实验结构清单（服务端按 rows 截断）
+pdb.getStructure  → 逐条元数据：方法 / 分辨率 / 标题 / 发布日期
+alphafold.getModel → 模型 URL（pdb/cif）、PAE 图、全局 pLDDT、残基置信分布
+```
+
+代码入口：`backend/src/proteins/analysis.ts` 的 `ProteinAnalysis.analyze(query)`。
+`persist` 默认开：结果会落一条 `observation` record（`evidence=sourced`）。
+
+## 为什么不走 UniProt 的 PDB 交叉引用
+
+UniProt 条目里带 `xref_pdb`，一次就能拿到全部 PDB id——听起来更省事。但热门蛋白
+（人血红蛋白 β 链有 **350** 条结构）会让响应体膨胀到几百 KB，既慢又会把 fixture 撑爆。
+RCSB 搜索能用 `rows` 在**服务端**截断，`total_count` 仍如实返回。
+所以：**总数照实报，明细只取前 N 条**。
+
+## 结果怎么读
+
+| 情形 | 报告给出的判断 |
+|------|--------------|
+| 有 ≤ 2.5 Å 实验结构 | 优先用该实验结构，点名 PDB id |
+| 实验结构分辨率偏低 | 要求与高 pLDDT 模型交叉验证，不一致区域单独标注 |
+| 无实验结构，pLDDT ≥ 90 | 预测模型可作为 MD 起始构象 |
+| 无实验结构，pLDDT 低 | **明说这一步该停下**，不硬跑一个不可信的构象 |
+
+最后一行是这条链路存在的意义：它要能说出「现在还不该往下走」。
+
+## 反模式
+
+- ❌ 拿蛋白俗名当查询，随手取搜索结果第一条就往下走（先加 `organism_id` 和 `reviewed:true`）
+- ❌ 把 pLDDT 当成「分辨率 Å」来比较
+- ❌ 报告里只列 AlphaFold 链接，不说实验结构有没有
+- ❌ 实验结构和预测模型冲突时挑一个支持自己假设的
+- ❌ 把 `total_count` 里的几百条当成「都可用」——绝大多数是同一蛋白的突变体/配体复合物
+- ❌ AlphaFold 返回 400 就当成「这个蛋白很特别」（那多半是 accession 写错了）
+
+## 验证方式（AD-5）
+
+- e2e 回放：`tests/unit/protein_e2e.test.ts`（12 个用例，零网络）
+  - ① UniProt：`hemoglobin subunit beta AND organism_id:9606 AND reviewed:true` → `P68871` / `HBB_HUMAN` / 147 aa
+  - ② PDB：`total_count=350`，取前 3 条（`1A00` / `1A01` / `1A0U`），最佳分辨率 **1.8 Å**
+  - ③ AlphaFold：`AF-P68871-F1`，pLDDT **97.19**
+  - 报告结论段：1.8 Å 实验结构在 → 建议 `1A01`，不用预测模型
+  - 负样本：`ZZZ999` → HTTP 400 → `available:false` + note，链路不崩
+- 真实网络录制：`tests/integration/protein_record.test.ts`
+  （`FIXTURE_MODE=record bun test tests/integration/protein_record.test.ts`），
+  fixture 落 `tests/fixtures/proteins/protein-analysis.json`，**请求头永不落盘**
+
+------------------------------------------------------------------------------
+## 技能：research-report（backend/src/skills/research-report/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: research-report
+description: "研究报告导出：把一个项目的证据图（文献 / 思路 / 实验 / 观察 / 结论）渲染成带证据链接的 Markdown 报告，结论区受结论卡 review 门槛约束。用于「把这段时间做的事整理成一份能给人看的报告」「导出一份每条结论都能回溯到原始记录的材料」。也用于评审结论卡本身（review 门槛的操作入口）。"
+category: report
+domain: C/E
+triggers: [整理成一份报告, 导出研究报告, 评审这张结论卡, 这个结论能不能写进论文]
+connectors: []
+validation: [tests/unit/report_export.test.ts, tests/unit/conclusion_review.test.ts, tests/unit/conclusion_rules.test.ts, tests/unit/demo_thread.test.ts]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Research report（证据图 → 研究报告）
+
+## 何时用这个技能
+
+- 一段研究做到一个节点，要把「问题 / 思路 / 实验 / 结论」整理成一份可交付的报告
+- 需要一份**每条结论都能回溯到 record id** 的材料（给合作者、导师、审稿人看）
+- 要评审结论卡：判断哪些结论可以对外说，哪些只能进「待验证」
+
+**不适用**：写投稿用的综述 → `literature-review`（那是文献的组织，不是本项目产出的组织）；
+想知道某条实验跑成什么样 → `spark-research exp status` / `lab status`。
+
+## 铁律（先读这段）
+
+1. **报告是证据图的投影，不是重新讲一遍故事。** 正文由代码渲染，**不经过模型**。
+   不要「帮用户润色一下报告正文」再写回去——那等于给了模型一次改数据的机会。
+   要改叙述就去改源头的 record（结论卡的 claim、实验的 hypothesis）。
+2. **只有 `approved` 的结论进「结论」区。** 门槛看的是卡上**已经落下的** review 状态，
+   不是「现在跑一遍检查器会通过」。没评审就是没评审，报告不替评审人按通过键。
+3. **不许替用户 review。** `conclusion review` 会落一条记名的 decision record。
+   你可以告诉用户「跑这条命令」，可以解释每条 finding 是什么意思，但不要用
+   `--actor` 冒名顶替。评审是一个人对一条结论负责。
+4. **hard finding 不可协商。** 三个检查器的 hard 全部是可核对的事实判断
+   （证据不存在 / 类型不对 / 模拟数据没标注 / 在随机平台上声称逐位复现），
+   不是审美问题。修的办法是补证据或改结论，不是找理由绕过去。
+5. **模拟数据的标记不许在报告里消失。** 结论卡引用了 `simulated` 的 observation，
+   报告里就带 `[模拟数据]` 标记与那句「模拟器不验证生物学」。
+   把它删掉是把一份演练包装成实验结果。
+
+## 用法
+
+```bash
+# 评审结论卡（门槛的操作入口）
+spark-research conclusion list                       # 看有哪些结论卡、各自什么状态
+spark-research conclusion show <id>                  # 看一张卡 + 「现在重新评审会是什么结果」
+spark-research conclusion review <id> --actor 张三    # 跑检查器并落判定（记名）
+spark-research conclusion review <id> --actor 张三 --veto "对照组不成立"   # 人工否决
+
+# 导出报告
+spark-research report stats                          # 先看统计：有多少结论还卡在 pending
+spark-research report export                         # 打到 stdout
+spark-research report export --out report.md         # 写文件
+spark-research report export --verbose                # 把 record 正文整段嵌进去
+```
+
+HTTP：`GET /api/report?format=markdown`（工作台右上角「导出报告」按钮走的就是它）、
+`GET /api/conclusions`、`POST /api/conclusions/:id/review`（**必须显式传 actor**，
+HTTP 层没有环境变量兜底）。
+
+退出码：`conclusion review` 被否决时返回 1。**不要把它当成命令失败**——
+它是「这条结论没通过」，是一个有意义的结果。
+
+## 三个检查器（结论卡评审跑的就是这三条）
+
+| rule | 严重度 | 检查什么 |
+|------|--------|---------|
+| `data-consistency` | hard / soft | 结论引用的 observation 是否真实存在于执行记录：断链、跨项目、类型不对 = hard；没有执行锚点、图上没连边 = soft |
+| `capability-labeling` | hard | 模拟读数没标注 = hard；在非确定性平台上声称逐位复现 = hard |
+| `stats-plausibility` | **只有 soft** | 启发式：样本量过小、多重比较未校正、p 值边缘（0.04–0.05）、结论强度超过数据支撑 |
+
+**`stats-plausibility` 是启发式，误报与漏报都在预期内。** 它不是统计审稿人，
+是一个「这里值得再看一眼」的提示。看到它的 finding 不要直接改数字去迎合它。
+
+判定规则只有一条：**任一 hard → vetoed，零 hard → approved**。没有「人工推翻 hard」的路；
+反方向可以——`--veto` 让人挡下一条本来会自动通过的结论。
+
+## 能力位在报告里的措辞（G4）
+
+| 能力位 | 来源 | 报告里怎么说 |
+|--------|------|-------------|
+| `deterministic: true`（pyref） | 仿真平台 | 「逐位重算对账」——同参数重跑应逐位一致 |
+| `deterministic: false`（OpenMM） | 仿真平台 | 「区间/趋势对账」——只保证落在同一区间，**不**声称逐位可复现 |
+| `simulated: true`（opentrons_simulate / mock） | 湿实验后端 | 结论标题挂 `[模拟数据]`，并写明模拟器不验证生物学 |
+
+混合证据取最保守的一条：只要有一条来自非确定性平台，整条结论就按区间对账写。
+
+## 报告结构
+
+```
+一、问题      项目描述 + 思路卡里的 openQuestions + 文献基础统计
+二、思路      每张 idea 卡：假设 / novelty 状态 / 支持与反对文献（走 supports / contradicts 边）
+三、实验      干湿实验：状态、平台或后端、假设、结果摘要、观察（带能力位注记）
+四、结论      **只有 approved**：主张 / 评审记录 / 可复现性口径 / 逐条证据 / 局限 / soft 提示
+五、待验证    pending 与 vetoed：为什么没进结论区（逐条 hard finding）
+附录 A        证据索引：报告里出现过的全部 record id → 类型 / 证据标签 / 标题
+附录 B        参考文献（库内论文，key 与 `lit export --format bibtex` 一致）
+```
+
+## 反模式
+
+- ❌ 用模型重写报告正文再存回去（数据会在润色中变形）
+- ❌ 替用户 `conclusion review --actor <某人>`
+- ❌ 把 `report export` 的退出码 0 说成「结论都通过了」——结论区可能是空的
+- ❌ 为了让报告好看，把 `[模拟数据]` 标记或「模拟器不验证生物学」那句删掉
+- ❌ 看到 `stats-plausibility` 的 soft finding 就去调整样本量描述来消掉告警
+- ❌ 把「检查器现在会通过」当成「已经通过」写进对外材料
+
+## 证据图
+
+```
+decision(conclusion_review) --derives_from--> conclusion   （谁 / 何时 / 判了什么 / 依据哪些 finding）
+conclusion                 --derives_from--> observation   （证据）
+conclusion                 --derives_from--> experiment
+observation                --derives_from--> experiment / artifact record
+paper                      --supports/contradicts--> idea
+```
+
+报告里每条 `record ...` 都是这张图上的一个节点 id，可用
+`spark-research conclusion show <id>` 或 `GET /api/records/<id>/graph` 展开。
+
+## 验证方式（AD-5）
+
+- 检查器单测：`tests/unit/conclusion_rules.test.ts` —— G2 断链 / 已删除 / 跨项目 / 类型不对
+  四种对抗 + G4 模拟未标注与逐位声明 + G3 四类启发式（含阴性对照「干净结论零 finding」）
+- review 门槛：`tests/unit/conclusion_review.test.ts` —— approved/vetoed 判定、人工否决、
+  重新评审会翻面、`assess` 不写库、CLI 退出码
+- 报告导出：`tests/unit/report_export.test.ts` —— 分区归属（approved vs pending/vetoed）、
+  证据链接可回溯、能力位措辞、空项目不崩
+- 全链路：`tests/unit/demo_thread.test.ts`（`scripts/demo-research-thread.ts` 的可重放脚本）
+  —— 文献 → idea → novelty → 干实验 → 结论 → review → 报告
+
+------------------------------------------------------------------------------
+## 技能：wet-protocol（backend/src/skills/wet-protocol/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: wet-protocol
+description: "湿实验协议：自然语言协议 → 编译成 Opentrons Python Protocol API v2 脚本 → 安全门 → **人工 approve** → 官方模拟器执行 → run log 入证据图。用于「把一个实验方案变成可执行、可审计、可复现的协议」「先在模拟器上验一遍再上真机」。物理世界的操作永远不自动化审批。"
+category: experiment
+domain: B
+triggers: [把这个实验方案变成协议, 先在模拟器上验一遍, 编译成 Opentrons 脚本, 这个协议安全吗]
+connectors: []
+validation: [tests/unit/lab_compile.test.ts, tests/unit/lab_safety.test.ts, tests/unit/wet_loop.test.ts, tests/unit/wet_e2e.test.ts, tests/lab/opentrons_backend.test.py]
+allowed-tools: [Bash, Read, Write]
+---
+
+# Wet protocol（湿实验协议编译与执行）
+
+## 何时用这个技能
+
+- 用户有一个**要动液体/设备**的实验方案，想把它变成可执行的协议并先验一遍
+- 需要把一次湿实验的每一步（谁批的、批的是哪一版、机器做了什么）留成可审计的记录
+- 干实验（`dry-experiment`）跑出观察之后，要接一条湿实验去验证
+
+**不适用**：纯计算的假设 → `dry-experiment`；只想查文献 → `literature-search`。
+
+## 铁律（先读这段）
+
+1. **安全门通过 ≠ 可以执行。** 安全门是**必要非充分**条件。它全过之后实验会停在
+   `awaiting_approval`，等一个具名的人按 approve（AD-6）。不要替用户按这个按钮，
+   也不要把「安全门都过了」说成「可以跑了」。
+2. **approve 批的是某一版协议，不是这条实验。** 每条 approve 落一条 decision record，
+   记的是**协议 hash**。协议改了 hash 就变，先前的批准立刻作废，必须重新
+   `compile → safety_check → approve`。这不是繁文缛节：批的人看的是当时那份步骤表。
+3. **Opentrons 上没有的硬件不假装有。** 离心、340 nm 酶标、离机配液都编译成
+   `[spark-note]` 注释并标 `execution: manual`。把离心编译成一个 delay 会让 run log
+   看起来「跑通了」——那是最糟的一种假成功。
+4. **模拟成功 ≠ 实验会成功。** 模拟器验证的是**协议在协议引擎里合不合法**
+   （labware 存不存在、次序对不对、体积够不够），不验证生物学。
+   observation 正文里写明「硬件为模拟」，报告里也不许省掉这句。
+5. **run log 是证据，不是日志。** 每条命令都锚定回编译产物里的某一步
+   （`[spark-step]` 标记），run log 与执行的脚本一起进 artifact。
+   「我记得跑过」不算数，`lab status <id>` 说了算。
+
+## 用法
+
+```bash
+spark-research lab backends                              # 先看模拟器可用不可用
+spark-research lab compile "取样品50µL加入96孔板，37°C孵育1小时，600nm读取OD" \
+    --title "OD600 测定" --hypothesis "孵育后 OD600 上升"
+    # → 建实验 → 编译 → 安全门 → **停在 awaiting_approval**
+
+spark-research lab status <id>                           # 看编译后的步骤表与安全门结论
+spark-research lab approve <id> --actor 张三 --note "试剂与体积已复核"
+spark-research lab reject  <id> --reason "样品量不足，先补样"
+spark-research lab simulate <id> --note "首轮基线"        # 执行 → 回收 → observation
+spark-research lab compile --experiment <id> --protocol "<改过的协议>"   # 重编译（作废 approve）
+```
+
+退出码 1 = 安全门拦截 / 未经 approve 就执行 / 模拟器拒绝协议。**都不要当成「跑完了」**。
+
+## 状态机
+
+```
+design ─► compile ─► safety_check ─► awaiting_approval ─► wet_run ─► collect ─► analyze ─► concluded
+             ▲            │                  │               │                        └► iterated
+             │            └► failed          └► rejected     └► failed
+             └────────────── 重新编译（清掉已有的 approve / reject / 安全门结论）
+```
+
+- **唯一进入 `wet_run` 的门是 `approve()`**。转移表层面就只有这一条边。
+- 安全门不过 → `failed` 并抛 `LabSafetyError`，**不会**进 `awaiting_approval`。
+- 已经执行过的实验不能就地重编译（`runId` 非空即拒绝）——改协议请 `iterate` 另起一条。
+- 表外的转移一律拒绝，不做「顺手纠正」。
+
+## 安全门：四条独立规则
+
+| 规则 id | 检查 | 拦什么 |
+|---------|------|--------|
+| `chemical_compatibility` | 试剂兼容性 | 强酸 × 次氯酸盐、强酸 × 强碱 |
+| `concentration_limit` | 浓度上限 | 受管制试剂超过 `MAX_CONCENTRATION` |
+| `biosafety` | 生物安全等级 | 超过 BSL-2 |
+| `volume_capacity` | 体积 / 孔板容量 | 单孔累计超 360 µL、单次转移超出移液器量程 |
+
+每条都是**零 IO 的纯函数**，可以单独打对抗样例。`volume_capacity` 需要**编译产物**
+才查得出「累计溢孔」——一句「加 200 µL」两次在自然语言层面都合法，
+只有排完 deck 累加起来才知道会溢。没有编译产物时它退回单次核对，并在 detail 里
+明说「单孔累计体积待编译后复核」，**不静默放行**。
+
+## 编译目标
+
+Opentrons **Flex** / Python Protocol API v2（`apiLevel 2.21`）。
+选 Flex 不是偏好：opentrons 9.x 已移除 OT-2 支持，而且 OT-2 没有吸光度读板模块——
+「600 nm 读 OD」在 Flex 上才有真模块可用，不必退化成注释。
+
+| 协议动作 | 编译成 | execution |
+|---------|-------|-----------|
+| `addSample` | `pipette.transfer(...)` reservoir → 板孔 | deck |
+| `serialDilute` | 分装稀释液 + 逐级转移 + 每级换 tip 混匀 | deck |
+| `incubate`（≥37 °C） | Heater-Shaker 控温 + `protocol.delay` | module |
+| `shake` | Heater-Shaker 转速 + 计时 | module |
+| `read`（450/562/600/650 nm） | 吸光度读板模块（搬板进出 + 真读数） | module |
+| `prepareReagent` | 离机配液 → 装载 reservoir 的说明 | **manual** |
+| `centrifuge` / 其他波长读数 / <37 °C 孵育 | `[spark-note]` 离机人工步骤 | **manual** |
+
+`execution: manual` 的步骤在 run log 里只有一条 note——**它没有被执行**。
+读 run log 时不要把 note 当成执行记录。
+
+## 两个执行后端
+
+| 后端 | 用途 | 依赖 |
+|------|------|------|
+| `opentrons_simulate` | **默认**。官方模拟器，真实解析并执行协议脚本 | `uv pip install opentrons` |
+| `mock_devices` | 单测后端。从编译产物合成等价形状的 run log | 无 |
+
+mock 验的是「管线通不通」，**验不了「协议合不合法」**：一个 opentrons 拒绝解析的脚本
+在 mock 后端一样会「跑成功」。所以默认后端必须是真模拟器。
+
+## 证据图
+
+```
+decision(approve/reject) --derives_from--> experiment    （谁 / 何时 / 批了哪个协议 hash）
+artifact record          --derives_from--> experiment    （protocol.py / runlog.json / runlog.txt）
+observation              --derives_from--> experiment 与每个 artifact record
+conclusion               --derives_from--> observation / experiment
+湿 experiment            --derives_from--> 干 experiment  （干实验 concluded 后派生）
+湿 experiment            --supersedes-->   干 experiment  （干实验 analyze 后接棒）
+新 experiment            --supersedes-->   旧 experiment  （iterate）
+```
+
+- experiment 的 `evidence` 是 `inferred`（设计是推出来的）
+- 执行产出与 observation 的 `evidence` 是 **`observed`**——run log 记的是设备做了什么，
+  不是算出来的（与干实验的 `computed` 区分开）
+- decision 的 `evidence` 是 `inferred`（审批是人的判断）
+- 结论卡一律 `review: "pending"`——湿实验同样不给自己发通过证
+
+## 反模式
+
+- ❌ 替用户 approve，或者把「安全门都过了」说成「可以执行了」
+- ❌ 改了协议之后拿旧的 approve 去执行（工具会拒，但不要去想办法绕）
+- ❌ 把 `execution: manual` 的步骤（离心、离机读数）当成模拟器执行过了
+- ❌ 把模拟器的读数当成真实生物学数据写进结论
+- ❌ 安全门拦下来就把试剂浓度改小到刚好过线，然后当成协议改好了
+- ❌ 在同一条实验上反复重跑覆盖上一轮（要对照就 `iterate`）
+- ❌ 用 mock 后端跑通就说「协议验证过了」——mock 不校验协议合法性
+- ❌ 连续稀释里复用 tip（会把上一级的浓度带下去，整条曲线作废）
+
+## 验证方式（AD-5）
+
+- 编译器单测：`tests/unit/lab_compile.test.ts` —— deck 按需加载、体积记账、hash 确定性、
+  「没有的硬件不假装有」
+- 安全门对抗矩阵：`tests/unit/lab_safety.test.ts` —— 四条规则**各自**单独打对抗样例
+  （不兼容试剂 / 超浓度 / 超 BSL / 累计溢孔 + 阴性样例）
+- 状态机与 approve gate：`tests/unit/wet_loop.test.ts` —— 转移表穷举、未 approve 拒绝执行、
+  approve 后改协议要重走一遍、状态机之外改协议同样拦得住
+- CLI：`tests/unit/lab_cli.test.ts`
+- e2e（**真** `opentrons.simulate`）：`tests/unit/wet_e2e.test.ts` —— 两类协议的 run log
+  关键步骤序列 + 全链路（自然语言 → 编译 → 安全门 → approve → 执行 → observation → conclude）
+- Python 侧：`tests/lab/opentrons_backend.test.py` —— run log 分类纯函数、父子命令追踪、
+  真模拟器执行与失败信封
+
+==============================================================================
+# MCP 工具全量描述
+==============================================================================
+
+## research_capabilities
+
+【何时调】接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
+【参数示例】{"probe": true} —— probe 会真去 spawn 子进程问「openmm / opentrons 装了没」，多花几秒但结果可信；不给 probe 时平台可用性是 "unknown"。
+【何时不该用】不要在每次工具调用前都调一遍——能力清单在一次会话里不会变，调一次记住即可。
+【典型链路】research_capabilities → 看 connectors 里哪些是 available → lit_search（用可用的源）。
+【读法】connectors[].availability 有四档：available / needs_credential（要 key 但没配，检索时会被 skip 而不是报错）/ placeholder（占位实现，调用会失败）/ unavailable。caveat 字段是已知的坑（例如 Semantic Scholar 匿名请求实测持续 429）。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "probe": {
+      "type": "boolean",
+      "description": "是否真去探测本地仿真平台与湿实验后端的安装情况（慢几秒，但结果是真的）"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## project_list
+
+【何时调】开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
+【参数示例】{"all": true} 连已归档的一起列。
+【何时不该用】只想知道当前项目时不必列全部——返回体里的 current 字段就是。
+【典型链路】project_list → （没有合适的）project_create → 之后所有工具默认作用在当前项目上。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "all": {
+      "type": "boolean",
+      "description": "是否包含已归档项目"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## project_create
+
+【何时调】用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
+【参数示例】{"slug": "gpcr-allostery", "name": "GPCR 变构位点预测", "description": "用 MD + 序列共进化找 β2AR 的隐藏变构口袋"}
+【何时不该用】同一课题的第二个子问题不要新建项目——那会把证据图切碎，novelty check 与报告都只能看到半张图。
+【典型链路】project_create → lit_search --add → idea_coexplore → idea_novelty_check。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "项目短名（小写 kebab-case，作为目录名与所有工具的 project 参数）",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "description": "显示名称",
+      "examples": [
+        "GPCR 变构位点预测"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "description": "一两句话说清课题要回答什么问题（会进研究报告的开头）",
+      "examples": [
+        "用 MD + 序列共进化找 β2AR 的隐藏变构口袋"
+      ]
+    },
+    "setCurrent": {
+      "type": "boolean",
+      "description": "创建后是否设为当前项目（默认 true）"
+    }
+  },
+  "required": [
+    "slug"
+  ],
+  "additionalProperties": false
+}
+```
+
+## project_use
+
+【何时调】要在一个已存在的项目下工作，且不想每次都传 project 参数时。
+【参数示例】{"slug": "gpcr-allostery"}
+【何时不该用】只做一次跨项目查询时——直接给那次调用传 project 参数更安全，不会把用户的当前项目切走（用户可能正在另一个项目里工作）。
+【典型链路】project_list → project_use → records_timeline（看这个课题最近发生了什么）。
+【副作用】这会改变 CLI 与工作台看到的「当前项目」，是一个用户可见的全局状态变更，切之前最好说一声。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "slug": {
+      "type": "string",
+      "description": "要切换到的项目 slug",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "slug"
+  ],
+  "additionalProperties": false
+}
+```
+
+## lit_search（长任务）
+
+【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+【参数示例】{"query": "allosteric site prediction molecular dynamics GPCR", "limit": 20, "add": true, "tags": ["background"]}
+【何时不该用】① 已经拿到确定的 DOI/arXiv id 只想入库 → 用 lit_add。② 不要把用户的一整句话直接当 query——先拆成 2-4 个核心概念，每个概念查一次。③ 不要 add: true 一次灌几百条，入库是显式动作。
+【典型链路】lit_search(add=false) 先看候选 → 挑选后 lit_search(add=true) 或 lit_add → lit_read_cards → lit_review_draft。
+【必读返回字段】sources[] 里每个源有 outcome：ok / skipped（没配凭据或该源不认这个 id，**不是失败**）/ failed（真失败）。有 failed 就必须在回答里说明「覆盖面不全」——把失败静默吞掉后声称「已全面检索」是本工作台明令禁止的行为。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "检索式。用英文关键词组合，不要整句自然语言",
+      "examples": [
+        "allosteric site prediction molecular dynamics"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "限定文献源；不给则用默认组合",
+      "examples": [
+        [
+          "openalex",
+          "crossref",
+          "europepmc"
+        ]
+      ]
+    },
+    "limit": {
+      "type": "number",
+      "description": "每源返回上限",
+      "examples": [
+        20
+      ]
+    },
+    "add": {
+      "type": "boolean",
+      "description": "是否直接把结果入项目文献库（默认 false，先看后入）"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "入库时打的标签（仅 add=true 时生效）",
+      "examples": [
+        [
+          "background"
+        ]
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false
+}
+```
+
+## lit_add（长任务）
+
+【何时调】已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
+【参数示例】{"identifier": "10.1038/s41586-021-03819-2", "tags": ["method"]}
+【何时不该用】只有标题没有标识符时——先 lit_search 拿到 DOI 再入库，否则会入一条元数据残缺的记录。
+【典型链路】lit_search → 挑出要精读的几篇 → lit_add → lit_read_cards。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "identifier": {
+      "type": "string",
+      "description": "DOI / arXiv id / PMID",
+      "examples": [
+        "10.1038/s41586-021-03819-2"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "从哪些源解析该标识符",
+      "examples": [
+        [
+          "crossref",
+          "openalex"
+        ]
+      ]
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "入库标签",
+      "examples": [
+        [
+          "method"
+        ]
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "identifier"
+  ],
+  "additionalProperties": false
+}
+```
+
+## lit_list
+
+【何时调】要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
+【参数示例】{"tag": "background", "status": "unread"}
+【何时不该用】要找库**外**的论文时——那是 lit_search。
+【典型链路】lit_list → 看哪些 readingStatus 还是 unread → lit_read_cards。
+【关键字段】bibtexKey 是写引用时唯一合法的 key 形式（[@key]）；引用库外 key 会被 citation-integrity 判为伪造引用并 veto。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "tag": {
+      "type": "string",
+      "description": "按标签过滤",
+      "examples": [
+        "background"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "description": "按阅读状态过滤：unread / reading / read",
+      "examples": [
+        "unread"
+      ]
+    },
+    "q": {
+      "type": "string",
+      "description": "标题/作者关键词模糊过滤",
+      "examples": [
+        "allosteric"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## lit_read_cards（长任务）
+
+【何时调】文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
+【参数示例】{"all": true, "tag": "background"} 批量精读某个标签下的全部论文；或 {"paperId": "a1b2c3d4"} 只精读一篇。
+【何时不该用】库里还没有论文时（先 lit_search --add）；只想看已有卡片时用 lit_list 的 readingCards。
+【典型链路】lit_search(add=true) → lit_read_cards(all=true) → lit_review_draft。
+【代价提示】每篇一次模型调用，20 篇就是 20 次——先用 tag 收窄范围。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "paperId": {
+      "type": "string",
+      "description": "单篇精读时给论文 id（支持前 8 位前缀）",
+      "examples": [
+        "a1b2c3d4"
+      ]
+    },
+    "all": {
+      "type": "boolean",
+      "description": "批量精读（与 tag 组合收窄范围）"
+    },
+    "tag": {
+      "type": "string",
+      "description": "批量精读时按标签过滤",
+      "examples": [
+        "background"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## lit_review_draft（长任务）
+
+【何时调】精读卡已经齐了，要产出一份带真实引用的综述草稿时。生成后立即跑 citation-integrity 核验，返回体里 vetoed=true 表示草稿里有伪造引用或库外引用——**那份草稿不能拿去用**，要先修引用。
+【参数示例】{"topic": "变构位点预测方法的演进"}
+【何时不该用】库里精读卡为零时（会直接报错）；想让模型「凭知识写综述」时——本工具的引用只允许指向项目文献库内的论文，这是刻意的。
+【典型链路】lit_read_cards → lit_review_draft → 若 vetoed 则看 citation.findings 逐条修 → 再跑一次。
+【返回读法】citation.findings 里 severity=hard 的是必须修的（库外 key）；soft 是提示（陈述与卡片冲突 / 强断言无引用），由人判断。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "topic": {
+      "type": "string",
+      "description": "综述主题；不给则按项目描述组织",
+      "examples": [
+        "变构位点预测方法的演进"
+      ]
+    },
+    "judge": {
+      "type": "boolean",
+      "description": "是否启用 LLM 辅助的「真 key 假内容」判定（默认 true）"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## lit_export
+
+【何时调】要把项目文献库交给写作工具（LaTeX / Zotero）时。
+【参数示例】{"format": "bibtex", "tag": "cited"}
+【何时不该用】只想在对话里列几篇论文时——用 lit_list，导出是给文件用的。
+【典型链路】lit_review_draft → lit_export(bibtex) → 交给论文模板。
+【返回形态】不是 JSON 而是文本内容（content 字段里是 .bib 原文）。bibtexKey 与综述草稿里的 [@key] 完全一致，读者可以直接对照。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "format": {
+      "type": "string",
+      "enum": [
+        "bibtex",
+        "csl"
+      ],
+      "description": "导出格式"
+    },
+    "tag": {
+      "type": "string",
+      "description": "只导出某个标签下的论文",
+      "examples": [
+        "cited"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## idea_coexplore（长任务）
+
+【何时调】用户抛出一个研究想法、想被挑毛病、想判断方向值不值得做时。这不是「附和式头脑风暴」：产出的 Idea 卡**强制**包含至少一条反对证据，每条观点要么给库内 bibtexKey，要么显式标 inferred。
+【参数示例】{"message": "我想用 MD 轨迹的互信息找 β2AR 的隐藏变构口袋，比序列共进化更直接", "persist": true}
+【何时不该用】① 文献库为空时先做检索——库空时返回体里 emptyLibrary=true，那一轮的观点全是推断，不要当成有文献支撑的判断。② 多轮讨论的中间轮用 persist=false，别把每一轮都落成一张卡。
+【典型链路】lit_search(add=true) → idea_coexplore(persist=true) → idea_novelty_check。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string",
+      "description": "研究想法或要被批判的陈述，写具体",
+      "examples": [
+        "用 MD 轨迹的互信息找 β2AR 的隐藏变构口袋"
+      ]
+    },
+    "sessionId": {
+      "type": "string",
+      "description": "多轮共探时传同一个 sessionId 以保持上下文",
+      "examples": [
+        "coexplore-2026-09"
+      ]
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "是否把这一轮的 Idea 卡落库（默认 true；中间轮建议 false）"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "message"
+  ],
+  "additionalProperties": false
+}
+```
+
+## idea_list
+
+【何时调】要看项目里已经有哪些想法、哪些还没做过创新性核验时。
+【参数示例】{"status": "unchecked"} 找出还没查过新颖性的想法。
+【何时不该用】要看某一条的完整证据边时——用 record_get 展开证据图。
+【典型链路】idea_list(status=unchecked) → idea_novelty_check（逐条查）。
+【状态读法】unchecked / checked-novel / checked-incremental / checked-overlap。注意：查过但没查出结论的会**维持 unchecked**，报告指针仍写回——「查过没结论」与「没查过」在数据上是分得开的。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "unchecked",
+        "checked-novel",
+        "checked-incremental",
+        "checked-overlap"
+      ],
+      "description": "按 novelty 状态过滤"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## idea_novelty_check（长任务）
+
+【何时调】一个想法成形后、投入实验之前，问「有没有人做过 / 我们新在哪」时。流程是：抽 claim → 每条 claim 多路检索真实文献 → 逐条列最近邻 + 相同点 + 不同点 + 评级。
+【参数示例】{"ideaId": "3f2a1b0c", "perSource": 5}
+【何时不该用】① 想法还很模糊时——claim 抽不出来，结论会是「不可用」。② 不要把本工具的评级当作最终判断：模型给的评级会被一层确定性代码按检索结果校正（存在高相似候选却评 novel 会被升级为 existing），报告里两个评级都列出，要看校正后的那个。
+【典型链路】idea_coexplore → idea_novelty_check → 若 checked-overlap 则回到 idea_coexplore 换角度。
+【返回读法】conclusive=false 表示「查过但没查出结论」（例如一条候选都没检到）——**检索不到不等于新颖**，这是本工作台明确拒绝的推理。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "ideaId": {
+      "type": "string",
+      "description": "Idea 卡的 record id（支持前缀）",
+      "examples": [
+        "3f2a1b0c"
+      ]
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "限定检索源",
+      "examples": [
+        [
+          "openalex",
+          "semanticscholar"
+        ]
+      ]
+    },
+    "perSource": {
+      "type": "number",
+      "description": "每个检索式每源取多少候选",
+      "examples": [
+        5
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "ideaId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## exp_design
+
+【何时调】要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
+【参数示例】{"title": "水盒子平衡 300K", "platform": "openmm", "kind": "water-box-md", "params": {"steps": 5000, "boxSizeNm": 2.0}, "hypothesis": "2 nm 盒子在 5 ps 内可达到温度平衡"}
+【何时不该用】不知道有哪些平台/kind/参数时——先 research_capabilities 看 simulationPlatforms（每个平台的 kinds 与 deterministic 位都在里面）。参数写错会在 design 阶段就被拒，不会让你跑完才发现。
+【典型链路】research_capabilities → exp_design → exp_run。
+【平台选择】pyref 零依赖、确定性（deterministic=true，结论可做逐位对账）；openmm 是真实 MD 但 CPU 上不逐位复现（deterministic=false，下游结论必须按「区间/趋势对账」措辞）。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "实验标题",
+      "examples": [
+        "水盒子平衡 300K"
+      ]
+    },
+    "platform": {
+      "type": "string",
+      "enum": [
+        "pyref",
+        "openmm"
+      ],
+      "description": "仿真平台"
+    },
+    "kind": {
+      "type": "string",
+      "description": "任务种类（见 capabilities 里该平台的 kinds）",
+      "examples": [
+        "water-box-md"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "description": "平台参数；写错会在 design 阶段被拒",
+      "additionalProperties": true
+    },
+    "hypothesis": {
+      "type": "string",
+      "description": "这个算例要验证的假设",
+      "examples": [
+        "2 nm 盒子在 5 ps 内可达到温度平衡"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "additionalProperties": false
+}
+```
+
+## exp_run（长任务）
+
+【何时调】exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
+【参数示例】{"experimentId": "9c8b7a6d", "note": "第一轮基线"}；进程中断后重连用 {"experimentId": "9c8b7a6d", "resume": true}。
+【何时不该用】① 实验已经 concluded 时（状态机会拒绝）。② 想直接下结论时——conclude 参数只在这一轮确实得到结论时才给，别用它跳过分析。
+【典型链路】exp_design → exp_run → record_get（看 observation）→ 需要结论时 exp_run 的 conclude 参数或另起一轮。
+【超时行为】MD 任务可能跑几分钟。超过配置的等待上限会返回任务句柄，之后用 task_status 查——任务**仍在后台跑**，不会因为工具返回而中断。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "experimentId": {
+      "type": "string",
+      "description": "实验 record id（支持前缀）",
+      "examples": [
+        "9c8b7a6d"
+      ]
+    },
+    "resume": {
+      "type": "boolean",
+      "description": "断点续跑：任务还在跑就接回来，已丢失则标 failed 可重试"
+    },
+    "note": {
+      "type": "string",
+      "description": "写进 analyze 记录的备注",
+      "examples": [
+        "第一轮基线"
+      ]
+    },
+    "conclude": {
+      "type": "string",
+      "description": "若这一轮直接得到结论，给出结论陈述（会落一张 pending 的结论卡）",
+      "examples": [
+        "2 nm 盒子在 5 ps 内温度已平衡"
+      ]
+    },
+    "timeoutMs": {
+      "type": "number",
+      "description": "单次 run 的等待上限（毫秒）",
+      "examples": [
+        600000
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "experimentId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## exp_list
+
+【何时调】要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
+【参数示例】{"state": "failed"}
+【何时不该用】要看湿实验时——那是 lab_status，干湿是两张分开的状态机，状态名不通用。
+【典型链路】exp_list(state=failed) → 看 recoverable → exp_run(resume=true)。
+【失败读法】failed 且 recoverable=true 通常是「任务随编排进程一起被杀」，重跑即可；recoverable=false 是算例本身跑挂了，要改参数而不是重试。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "description": "按状态过滤：design / dry_run / collect / analyze / concluded / iterated / failed",
+      "examples": [
+        "failed"
+      ]
+    },
+    "platform": {
+      "type": "string",
+      "description": "按平台过滤",
+      "examples": [
+        "pyref"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## lab_compile
+
+【何时调】要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
+【参数示例】{"naturalLanguage": "取样品 50 µL 加入 96 孔板 A1-A6，加入 100 µL 缓冲液，37°C 孵育 30 分钟，600 nm 读 OD", "title": "OD 时序"}
+【何时不该用】想让协议直接执行时——**做不到，这是刻意的**。执行需要人工批准（AD-6：安全门通过是必要非充分条件，物理世界的操作不自动化审批）。approve / reject / simulate 都不是 MCP 工具。
+【典型链路】lab_compile → 把返回体里的 humanAction 原样转达给用户 → 用户自己批准并执行 → lab_status 看结果。
+【被拦下时】安全门不通过会返回 422 与 blocked 清单（超浓度 / 不兼容试剂 / 超生物安全等级 / 单孔累计溢孔）。改方案重新编译，不要试图绕过。
+【重新编译的后果】任何一次重新编译都会作废先前的批准——协议在改，旧批准不能跨版本存活。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "naturalLanguage": {
+      "type": "string",
+      "description": "自然语言协议。写清体积、容器、温度、时间、读数波长",
+      "examples": [
+        "取样品 50 µL 加入 96 孔板 A1-A6，加入 100 µL 缓冲液，37°C 孵育 30 分钟，600 nm 读 OD"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "description": "实验标题",
+      "examples": [
+        "OD 时序"
+      ]
+    },
+    "hypothesis": {
+      "type": "string",
+      "description": "这个湿实验要验证什么",
+      "examples": [
+        "加缓冲后 30 分钟内 OD 上升趋于平台"
+      ]
+    },
+    "fromDry": {
+      "type": "string",
+      "description": "由哪个干实验衍生而来（干湿闭环接棒）",
+      "examples": [
+        "9c8b7a6d"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "naturalLanguage"
+  ],
+  "additionalProperties": false
+}
+```
+
+## lab_status
+
+【何时调】要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
+【参数示例】{"state": "awaiting_approval"} 列出所有卡在等人批准的实验。
+【何时不该用】想推动状态前进时——本工具只读。推进要由人来做。
+【典型链路】lab_compile → lab_status(state=awaiting_approval) → 提醒用户去批准 → 用户执行后 lab_status 看 concluded。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "description": "按状态过滤：design / compile / safety_check / awaiting_approval / wet_run / collect / analyze / concluded / iterated / rejected / failed",
+      "examples": [
+        "awaiting_approval"
+      ]
+    },
+    "experimentId": {
+      "type": "string",
+      "description": "只看某一个实验",
+      "examples": [
+        "5e4d3c2b"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## records_timeline
+
+【何时调】要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
+【参数示例】{"type": ["conclusion", "observation"], "limit": 20}
+【何时不该用】要看某一条的上下游关系时——用 record_get（它带证据子图）。
+【典型链路】records_timeline → 挑出可疑的一条 → record_get 展开它的证据链。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "record 类型过滤（可多选）",
+      "examples": [
+        [
+          "conclusion",
+          "observation"
+        ]
+      ]
+    },
+    "evidence": {
+      "type": "string",
+      "enum": [
+        "observed",
+        "sourced",
+        "computed",
+        "inferred"
+      ],
+      "description": "证据类型过滤"
+    },
+    "limit": {
+      "type": "number",
+      "description": "返回条数上限（最大 500）",
+      "examples": [
+        50
+      ]
+    },
+    "offset": {
+      "type": "number",
+      "description": "分页偏移",
+      "examples": [
+        0
+      ]
+    },
+    "since": {
+      "type": "string",
+      "description": "起始时间（ISO 8601）",
+      "examples": [
+        "2026-09-01T00:00:00Z"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## record_get
+
+【何时调】要核对某条记录的证据链时——「这个结论是基于什么」「这个观察来自哪次运行」。返回记录本体 + 出入边 + 关联 artifact 内容。
+【参数示例】{"recordId": "7a6b5c4d", "graphDepth": 2}
+【何时不该用】只想列一批记录时用 records_timeline。
+【典型链路】conclusion_list → record_get（展开证据）→ 判断结论是否站得住。
+【边方向】supports / contradicts 是 paper→idea（查一条 idea 的支撑文献看它的 incoming 边）；cites 是新产物→被引论文；derives_from 是产物→来源。方向读反会得出相反结论。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "recordId": {
+      "type": "string",
+      "description": "record id",
+      "examples": [
+        "7a6b5c4d"
+      ]
+    },
+    "graphDepth": {
+      "type": "number",
+      "description": "同时取证据子图的深度（1-5）；不给则只返回记录本身与直接边",
+      "examples": [
+        2
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "recordId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## conclusion_list
+
+【何时调】要看项目里的结论卡及其评审状态时。只有 review=approved 的结论才会进研究报告的「结论」区，pending / vetoed 进「待验证」区。
+【参数示例】{"review": "pending"} 找出还没评审的结论。
+【何时不该用】想改变评审状态时——评审不是 MCP 工具（见 conclusion_get 的说明）。
+【典型链路】conclusion_list(review=pending) → conclusion_get（看预评估）→ 把结果转达给用户，由人决定评审。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "review": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "approved",
+        "vetoed"
+      ],
+      "description": "按评审状态过滤"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## conclusion_get
+
+【何时调】要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
+【参数示例】{"conclusionId": "2b3c4d5e"}
+【何时不该用】想真正评审时——评审会落一条记名的 decision record，必须由人执行：`spark-research conclusion review <id> --actor <名字>`。结论能否进报告是可信度的最后一道闸，不交给外部 agent 自评。
+【典型链路】conclusion_get → 把 findings 里的 hard 项转达给用户并给出修复建议 → 用户修完自己评审。
+【返回读法】wouldApprove=false 时看 findings：任一 hard 就会 vetoed，且**不提供人工推翻 hard 的路径**（三条 hard 全是可核对的事实判断）。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "conclusionId": {
+      "type": "string",
+      "description": "结论卡 record id",
+      "examples": [
+        "2b3c4d5e"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "conclusionId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## report_export
+
+【何时调】要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
+【参数示例】{"verbose": true}
+【何时不该用】想让模型「写一份漂亮的报告」时——本工具刻意不让模型碰正文，那是为了让报告可审计。要润色请在拿到 Markdown 之后自己做，但不要改动 record id。
+【典型链路】（一段研究工作之后）conclusion_list → 提醒用户评审待定结论 → report_export。
+【读法】结论区只包含 approved 的卡；pending 与 vetoed 在「待验证」区并逐条列出阻塞它的 hard finding。报告不替评审人按通过键。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "verbose": {
+      "type": "boolean",
+      "description": "是否输出更详细的证据索引"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## task_status
+
+【何时调】某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
+【参数示例】{"taskId": "6d5e4f3a-..."}
+【何时不该用】工具已经返回了结果时——那就是终态，不必再查。
+【典型链路】exp_run（超时，返回 taskId）→ 等一会 → task_status → state=succeeded 时取 result。
+【提醒】超时返回句柄不代表任务被取消：任务在后台继续跑，实验状态的真源在磁盘上。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "taskId": {
+      "type": "string",
+      "description": "长任务句柄 id",
+      "examples": [
+        "6d5e4f3a-1b2c-4d5e-8f90-1a2b3c4d5e6f"
+      ]
+    }
+  },
+  "required": [
+    "taskId"
+  ],
+  "additionalProperties": false
+}
+```

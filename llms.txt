@@ -1,0 +1,157 @@
+# Spark Research
+
+> 面向科研人群的开源科研工作台（v0.2.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+
+核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
+
+## 文档
+
+- [README](README.md)：安装、快速上手、CLI 一览
+- [产品设计](docs/DESIGN.md)：定位、五大功能域、系统架构、8 条架构决策（AD-1..AD-8）——设计真源
+- [扩展指南](docs/EXTENDING.md)：六个扩展点各一节：契约 + 最小可运行示例 + 怎么测 + 放哪里
+- [开发与验证计划](docs/DEVELOPMENT_PLAN.md)：阶段划分 P0-P9、每阶段的验证与退出标准、工程纪律 9 条
+- [外部评审简报](docs/REVIEW_BRIEF.md)：15 分钟进入状态：架构、方法、已知缺陷、最想被挑战的问题
+- [Backlog](docs/BACKLOG.md)：未决事项唯一登记处（v0.3 候选 / 等外部输入）
+- [CHANGELOG](CHANGELOG.md)：版本变更
+- [llms-full.txt](llms-full.txt)：上述文档 + 全部技能手册的全量纯文本
+
+## CLI
+
+```
+spark-research project new|list|open|archive
+    项目管理。文献库/思路库/实验/结论都挂在项目下
+spark-research lit search|add|list|pdf|read|review|export|sources
+    文献域：跨源检索、入库、PDF、精读卡、综述、导出
+spark-research idea new|list|check
+    思路库：Co-explore 产出 Idea 卡 + novelty check
+spark-research exp new|run|status|list|platforms
+    干实验闭环：设计 → 提交 → 回收 → 分析（断点可续跑）
+spark-research lab compile|approve|reject|simulate|status|backends
+    湿实验：编译 → 安全门 → **人工批准** → 模拟器执行
+spark-research conclusion list|show|review
+    结论卡评审。只有 approved 进报告结论区
+spark-research report export|stats
+    证据图 → 带证据链接的 Markdown 报告
+spark-research capabilities [--json] [--probe]
+    能力自描述：从真实注册表生成的清单
+spark-research config list|get|set|unset|path
+    用户配置（env > config.json > 默认值）
+spark-research new skill|connector|platform <name>
+    脚手架：生成带测试桩的扩展点模板
+spark-research mcp
+    以 MCP server 模式运行（stdio），供外部 agent 接入
+spark-research server [port]
+    启动 HTTP API + Web 工作台（默认 4321）
+```
+
+## 作为 MCP 工具箱接入
+
+```bash
+spark-research mcp    # stdio 传输
+```
+
+暴露 24 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+
+- `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
+- `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
+- `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
+- `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
+- `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
+- `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
+- `lit_review_draft`（长任务，同步等待）：精读卡已经齐了，要产出一份带真实引用的综述草稿时。生成后立即跑 citation-integrity 核验，返回体里 vetoed=true 表示草稿里有伪造引用或库外引用——**那份草稿不能拿去用**，要先修引用。
+- `lit_export`：要把项目文献库交给写作工具（LaTeX / Zotero）时。
+- `idea_coexplore`（长任务，同步等待）：用户抛出一个研究想法、想被挑毛病、想判断方向值不值得做时。这不是「附和式头脑风暴」：产出的 Idea 卡**强制**包含至少一条反对证据，每条观点要么给库内 bibtexKey，要么显式标 inferred。
+- `idea_list`：要看项目里已经有哪些想法、哪些还没做过创新性核验时。
+- `idea_novelty_check`（长任务，同步等待）：一个想法成形后、投入实验之前，问「有没有人做过 / 我们新在哪」时。流程是：抽 claim → 每条 claim 多路检索真实文献 → 逐条列最近邻 + 相同点 + 不同点 + 评级。
+- `exp_design`：要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
+- `exp_run`（长任务，同步等待）：exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
+- `exp_list`：要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
+- `lab_compile`：要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
+- `lab_status`：要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
+- `records_timeline`：要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
+- `record_get`：要核对某条记录的证据链时——「这个结论是基于什么」「这个观察来自哪次运行」。返回记录本体 + 出入边 + 关联 artifact 内容。
+- `conclusion_list`：要看项目里的结论卡及其评审状态时。只有 review=approved 的结论才会进研究报告的「结论」区，pending / vetoed 进「待验证」区。
+- `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
+- `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
+- `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
+
+**刻意不暴露的动作**（设计声明，不是未实现清单）：
+
+- `lab_approve`：AD-6：湿实验执行前的人工审批是硬门。若 agent 能自己批准，它就能自己编译、自己批准、自己执行，approve gate 退化成注释。 人来做：`spark-research lab approve <id> --actor <名字>（或在工作台实验面板点「批准」）`
+- `lab_reject`：拒绝同样是记名决策，会落一条 decision record；由人署名才有审计意义。 人来做：`spark-research lab reject <id> --actor <名字> --reason <理由>`
+- `lab_simulate`：执行协议是物理世界动作的模拟入口，且只允许从 awaiting_approval 经人工批准进入。开放它等于绕过 approve gate。 人来做：`spark-research lab simulate <id>（须先经人工 approve）`
+- `conclusion_review`：结论卡能否进报告结论区是可信度的最后一道闸。让外部 agent 给自己产出的结论盖章，等于取消这道闸。预评估已通过 conclusion_get 只读开放。 人来做：`spark-research conclusion review <id> --actor <名字>`
+- `project_archive`：归档会把项目移出默认视图，是破坏性的组织动作，不应由外部 agent 代劳。 人来做：`spark-research project archive <slug>`
+
+## 能力面
+
+### 数据源 Connector（17）
+
+- **chemistry**：chembl / pubchem
+- **genomics**：ensembl / ncbi / cncb
+- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang
+- **proteins**：uniprot / pdb / alphafold
+
+可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。
+
+### 干实验平台（2，默认 pyref）
+
+- pyref / openmm
+
+### 湿实验后端（2，默认 opentrons_simulate）
+
+- opentrons_simulate / mock_devices
+
+### 技能（10）
+
+- **dry-experiment**（域 B）：先在计算机上验一遍 / 跑一个 MD 算例 / 设计一个仿真 / 实验跑挂了能不能续跑
+- **idea-coexplore**（域 A）：我有个想法 / 帮我挑毛病 / 这个方向值不值得做 / 陪我想清楚这个假设
+- **library-curation**（域 A）：把这篇加进文献库 / 整理文献库 / 导出 BibTeX / 标记已读 / 给这批论文打标签
+- **literature-review**（域 A）：写一篇综述 / 相关工作章节 / 把这些论文串成一段叙述 / 帮我核对引用是不是真的
+- **literature-search**（域 A）：找相关工作 / 背景调研 / 这个领域有哪些工作 / 帮我查文献 / 为综述准备候选池
+- **novelty-check**（域 D）：这个想法有没有人做过 / 我们相对已有工作新在哪 / 查一下新颖性 / 有没有撞车的论文
+- **paper-download**（域 A）：下载这篇论文 / 把 PDF 拿到本地 / 库里哪些论文有全文 / 补全文献库的 PDF
+- **protein-analysis**（域 B）：这个蛋白长什么样 / 有没有可用的结构 / AlphaFold 模型信得过吗 / 查一下这个 UniProt
+- **research-report**（域 C/E）：整理成一份报告 / 导出研究报告 / 评审这张结论卡 / 这个结论能不能写进论文
+- **wet-protocol**（域 B）：把这个实验方案变成协议 / 先在模拟器上验一遍 / 编译成 Opentrons 脚本 / 这个协议安全吗
+
+### 规则
+
+- 湿实验安全门（拦截）：chemical_compatibility / concentration_limit / biosafety / volume_capacity
+- 引用真实性：citation-integrity（库外 key = hard veto）
+- 结论卡评审：data-consistency / capability-labeling / stats-plausibility（任一 hard → vetoed）
+- novelty 评级校验（确定性覆盖模型评级）：no_candidates / rating_without_nearest / unknown_work / existing_without_high_affinity / novel_despite_high_affinity
+
+## 证据图
+
+- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact
+- 边类型：supports / contradicts / derives_from / cites / supersedes
+- 证据标签：observed / sourced / computed / inferred
+- 边方向按语义读：`paper --supports--> idea`（查一条 idea 的支撑文献看它的 incoming 边）；`cites` 是新产物 → 被引论文；`derives_from` 是产物 → 来源。
+
+## 配置
+
+优先级：环境变量 > `~/.spark-research/config.json` > 默认值。
+
+- `defaultModel`（默认 moonshotai/kimi-k2.6，env `SPARK_RESEARCH_MODEL`）：所有 LLM 调用的默认模型（provider 由模型名推断）
+- `defaultProvider`（默认 —）：`spark-research auth` 记录的默认 provider（key 选取顺序）
+- `contactEmail`（默认 spark-research@example.invalid，env `SPARK_RESEARCH_CONTACT_EMAIL`）：文献 API 礼貌头里的联系邮箱（OpenAlex/CrossRef 的 polite pool）
+- `userAgent`（默认 —，env `SPARK_RESEARCH_USER_AGENT`）：文献 connector 的 User-Agent（默认由版本号 + 项目地址 + contactEmail 拼出）
+- `wetBackend`（默认 opentrons_simulate，env `SPARK_RESEARCH_WET_BACKEND`）：湿实验默认执行后端
+- `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
+- `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
+- `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
+- `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
+- `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
+
+## 用这个工作台时必须知道的几条
+
+1. **湿实验执行前的人工批准是硬门**（AD-6）。安全门通过 ≠ 可以执行；approve / reject / simulate 不对外部 agent 开放。
+2. **引用必须能回链到项目文献库内的真实论文**。库外 key 会被 citation-integrity 判为伪造引用并 veto；写引用只能用 `lit list` 给出的 bibtexKey。
+3. **检索不到 ≠ 新颖**。novelty check 在一条候选都没检到时给出「结论不可用」，不会因此评 novel。
+4. **失败的数据源不许被静默吞掉**。检索结果里每个源有 ok / skipped（未配凭据，不是失败）/ failed 三档；有 failed 就要如实说明覆盖面不全。
+5. **只有 review approved 的结论卡才进报告结论区**，pending 与 vetoed 进「待验证」区并列出阻塞它的 hard finding。报告不替评审人按通过键。
+6. **模拟不是真实数据**。Opentrons 模拟器的读数是 0.0；引用 `simulated=true` 的 observation 却不标注，结论会被 capability-labeling 判 hard。
+
