@@ -1,7 +1,7 @@
 {
   "name": "spark-research",
-  "version": "0.1.0",
-  "description": "开源科学Agent平台：干湿闭环 + 自动化实验室，对标 Claude Science",
+  "version": "0.2.0",
+  "description": "面向科研人群的开源科研工作台：文献 → 思路 → 实验 → 记录 → 创新性核验 → 结论评审 → 报告",
   "license": "Apache-2.0",
   "type": "module",
   "bin": {

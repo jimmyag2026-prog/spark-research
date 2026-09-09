@@ -1,8 +1,11 @@
 import type {
   ArtifactVersion,
+  ConclusionAssessment,
+  ConclusionCard,
   DryExperiment,
   IdeaCard,
   LibraryPaper,
+  ReportCounts,
   ProjectMeta,
   ProjectSummary,
   ReadingCard,
@@ -259,6 +262,8 @@ export const api = {
     ) => post<{ experiment: DryExperiment }>(withProject("/api/experiments", project), body),
     run: (id: string, body: { conclude?: string } = {}, project?: string, onProgress?: (m: string) => void) =>
       runTask(withProject(`/api/experiments/${id}/run`, project), body, onProgress),
+    conclude: (id: string, body: { claim: string; limitations?: string; confidence?: string }, project?: string) =>
+      post<{ experiment: DryExperiment }>(withProject(`/api/experiments/${id}/conclude`, project), body),
   },
 
   lab: {
@@ -334,6 +339,35 @@ export const api = {
       request<{ artifact: ArtifactVersion & { content: string } }>(
         withProject(`/api/artifacts/version/${versionId}`, project),
       ),
+  },
+
+  // P8：结论卡评审门槛（域 E2）与研究报告导出（域 C2）。
+  conclusions: {
+    list: (project?: string, review?: string) =>
+      request<{ conclusions: ConclusionCard[]; total: number }>(
+        withProject(`/api/conclusions${review ? `?review=${encodeURIComponent(review)}` : ""}`, project),
+      ),
+    get: (id: string, project?: string) =>
+      request<{ conclusion: ConclusionCard; assessment: ConclusionAssessment }>(
+        withProject(`/api/conclusions/${id}`, project),
+      ),
+    // actor 必填：HTTP 层没有环境变量兜底（AD-6），UI 要把「谁在评审」显式带上。
+    review: (id: string, body: { actor: string; veto?: string }, project?: string) =>
+      post<{
+        approved: boolean;
+        conclusion: ConclusionCard;
+        decisionRecordId: string;
+        reconciliation: string;
+        findings: ConclusionAssessment["findings"];
+      }>(withProject(`/api/conclusions/${id}/review`, project), body),
+  },
+
+  report: {
+    json: (project?: string) =>
+      request<{ project: string; title: string; generatedAt: string; counts: ReportCounts; markdown: string }>(
+        withProject("/api/report", project),
+      ),
+    markdownUrl: (project?: string) => withProject("/api/report?format=markdown", project),
   },
 
   session: {

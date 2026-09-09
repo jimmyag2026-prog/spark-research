@@ -12,6 +12,12 @@ export interface LlmResponse {
   model: string;
   content: string;
   mock: boolean;
+  // 上游给的结束原因（"stop" / "length" / …）。拿不到就是 undefined。
+  //
+  // 为什么要它（P8-G5 实测）：判定器解析失败时，「模型没按格式输出」与「输出被截断」
+  // 是两回事——前者该重试并把格式要求说重，后者重试多少次都一样。没有这个字段，
+  // 两种失败在日志里长得完全一样，只能靠猜。
+  finishReason?: string;
 }
 
 export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
@@ -105,9 +111,19 @@ export class LLMRouter {
         mock: false,
       };
     }
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content ?? "";
-    return { ok: true, provider: "openrouter", model, content: String(content), mock: false };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+    };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content ?? "";
+    return {
+      ok: true,
+      provider: "openrouter",
+      model,
+      content: String(content),
+      mock: false,
+      ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
+    };
   }
 
   private async callKimi(
@@ -126,9 +142,19 @@ export class LLMRouter {
     if (!response.ok) {
       return { ok: false, provider: "kimi", model, content: `[error] HTTP ${response.status}`, mock: false };
     }
-    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const content = data.choices?.[0]?.message?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: String(content), mock: false };
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+    };
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content ?? "";
+    return {
+      ok: true,
+      provider: "kimi",
+      model,
+      content: String(content),
+      mock: false,
+      ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
+    };
   }
 
   listModels(): Record<Provider, readonly string[]> {

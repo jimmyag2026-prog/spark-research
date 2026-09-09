@@ -1,6 +1,6 @@
 import { For, Show, createSignal, type JSX } from "solid-js";
 import { api, streamChat } from "../lib/api";
-import type { NoveltyResult, ReviewResult, TaskSnapshot } from "../lib/types";
+import type { ConclusionCard, NoveltyResult, ReviewResult, TaskSnapshot } from "../lib/types";
 import { useWorkspace, withBusy } from "../state";
 import { IdeaCardView, NoveltyView, ReadingCardView, ReviewView } from "./cards";
 import { Async, Badge, Markdown, Spinner } from "./ui";
@@ -389,6 +389,148 @@ function ArtifactsView(): JSX.Element {
   );
 }
 
+// 结论卡与 review 门槛（DESIGN 域 E2 · P8-gate G1）。
+//
+// 两条 UI 纪律：
+//  1. **不替人签名。** 评审要在输入框里填评审人——HTTP 层不接受环境变量兜底（AD-6），
+//     前端也不许拿 localStorage 里的什么东西默默顶上。
+//  2. **只显示服务端给的状态。** 「现在跑一遍会通过」（assessment.wouldApprove）与
+//     「已经通过」（review.state）在界面上是两件不同的事，颜色与文案都不一样。
+function ConclusionsView(): JSX.Element {
+  const ws = useWorkspace();
+  const [actor, setActor] = createSignal("");
+  const [open, setOpen] = createSignal<string | null>(null);
+
+  const review = async (card: ConclusionCard, veto?: string) => {
+    const who = actor().trim();
+    if (!who) {
+      ws.notify("请先填写评审人：评审是一个人对一条结论负责，不能匿名", "error");
+      return;
+    }
+    const result = await withBusy(ws, "结论评审", () =>
+      api.conclusions.review(card.recordId, { actor: who, ...(veto ? { veto } : {}) }, ws.slug()),
+    );
+    if (!result) return;
+    ws.notify(
+      result.approved
+        ? `已通过：${card.title}`
+        : `已否决：${card.title}（${result.findings.filter((f) => f.severity === "hard").length} 条 hard finding）`,
+      result.approved ? "info" : "error",
+    );
+    ws.refreshDomain("conclusions");
+  };
+
+  const tone = (state: ConclusionCard["review"]["state"]) =>
+    state === "approved" ? "observed" : state === "vetoed" ? "error" : "inferred";
+
+  return (
+    <div class="stream">
+      <div class="row wrap">
+        <label class="sr-only" for="review-actor">
+          评审人
+        </label>
+        <input
+          id="review-actor"
+          class="input"
+          style={{ flex: "0 1 200px" }}
+          placeholder="评审人（记名，必填）"
+          value={actor()}
+          onInput={(e) => setActor(e.currentTarget.value)}
+        />
+        <a class="btn" href={api.report.markdownUrl(ws.slug())} download="">
+          导出研究报告
+        </a>
+        <span class="faint" style={{ "font-size": "11.5px" }}>
+          只有 approved 的结论进报告「结论」区，pending / vetoed 进「待验证」区。
+        </span>
+      </div>
+
+      <Async
+        state={{ loading: ws.conclusions.loading, error: ws.conclusions.error, data: ws.conclusions() }}
+        isEmpty={(data) => data.conclusions.length === 0}
+        empty={{ title: "还没有结论卡", hint: "干实验 conclude 或湿实验 conclude 后会生成。" }}
+      >
+        {(data) => (
+          <For each={data.conclusions}>
+            {(card) => (
+              <article class="card">
+                <div class="card-head">
+                  <Badge tone={tone(card.review.state)}>{card.review.state}</Badge>
+                  <strong>{card.title}</strong>
+                  <span class="spacer" />
+                  <span class="mono faint" style={{ "font-size": "11px" }}>
+                    {card.recordId.slice(0, 8)}
+                  </span>
+                </div>
+                <div class="card-body">
+                  <p style={{ margin: "0 0 6px" }}>{card.claim}</p>
+                  <p class="faint" style={{ margin: "0 0 6px", "font-size": "12px" }}>
+                    证据 {card.evidenceIds.length} 条 · {card.mode}
+                    <Show when={card.review.at}>
+                      {" · 评审 "}
+                      {card.review.actor ?? "(未记名)"} @ {card.review.at} · {card.review.hardCount} hard /{" "}
+                      {card.review.softCount} soft
+                    </Show>
+                  </p>
+                  <Show when={card.limitations}>
+                    <p class="faint" style={{ margin: "0 0 6px", "font-size": "12px" }}>
+                      局限：{card.limitations}
+                    </p>
+                  </Show>
+                  <Show when={card.review.reason}>
+                    <p class="faint" style={{ margin: "0 0 6px", "font-size": "12px" }}>
+                      人工否决理由：{card.review.reason}
+                    </p>
+                  </Show>
+                  <Show when={card.review.findings.length > 0}>
+                    <ul class="md" style={{ margin: "0 0 6px", "padding-left": "18px", "font-size": "12px" }}>
+                      <For each={card.review.findings}>
+                        {(f) => (
+                          <li>
+                            <span class="mono">
+                              [{f.severity}] {f.rule}
+                            </span>{" "}
+                            {f.message}
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                  <div class="row wrap">
+                    <button class="btn btn-sm btn-primary" onClick={() => review(card)} disabled={ws.busy() !== null}>
+                      跑评审
+                    </button>
+                    <button
+                      class="btn btn-sm"
+                      onClick={() => setOpen(open() === card.recordId ? null : card.recordId)}
+                    >
+                      {open() === card.recordId ? "取消人工否决" : "人工否决"}
+                    </button>
+                    <Show when={open() === card.recordId}>
+                      <input
+                        class="input"
+                        style={{ flex: "1 1 200px" }}
+                        placeholder="否决理由（必填）"
+                        onKeyDown={(e) => {
+                          if (e.key !== "Enter") return;
+                          const reason = e.currentTarget.value.trim();
+                          if (!reason) return;
+                          setOpen(null);
+                          void review(card, reason);
+                        }}
+                      />
+                    </Show>
+                  </div>
+                </div>
+              </article>
+            )}
+          </For>
+        )}
+      </Async>
+    </div>
+  );
+}
+
 export function CenterPanel(): JSX.Element {
   const ws = useWorkspace();
   return (
@@ -404,6 +546,9 @@ export function CenterPanel(): JSX.Element {
       </Show>
       <Show when={ws.view().kind === "ideas"}>
         <IdeasView />
+      </Show>
+      <Show when={ws.view().kind === "conclusions"}>
+        <ConclusionsView />
       </Show>
       <Show when={ws.view().kind === "artifacts"}>
         <ArtifactsView />

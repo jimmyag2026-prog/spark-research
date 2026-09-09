@@ -237,3 +237,48 @@ test("⑩ 时间线呈现完整研究线索，且明暗主题都能用", async (
   );
   expect(overflow).toBe(true);
 });
+
+// P8：结论卡 review 门槛（G1）与研究报告导出（G7）在浏览器里的落点。
+// 接在 ⑥ 的干实验（已到 analyze）后面：写结论 → 评审 → 报告里出现在「结论」区。
+test("⑪ 结论卡评审门槛：pending 进不了结论区，approved 才进", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.locator(".bottom");
+  await panel.getByRole("tab", { name: /干实验/ }).click();
+  await panel.locator(".exp-list .nav-item").filter({ hasText: "阻尼振子基线" }).first().click();
+  await panel.getByPlaceholder("结论（claim）").fill("阻尼系数 0.4 下能量在 200 步内衰减到初值的 1/3");
+  await panel.getByRole("button", { name: "得出结论" }).click();
+  await waitIdle(page);
+
+  // 结论页：新卡是 pending，此时报告的结论区还是空的。
+  await page.locator(".left").getByRole("button", { name: /^结论/ }).click();
+  const card = page.locator(".center .card").first();
+  await expect(card).toContainText("pending");
+
+  const before = await page.evaluate(async () => (await fetch("/api/report")).json());
+  expect(before.counts.approvedConclusions).toBe(0);
+  expect(before.counts.unverifiedConclusions).toBeGreaterThan(0);
+
+  // 不填评审人不许评审（AD-6：评审要记名）。
+  await card.getByRole("button", { name: "跑评审" }).click();
+  await expect(page.locator(".toast[data-kind='error']")).toContainText("评审人");
+
+  await page.getByPlaceholder("评审人（记名，必填）").fill("e2e-reviewer");
+  await card.getByRole("button", { name: "跑评审" }).click();
+  await waitIdle(page);
+  await expect(page.locator(".center .card").first()).toContainText("approved");
+
+  // 报告里这条结论进了「结论」区，且带 record id 可回溯。
+  const after = await page.evaluate(async () => (await fetch("/api/report")).json());
+  expect(after.counts.approvedConclusions).toBe(1);
+  const conclusionSection = after.markdown.split("## 四、结论")[1].split("## 五、待验证")[0];
+  expect(conclusionSection).toContain("阻尼系数 0.4 下能量");
+  expect(conclusionSection).toContain("e2e-reviewer");
+});
+
+test("⑫ 导出报告按钮下载 Markdown（结论区受门槛约束）", async ({ page }) => {
+  await page.goto("/");
+  const download = page.waitForEvent("download");
+  await page.locator(".head").getByRole("link", { name: "导出报告" }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toContain("report.md");
+});

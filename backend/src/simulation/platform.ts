@@ -109,9 +109,10 @@ export interface SubprocessPlatformOptions {
 // 本地子进程型仿真平台的公共骨架：openmm 与 pyref 都是「写 params.json →
 // 起一个 python runner → runner 自己写 done.json」，差别只在 runner 与参数归一化。
 //
-// 这里刻意**不**复用 compute/providers.ts 的 ComputeProvider：那套的 wait() 是阻塞语义、
-// 状态全在内存里，跨进程接不上。P5 需要的是「编排进程死了任务还在、重启能接回来」，
-// 与 ComputeProvider 的契约不是一回事（见 devlog 决策 D1）。
+// 这里刻意**不**复用 v0.1 的 `compute/providers.ts`（ComputeProvider）：那套的 wait() 是阻塞
+// 语义、状态全在内存里，跨进程接不上。P5 需要的是「编排进程死了任务还在、重启能接回来」，
+// 与 ComputeProvider 的契约不是一回事（见 devlog P5 决策 D1）。
+// P8-G6：该模块已连同 v0.1 测试一并删除，此处保留这段说明是为了记住**为什么**另起契约。
 export abstract class SubprocessSimulationPlatform implements SimulationPlatform {
   abstract readonly id: string;
   abstract readonly description: string;
