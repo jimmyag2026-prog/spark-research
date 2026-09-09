@@ -117,9 +117,17 @@ export class ExperimentLoop {
 
   // ── 读 ────────────────────────────────────────────────────────────────────
 
+  // P6 起同一个项目里会同时有干实验与湿实验（两张状态机、两套 metadata）。
+  // 干实验一侧必须把 `mode="wet"` 的 record 滤掉：否则 toView 会把湿实验的
+  // `awaiting_approval` 之类的状态**悄悄降级**成 design，读出来是一条假实验。
+  private isDry(record: ResearchRecord): boolean {
+    return (record.metadata as { mode?: string }).mode !== "wet";
+  }
+
   list(filter: { state?: ExperimentState; platform?: string } = {}): ExperimentView[] {
     return this.records
       .list({ type: "experiment" })
+      .filter((record) => this.isDry(record))
       .map((record) => this.toView(record))
       .filter((view) => (filter.state ? view.state === filter.state : true))
       .filter((view) => (filter.platform ? view.platform === filter.platform : true));
@@ -128,10 +136,10 @@ export class ExperimentLoop {
   // 支持 id 前缀（CLI 里没人愿意抄完整 uuid）；前缀歧义时报错而不是猜。
   get(ref: string): ExperimentView {
     const exact = this.records.get(ref);
-    if (exact && exact.type === "experiment") return this.toView(exact);
+    if (exact && exact.type === "experiment" && this.isDry(exact)) return this.toView(exact);
     const matches = this.records
       .list({ type: "experiment" })
-      .filter((record) => record.id.startsWith(ref));
+      .filter((record) => this.isDry(record) && record.id.startsWith(ref));
     if (matches.length === 1) return this.toView(matches[0]!);
     if (matches.length > 1) {
       throw new ExperimentNotFoundError(

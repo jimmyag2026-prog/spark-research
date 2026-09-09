@@ -24,6 +24,10 @@ export interface WetRunLogEntry {
   depth: number;
   type: string;
   text: string;
+  // 父命令（`transfer` / `mix` 会把 aspirate/dispense 展开成子命令）。
+  // 不区分父子就会把混匀的来回吹打也算成「转移了多少液体」。
+  parentIndex?: number | null;
+  parentType?: string | null;
   // 锚回编译产物里的步骤（来自协议里注入的 `[spark-step]` 标记）。
   stepId: string | null;
   action: string | null;
