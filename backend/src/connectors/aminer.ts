@@ -75,6 +75,8 @@ export function isCredentialMissing(value: unknown): value is CredentialMissingR
 export class AMinerConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super(AMINER_CONNECTOR_ID, aminerConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getPaper", (p) => this.getPaper(p));
   }
 
   // 是否已配置凭据。只看「有没有」，不把值带出这个方法之外。
@@ -116,7 +118,7 @@ export class AMinerConnector extends HttpConnector {
     if (!mapped.title) throw new Error('Connector "aminer" tool "search" 需要参数 query 或 title');
     mapped.page ??= 1;
     mapped.size ??= 10;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getPaper(
@@ -126,6 +128,6 @@ export class AMinerConnector extends HttpConnector {
     const ids = params.ids ?? (params.id ? [String(params.id)] : []);
     if (ids.length === 0) throw new Error('Connector "aminer" tool "getPaper" 需要参数 id 或 ids');
     // 官方限制单次最多 100 个 id。
-    return super.call("getPaper", { ids: ids.slice(0, 100) });
+    return this.requestRaw("getPaper", { ids: ids.slice(0, 100) });
   }
 }
