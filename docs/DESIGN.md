@@ -170,9 +170,21 @@ P6 落地口径：
 - 安全门从三段 if 拆成**四条彼此独立的纯函数规则**（`chemical_compatibility` /
   `concentration_limit` / `biosafety` / **新增 `volume_capacity`**）。`volume_capacity` 吃编译产物：
   「单孔累计溢孔」在自然语言层面看不出来，只有排完 deck 累加才知道
+  - **v0.3.0（P10 D-8）口径收敛**：「四条规则」说的是**规则本身存在且各有对抗测试**，
+    不等于四条都在自然语言主管线上生效。实测：`volume_capacity` 全程可信；
+    `chemical_compatibility` 词表已扩到中英文+分子式但仍有限；
+    `concentration_limit` / `biosafety` 所需字段编译器从不产生，**在主管线上恒空转**。
+    对抗测试当初是用 `withReagents()` 手工注入验证规则本身的——这验证了规则，没验证接线。
+    补位机制是 `unconsumedWarnings`（见 `lab/protocol.ts`）：本句出现了量纲/试剂/条件
+    却无任何规则消费 → 产出显式告警并强制在审批面前显示。
+    **「规则能被单独测到」不等于「规则在管线上生效」，这是本次外部评审最值得记住的一条教训。**
 
 **B3 干湿闭环引擎**
-- 状态机：`design → dry_run → (approve gate) → wet_run → collect → analyze → iterate | conclude`
+- 状态机：`design → dry_run → (approve gate) → approved → (execution gate) → executing → collect → analyze → iterate | conclude`
+  - **v0.3.0（P10 D-10）**：原 `wet_run` 一个状态同时表示「已批准待执行」与「执行中」，
+    拆成 `approved` / `executing` 两态。第二道门（`approved → executing`）由 `execute()` 用
+    乐观并发 CAS 原子声明执行权，**并在那一刻一次性消费 approval**——重跑必须重新审批，
+    崩溃重启后也不例外。两道门都在 `/api/lab/machine` 有机器可读形态（`approvalGate` / `executionGate`）
 - 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
 - 断点续跑：状态持久化到 Project 存储，进程重启可恢复
 - 人在环：湿实验执行前强制 approve gate（安全门通过 ≠ 自动执行）
@@ -384,6 +396,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
 | AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」。<br>**主会话裁定（v0.2.0）**：MCP 工具清单是**能力声明，不是访问控制**。真正的访问控制在别处（daemon 的 permit set、文件权限、物理设备要人去按）。一个有 Bash 权限的 agent 确实能绕道调 CLI——承认这一点，不假装挡得住。这条边界起的作用是另外三件事：**默认路径**（agent 的第一反应是「我有哪些工具」，自动批准不在默认可达集合里）、**意图显性化**（绕道要主动构造命令，是一个「我知道我在绕过设计」的留痕动作，用户在 permission 层看得见）、**责任归属**（经 MCP 调用是我们授权的能力；经 Bash 绕过是用户授予 Bash 权限的后果）。所以它是纵深防御的一层，不是唯一一层——说它能挡住有意绕过者是安全剧场，但说「反正能绕过所以不该做」同样错：默认值决定 99% 的行为。若要真正堵住绕道，正确做法不是加固 MCP 层，而是在 CLI 层要求审批必须来自可交互终端（见 BACKLOG V19） |
+| AD-12 | **对外声称的每一项能力必须机器可核**（v0.3.0 新增，门禁在 `tests/unit/narrative_parity.test.ts`） | 外部评审最大的一条发现是「叙事超前于实现」：README 宣传 100 并发 swarm 而 `swarm.ts` 生产代码零调用方、架构图写 18 个 connector 实际 17 个。这类漂移**不报错**——能编译、测试全绿、只有人去读才发现对不上，所以靠人自觉不可持续。门禁做三件事：① **孤儿模块检测**（生产代码零引用者必须在册且写清理由，白名单只许缩短不许悄悄变长）；② 文档里的数量声称与运行期真源对撞；③ **自描述端点必须能从真源推导**——`/api/lab/machine` 的两道门由转移表算出来比对，而不是手写（P10 就撞上过：D-10 拆了状态之后该端点仍自称 `to: "wet_run"`，AD-6 的机器可读表达对外撒谎且全部测试皆绿）。<br>**编号说明**：AD-10 / AD-11 预留给 v0.4 的 P13（完成判定问图不问模型）与 P15（扩展过契约才算装好），见 `docs/DEVELOPMENT_PLAN_v0.3.md` §八 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 

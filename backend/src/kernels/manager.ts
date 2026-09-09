@@ -2,6 +2,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import { ControlRepl } from "./control_repl";
+import { configuredKernelTimeoutMs } from "../config";
 
 export type KernelType = "python" | "r" | "control_repl";
 
@@ -16,7 +17,7 @@ export interface KernelResult {
 }
 
 export interface KernelExecuteOptions {
-  // 单次 execute 的超时上限（毫秒）。省略则用模块级默认（见 DEFAULT_KERNEL_TIMEOUT_MS）；
+  // 单次 execute 的超时上限（毫秒）。省略则用模块级默认（见 defaultKernelTimeoutMs()）；
   // 传 0 或负数显式关闭超时。
   timeoutMs?: number;
 }
@@ -31,10 +32,12 @@ function resolvePython(): string {
 // D-2：config/ 面板（P9）没有对应设置项（只读不改，见 docs/devlog/P10-b.md），
 // 走 env + 常量默认。120s 对照 backend/src/lab/wet_backend.ts 的
 // DEFAULT_TIMEOUT_MS（同为「一次子进程调用整体等多久算挂」的量级）。
-const DEFAULT_KERNEL_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SPARK_KERNEL_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
-})();
+// P10 收口：默认值收进 config 注册表（`CONFIG_SETTINGS.kernelTimeoutMs`），优先级仍是
+// env > config.json > 常量默认，与仓库其余配置项走同一套解析（P9「配置面收口」）。
+// 做成函数而不是模块级常量：改了 config.json 不必重启进程。
+function defaultKernelTimeoutMs(): number {
+  return configuredKernelTimeoutMs(120_000);
+}
 
 export class KernelTimeoutError extends Error {
   readonly timeout = true;
@@ -137,7 +140,7 @@ export class PythonKernel {
     const stdin = this.proc.stdin;
     if (typeof stdin === "number" || !stdin) throw new Error("PythonKernel: stdin not available");
 
-    const timeoutMs = options.timeoutMs ?? DEFAULT_KERNEL_TIMEOUT_MS;
+    const timeoutMs = options.timeoutMs ?? defaultKernelTimeoutMs();
     const state = { done: false };
     const linePromise = new Promise<string>((resolve) => {
       this.waiters.push((line) => {
@@ -273,7 +276,7 @@ export class KernelManager {
       // 更常见的挂起（例如 daemon 分派的方法未来变成真异步之后卡住），把它变成一个
       // 可见的超时错误而不是让调用方无限等；纯 CPU 死循环仍然只能拖到进程级兜底。
       // 已在 docs/devlog/P10-b.md 记录这条局限，不在本 lane 里用 Worker 线程强杀改造它。
-      const timeoutMs = options.timeoutMs ?? DEFAULT_KERNEL_TIMEOUT_MS;
+      const timeoutMs = options.timeoutMs ?? defaultKernelTimeoutMs();
       return this.raceControlRepl(kernel.repl as ControlRepl, code, timeoutMs);
     }
     return { status: "error", error: "R kernel execution not implemented yet" };

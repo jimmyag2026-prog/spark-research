@@ -125,6 +125,42 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "D-7：写请求（POST/PUT/PATCH/DELETE）若带 Origin header，只有 localhost/127.0.0.1 或这里列出的主机名会被接受，其余一律 403——挡的是浏览器打开恶意网页后对本机 API 发起的跨站写请求。缺 Origin 的请求（CLI / MCP 进程内调用）不受此项影响，恒放行；只有真正要把服务暴露给别的可信前端域名时才需要配置它。",
   },
   {
+    key: "httpTimeoutMs",
+    type: "number",
+    envVar: "SPARK_HTTP_TIMEOUT_MS",
+    defaultValue: 30_000,
+    summary: "单次 connector HTTP 请求的超时上限（毫秒）",
+    effect:
+      "超时后该次请求抛 HttpTimeoutError（与「上游返回 4xx/5xx」是两种不同的失败）。调小会让冷启动慢的源更容易被判超时；调大则一个挂起的上游能拖住整条跨源检索更久。",
+  },
+  {
+    key: "llmTimeoutMs",
+    type: "number",
+    envVar: "SPARK_LLM_TIMEOUT_MS",
+    defaultValue: 120_000,
+    summary: "单次 LLM 调用的超时上限（毫秒）",
+    effect:
+      "超时按可见失败处理（`ok:false`），不会被当成模型产出。调小会让长文本生成（综述草稿）更容易被掐；调大则一次卡住的模型调用能挂住整条 orchestrator 流程更久。",
+  },
+  {
+    key: "kernelTimeoutMs",
+    type: "number",
+    envVar: "SPARK_KERNEL_TIMEOUT_MS",
+    defaultValue: 120_000,
+    summary: "单次 Python kernel execute 的超时上限（毫秒）",
+    effect:
+      "超时会杀掉并重建子进程（kernel 内的变量状态随之丢失）。跑长仿真时要调大，否则会在中途被杀。传 0 或负数显式关闭超时。",
+  },
+  {
+    key: "taskTimeoutMs",
+    type: "number",
+    envVar: "SPARK_TASK_TIMEOUT_MS",
+    defaultValue: 600_000,
+    summary: "server 长任务整个生命周期的超时上限（毫秒）",
+    effect:
+      "**与 `mcpTimeoutMs` 是两回事，且必须一起调**：后者是 MCP 等待多久改走句柄，这里是任务本身多久被判超时失败。只调 mcpTimeoutMs 的话，任务仍会在这里被掐掉（v0.2.1 × P10 的语义漂移就是这么来的）。",
+  },
+  {
     key: "mcpTimeoutMs",
     type: "number",
     envVar: "SPARK_RESEARCH_MCP_TIMEOUT_MS",
@@ -313,6 +349,31 @@ export function configuredMcpTimeoutMs(fallback: number, options: ConfigOptions 
   const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
+
+export function configuredHttpTimeoutMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("httpTimeoutMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function configuredLlmTimeoutMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("llmTimeoutMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function configuredKernelTimeoutMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("kernelTimeoutMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("taskTimeoutMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 
 // 礼貌头是唯一「配置必须变成 env」的地方：politeness.ts 从 v0.2 起就只读 env，
 // 而 connector 层在很多路径上拿不到 config 句柄。做法是**进程启动时把 config 的值

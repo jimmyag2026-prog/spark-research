@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { configuredTaskTimeoutMs } from "../config";
 
 // 长任务句柄（P7）。
 //
@@ -74,10 +75,12 @@ export interface StartTaskOptions {
 // 同步等长任务的上限）更宽——这里包的是任务体的整个生命周期（可能内含多轮
 // review 修正循环），不是单次工具调用，需要更大的余量；同时仍然是个有限值，
 // 一次真正挂死的调用最终会被结构化地报出来而不是让任务句柄永远停在 running。
-const DEFAULT_TASK_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SPARK_TASK_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
-})();
+// P10 收口：默认值收进 config 注册表（`CONFIG_SETTINGS.taskTimeoutMs`），优先级仍是
+// env > config.json > 常量默认，与仓库其余配置项走同一套解析（P9「配置面收口」）。
+// 做成函数而不是模块级常量：改了 config.json 不必重启进程。
+function defaultTaskTimeoutMs(): number {
+  return configuredTaskTimeoutMs(600_000);
+}
 
 export class TaskTimeoutError extends Error {
   readonly timeout = true;
@@ -117,7 +120,7 @@ export class TaskRegistry {
   constructor(options: { now?: () => string; capacity?: number; timeoutMs?: number } = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.capacity = options.capacity ?? 200;
-    this.defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+    this.defaultTimeoutMs = options.timeoutMs ?? defaultTaskTimeoutMs();
   }
 
   start(options: StartTaskOptions): TaskSnapshot {

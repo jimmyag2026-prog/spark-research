@@ -1,3 +1,4 @@
+import { configuredLlmTimeoutMs } from "../config";
 export const SUPPORTED_PROVIDERS = ["kimi", "openai", "anthropic", "deepseek", "qwen", "openrouter"] as const;
 export type Provider = (typeof SUPPORTED_PROVIDERS)[number];
 
@@ -38,10 +39,12 @@ const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 // 流程挂死。config/ 面板（P9）没有对应设置项（只读不改，见 docs/devlog/P10-b.md），
 // 走 env + 常量默认。120s：对照 backend/src/lab/wet_backend.ts 的湿实验后端超时
 // 惯例（同为「一次外部调用整体等多久算挂」的量级），也留够长文本生成的余量。
-const DEFAULT_LLM_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SPARK_LLM_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
-})();
+// P10 收口：默认值收进 config 注册表（`CONFIG_SETTINGS.llmTimeoutMs`），优先级仍是
+// env > config.json > 常量默认，与仓库其余配置项走同一套解析（P9「配置面收口」）。
+// 做成函数而不是模块级常量：改了 config.json 不必重启进程。
+function defaultLlmTimeoutMs(): number {
+  return configuredLlmTimeoutMs(120_000);
+}
 
 async function fetchWithTimeout(
   url: string,
@@ -97,7 +100,7 @@ export class LLMRouter {
   ) {
     this.env = env;
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    this.timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+    this.timeoutMs = opts.timeoutMs ?? defaultLlmTimeoutMs();
   }
 
   private keys(): { kimi?: string; openrouter?: string } {

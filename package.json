@@ -1,6 +1,6 @@
 {
   "name": "spark-research",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "面向科研人群的开源科研工作台：文献 → 思路 → 实验 → 记录 → 创新性核验 → 结论评审 → 报告",
   "license": "Apache-2.0",
   "type": "module",
@@ -15,8 +15,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p frontend/workspace/tsconfig.json",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
-    "test:lab": "bun test tests/lab",
-    "test:py": "python -m pytest tests/",
+    "test:lab": "./.venv/bin/python -m pytest tests/lab || python3 -m pytest tests/lab",
+    "test:py": "./.venv/bin/python -m pytest tests/ || python3 -m pytest tests/",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
     "gen:llms": "bun scripts/gen-llms-txt.ts",
     "check:llms": "bun scripts/gen-llms-txt.ts --check"

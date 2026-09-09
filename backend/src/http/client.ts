@@ -1,3 +1,4 @@
+import { configuredHttpTimeoutMs } from "../config";
 // 可注入的 HTTP 层：connector 一律通过 HttpClient 发请求，而不是直接调用全局 fetch。
 // 这是 P2 fixture 回放机制（tests/fixtures/literature）的前提——只有 http 层可注入，
 // CI 才能在完全无网络的情况下跑完跨源检索链路。
@@ -76,10 +77,12 @@ export class BufferedResponse implements HttpResponse {
 // （对照 backend/src/lab/wet_backend.ts 的 DEFAULT_TIMEOUT_MS）。
 // 30s：文献/蛋白/化学等 connector 的单次请求正常在数百 ms～几秒内完成；30s 足够
 // 覆盖冷启动 + 重试，又不会让一次挂起的上游拖垮整条检索链路太久。
-const DEFAULT_HTTP_TIMEOUT_MS = (() => {
-  const raw = Number(process.env.SPARK_HTTP_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
-})();
+// P10 收口：默认值收进 config 注册表（`CONFIG_SETTINGS.httpTimeoutMs`），优先级仍是
+// env > config.json > 常量默认，与仓库其余配置项走同一套解析（P9「配置面收口」）。
+// 做成函数而不是模块级常量：改了 config.json 不必重启进程。
+function defaultHttpTimeoutMs(): number {
+  return configuredHttpTimeoutMs(30_000);
+}
 
 // 超时与「上游返回了 4xx/5xx」结构上不同——后者仍然是一个合法的 HttpResponse
 // （ok=false，有 status），前者是请求根本没有落地。用专门的错误类型让调用方
@@ -101,7 +104,7 @@ export class HttpTimeoutError extends Error {
 // 生产实现：包一层全局 fetch。
 export class NativeHttp implements HttpClient {
   async request(url: string, init: HttpRequestInit = {}): Promise<HttpResponse> {
-    const timeoutMs = init.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
+    const timeoutMs = init.timeoutMs ?? defaultHttpTimeoutMs();
     const controller = new AbortController();
     const timer =
       timeoutMs > 0
