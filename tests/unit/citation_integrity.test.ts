@@ -247,6 +247,57 @@ describe("LlmCitationJudge", () => {
       }),
     ).rejects.toThrow(/无法解析/);
   });
+
+  // P8-G5 实测发现：真实模型每轮有 2–6% 的判定不是判错，而是模型输出了一段思维链正文、
+  // JSON 始终没出现（多为长推理被截断）。行为上是安全的（降级可见），但白白丢掉那部分
+  // 检查覆盖率。重试一次成本极低。
+  test("输出不合形状时重试一次；第二次给出 JSON 则判定成功", async () => {
+    const llm = new FakeLlm([
+      "让我仔细分析：\n(A) 精读卡说……\n(B) 草稿说……",
+      '{"verdict":"conflict","reason":"说反了"}',
+    ]);
+    const judged = await new LlmCitationJudge(llm).judge({ key: "k", statement: "S", baseline: BASELINE });
+    expect(judged.verdict).toBe("conflict");
+    expect(llm.calls).toHaveLength(2);
+    // 重试把上一轮的输出与「只输出 JSON」的指令一起带上，模型才知道自己错在哪。
+    expect(llm.lastUserPrompt).toContain("只输出");
+    expect(llm.calls[1]!.messages.some((m) => m.role === "assistant")).toBe(true);
+  });
+
+  test("两次都不合形状 → 抛第一次的错误（带模型原本想说什么，诊断价值更高）", async () => {
+    const llm = new FakeLlm(["第一次的胡言乱语"]);
+    await expect(
+      new LlmCitationJudge(llm).judge({ key: "k", statement: "S", baseline: BASELINE }),
+    ).rejects.toThrow(/第一次的胡言乱语/);
+    expect(llm.calls).toHaveLength(2);
+  });
+
+  test("截断与「没按格式说话」在错误消息里分得开（P8-G5：两种病要往不同方向修）", async () => {
+    const truncated = {
+      call: async () => ({
+        ok: true as const,
+        provider: "kimi" as const,
+        model: "m",
+        content: "让我分析一下：(A) 精读卡说",
+        mock: false,
+        finishReason: "length",
+      }),
+    };
+    await expect(
+      new LlmCitationJudge(truncated).judge({ key: "k", statement: "S", baseline: BASELINE }),
+    ).rejects.toThrow(/输出被截断/);
+    await expect(
+      new LlmCitationJudge(new FakeLlm(["没有 JSON 的正文"])).judge({ key: "k", statement: "S", baseline: BASELINE }),
+    ).rejects.toThrow(/没有可解析的 JSON/);
+  });
+
+  test("调用本身失败不重试（重试解决不了没有凭据，只会把一次失败变两次）", async () => {
+    const llm = new FakeLlm([{ ok: false, content: "[error] no key" }]);
+    await expect(
+      new LlmCitationJudge(llm).judge({ key: "k", statement: "S", baseline: BASELINE }),
+    ).rejects.toThrow(/调用失败/);
+    expect(llm.calls).toHaveLength(1);
+  });
 });
 
 describe("ReviewerAgent 接入 citation-integrity", () => {

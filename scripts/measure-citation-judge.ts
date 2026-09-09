@@ -425,9 +425,9 @@ export async function measure(
   const scored = outcomes.filter((o) => o.verdict !== "error");
   return {
     model,
-    // LLMRouter 不传 temperature，用的是各 provider 的默认值。如实记录这一点，
-    // 而不是写一个我们并没有设置的数字。
-    temperature: options.temperature ?? "provider default（LLMRouter 未显式设置）",
+    // LLMRouter 对 OpenRouter/Kimi 两条路径都固定发 temperature=0.2（见 llm/router.ts），
+    // 脚本这一侧不覆盖它。如实记录实际生效的值。
+    temperature: options.temperature ?? "0.2（LLMRouter 固定值）",
     total: outcomes.length,
     errors: outcomes.length - scored.length,
     overall: score("overall", scored),

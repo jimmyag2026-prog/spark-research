@@ -41,4 +41,4 @@ backend/src/skills/
 | protein-analysis | B | P5 落地 |
 | dry-experiment | B | P5 落地 |
 | wet-protocol | B | P6 落地 |
-| research-report | C/E | P8 |
+| research-report | C/E | P8 落地 |
