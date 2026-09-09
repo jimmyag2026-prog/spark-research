@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -19,6 +19,15 @@ import { join } from "node:path";
 // 被显式标成 `secret`：`config list` 只显示「已设置 / 未设置」，值永不打印（AD-2 的延伸）。
 
 export const CONFIG_FILE = "config.json";
+
+// D-6（外部评审）：config.json 与 credentials.json 装着同等敏感的东西——LLM API key
+// （KIMI_API_KEY / OPENROUTER_API_KEY，见下面 CONFIG_SETTINGS 的 secret: true 项）。
+// credentials.json 从 P2 起就是 0600（daemon/credentials.ts AD-2），config.json 却一直
+// 没指定 mode、落盘就是 umask 默认的 0644——同一台机器上，系统里最值钱的密钥反而是
+// 保护最弱的那份。这里照抄 credentials.ts 的写法：目录 0700 / 文件 0600 / 写入后显式 chmod
+// （`writeFileSync` 的 mode 只在创建新文件时生效，已存在的文件必须显式收紧）。
+const CONFIG_FILE_MODE = 0o600;
+const CONFIG_DIR_MODE = 0o700;
 
 export type SettingType = "string" | "number" | "enum";
 
@@ -107,6 +116,15 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "一切持久化的根：projects/、credentials.json、config.json 全在它下面。改了等于换一套工作区，旧项目不会自动迁移。只能用环境变量设，不能写进 config.json（先有目录才有文件）。",
   },
   {
+    key: "originAllowlist",
+    type: "string",
+    envVar: "SPARK_RESEARCH_ORIGIN_ALLOWLIST",
+    defaultValue: null,
+    summary: "HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出",
+    effect:
+      "D-7：写请求（POST/PUT/PATCH/DELETE）若带 Origin header，只有 localhost/127.0.0.1 或这里列出的主机名会被接受，其余一律 403——挡的是浏览器打开恶意网页后对本机 API 发起的跨站写请求。缺 Origin 的请求（CLI / MCP 进程内调用）不受此项影响，恒放行；只有真正要把服务暴露给别的可信前端域名时才需要配置它。",
+  },
+  {
     key: "mcpTimeoutMs",
     type: "number",
     envVar: "SPARK_RESEARCH_MCP_TIMEOUT_MS",
@@ -145,6 +163,8 @@ export interface ConfigOptions {
   // 工作区根目录（测试注入 mkdtemp）。未给则 env SPARK_RESEARCH_DATA_DIR → ~/.spark-research。
   root?: string;
   env?: Record<string, string | undefined>;
+  // 权限告警出口，默认 console.warn；注入便于单测断言（与 CredentialStore 同口径）。
+  warn?: (message: string) => void;
 }
 
 export function dataDir(options: ConfigOptions = {}): string {
@@ -157,9 +177,43 @@ export function configPath(options: ConfigOptions = {}): string {
   return join(dataDir(options), CONFIG_FILE);
 }
 
+export interface ConfigFilePermission {
+  ok: boolean;
+  mode: string;
+  path: string;
+  warning?: string;
+}
+
+// 文件权限体检：宽于 0600 时告警（不阻断，读侧只报告不强改——避免在只读文件系统上
+// 把用户锁在门外）。判定逻辑与 daemon/credentials.ts 的 checkPermissions 同口径。
+export function checkConfigPermissions(options: ConfigOptions = {}): ConfigFilePermission {
+  const path = configPath(options);
+  if (!existsSync(path)) return { ok: true, mode: "-", path };
+  const mode = statSync(path).mode & 0o777;
+  const modeStr = mode.toString(8).padStart(3, "0");
+  if ((mode & 0o077) === 0) return { ok: true, mode: modeStr, path };
+  return {
+    ok: false,
+    mode: modeStr,
+    path,
+    warning: `配置文件权限过宽（${modeStr}）：${path}，其中可能含 LLM API key，请执行 chmod 600 收紧`,
+  };
+}
+
+// 启动时权限自检：发现过宽立即收紧到 0600，并把「发现时」的状态报告给调用方去告警。
+// （collectConfigPermissions 里的 chmod 只在文件已经落盘的前提下生效；新建文件走
+// saveConfig 那条路径，创建时就是 0600，不会走到这里。）
+export function enforceConfigPermissions(options: ConfigOptions = {}): ConfigFilePermission {
+  const result = checkConfigPermissions(options);
+  if (!result.ok) chmodSync(result.path, CONFIG_FILE_MODE);
+  return result;
+}
+
 export function loadConfig(options: ConfigOptions = {}): UserConfig {
   const path = configPath(options);
   if (!existsSync(path)) return {};
+  const perm = enforceConfigPermissions(options);
+  if (!perm.ok && perm.warning) (options.warn ?? ((m: string) => console.warn(m)))(perm.warning);
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -172,9 +226,12 @@ export function loadConfig(options: ConfigOptions = {}): UserConfig {
 
 export function saveConfig(config: UserConfig, options: ConfigOptions = {}): string {
   const dir = dataDir(options);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: CONFIG_DIR_MODE });
   const path = configPath(options);
-  writeFileSync(path, JSON.stringify(config, null, 2) + "\n");
+  // writeFileSync 的 mode 只在创建新文件时生效；已存在的文件（例如从 0644 升级而来）
+  // 要显式 chmod 才会真的被收紧——这是 D-6 里最容易漏的一条路径。
+  writeFileSync(path, JSON.stringify(config, null, 2) + "\n", { mode: CONFIG_FILE_MODE });
+  chmodSync(path, CONFIG_FILE_MODE);
   return path;
 }
 
