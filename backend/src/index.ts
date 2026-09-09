@@ -11,6 +11,7 @@ import { ProjectManager } from "./project/manager";
 import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
 import { runIdeaCommand } from "./ideation/cli";
+import { runExpCommand } from "./experiment/cli";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -23,6 +24,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research project     项目管理（new / list / open / archive）
   spark-research lit         文献域（search / add / list / pdf / read / review / export / sources）
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
+  spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
   spark-research server      启动 Web 服务（默认 4321）
@@ -272,6 +274,13 @@ function main() {
     case "idea":
     case "ideation": {
       runIdeaCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "exp":
+    case "experiment": {
+      runExpCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;
