@@ -2,7 +2,7 @@ import { defaultHttp, type HttpClient } from "../http/client";
 
 export type ToolResponseType = "json" | "text";
 
-export interface MCPTool {
+export interface HttpTool {
   name: string;
   description: string;
   endpoint: string;
@@ -14,12 +14,16 @@ export interface ConnectorMetadata {
   domain: string;
   apiKeyRequired: boolean;
   status: "available" | "placeholder";
+  // 已知限制（P9）。`status: "available"` 说的是「接口实现了」，不等于「无条件可用」——
+  // 例如 Semantic Scholar 匿名请求实测持续 429。这条会被 `capabilities` 原样透出，
+  // 让外部 agent 在选源之前就知道会撞什么墙，而不是撞完再猜。
+  caveat?: string;
 }
 
-export interface MCPConnectorConfig {
+export interface HttpConnectorConfig {
   baseUrl: string;
   description: string;
-  tools: MCPTool[];
+  tools: HttpTool[];
   metadata?: ConnectorMetadata;
 }
 
@@ -40,13 +44,20 @@ export interface ConnectorOptions {
   userAgent?: string;
 }
 
-export class MCPConnector {
+// 一个普通的 HTTP 数据源客户端基类。
+//
+// **命名历史包袱（P9 修正）**：这个类原名 `MCPConnector`，但它与 Model Context
+// Protocol 毫无关系——名字来自 v0.1 的早期设想，那时打算让每个数据源都是一个 MCP
+// server。真正的 MCP 实现在 `backend/src/mcp/`（P9 落地）。两个东西同名会让读者
+// 以为 connector 层在说 MCP 协议，所以在 v0.2.0 把公开 API 定下来**之前**改名。
+// 旧名保留为 deprecated 别名，外部代码不会断。
+export class HttpConnector {
   readonly name: string;
-  readonly config: MCPConnectorConfig;
+  readonly config: HttpConnectorConfig;
   protected readonly http: HttpClient;
   protected readonly options: ConnectorOptions;
 
-  constructor(name: string, config: MCPConnectorConfig, options: ConnectorOptions = {}) {
+  constructor(name: string, config: HttpConnectorConfig, options: ConnectorOptions = {}) {
     this.name = name;
     this.config = config;
     this.options = options;
@@ -130,7 +141,19 @@ export class MCPConnector {
     return isText ? response.text() : response.json();
   }
 
-  listTools(): MCPTool[] {
+  listTools(): HttpTool[] {
     return this.config.tools.map((tool) => ({ ...tool }));
   }
 }
+
+// ── 旧名（deprecated 别名，P9 起改用上面的名字）──────────────────────────────
+// 这三个别名只为兼容外部引用而存在；仓库内部一律用新名。
+
+/** @deprecated 与 MCP 协议无关，改用 `HttpConnector`。 */
+export const MCPConnector = HttpConnector;
+/** @deprecated 与 MCP 协议无关，改用 `HttpConnector`。 */
+export type MCPConnector = HttpConnector;
+/** @deprecated 改用 `HttpConnectorConfig`。 */
+export type MCPConnectorConfig = HttpConnectorConfig;
+/** @deprecated 改用 `HttpTool`。 */
+export type MCPTool = HttpTool;

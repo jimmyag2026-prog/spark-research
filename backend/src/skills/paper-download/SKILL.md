@@ -3,6 +3,9 @@ name: paper-download
 description: "下载库内论文的开放获取（OA）PDF：解析 arXiv /pdf/ 直链、Europe PMC fullTextPdf、OpenAlex best_oa_location 三类候选，落盘到项目 papers/ 目录并记录 sha256 checksum。拿不到时明确标注不可得原因（403 / 无 OA / 非 PDF）并写回库，不重试轰炸。"
 category: literature
 domain: A
+triggers: [下载这篇论文, 把 PDF 拿到本地, 库里哪些论文有全文, 补全文献库的 PDF]
+connectors: [openalex, europepmc, arxiv]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts]
 allowed-tools: [Bash, Read]
 ---
 

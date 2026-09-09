@@ -15,7 +15,7 @@
 6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
 7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
 8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
-9. **阶段性成果及时保存**（P7 后新增，用户要求）：每完成一个逻辑块就 commit **并 push feature 分支**到远端。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
+9. **阶段性成果及时保存**（P7 后新增，用户要求；P9 后加强）：**新分支创建后立即 `git push -u` 建立远端跟踪，再开始写代码**；此后每完成一个逻辑块就 commit 并 push。P9 曾在零 commit 状态遭遇额度中断，差点全丢。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
 
 ---
 
@@ -192,6 +192,11 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 - llms.txt 生成脚本幂等（文档变更后重新生成 diff 干净）
 
 **退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
+
+**P9 完成状态（2026-09-09）**：范围全部落地，见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)。
+机器版退出标准已由 `tests/unit/mcp_e2e.test.ts` 覆盖（真实 MCP 客户端跑通
+capabilities → 检索入库 → idea → novelty → 时间线 → 报告，零网络零真实模型）；
+**人版外部验收（全新 Claude Code 会话接 MCP）留给主会话执行**，tag 与 Release 同。
 
 | 层 | 工具 | 网络 | 运行时机 |
 |----|------|------|---------|

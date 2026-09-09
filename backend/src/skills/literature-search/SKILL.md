@@ -3,6 +3,9 @@ name: literature-search
 description: "跨源文献检索：并发查询 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（以及已配置凭据时的 AMiner），归一化为统一 Paper 模型，按 DOI 与标题模糊匹配去重合并，返回带来源标注的候选清单。用于背景调研、找相关工作、为综述或创新性核验准备候选池。"
 category: literature
 domain: A
+triggers: [找相关工作, 背景调研, 这个领域有哪些工作, 帮我查文献, 为综述准备候选池]
+connectors: [openalex, crossref, europepmc, semanticscholar, aminer]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts, tests/integration/literature_record.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

@@ -58,7 +58,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
             llm: ctx.llm(),
             library,
             records: scope.project.records(),
-            model: ctx.deps.model,
+            model: ctx.model(),
             projectContext: scope.project.meta.description || undefined,
           });
           const turn = await session.turn(message, { sessionId });
@@ -118,7 +118,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
             library,
             records,
             artifacts: scope.project.artifacts(),
-            model: ctx.deps.model,
+            model: ctx.model(),
             workDir: scope.project.paths.artifactsDir,
             sources,
             perSource,

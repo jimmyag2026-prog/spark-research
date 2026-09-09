@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { file } from "bun";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
+import { buildCapabilities } from "../capabilities";
 import { ProtocolCompiler, validateProtocol } from "../lab/protocol";
 import type { Protocol } from "../lab/protocol";
 import { LabSafetyGate } from "../lab/orchestrator";
@@ -88,6 +89,20 @@ export function createApp(deps: ServerDeps = {}): Hono {
   app.get("/api/health", (c) => c.json({ status: "ok", service: "spark-research", version: PACKAGE_VERSION }));
 
   app.get("/api/connectors", (c) => c.json({ connectors: ctx.connectors.listAll() }));
+
+  // 能力自描述（P9）。UI、CLI、MCP 三个消费者共用同一份生成结果——
+  // `?probe=1` 才会真去 spawn 子进程探测本地仿真平台/湿实验后端的安装情况。
+  app.get("/api/capabilities", async (c) => {
+    const probe = c.req.query("probe") === "1" || c.req.query("probe") === "true";
+    return c.json(
+      await buildCapabilities({
+        probe,
+        root: deps.root,
+        connectors: ctx.connectors,
+        credentials: ctx.credentials(),
+      }),
+    );
+  });
 
   app.post("/api/chat", async (c) => {
     const req = await c.req.json<ChatRequest>();

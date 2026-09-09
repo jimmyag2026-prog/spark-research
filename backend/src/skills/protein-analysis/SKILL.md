@@ -3,6 +3,9 @@ name: protein-analysis
 description: "蛋白结构调研链路：UniProt 查询确定身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与 pLDDT 置信度 → 给出「拿哪个结构去做下游计算」的判断。用于「这个蛋白长什么样」「有没有可用的结构」「AlphaFold 模型信得过吗」。"
 category: experiment
 domain: B
+triggers: [这个蛋白长什么样, 有没有可用的结构, AlphaFold 模型信得过吗, 查一下这个 UniProt]
+connectors: [uniprot, pdb, alphafold]
+validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

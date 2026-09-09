@@ -3,6 +3,9 @@ name: literature-review
 description: "综述全链路：检索 → 入库 → 逐篇精读卡 → 综述草稿 → 引用真伪核验。每条引用都必须能回链到项目文献库内的真实论文；伪造引用与库外引用会被 citation-integrity 检查器 veto。用于写文献综述、相关工作章节、背景调研报告。"
 category: literature
 domain: A
+triggers: [写一篇综述, 相关工作章节, 把这些论文串成一段叙述, 帮我核对引用是不是真的]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/reading.test.ts, tests/unit/review.test.ts, tests/unit/review_e2e.test.ts, tests/unit/citation_integrity.test.ts, tests/unit/citation_adversarial.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

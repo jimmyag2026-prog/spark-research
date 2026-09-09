@@ -16,6 +16,12 @@ import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
 import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
+import { runConfigCommand } from "./config/cli";
+import { applyConfigEnvDefaults } from "./config";
+import { runCapabilitiesCommand } from "./capabilities/cli";
+import { runNewCommand } from "./scaffold/cli";
+import { runMcpStdio } from "./mcp/server";
+import { MCP_TOOLS } from "./mcp/tools";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -32,6 +38,10 @@ const HELP = `Spark Research v${pkg.version}
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
+  spark-research capabilities 能力自描述（--json 给 agent，不带则给人看的表格）
+  spark-research config      用户配置（list / get / set / unset / path）
+  spark-research new         脚手架（new skill|connector|platform <name>）
+  spark-research mcp         以 MCP server 模式运行（stdio），供外部 agent 接入
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
   spark-research server      启动 Web 服务（默认 4321）
@@ -240,6 +250,9 @@ async function chatOnce(message: string) {
 }
 
 function main() {
+  // config.json 里的非凭据设置补进 env（已有 env 不动）——礼貌头这类在很深的调用栈里
+  // 只读 env 的配置靠这一步生效，优先级仍是 env > config.json（P9 配置面收口）。
+  applyConfigEnvDefaults();
   const cmd = process.argv[2];
   switch (cmd) {
     case undefined:
@@ -308,6 +321,33 @@ function main() {
     case "report": {
       runReportCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "config": {
+      const code = runConfigCommand(process.argv.slice(3));
+      if (code !== 0) process.exitCode = code;
+      break;
+    }
+    case "new": {
+      const code = runNewCommand(process.argv.slice(3));
+      if (code !== 0) process.exitCode = code;
+      break;
+    }
+    case "capabilities":
+    case "caps": {
+      runCapabilitiesCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "mcp": {
+      // stdio 传输：**绝不能往 stdout 写任何非协议内容**，否则客户端解析 JSON-RPC 会挂。
+      // 提示信息一律走 stderr。
+      console.error(`Spark Research MCP server v${pkg.version}（stdio）— 暴露 ${MCP_TOOLS.length} 个工具`);
+      runMcpStdio().catch((error) => {
+        console.error(`MCP server 启动失败: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
       });
       break;
     }

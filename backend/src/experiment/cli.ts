@@ -1,3 +1,4 @@
+import { configuredSimulationPlatform } from "../config";
 import { ProjectError, ProjectManager, type Project } from "../project/manager";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
 import { ExperimentLoop } from "./loop";
@@ -119,7 +120,8 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
         }
         project = manager.defaultProject();
         const loop = makeLoop(project, deps);
-        const platform = flagString(flags.platform) ?? DEFAULT_SIMULATION_PLATFORM;
+        // --platform 显式 > 用户 config.json > 代码默认（P9 配置面收口）。
+        const platform = flagString(flags.platform) ?? configuredSimulationPlatform(DEFAULT_SIMULATION_PLATFORM);
         const kind = flagString(flags.kind) ?? defaultKindFor(platform, deps, project);
         const view = await loop.design({
           title,

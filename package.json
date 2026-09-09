@@ -17,7 +17,9 @@
     "test:integration": "bun test tests/integration",
     "test:lab": "bun test tests/lab",
     "test:py": "python -m pytest tests/",
-    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts"
+    "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
+    "gen:llms": "bun scripts/gen-llms-txt.ts",
+    "check:llms": "bun scripts/gen-llms-txt.ts --check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

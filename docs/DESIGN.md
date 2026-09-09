@@ -342,7 +342,8 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 ┌────────────────────────────────────────────────────────────┐
 │  界面层                                                      │
 │  CLI（完整功能）· Web 工作台（项目导航+会话+时间线+实验面板）    │
-│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 是它的投影）     │
+│  MCP server（P9：24 工具，外部 agent 接入；审批类刻意不暴露）    │
+│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 与 MCP 都是投影） │
 ├────────────────────────────────────────────────────────────┤
 │  Agent 层（TypeScript）                                      │
 │  research agent（唯一用户可见）                               │
@@ -366,6 +367,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 │    experiments/<platform>/{prepared,runs}/  (P5 仿真状态真源)  │
 │  ~/.spark-research/state.json (当前项目 + session→project)    │
 │  ~/.spark-research/credentials.json (0600, daemon-only)      │
+│  ~/.spark-research/config.json (P9：配置真源，env > file > 默认)│
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -381,6 +383,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
 | AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
+| AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」。<br>**主会话裁定（v0.2.0）**：MCP 工具清单是**能力声明，不是访问控制**。真正的访问控制在别处（daemon 的 permit set、文件权限、物理设备要人去按）。一个有 Bash 权限的 agent 确实能绕道调 CLI——承认这一点，不假装挡得住。这条边界起的作用是另外三件事：**默认路径**（agent 的第一反应是「我有哪些工具」，自动批准不在默认可达集合里）、**意图显性化**（绕道要主动构造命令，是一个「我知道我在绕过设计」的留痕动作，用户在 permission 层看得见）、**责任归属**（经 MCP 调用是我们授权的能力；经 Bash 绕过是用户授予 Bash 权限的后果）。所以它是纵深防御的一层，不是唯一一层——说它能挡住有意绕过者是安全剧场，但说「反正能绕过所以不该做」同样错：默认值决定 99% 的行为。若要真正堵住绕道，正确做法不是加固 MCP 层，而是在 CLI 层要求审批必须来自可交互终端（见 BACKLOG V19） |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 
@@ -400,8 +403,18 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 ### 5.4 模型路由
 
 - 保持模型无关（现有 LLMRouter：kimi/openai/anthropic/deepseek/qwen/openrouter）
-- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）
+- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）。P9 核对：这一层目前是**代码内配置**，暴露成用户配置项记在 BACKLOG V16
 - 默认模型保持 OpenRouter 路由，用户 BYOK
+
+## 5.5 扩展面与自描述（P9）
+
+- **六个扩展点**（Skill / Connector / SimulationPlatform / WetLabBackend / 安全门规则 / Prompt 与模型路由）的契约、最小可运行示例、测试方法与文件位置见 [EXTENDING.md](EXTENDING.md)
+- **脚手架**：`spark-research new skill|connector|platform`，生成的测试桩当场可跑（CI 真跑一遍）
+- **能力自描述**：`spark-research capabilities [--json] [--probe]`，**全部从真实注册表生成**并有双向一致性测试（清单里的每一项可实例化；注册表里的每一项都在清单里）。可用性分静态档（零 IO）与探测档（spawn 子进程）两层，不混
+- **配置面收口**：`~/.spark-research/config.json` + 一张设置表（`backend/src/config/index.ts`）作单一真源，优先级 env > config.json > 默认值；凭据与设置同文件但标 `secret`，值永不打印、永不进 env
+- **SKILL.md frontmatter 规范化**：新增 `triggers` / `connectors` / `validation` 三个必填字段，schema 校验进 CI；`validation` 让 AD-5 从口号变成一道门（校验器去磁盘核对测试文件存在）
+- **llms.txt / llms-full.txt**：由 `bun run gen:llms` 幂等生成，CI 守与文档同步
+- **命名修正**：connector 基类 `MCPConnector` → `HttpConnector`（与 MCP 协议无关，是 v0.1 的历史包袱）。旧名保留 deprecated 别名，移除记在 BACKLOG V15
 
 ---
 
@@ -432,3 +445,14 @@ P8 核验结论（逐条证据见 [devlog/P8-wrapup.md](devlog/P8-wrapup.md)）�
 | 2 湿实验路径 | ✅ | `tests/unit/wet_e2e.test.ts` 两类协议在**真** `opentrons.simulate` 下执行；安全门 4 条规则对抗矩阵；Playwright ⑦⑧⑨ 走浏览器版 |
 | 3 测试基线 | ✅ | 单元 706（基线 84 → 655 → 706；P8 删除 v0.1 compute 模块的 12 条属 G6 授权清理）· pytest 48 · Playwright 12 · typecheck 干净 |
 | 4 文档 | ✅ | README 重写、CHANGELOG v0.2.0、9 篇 devlog、本文档随实现更新 |
+
+P9 追加核验（扩展面与 LLM 友好化，逐条证据见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)）：
+
+| 项 | 结论 | 证据 |
+|----|------|------|
+| 六个扩展点有文档且示例可跑 | ✅ | [EXTENDING.md](EXTENDING.md) 六节；skill/connector/platform 示例=脚手架产物，CI 生成后真跑；安全门规则示例 `examples/extending/flammable_over_heat_rule.ts` 带 11 例（含阴性对照） |
+| 能力清单从注册表生成 | ✅ | `tests/unit/capabilities.test.ts` 双向一致（19 例） |
+| MCP 可被真实客户端跑通 | ✅ | `tests/unit/mcp_e2e.test.ts` 用 SDK Client + InMemoryTransport 走完 capabilities → 检索入库 → idea → novelty → 时间线 → 报告 |
+| 审批类动作在 MCP 层不可达 | ✅ | `tests/unit/mcp_server.test.ts` 对抗组，含遍历全部工具请求构造的结构性防线 |
+| llms.txt 幂等 | ✅ | `tests/unit/llms_txt.test.ts`（含「改了文档忘了重新生成 → 红」这道门） |
+| 测试基线 | ✅ | 单元 716 → 824（+108）· pytest 48 · Playwright 12 · typecheck 干净 |

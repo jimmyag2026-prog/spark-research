@@ -1,11 +1,11 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 
 // 国家基因组科学数据中心（CNCB/NGDC）
 // 真实 API：
 //   - GWH API: https://ngdc.cncb.ac.cn/gwh/api/public/genome/<id> / assembly/<acc> / bioProject/<acc> / bioSample/<acc>
 //   - GenBase REST: https://ngdc.cncb.ac.cn/genbase/api/file/fasta?acc=<id>（下载序列）
 //   - BIG Search: https://ngdc.cncb.ac.cn/search/（AND/OR/NOT 查询语法）
-export const cncbConfig: MCPConnectorConfig = {
+export const cncbConfig: HttpConnectorConfig = {
   baseUrl: "https://ngdc.cncb.ac.cn/gwh/api/public",
   description: "国家基因组科学数据中心（CNCB/NGDC，中国）",
   tools: [
@@ -17,7 +17,7 @@ export const cncbConfig: MCPConnectorConfig = {
   metadata: { domain: "ngdc.cncb.ac.cn", apiKeyRequired: false, status: "available" },
 };
 
-export class CNCBConnector extends MCPConnector {
+export class CNCBConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("cncb", cncbConfig, options);
   }
@@ -28,32 +28,42 @@ export class CNCBConnector extends MCPConnector {
 //   - ExquisiteCore/cnki-search (Go): 访问 https://kns.cnki.net/kns8s/brief/grid（POST QueryJson）
 //   - slender0923/cnki-mcp: MCP server，15 种搜索类型
 // 当前为占位：接入官方 API key 后可直接使用，或封装社区开源方案
-export const cnkiConfig: MCPConnectorConfig = {
+export const cnkiConfig: HttpConnectorConfig = {
   baseUrl: "https://kns.cnki.net/kns8s",
   description: "中国知网（CNKI）文献数据库（社区方案或官方API，需申请）",
   tools: [
     { name: "search", description: "检索知网文献（需通过 kns8s/brief/grid 或官方API）", endpoint: "/brief/grid", method: "POST" },
   ],
-  metadata: { domain: "cnki.net", apiKeyRequired: true, status: "placeholder" },
+  metadata: {
+    domain: "cnki.net",
+    apiKeyRequired: true,
+    status: "placeholder",
+    caveat: "占位实现：无公开 API 渠道，调用会失败。中文文献主路径请用 aminer",
+  },
 };
 
-export class CNKIConnector extends MCPConnector {
+export class CNKIConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("cnki", cnkiConfig, options);
   }
 }
 
 // 万方数据：官方 Web API 需企业授权/API key，当前为占位配置
-export const wanfangConfig: MCPConnectorConfig = {
+export const wanfangConfig: HttpConnectorConfig = {
   baseUrl: "https://api.wanfangdata.com.cn",
   description: "万方数据（万方，中国）",
   tools: [
     { name: "search", description: "检索万方文献", endpoint: "/search" },
   ],
-  metadata: { domain: "wanfangdata.com.cn", apiKeyRequired: true, status: "placeholder" },
+  metadata: {
+    domain: "wanfangdata.com.cn",
+    apiKeyRequired: true,
+    status: "placeholder",
+    caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中文文献主路径请用 aminer",
+  },
 };
 
-export class WanFangConnector extends MCPConnector {
+export class WanFangConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("wanfang", wanfangConfig, options);
   }

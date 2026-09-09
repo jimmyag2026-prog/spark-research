@@ -268,7 +268,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             llm: ctx.llm(),
             library,
             records: scope.project.records(),
-            model: ctx.deps.model,
+            model: ctx.model(),
             projectContext: scope.project.meta.description || undefined,
           });
           task.progress(0, targets.length, `精读 ${targets.length} 篇`);
@@ -313,7 +313,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             library,
             records,
             artifacts: scope.project.artifacts(),
-            model: ctx.deps.model,
+            model: ctx.model(),
             workDir: scope.project.paths.artifactsDir,
           });
           const draft = await generator.generate(cards, { topic, sessionId });
@@ -322,7 +322,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             draft: draft.markdown,
             knownKeys: libraryKeyIndex(library.list()).keys,
             baselines: baselinesFrom(cards),
-            judge: useJudge ? (ctx.deps.judge ?? new LlmCitationJudge(llm, ctx.deps.model)) : undefined,
+            judge: useJudge ? (ctx.deps.judge ?? new LlmCitationJudge(llm, ctx.model())) : undefined,
             artifactId: draft.artifactId ?? "",
             location: "text/markdown",
           });

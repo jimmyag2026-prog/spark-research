@@ -3,6 +3,9 @@ name: research-report
 description: "研究报告导出：把一个项目的证据图（文献 / 思路 / 实验 / 观察 / 结论）渲染成带证据链接的 Markdown 报告，结论区受结论卡 review 门槛约束。用于「把这段时间做的事整理成一份能给人看的报告」「导出一份每条结论都能回溯到原始记录的材料」。也用于评审结论卡本身（review 门槛的操作入口）。"
 category: report
 domain: C/E
+triggers: [整理成一份报告, 导出研究报告, 评审这张结论卡, 这个结论能不能写进论文]
+connectors: []
+validation: [tests/unit/report_export.test.ts, tests/unit/conclusion_review.test.ts, tests/unit/conclusion_rules.test.ts, tests/unit/demo_thread.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

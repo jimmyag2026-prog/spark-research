@@ -3,6 +3,10 @@ name: dry-experiment
 description: "干实验（in silico）闭环：从一个假设出发设计仿真算例 → 提交到仿真平台 → 回收产出进 artifact → 产出 observation → 迭代或下结论。全程状态持久化，编排进程被杀也能续跑。用于「这个想法能不能先在计算机上验一遍」「跑一个 MD / ODE 算例并把结果留成证据」。"
 category: experiment
 domain: B
+triggers: [先在计算机上验一遍, 跑一个 MD 算例, 设计一个仿真, 实验跑挂了能不能续跑]
+connectors: []
+platforms: [pyref, openmm]
+validation: [tests/unit/experiment.test.ts, tests/unit/experiment_e2e.test.ts, tests/unit/simulation_contract.test.ts, tests/sim/oscillator.test.py]
 allowed-tools: [Bash, Read, Write]
 ---
 

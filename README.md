@@ -36,6 +36,8 @@
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
 
+外部 agent 可以经 **MCP** 把整个工作台当工具箱接入（`spark-research mcp`），见下方「扩展与接入」。
+
 界面上，CLI 与 HTTP API 是能力真源，Web 工作台是它们的投影（AD-7）——
 UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（有对照测试守着）。
 
@@ -162,6 +164,7 @@ bun test tests/unit/     # 单元 + 契约 + fixture 回放 e2e
 bun test tests/integration/
 bun run test:py          # pytest（仿真 kernel + Opentrons 后端）
 bun run test:e2e         # Playwright 浏览器全流程（会自动构建前端）
+bun run check:llms       # llms.txt 是否与当前文档同步
 ```
 
 LLM 与网络在测试里一律走 fake / 录制回放，**没有一条 CI 路径打真实模型或外部 API**。
@@ -169,21 +172,70 @@ LLM 与网络在测试里一律走 fake / 录制回放，**没有一条 CI 路�
 
 ---
 
-## 扩展（v0.3 预告）
+## 扩展与接入
 
-六个扩展点已经在架构上就位，`docs/EXTENDING.md` 与脚手架命令排在下一阶段（P9）：
+六个扩展点，每个都有契约 + 最小可运行示例 + 测试方法 + 文件位置：**[docs/EXTENDING.md](docs/EXTENDING.md)**。
 
-| 扩展点 | 现在的位置 | 加一个新的要写什么 |
-|--------|-----------|------------------|
-| Skill | `backend/src/skills/<name>/SKILL.md` | 一份带 frontmatter 的说明 + 配套 e2e（AD-5：没有验证不算完成） |
-| Connector | `backend/src/connectors/` | 实现 Connector 契约；要 key 就走 CredentialStore |
-| 仿真平台 | `backend/src/simulation/<id>/` | 实现 `SimulationPlatform`，直接复用现成的契约测试套件当验收 |
-| 湿实验后端 | `backend/src/lab/wet_backend.ts` | 同设备族即插即用；换设备族要把「结构化步骤→设备语言」下沉进 backend |
-| 安全门规则 | `backend/src/lab/orchestrator.ts` | 一个纯函数 + 一条对抗单测 |
+| 扩展点 | 位置 | 加一个新的要写什么 |
+|--------|------|------------------|
+| Skill | `backend/src/skills/<name>/SKILL.md` | 带规范化 frontmatter 的说明 + 配套验证（AD-5：`validation` 字段由 CI 去磁盘核对） |
+| Connector | `backend/src/connectors/` | 一份 `HttpConnectorConfig`；要 key 就走 CredentialStore（AD-2） |
+| 仿真平台 | `backend/src/simulation/<id>/` | 实现 `SimulationPlatform`，**直接复用现成契约测试套件当验收** |
+| 湿实验后端 | `backend/src/lab/wet_backend.ts` | 同设备族即插即用；换设备族按 EXTENDING 第 4 节的五步施工说明 |
+| 安全门规则 | `backend/src/lab/safety.ts` | 一个纯函数 + 一条对抗单测 + 一条阴性对照 |
 | Prompt 与模型路由 | `backend/src/agents/prompt/` | 双层 prompt（core + workflow），子代理可配独立模型 |
 
-P9 还会补：`spark-research capabilities --json`（机器可读能力清单）、
-llms.txt / llms-full.txt、MCP server 模式（把工作台当工具箱接入任意 MCP 客户端）。
+三个扩展点有脚手架，生成的测试桩当场能跑（CI 里真跑一遍）：
+
+```bash
+spark-research new skill <name>
+spark-research new connector <name> [--with-key]
+spark-research new platform <name>
+```
+
+### 能力自描述
+
+```bash
+spark-research capabilities            # 人看的表格
+spark-research capabilities --json     # agent 看的清单：schema + 可用性状态
+spark-research capabilities --probe    # 真去探测 openmm / opentrons 装没装
+```
+
+清单**从真实注册表生成**（有双向一致性测试守着），不是手写的。你接进来的东西注册之后自动出现。
+
+### 用户配置
+
+`~/.spark-research/config.json` 是配置真源，优先级 **环境变量 > config.json > 默认值**：
+
+```bash
+spark-research config list       # 每一项都写清「当前值 / 来源 / 改了影响什么」
+spark-research config set contactEmail you@lab.edu
+```
+
+凭据与设置同文件，但 `config list` 只显示「已设置 / 未设置」，值永不打印。
+
+### 作为 MCP 工具箱接入外部 agent
+
+```bash
+spark-research mcp    # stdio 传输
+```
+
+```json
+{ "mcpServers": { "spark-research": { "command": "spark-research", "args": ["mcp"] } } }
+```
+
+暴露 24 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告）。
+接入后第一步调 `research_capabilities`。
+
+**`lab approve` / `lab reject` / `lab simulate` / `conclusion review` 刻意不暴露为 MCP 工具**：
+若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，approve gate 退化成注释（AD-6）。
+`lab_compile` 会停在 `awaiting_approval` 并在返回体里写清「需要人执行哪条命令」。
+这条边界有结构性测试守着——遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点。
+
+### 给外部 LLM 读的文本
+
+[`llms.txt`](llms.txt)（索引）与 [`llms-full.txt`](llms-full.txt)（全量文档 + 技能手册 + MCP 工具描述），
+由 `bun run gen:llms` 生成，幂等且有 CI 门守着与文档同步。
 
 ---
 

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { configuredWetBackend } from "../config";
 import { ExperimentLoop } from "../experiment/loop";
 import { ProjectError, ProjectManager, type Project } from "../project/manager";
 import { SimulationRegistry } from "../simulation/registry";
@@ -83,7 +84,8 @@ function makeLoop(project: Project, deps: LabCliDeps, backendId?: string): WetLa
     records: project.records(),
     artifacts: project.artifacts(),
     root: join(project.paths.experimentsDir, "wet"),
-    backend: deps.backend ?? wetBackend(backendId ?? DEFAULT_WET_BACKEND),
+    // 默认后端的解析顺序：--backend 显式 > 用户 config.json > 代码默认（P9 配置面收口）。
+    backend: deps.backend ?? wetBackend(backendId ?? configuredWetBackend(DEFAULT_WET_BACKEND)),
   });
 }
 
