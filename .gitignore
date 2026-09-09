@@ -15,3 +15,7 @@ logs/
 # P2: PDF 本体不入库（只有 fixture 里的截断样本进 git）
 papers/
 *.pdf
+
+# P7: Playwright 产物（trace/截图/报告）不入库
+test-results/
+playwright-report/

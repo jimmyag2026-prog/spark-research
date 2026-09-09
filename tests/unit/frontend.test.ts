@@ -63,7 +63,7 @@ describe("静态托管 · 已构建", () => {
   test("API 路由与静态资源并存；未知 /api/* 回 JSON 404 而不是 HTML", async () => {
     const health = await fetch(`${base()}/api/health`);
     expect(health.status).toBe(200);
-    expect((await health.json()).status).toBe("ok");
+    expect(((await health.json()) as { status: string }).status).toBe("ok");
     const unknown = await fetch(`${base()}/api/nonexistent`);
     expect(unknown.status).toBe(404);
     expect(unknown.headers.get("content-type")).toContain("application/json");
