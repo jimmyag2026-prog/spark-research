@@ -3,6 +3,7 @@ import { BottomPanel } from "./components/bottom";
 import { CenterPanel } from "./components/center";
 import { LeftPanel } from "./components/left";
 import { RightPanel } from "./components/right";
+import { api } from "./lib/api";
 import { Badge, Spinner } from "./components/ui";
 import { useWorkspace, WorkspaceProvider } from "./state";
 
@@ -83,6 +84,17 @@ function Shell(): JSX.Element {
         <span class="spacer" />
         <Show when={ws.busy()}>
           <Spinner label={ws.busy()!} />
+        </Show>
+        <Show when={ws.project()}>
+          {/* 导出走 GET /api/report?format=markdown：浏览器直接下载，前端不复制一份渲染逻辑。 */}
+          <a
+            class="btn btn-sm"
+            href={api.report.markdownUrl(ws.slug())}
+            download=""
+            title="导出研究报告（Markdown，结论区受 review 门槛约束）"
+          >
+            导出报告
+          </a>
         </Show>
         <ThemeToggle />
       </header>

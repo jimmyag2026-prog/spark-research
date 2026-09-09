@@ -10,6 +10,7 @@ import {
 import { createStore } from "solid-js/store";
 import { api } from "./lib/api";
 import type {
+  ConclusionCard,
   DryExperiment,
   IdeaCard,
   LibraryPaper,
@@ -32,6 +33,7 @@ export type CenterView =
   | { kind: "papers" }
   | { kind: "cards" }
   | { kind: "ideas" }
+  | { kind: "conclusions" }
   | { kind: "artifacts" };
 
 export interface StreamMessage {
@@ -61,6 +63,7 @@ interface WorkspaceValue {
   papers: Resource<{ papers: LibraryPaper[]; citations: number }>;
   cards: Resource<{ cards: ReadingCard[] }>;
   ideas: Resource<{ ideas: IdeaCard[] }>;
+  conclusions: Resource<{ conclusions: ConclusionCard[]; total: number }>;
   dry: Resource<{ experiments: DryExperiment[] }>;
   wet: Resource<{ experiments: WetExperiment[] }>;
   artifacts: Resource<{ artifacts: Array<{ id: string; filename: string; createdAt: string; version: number }> }>;
@@ -69,7 +72,7 @@ interface WorkspaceValue {
 
   // 一次动作可能同时影响 record 时间线与某个域列表，所以给一个「全刷」。
   refreshAll: () => void;
-  refreshDomain: (domain: "papers" | "cards" | "ideas" | "dry" | "wet" | "artifacts") => void;
+  refreshDomain: (domain: "papers" | "cards" | "ideas" | "conclusions" | "dry" | "wet" | "artifacts") => void;
 
   view: Accessor<CenterView>;
   setView: (view: CenterView) => void;
@@ -104,6 +107,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
   const [papers, papersCtl] = createResource(slug, (s) => api.lit.papers(s));
   const [cards, cardsCtl] = createResource(slug, (s) => api.lit.cards(s));
   const [ideas, ideasCtl] = createResource(slug, (s) => api.ideas.list(s));
+  const [conclusions, conclusionsCtl] = createResource(slug, (s) => api.conclusions.list(s));
   const [dry, dryCtl] = createResource(slug, (s) => api.experiments.list(s));
   const [wet, wetCtl] = createResource(slug, (s) => api.lab.list(s));
   const [artifacts, artifactsCtl] = createResource(slug, (s) => api.artifacts.list(s));
@@ -143,6 +147,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
       papers: papersCtl,
       cards: cardsCtl,
       ideas: ideasCtl,
+      conclusions: conclusionsCtl,
       dry: dryCtl,
       wet: wetCtl,
       artifacts: artifactsCtl,
@@ -160,6 +165,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
     void papersCtl.refetch();
     void cardsCtl.refetch();
     void ideasCtl.refetch();
+    void conclusionsCtl.refetch();
     void dryCtl.refetch();
     void wetCtl.refetch();
     void artifactsCtl.refetch();
@@ -180,6 +186,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
     papers,
     cards,
     ideas,
+    conclusions,
     dry,
     wet,
     artifacts,

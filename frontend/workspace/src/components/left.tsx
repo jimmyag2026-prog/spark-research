@@ -169,6 +169,13 @@ export function LeftPanel(): JSX.Element {
             onSelect={() => ws.setView({ kind: "ideas" })}
           />
           <NavItem
+            label="结论"
+            count={ws.conclusions()?.total}
+            view="conclusions"
+            current={ws.view().kind === "conclusions"}
+            onSelect={() => ws.setView({ kind: "conclusions" })}
+          />
+          <NavItem
             label="产物"
             count={ws.artifacts()?.artifacts.length}
             view="artifacts"

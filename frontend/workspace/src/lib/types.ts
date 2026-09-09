@@ -216,3 +216,59 @@ export interface ArtifactVersion {
   createdAt: string;
   producingCellId: string | null;
 }
+
+// P8：结论卡与研究报告。字段与 backend/src/conclusion/models.ts 一一对应
+// （UI 不推导任何后端没给的状态）。
+export interface ConclusionFinding {
+  rule: string;
+  severity: "hard" | "soft";
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface ConclusionReviewStamp {
+  state: "pending" | "approved" | "vetoed";
+  at: string | null;
+  actor: string | null;
+  actorSource: string | null;
+  hardCount: number;
+  softCount: number;
+  findings: ConclusionFinding[];
+  reason: string | null;
+  decisionRecordId: string | null;
+}
+
+export interface ConclusionCard {
+  recordId: string;
+  project: string;
+  title: string;
+  claim: string;
+  limitations: string | null;
+  confidence: string | null;
+  mode: "dry" | "wet" | "manual";
+  experimentId: string | null;
+  evidenceIds: string[];
+  review: ConclusionReviewStamp;
+  createdAt: string;
+}
+
+export interface ConclusionAssessment {
+  hardCount: number;
+  softCount: number;
+  wouldApprove: boolean;
+  reconciliation: "bitwise" | "interval" | "unknown";
+  findings: Array<{ rule?: string; severity: "hard" | "soft"; message: string }>;
+  evidence: Array<{ id: string; ok: boolean; simulated: boolean; deterministic: boolean | null; linked: boolean }>;
+}
+
+export interface ReportCounts {
+  papers: number;
+  readings: number;
+  ideas: number;
+  dryExperiments: number;
+  wetExperiments: number;
+  observations: number;
+  approvedConclusions: number;
+  unverifiedConclusions: number;
+  decisions: number;
+}

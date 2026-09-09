@@ -216,6 +216,20 @@ function DryDetail(props: { experiment: DryExperiment }): JSX.Element {
     ws.refreshDomain("dry");
   };
 
+  const [claim, setClaim] = createSignal("");
+  const conclude = async () => {
+    const text = claim().trim();
+    if (!text) return;
+    const done = await withBusy(ws, "写入结论卡", () =>
+      api.experiments.conclude(props.experiment.id, { claim: text }, ws.slug()),
+    );
+    if (!done) return;
+    setClaim("");
+    ws.notify("结论卡已生成（review pending）——去「结论」页评审");
+    ws.refreshDomain("dry");
+    ws.refreshDomain("conclusions");
+  };
+
   return (
     <div class="col">
       <Show when={machine()}>
@@ -239,6 +253,21 @@ function DryDetail(props: { experiment: DryExperiment }): JSX.Element {
           <span style={{ color: "var(--danger)", "font-size": "12px" }}>{props.experiment.lastError}</span>
         </Show>
       </div>
+      {/* 结论卡一律 review=pending 落地（域 E2）——这里只负责写下主张，不给自己发通过证。 */}
+      <Show when={props.experiment.state === "analyze"}>
+        <div class="row wrap">
+          <input
+            class="input"
+            style={{ flex: "1 1 240px" }}
+            placeholder="结论（claim）"
+            value={claim()}
+            onInput={(e) => setClaim(e.currentTarget.value)}
+          />
+          <button class="btn btn-sm" onClick={conclude} disabled={ws.busy() !== null || !claim().trim()}>
+            得出结论
+          </button>
+        </div>
+      </Show>
       <KeyValues
         entries={[
           ["平台", `${props.experiment.platform}/${props.experiment.simKind}`],

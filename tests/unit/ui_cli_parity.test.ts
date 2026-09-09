@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runConclusionCommand } from "../../backend/src/conclusion/cli";
+import { ConclusionStore } from "../../backend/src/conclusion/store";
 import { runExpCommand } from "../../backend/src/experiment/cli";
 import { runLabCommand } from "../../backend/src/lab/cli";
 import { runLitCommand } from "../../backend/src/literature/cli";
@@ -220,6 +222,62 @@ describe("UI ↔ CLI 行为对照", () => {
         expect(titles(httpProject).length).toBeGreaterThan(0);
       } finally {
         httpProject.close();
+        cliAgain.close();
+      }
+    } finally {
+      await fx.stop();
+    }
+  });
+
+  // P8：结论评审在两侧落同样的 record 形状。
+  // 唯一允许的差异是 `actorSource`——CLI 落 $USER 是诚实的（就是这个人敲的命令），
+  // HTTP 必须显式传 actor 并记 `http:explicit`（AD-6 的 P7 补充 / BACKLOG V10）。
+  test("结论评审：两边落同形状的 decision record，只有 actorSource 按设计不同", async () => {
+    const seed = (project: Project): string => {
+      const records = project.records();
+      const obs = records.create({
+        type: "observation",
+        title: "观察",
+        content: "# 观察\n\nn=30，衰减常数缩短 3.1 倍（p=0.002）。",
+        evidence: "computed",
+        metadata: { kind: "simulation_summary", runId: "r1", experimentId: "e1", deterministic: true },
+      });
+      return new ConclusionStore(records).create({ claim: "阻尼升高使衰减更快", evidenceIds: [obs.id] }).recordId;
+    };
+
+    const cli = cliWorkspace("parity-concl");
+    const cliProject = cli.manager.open("parity-concl");
+    const cliCardId = seed(cliProject);
+    cliProject.close();
+    expect(
+      await runConclusionCommand(["review", cliCardId, "--actor", "张三"], { manager: cli.manager, ...cli.sink }),
+    ).toBe(0);
+
+    const fx = makeServer({ slug: "parity-concl" });
+    try {
+      const httpProject = fx.manager.open(fx.project.slug);
+      const httpCardId = seed(httpProject);
+      httpProject.close();
+      const res = await fx.post<{ approved: boolean }>(`/api/conclusions/${httpCardId}/review`, { actor: "张三" });
+      expect(res.body.approved).toBe(true);
+
+      const httpAgain = fx.manager.open(fx.project.slug);
+      const cliAgain = cli.manager.open("parity-concl");
+      try {
+        expect(graphShape(httpAgain)).toEqual(graphShape(cliAgain));
+        const stamp = (project: Project) => {
+          const card = new ConclusionStore(project.records()).get(
+            project === cliAgain ? cliCardId : httpCardId,
+          )!;
+          return { state: card.review.state, actor: card.review.actor, hardCount: card.review.hardCount };
+        };
+        expect(stamp(httpAgain)).toEqual(stamp(cliAgain));
+        const source = (project: Project, id: string) =>
+          new ConclusionStore(project.records()).get(id)!.review.actorSource;
+        expect(source(cliAgain, cliCardId)).toBe("explicit");
+        expect(source(httpAgain, httpCardId)).toBe("http:explicit");
+      } finally {
+        httpAgain.close();
         cliAgain.close();
       }
     } finally {
