@@ -48,7 +48,7 @@ lane → integration → 一个 PR。四条 lane 的纪律零违反。
 
 | # | 发现 | 来源 |
 |---|---|---|
-| V22 | **`protein-analysis` 技能没有任何生产入口**——有 SKILL.md、12 个 e2e、被 DESIGN 列为 10 技能之一，但无 CLI / HTTP / MCP，不在 capabilities。**AD-5「有 e2e 就算完成」被纸面满足了** | D-12 门禁首次运行 |
+| V22 | **`capabilities` 对外广播了一个无法调用的技能**——`protein-analysis` 在 `capabilities --json` 里带完整描述、`triggers`、connector 清单与 `validation` 列表，而 CLI / HTTP / MCP **三个入口全无**。外部 agent 读了 triggers 会确信自己能调用它。**不是完整性缺口，是自描述面撒谎**（AD-12 的直接违反） | D-12 门禁首次运行 + v0.4 制订时的可达性矩阵实测 |
 | V23 | 湿实验 `unconsumedWarnings` 只在 CLI 强制显示，**HTTP / Web 审批面没接** | lane D-d 交付说明 |
 | V25 | `concentration_limit` / `biosafety` 在自然语言主管线上**仍然空转** | lane D-d，D-8 的授权范围 |
 | V24 | `RecordIntegrityError` 没有「人工确认后修复」的恢复路径 | lane D-d |
@@ -137,9 +137,14 @@ P16  文献域补强（arXiv/PubMed 走 manifest = 扩展机制的真实验收�
 
 #### R-d：可达性闸门（新增，独立 lane）
 
-**问题**：D-12 门禁首次运行就抓到 `protein-analysis` 有 SKILL.md、有 12 个 e2e、
-被 DESIGN 列为 10 技能之一，**却没有任何生产入口**。
-AD-5「每个技能必须有配套 e2e 验证才算完成」在这里被**纸面满足**了：有 e2e，但没人能用。
+**问题**（v0.4 制订时实测了全部 10 个技能的可达性矩阵，结论比初判严重）：
+`protein-analysis` 是 10 个里**唯一 CLI / HTTP / MCP 三个入口全无**的，也是唯一 SKILL.md 里没有 CLI 示例的。
+而 `capabilities --json` **照常把它当可用能力广播**——带描述、`triggers`（「这个蛋白长什么样」
+「有没有可用的结构」）、connector 清单、`validation` 文件列表。外部 agent 读了 triggers 会确信能调用它。
+
+所以这不是「少个入口」，是**自描述面在对外撒谎**——AD-12 的直接违反，而现有门禁只查孤儿模块、
+没查技能可达性。AD-5「每个技能必须有配套 e2e 验证才算完成」在这里也被**纸面满足**了：有 e2e，但没人能用。
+（附带：它列的 `validation` 第二项属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。）
 
 **AD-5 收紧为**（写入 DESIGN）：
 
