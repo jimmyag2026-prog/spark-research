@@ -290,7 +290,7 @@ export interface StageStatus { done: boolean; evidence: string[]; reason: string
 | `read_cards` | 进入综述的每篇 paper 都有对应 `reading` record（集合包含关系） |
 | `citations_verified` | 存在 `citation-integrity` 的 review 记录，且零 hard finding |
 
-> **写进 DESIGN 作 AD-9**：*任务完成判定必须由确定性代码对证据图查询得出，
+> **写进 DESIGN 作 AD-10**：*任务完成判定必须由确定性代码对证据图查询得出，
 > 不得由模型自报。* 这是 AD-8（模型给结论处必有确定性约束层）在**编排层**的直接推论——
 > 两个参照系都没有等价物：Claude Science 是状态机驱动但判据在模型侧，
 > OpenScience 是 stage 自报。
@@ -408,7 +408,7 @@ spark-research ext verify <path>
 | rule | 纯函数性检查：零 IO、确定性（同输入两次同输出）、无外部状态 |
 | skill | P9 的 frontmatter schema 校验 + 声明的 e2e 存在且能跑（AD-5 的机器化） |
 
-> **写进 DESIGN 作 AD-10**：*扩展「能装上」不算装好，「过得了对应契约测试」才算装好。*
+> **写进 DESIGN 作 AD-11**：*扩展「能装上」不算装好，「过得了对应契约测试」才算装好。*
 > 这把 AD-5（技能必须有 e2e 才算完成）从**开发侧纪律**变成了**运行时门禁**，
 > 也是对 OpenScience「313 技能质量参差」的结构性回答——
 > 我们不限制数量，我们限制**未经验证的数量**。
@@ -452,7 +452,7 @@ spark-research ext verify <path>
 | **Agent loop 对抗** | `tests/unit/agent_loop/` | FakeLLM 脚本化 tool call 序列：① 越权工具被结构化拒绝 ② 预算耗尽 → `stopReason:"budget"` 而非 `done` ③ tool 结果真回灌（断言第二轮 prompt 含第一轮结果）④ **子代理调 `lab_approve` 必被拒**（红线） ⑤ LLM 返回失败 → 任务 `ok:false` 且 summary 不含错误文本（D-4） | 主线 A 的全部承诺 |
 | **扩展恶意矩阵** | `tests/unit/extensions/` | ① manifest 声明 A 却调 B 工具 → 拒 ② 未 grant 却取凭据 → 拒 ③ 声明式 connector 里塞 `file://` / 内网地址 → 拒（SSRF） ④ 扩展抛异常 → 主进程存活、`capabilities` 标 `failed` ⑤ 未过 `ext verify` 的扩展装载时显式警告 | 主线 C 的安全边界 |
 
-### 5.2 确定性判据的对抗测试（AD-9 的自证）
+### 5.2 确定性判据的对抗测试（AD-10 的自证）
 
 - **伪造完成**：FakeLLM 自称「综述已完成」，但图上无 `reading` record → `contract.allDone()` 必须为 false。
 - **无进展停机**：连续两轮工具调用不产生新 record → 循环在第 2 轮停止，报告写明未完成的 stage。
@@ -466,7 +466,7 @@ spark-research ext verify <path>
    （用删除前的 `swarm.ts` 当阴性对照，证明该测试真的能抓到）；
 3. 数字类声称（connector 数 / 技能数 / 端点数）由脚本生成，**不允许手写**。
 
-> **写进 DESIGN 作 AD-11**：*对外声称的每一项能力必须机器可核。*
+> **写进 DESIGN 作 AD-12**：*对外声称的每一项能力必须机器可核。*
 > 评审说「越靠近可信度核心的代码质量越高，越靠近宣传语的代码越虚」——
 > 这条 AD 就是不让这句话在 v0.4 再成立一次。
 
@@ -513,7 +513,7 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 | **P10** | 闸门 D：D-1…D-12 | 2–3 会话 | **4** | **Sonnet 5** | P9 合入 + `v0.2.0` tag | 并发/超时新套件全绿；655 用例零回归 |
 | **P11** | LLM Runtime v2 | 2 会话 | 3（接口先行后） | **Opus 5** | P10 | provider 矩阵契约测试；tool calling / JSON 模式 / 流式 / usage 各一条真实录制回放 |
 | **P12** | ToolBus + 真子代理；删 swarm | 2 会话 | 2 | **Opus 5** | P11 | Agent loop 对抗五条全过；README 宣传语与实现对齐（D-12 门禁） |
-| **P13** | contract + replan + 帧级记账 + findings 状态机 | 2 会话 | 2 | **Opus 5** | P12 | AD-9 对抗测试（伪造完成 / 无进展停机 / 记账诚实）全过 |
+| **P13** | contract + replan + 帧级记账 + findings 状态机 | 2 会话 | 2 | **Opus 5** | P12 | AD-10 对抗测试（伪造完成 / 无进展停机 / 记账诚实）全过 |
 | **P14** | 上手性：npx/单二进制/零参数 UI/向导/依赖分层/demo/本地模型/SSE 流 | 2 会话 | 2 | **Sonnet 5** | P11（流式） | 干净机器外部验收 ②通过 |
 | **P15** | 扩展装载 + 声明式 connector + MCP client + `ext verify` | 2 会话 | 2 | **Opus 5** | P12（ToolBus） | 恶意扩展矩阵全过；`EXTENDING.md` 三类示例 CI 全绿 |
 | **P16** | 文献域补强（arXiv/PubMed 走 manifest）+ 收口 + `v0.3.0` | 1–2 会话 | 3 | **Sonnet 5** | P15 | 外部验收 ①③④ 全过 |
@@ -523,7 +523,7 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 两者都不占关键路径。
 
 **可裁剪顺序**（若要提前发布）：P15 的 ③ MCP client → P14 的 Homebrew/curl → P13 的 findings 状态机。
-**不可裁剪**：P10 全部、P11、P12、AD-9 的确定性完成判据——这四项是 v0.3 主题本身。
+**不可裁剪**：P10 全部、P11、P12、AD-10 的确定性完成判据——这四项是 v0.3 主题本身。
 
 ### 6.2 模型分配依据
 
@@ -542,7 +542,7 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 | 规格清楚的工程活（打包 / 向导 / 依赖分层） | P14 | Sonnet 5 | — |
 | 抽象设计（错了要返工三条主线） | P11 | Opus 5 | 一个抽象同时承载 tool calling / 流式 / 记账 / JSON 模式 |
 | 抽象设计（v0.2 唯一被判「坏抽象」的那一层的继任者） | P12 | Opus 5 | 同一个位置栽过一次 |
-| 原创设计（AD-9「完成判定问图不问模型」） | P13 | Opus 5 | v0.3 最有原创性的一条 |
+| 原创设计（AD-10「完成判定问图不问模型」） | P13 | Opus 5 | v0.3 最有原创性的一条 |
 | 安全边界设计 | P15 | Opus 5 | 错了就是 S-3「沙箱一行逃逸」那种过度声明 |
 
 **关于单轮等待**：v0.2 的总吞吐不慢，若痛点是「一次回复等太久」，
@@ -574,7 +574,7 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 | `D-d` 湿域与状态机 | D-8 D-9 D-10 | `lab/**` `project/records.ts` `tests/concurrency/approve_once.test.ts` |
 
 > D-4 在 P10 只做战术版（orchestrator 三处检查 `res.ok`）；
-> **AD-12 的类型层根治在 P11 完成**（`ok=false ⇒ content=""`）——分两步是因为类型改动属 P11 的抽象。
+> **AD-13 的类型层根治在 P11 完成**（`ok=false ⇒ content=""`）——分两步是因为类型改动属 P11 的抽象。
 
 **P11（接口先行 → 3 lane，Opus 5）**
 
@@ -643,26 +643,29 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 | 默认入口 | 起 Web 工作区 | App | `bun run dev` | 零参数起 UI　**✅ 追平** |
 | 模型中立 | 全 provider | 锁 Anthropic | 声明 6 实测 2 | OpenAI-compat 基座 + Anthropic + 本地　**✅ 追平** |
 | 子代理委派 | `task` 工具真委派 | `host.delegate()` 帧树 | 裸 `llm.call` 无工具 | ToolBus 真委派 + 预算 + 审计　**✅ 追平** |
-| 完成判定 | `contract.stages`（agent 自报） | 状态机（模型侧判据） | 无 | **图上确定性判据（AD-9）　🚀 超越两者** |
+| 完成判定 | `contract.stages`（agent 自报） | 状态机（模型侧判据） | 无 | **图上确定性判据（AD-10）　🚀 超越两者** |
 | 帧级记账 | 会话级 | 每帧 model/token/cost | 无 | **落进证据图，报告/lineage/UI 免费可查　🚀 超越** |
 | 模型指纹 | harness fingerprint | — | 无 | `agent_run` record 带 systemHash/promptHash　**✅ 追平** |
 | 审查持久化 | provenance claim | `verification_checks` 状态机 | 一次性 pass | findings 状态机 + 复核闭环　**✅ 追平 Claude** |
 | 连接器 | 46 免 key | 无 registry | 17 | **不比数量：声明式 manifest + 外部扩展 + MCP client　🚀 换赛道** |
-| 扩展机制 | 插件运行时 / SDK / LSP | agents 表 + MCP | 无 | 装载 + **契约化验收（AD-10）　🚀 超越** |
-| 能力自描述 | docs / llms.txt | — | P9 `capabilities --json` | + **叙事一致性 CI 门禁（AD-11）　🚀 超越两者** |
+| 扩展机制 | 插件运行时 / SDK / LSP | agents 表 + MCP | 无 | 装载 + **契约化验收（AD-11）　🚀 超越** |
+| 能力自描述 | docs / llms.txt | — | P9 `capabilities --json` | + **叙事一致性 CI 门禁（AD-12）　🚀 超越两者** |
 | 干湿闭环 | 无 | 无 | 有（安全门打折） | 安全门兑现声明　**🚀 独占赛道** |
 
 ---
 
 ## 八、新增架构决策（待写入 DESIGN §5.2）
 
+> **编号起点 AD-10**：P9 已经占用了 AD-9（「MCP 暴露面按『谁承担后果』切」），
+> 本方案初稿写成 AD-9…AD-13 是撞号，已整体后移一位。
+
 | # | 决策 | 理由 |
 |---|---|---|
-| **AD-9** | 任务完成判定必须由确定性代码对证据图查询得出，不得由模型自报 | AD-8 在编排层的直接推论；OpenScience 的 stage 自报与 Claude 的模型侧判据都有同一个洞：*agent 可以宣布自己完成了* |
-| **AD-10** | 扩展「能装上」不算装好，「过得了对应契约测试」才算装好 | AD-5 从开发侧纪律升级为运行时门禁；对 OpenScience「铺量导致质量参差」的结构性回答——不限数量，限**未经验证**的数量 |
-| **AD-11** | 对外声称的每一项能力必须机器可核（`capabilities --json` 为准，CI 门禁） | 本次评审最大发现是「叙事超前于实现」。靠人自觉不可持续，必须是门禁 |
-| **AD-12** | LLM 调用失败时**没有内容可用**（`ok=false ⇒ content=""`，错误只在 `error` 字段） | F-2 的类型层根治：把「错误文本被当成产出」变成编译期不可能，而不是靠三处 `if` 记得写 |
-| **AD-13** | 子代理**永远不能执行需要人工审批的动作**（`lab_approve` / `conclusion_review` / `project_archive` 在 ToolBus 层硬拒） | AD-6 从 HTTP 层扩展到 agent 层。agent 能力越强，这条红线越重要 |
+| **AD-10** | 任务完成判定必须由确定性代码对证据图查询得出，不得由模型自报 | AD-8 在编排层的直接推论；OpenScience 的 stage 自报与 Claude 的模型侧判据都有同一个洞：*agent 可以宣布自己完成了* |
+| **AD-11** | 扩展「能装上」不算装好，「过得了对应契约测试」才算装好 | AD-5 从开发侧纪律升级为运行时门禁；对 OpenScience「铺量导致质量参差」的结构性回答——不限数量，限**未经验证**的数量 |
+| **AD-12** | 对外声称的每一项能力必须机器可核（`capabilities --json` 为准，CI 门禁） | 本次评审最大发现是「叙事超前于实现」。靠人自觉不可持续，必须是门禁 |
+| **AD-13** | LLM 调用失败时**没有内容可用**（`ok=false ⇒ content=""`，错误只在 `error` 字段） | F-2 的类型层根治：把「错误文本被当成产出」变成编译期不可能，而不是靠三处 `if` 记得写 |
+| **AD-14** | 子代理**永远不能执行需要人工审批的动作**（`lab_approve` / `conclusion_review` / `project_archive` 在 ToolBus 层硬拒） | AD-6 从 HTTP 层扩展到 agent 层。agent 能力越强，这条红线越重要 |
 
 ---
 
@@ -686,6 +689,11 @@ v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试
 | V12 LLM 结构化输出 | **P11 根治** | `CallOptions.responseFormat`，不再靠「解析失败重试一次」治标 |
 | V13 判定 prompt 对「凭空归因」的口径 | **P16 (随 E-2)** | 与 judge 降本一起改，改完重跑 G5 测量 |
 | V14 位置加权豁免改白名单制 | **P13** | findings 状态机重构 reviewer 时一并做（阈值已到） |
+| V15 移除 `MCPConnector` 等 deprecated 别名 | **P10 (lane D-a)** | D-1 重构 connector 分发时顺带确认无外部引用后删除；做不掉就留 v0.4 |
+| V16 子代理独立模型暴露成用户配置项 | **P12** | 子代理做实时 `SubAgentSpec.model` 本就要有真消费方，顺势暴露成配置 |
+| V17 MCP 长任务进度回传 | **P14** | 与 SSE 流式一起做（同属「看得见 agent 在干活」） |
+| V18 `capabilities --probe` 结果缓存 | **P14** | 属上手性；缓存必须带失效条件（venv 变更），否则它会撒谎 |
+| V19 审批动作要求可交互终端 | **P12（与 AD-14 同批）** | AD-14「子代理永不自批准」是默认路径防线，V19 是技术防线，两者配套才完整 |
 | D1 第三个仿真平台 | 待定 | 契约已被两实现验证；P15 的 `ext verify` 让第三方自己加更划算 |
 | D2 Semantic Scholar key | **P16 (E-4)** | 凭据路径落地 |
 | D3 CNKI / 万方真实 API | 待定 | 无渠道；AMiner 仍是中文主路径 |
@@ -716,7 +724,7 @@ v0.3 不加新功能域——**一个都不加**。它做三件事：
 
 同时它把项目已经证明有效的那套确定性纪律，往上推了两层：
 **编排层**（完成与否问图不问模型）和**扩展层**（能装不算数，过契约才算数），
-再加一条把这次评审发现变成永久门禁的 AD-11。
+再加一条把这次评审发现变成永久门禁的 AD-12。
 
 做完这三件，README 第一句话才是真的。
 
