@@ -797,7 +797,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
 | AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
-| AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」 |
+| AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」。<br>**主会话裁定（v0.2.0）**：MCP 工具清单是**能力声明，不是访问控制**。真正的访问控制在别处（daemon 的 permit set、文件权限、物理设备要人去按）。一个有 Bash 权限的 agent 确实能绕道调 CLI——承认这一点，不假装挡得住。这条边界起的作用是另外三件事：**默认路径**（agent 的第一反应是「我有哪些工具」，自动批准不在默认可达集合里）、**意图显性化**（绕道要主动构造命令，是一个「我知道我在绕过设计」的留痕动作，用户在 permission 层看得见）、**责任归属**（经 MCP 调用是我们授权的能力；经 Bash 绕过是用户授予 Bash 权限的后果）。所以它是纵深防御的一层，不是唯一一层——说它能挡住有意绕过者是安全剧场，但说「反正能绕过所以不该做」同样错：默认值决定 99% 的行为。若要真正堵住绕道，正确做法不是加固 MCP 层，而是在 CLI 层要求审批必须来自可交互终端（见 BACKLOG V19） |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 
@@ -1491,7 +1491,7 @@ spark-research capabilities        # 你加的东西出现了吗？
 6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
 7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
 8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
-9. **阶段性成果及时保存**（P7 后新增，用户要求）：每完成一个逻辑块就 commit **并 push feature 分支**到远端。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
+9. **阶段性成果及时保存**（P7 后新增，用户要求；P9 后加强）：**新分支创建后立即 `git push -u` 建立远端跟踪，再开始写代码**；此后每完成一个逻辑块就 commit 并 push。P9 曾在零 commit 状态遭遇额度中断，差点全丢。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
 
 ---
 
@@ -1867,7 +1867,7 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 1. **证据图的设计是否站得住**：8 类 record + 5 类边能否覆盖真实科研流程？边方向约定（`supports`/`contradicts` 是 paper→idea，`cites` 是新产物→旧文献）是否会在图遍历时造成歧义？`RecordStore.update()` 允许改 content 是否破坏了「可审计证据链」的承诺？
 2. **可信度机制是否真的可信**：citation-integrity + 评级校验层 + 安全门 + 结论卡三检查器，这套「用确定性代码约束 LLM 输出」的路子，边界在哪里？哪些地方我们其实还是在信任 LLM 而不自知？
 3. **两个状态机的口径**：干实验 7 态、湿实验 11 态；湿实验 `approve` 直达 `wet_run`（无 approved 中间态）、「进入 compile 一律清空 approve」、唯一守卫回边 `wet_run→compile`。这套口径有没有能绕过审批的路径？
-4. **MCP 边界的划法（P9 新增，最想被挑战）**：把审批类动作挡在 MCP 之外，是真安全还是安全剧场？一个外部 agent 完全可以直接 `Bash` 调 `spark-research lab approve --actor 它自己编的名字`——我们挡住的到底是什么？我们的回答是「挡住的是**默认路径**与**责任归属**：MCP 工具是 agent 的第一反应，而绕道 shell 是一个显式的、留痕的、用户能在 permission 层看见的动作；`actorSource` 也会如实记录来源」。这个回答够不够？
+4. **MCP 边界的划法（P9 新增，最想被挑战）**：把审批类动作挡在 MCP 之外，是真安全还是安全剧场？一个外部 agent 完全可以直接 `Bash` 调 `spark-research lab approve --actor 它自己编的名字`——我们挡住的到底是什么？我们的回答是「挡住的是**默认路径**与**责任归属**：MCP 工具是 agent 的第一反应，而绕道 shell 是一个显式的、留痕的、用户能在 permission 层看见的动作；`actorSource` 也会如实记录来源」。这个回答够不够？**主会话已裁定并写进 AD-9**：MCP 清单是能力声明不是访问控制，承认有 Bash 就能绕道；它起作用的是默认路径 / 意图显性化 / 责任归属三件事，是纵深防御的一层而非唯一一层。要真堵住绕道需要 CLI 层要求可交互终端（BACKLOG V19）。**仍欢迎挑战这个裁定**。
 5. **抽象是否过早或过晚**：SimulationPlatform 由两个实现验证过；WetLabBackend 只有 Opentrons 一族（已知重构点）；Connector 契约承载 17 个源。哪个抽象是错的？
 6. **扩展面的赌注（P9 新增）**：我们赌「模板承载纪律」比「文档陈述纪律」有效，所以脚手架的注释比代码多、CI 真跑生成物。这个赌注对吗？还是说没人会用脚手架，真正的扩展者都会直接抄现成实现？
 7. **相对参照系的判断**：不吸收 OpenScience 的 313 技能铺量路线而走「少而深 + 每技能 e2e」，这个赌注对吗？Project-centric 是真需求还是过度设计？
@@ -1915,6 +1915,10 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 | G7 | 证据图 → Markdown 报告导出 + research-report 技能（§5.3 第 10 个技能） | PLAN P8 | ✅ `report/export.ts` + `report` CLI + `/api/report` + 工作台导出按钮 + research-report 技能 |
 
 ## v0.3 候选
+
+| # | 项 | 备注 |
+|---|-----|------|
+| V19 | 审批动作要求可交互终端 | AD-9 裁定的推论：MCP 层挡的是默认路径与责任归属，**不是**技术上的绕道。要真堵住「agent 用 Bash 调 `lab approve --actor 自己编的名字`」，得在 CLI 层要求审批来自 TTY，或要求一个非交互环境拿不到的确认令牌。这才是技术防线；在此之前不要声称审批「无法被自动化」 |
 
 | # | 项 | 备注 |
 |---|-----|------|
