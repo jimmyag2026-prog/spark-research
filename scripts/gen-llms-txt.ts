@@ -44,6 +44,7 @@ const CLI_COMMANDS: Array<[string, string]> = [
   ["lit search|add|list|pdf|read|review|export|sources", "文献域：跨源检索、入库、PDF、精读卡、综述、导出"],
   ["idea new|list|check", "思路库：Co-explore 产出 Idea 卡 + novelty check"],
   ["exp new|run|status|list|platforms", "干实验闭环：设计 → 提交 → 回收 → 分析（断点可续跑）"],
+  ["protein <query> [--json] [--no-persist]", "蛋白结构调研：UniProt 身份 → RCSB PDB 实验结构 → AlphaFold 预测模型"],
   ["lab compile|approve|reject|simulate|status|backends", "湿实验：编译 → 安全门 → **人工批准** → 模拟器执行"],
   ["conclusion list|show|review", "结论卡评审。只有 approved 进报告结论区"],
   ["report export|stats", "证据图 → 带证据链接的 Markdown 报告"],

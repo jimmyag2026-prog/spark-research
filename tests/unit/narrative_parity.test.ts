@@ -5,6 +5,8 @@ import { ConnectorRegistry } from "../../backend/src/connectors/registry";
 import { MCP_TOOLS } from "../../backend/src/mcp/tools";
 import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/lab/wet_models";
 import { EXPERIMENT_STATES } from "../../backend/src/experiment/models";
+import { loadSkills } from "../../backend/src/skills/frontmatter";
+import { buildCapabilities } from "../../backend/src/capabilities";
 
 // AD-12「对外声称的每一项能力必须机器可核」的门禁实现（D-12）。
 //
@@ -75,10 +77,80 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   "backend/src/agents/swarm.ts":
     "**已知缺口**：v0.1 遗留，生产代码零调用方、dependsOn 未实现、decompose 是三条正则。" +
     "README 的「100 并发 swarm」宣传语即出自此处。方案 v0.3 P12 决定删除（BACKLOG V7）",
-  "backend/src/proteins/analysis.ts":
-    "**已知缺口**：protein-analysis 技能有 e2e、有 SKILL.md（写着代码入口是 ProteinAnalysis.analyze），" +
-    "但没有任何生产入口——无 CLI 命令、无 HTTP 路由、无 MCP 工具、不在 capabilities 里。" +
-    "也就是说用户与外部 agent 都调不到它。见 BACKLOG V22",
+  // v0.4 P11 lane R-d 之前，backend/src/proteins/analysis.ts 在这里登记过一条「已知缺口」：
+  // protein-analysis 技能有 e2e、有 SKILL.md，但 CLI / HTTP / MCP 三个入口全无（BACKLOG V22）。
+  // R-d-2 补齐了三个入口（proteins/cli.ts、server/routes/proteins.ts、mcp/tools.ts 的
+  // protein_analyze）之后，analysis.ts 有了真实生产调用方，不再是孤儿模块——条目已按下面
+  // 「反向：在册的条目若已不再是孤儿……」的要求移除，可达性本身由下面新增的
+  // 「技能可达性」测试接手把关（比孤儿检测更贴近问题本身：孤儿检测只查「有没有调用方」，
+  // 不查「调用方是不是一条外部可达的生产入口」）。
+};
+
+// ── R-d-1：技能可达性断言（v0.4 P11 lane R-d，AD-5 收紧版） ──────────────────────
+//
+// 背景：v0.4 制订时实测了全部 10 个技能的可达性矩阵，protein-analysis 是唯一 CLI / HTTP /
+// MCP 三个入口全无的一个——`capabilities --json` 却照常把它当可用能力广播（描述 + triggers +
+// connector 清单 + validation 文件列表）。外部 agent 读了 triggers 会确信自己能调用它。
+// AD-5 因此收紧为：技能「完成」= e2e 验证 + 至少一条可达的生产入口（CLI/HTTP/MCP 三选一），
+// 且该能力出现在 capabilities --json 里。这段实现的就是这条收紧后的判据。
+//
+// 判据设计：**不对 SKILL.md 的自然语言（description/triggers）做正则猜测**——那正是
+// 「叙事」本身，用叙事验证叙事是循环论证，猜错了不会有任何东西报警（正是 protein-analysis
+// 当初蒙混过关的方式：triggers 写得像模像样，没人核对它是否真能打到任何代码）。
+//
+// 改用两段式判据：
+//   ① SKILL_ENTRYPOINTS 是一张**显式维护**的「技能 → 声称的入口名」登记表，写法与上面
+//      ALLOWED_ORPHANS 同一套纪律——人工登记、必须写清楚是哪个入口，且有「反向：多余登记
+//      必须删除」的对称检查，防止它变成一张只增不减的死表。
+//   ② 每一条登记**不是自己说了算**：要去三张真实的生产注册表里核实存在——
+//      - CLI：从 backend/src/index.ts 的 `main()` 顶层 `switch(cmd)` 里抽取全部 `case "x":`
+//        字面量。这是**语法结构提取**（switch 的 case 标签是有限、精确的字符串字面量，
+//        运行时用 `===` 严格匹配），不是对文档/描述文本做模糊匹配——效果等价于「读一遍
+//        真实的 dispatch 表」，而不是「猜某段散文里提到了什么」。
+//      - MCP：`MCP_TOOLS` 数组本身就是结构化数据，直接查名字是否存在，零猜测。
+//      - （HTTP 路由留给后续：本仓库目前每个技能都至少有 CLI 或 MCP 入口，两者已经
+//        覆盖判据所需的「至少一条」；没有必要为了凑第三种检查方式而堆代码。）
+//   ③ 额外核实该技能确实出现在 `capabilities --json` 的 skills 列表里——这是「自描述面
+//      没有漏报」的对称检查（防止有技能声称了入口，却连自己都没被 capabilities 收录）。
+//
+// 为什么这不算「靠自觉」：SKILL_ENTRYPOINTS 里任何一条写错（入口名拼错、入口已被删除、
+// 或者压根没有这个入口）都会在下面的核实步骤里立刻变红——表本身可以人工维护，
+// 但表里的每一条都会被拿去跟事实对账，不存在「登记了就算数」这回事。
+//
+// 理想设计（留给后续）：SKILL.md frontmatter 加一个 `entrypoints:` 字段，把这张表
+// 从测试文件搬进技能自己的元数据里，让 capabilities --json 能把入口也一并广播出去。
+// 本 lane 没有这么做——frontmatter 的 schema（KNOWN_KEYS 白名单）与 capabilities 的
+// SkillCapability 类型都在 `backend/src/skills/frontmatter.ts` / `backend/src/capabilities/
+// index.ts`，这两个文件不在 R-d 的文件所有权范围内，也被其余系统（scaffold 脚手架、
+// capabilities 的其他消费方）共用，贸然扩 schema 风险面超出本 lane 的职责边界。
+// 详见 docs/devlog/P11-d.md 的「R-d-1 判据设计」一节。
+function cliCommandNames(): Set<string> {
+  const src = readFileSync(join(SRC, "index.ts"), "utf8");
+  const names = new Set<string>();
+  for (const m of src.matchAll(/case\s+"([a-z][a-z0-9_-]*)"\s*:/g)) names.add(m[1]!);
+  return names;
+}
+
+interface SkillEntrypoints {
+  cli?: readonly string[];
+  mcp?: readonly string[];
+}
+
+// 每条登记必须写明「这是哪个入口」，理由见上面的大段注释。
+const SKILL_ENTRYPOINTS: Record<string, SkillEntrypoints> = {
+  "dry-experiment": { cli: ["exp"], mcp: ["exp_design", "exp_run", "exp_list"] },
+  "idea-coexplore": { cli: ["idea"], mcp: ["idea_coexplore"] },
+  "library-curation": { cli: ["lit"], mcp: ["lit_add", "lit_list"] },
+  "literature-review": { cli: ["lit"], mcp: ["lit_review_draft"] },
+  "literature-search": { cli: ["lit"], mcp: ["lit_search"] },
+  "novelty-check": { cli: ["idea"], mcp: ["idea_novelty_check"] },
+  // paper-download 只有 CLI（`lit pdf`）；MCP 没有对应工具（下载文件不适合走 MCP 的
+  // JSON 往返），这是刻意设计，不是缺口——CLI 一条足够满足「至少一条」的判据。
+  "paper-download": { cli: ["lit"] },
+  // R-d-2 补的入口：CLI `spark-research protein <query>` + MCP `protein_analyze`。
+  "protein-analysis": { cli: ["protein"], mcp: ["protein_analyze"] },
+  "research-report": { cli: ["report", "conclusion"], mcp: ["report_export"] },
+  "wet-protocol": { cli: ["lab"], mcp: ["lab_compile", "lab_status"] },
 };
 
 describe("叙事一致性门禁（AD-12）", () => {
@@ -210,6 +282,62 @@ describe("叙事一致性门禁（AD-12）", () => {
     expect(
       bogus,
       `BADGE_TONE 里这些键既不是后端状态、也不在非状态白名单里：${bogus.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  // 第 7 条（R-d-1）：技能可达性。判据设计见上面 SKILL_ENTRYPOINTS 之前的大段注释。
+  test("技能可达性：每个 SKILL.md 对应的能力必须有可核实的生产入口（CLI/HTTP/MCP 三选一）", async () => {
+    const skills = loadSkills();
+    const skillNames = skills.map((s) => s.name).sort();
+
+    // 登记表必须与 skills/ 目录严格一一对应：少登记一个 = 那个技能可以悄悄失去入口
+    // 而没有任何测试注意到；多登记一个（技能已被删除）= 死表，两个方向都要挡。
+    const registered = Object.keys(SKILL_ENTRYPOINTS).sort();
+    const missing = skillNames.filter((n) => !registered.includes(n));
+    expect(missing, `这些技能在 SKILL_ENTRYPOINTS 里没有登记入口：${missing.join(", ")}`).toEqual([]);
+    const staleRegistrations = registered.filter((n) => !skillNames.includes(n));
+    expect(
+      staleRegistrations,
+      `这些登记对应的技能目录已经不存在，请从 SKILL_ENTRYPOINTS 移除：${staleRegistrations.join(", ")}`,
+    ).toEqual([]);
+
+    const cliNames = cliCommandNames();
+    const mcpNames = new Set(MCP_TOOLS.map((t) => t.name));
+    const manifest = await buildCapabilities();
+    const capabilitySkillNames = new Set(manifest.skills.map((s) => s.name));
+
+    const unreachable: string[] = [];
+    for (const skill of skills) {
+      const entry = SKILL_ENTRYPOINTS[skill.name] ?? {};
+      const verifiedCli = (entry.cli ?? []).filter((name) => cliNames.has(name));
+      const verifiedMcp = (entry.mcp ?? []).filter((name) => mcpNames.has(name));
+
+      // 登记了但核实不存在的条目：单独报出来，比笼统的「不可达」更好定位问题。
+      const badCli = (entry.cli ?? []).filter((name) => !cliNames.has(name));
+      const badMcp = (entry.mcp ?? []).filter((name) => !mcpNames.has(name));
+      expect(
+        badCli,
+        `技能 '${skill.name}' 登记的 CLI 入口在 index.ts 的 switch(cmd) 里核实不到：${badCli.join(", ")}`,
+      ).toEqual([]);
+      expect(
+        badMcp,
+        `技能 '${skill.name}' 登记的 MCP 工具在 MCP_TOOLS 里核实不到：${badMcp.join(", ")}`,
+      ).toEqual([]);
+
+      if (verifiedCli.length === 0 && verifiedMcp.length === 0) unreachable.push(skill.name);
+
+      // AD-12 的对称检查：声称了入口的技能必须真的出现在 capabilities --json 里，
+      // 否则「入口存在」与「外部 agent 能发现这个入口」是两件事，后者才是 AD-12 要的。
+      expect(
+        capabilitySkillNames.has(skill.name),
+        `技能 '${skill.name}' 有登记入口，但没有出现在 capabilities --json 的 skills 列表里`,
+      ).toBe(true);
+    }
+
+    expect(
+      unreachable,
+      `这些技能声称有能力（SKILL.md + triggers + capabilities 广播），但登记的入口一条都核实不到，` +
+        `等于自描述面对外撒谎（AD-12）：${unreachable.join(", ")}`,
     ).toEqual([]);
   });
 });
