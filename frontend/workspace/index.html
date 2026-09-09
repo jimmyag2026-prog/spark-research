@@ -1,65 +1,22 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Spark Research</title>
-  <link rel="stylesheet" href="/workspace/styles.css">
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">SR</span>
-      <h1>Spark Research</h1>
-    </div>
-    <div class="topbar-status">
-      <span id="health-indicator" class="health-indicator" title="服务状态">
-        <span class="dot"></span>
-        <span id="health-text">连接中…</span>
-      </span>
-      <span class="connector-count" id="connector-count" title="可用数据连接器">连接器 0</span>
-    </div>
-  </header>
-
-  <main class="layout">
-    <aside class="panel session-panel" id="session-panel">
-      <div class="panel-header">
-        <h2>会话</h2>
-        <button id="new-session-btn" class="btn primary small">＋ 新建</button>
-      </div>
-      <ul id="session-list" class="session-list"></ul>
-    </aside>
-
-    <section class="panel chat-panel" id="chat-panel">
-      <div id="chat-messages" class="chat-messages"></div>
-      <form id="chat-form" class="chat-input">
-        <textarea id="chat-input" rows="1" placeholder="向 Spark Research 提问，或描述一个实验协议…"></textarea>
-        <button type="submit" class="btn primary">发送</button>
-      </form>
-    </section>
-
-    <aside class="panel artifact-panel" id="artifact-panel">
-      <div class="panel-header">
-        <h2>Artifacts</h2>
-      </div>
-      <div id="artifact-content" class="artifact-content">
-        <p class="placeholder">选择一个会话查看产物与依赖关系</p>
-      </div>
-    </aside>
-  </main>
-
-  <footer class="lab-panel">
-    <div class="panel-header">
-      <h2>实验室</h2>
-    </div>
-    <div id="devices" class="device-grid"></div>
-    <form id="protocol-form" class="protocol-form">
-      <textarea id="protocol-input" rows="2" placeholder="用自然语言描述协议，例如：取样品 50µL 加入 96 孔板，37°C 孵育 1 小时，600nm 读取 OD。"></textarea>
-      <button type="submit" class="btn primary">编译并校验</button>
-    </form>
-    <div id="protocol-result" class="protocol-result"></div>
-  </footer>
-
-  <script src="/workspace/app.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spark Research 工作台</title>
+    <meta name="description" content="开源科研工作台：项目导航 · 会话流 · 证据时间线 · 干湿实验面板" />
+    <!-- 主题在首屏脚本里定好，避免刷新时闪一下白。 -->
+    <script>
+      (() => {
+        const saved = localStorage.getItem("spark-theme");
+        const theme =
+          saved ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
