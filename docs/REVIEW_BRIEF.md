@@ -167,7 +167,7 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 1. **证据图的设计是否站得住**：8 类 record + 5 类边能否覆盖真实科研流程？边方向约定（`supports`/`contradicts` 是 paper→idea，`cites` 是新产物→旧文献）是否会在图遍历时造成歧义？`RecordStore.update()` 允许改 content 是否破坏了「可审计证据链」的承诺？
 2. **可信度机制是否真的可信**：citation-integrity + 评级校验层 + 安全门 + 结论卡三检查器，这套「用确定性代码约束 LLM 输出」的路子，边界在哪里？哪些地方我们其实还是在信任 LLM 而不自知？
 3. **两个状态机的口径**：干实验 7 态、湿实验 11 态；湿实验 `approve` 直达 `wet_run`（无 approved 中间态）、「进入 compile 一律清空 approve」、唯一守卫回边 `wet_run→compile`。这套口径有没有能绕过审批的路径？
-4. **MCP 边界的划法（P9 新增，最想被挑战）**：把审批类动作挡在 MCP 之外，是真安全还是安全剧场？一个外部 agent 完全可以直接 `Bash` 调 `spark-research lab approve --actor 它自己编的名字`——我们挡住的到底是什么？我们的回答是「挡住的是**默认路径**与**责任归属**：MCP 工具是 agent 的第一反应，而绕道 shell 是一个显式的、留痕的、用户能在 permission 层看见的动作；`actorSource` 也会如实记录来源」。这个回答够不够？
+4. **MCP 边界的划法（P9 新增，最想被挑战）**：把审批类动作挡在 MCP 之外，是真安全还是安全剧场？一个外部 agent 完全可以直接 `Bash` 调 `spark-research lab approve --actor 它自己编的名字`——我们挡住的到底是什么？我们的回答是「挡住的是**默认路径**与**责任归属**：MCP 工具是 agent 的第一反应，而绕道 shell 是一个显式的、留痕的、用户能在 permission 层看见的动作；`actorSource` 也会如实记录来源」。这个回答够不够？**主会话已裁定并写进 AD-9**：MCP 清单是能力声明不是访问控制，承认有 Bash 就能绕道；它起作用的是默认路径 / 意图显性化 / 责任归属三件事，是纵深防御的一层而非唯一一层。要真堵住绕道需要 CLI 层要求可交互终端（BACKLOG V19）。**仍欢迎挑战这个裁定**。
 5. **抽象是否过早或过晚**：SimulationPlatform 由两个实现验证过；WetLabBackend 只有 Opentrons 一族（已知重构点）；Connector 契约承载 17 个源。哪个抽象是错的？
 6. **扩展面的赌注（P9 新增）**：我们赌「模板承载纪律」比「文档陈述纪律」有效，所以脚手架的注释比代码多、CI 真跑生成物。这个赌注对吗？还是说没人会用脚手架，真正的扩展者都会直接抄现成实现？
 7. **相对参照系的判断**：不吸收 OpenScience 的 313 技能铺量路线而走「少而深 + 每技能 e2e」，这个赌注对吗？Project-centric 是真需求还是过度设计？
