@@ -41,13 +41,19 @@ describe("HTTP · lab 状态机与后端", () => {
         transitions: Record<string, string[]>;
         awaiting: string;
         approvalGate: { from: string; to: string; requires: string[] };
+        executionGate: { from: string; to: string; consumesApproval: boolean };
       }>("/api/lab/machine");
-      expect(body.states).toHaveLength(11);
+      // D-10 起 wet_run 拆成 approved / executing，状态数 11 → 12。
+      expect(body.states).toHaveLength(12);
       expect(body.awaiting).toBe("awaiting_approval");
-      // AD-6：wet_run 的唯一入边来自 awaiting_approval。这条断言就是「门」的机器可读形态。
-      const intoWetRun = Object.entries(body.transitions).filter(([, tos]) => tos.includes("wet_run"));
-      expect(intoWetRun.map(([from]) => from)).toEqual(["awaiting_approval"]);
-      expect(body.approvalGate).toMatchObject({ from: "awaiting_approval", to: "wet_run", requires: ["actor"] });
+      // AD-6：approved 的唯一入边来自 awaiting_approval。这条断言就是「审批门」的机器可读形态。
+      const intoApproved = Object.entries(body.transitions).filter(([, tos]) => tos.includes("approved"));
+      expect(intoApproved.map(([from]) => from)).toEqual(["awaiting_approval"]);
+      expect(body.approvalGate).toMatchObject({ from: "awaiting_approval", to: "approved", requires: ["actor"] });
+      // D-10：executing 的唯一入边来自 approved，且这一步消费 approval（重跑要重批）。
+      const intoExecuting = Object.entries(body.transitions).filter(([, tos]) => tos.includes("executing"));
+      expect(intoExecuting.map(([from]) => from)).toEqual(["approved"]);
+      expect(body.executionGate).toMatchObject({ from: "approved", to: "executing", consumesApproval: true });
     } finally {
       await fx.stop();
     }
@@ -169,7 +175,8 @@ describe("HTTP · approve gate（AD-6）", () => {
         { actor: "李四", note: "复核过步骤表" },
       );
       expect(res.status).toBe(200);
-      expect(res.body.experiment.state).toBe("wet_run");
+      // D-10：approve 只把实验推到 approved，执行权要 execute() 另行原子声明。
+      expect(res.body.experiment.state).toBe("approved");
       expect(res.body.experiment.approval?.actor).toBe("李四");
       expect(res.body.experiment.approval?.protocolHash).toBe(experiment.protocolHash!);
       const decision = res.body.decision;
