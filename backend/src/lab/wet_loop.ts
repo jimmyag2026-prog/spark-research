@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import type { ArtifactStore } from "../artifacts/store";
 import type { ExperimentLoop } from "../experiment/loop";
 import type { ResearchRecord } from "../project/models";
-import type { RecordStore } from "../project/records";
+import { RecordConflictError, type RecordStore } from "../project/records";
 import { LabSafetyError } from "./orchestrator";
 import { compileToOpentrons, type OpentronsProgram } from "./opentrons_protocol";
 import { ProtocolCompiler, type Protocol } from "./protocol";
@@ -17,13 +17,17 @@ import {
 } from "./wet_backend";
 import {
   ApprovalRequiredError,
+  RecordIntegrityError,
+  WetExecutionConflictError,
   WetExperimentNotFoundError,
   WetStateError,
   canWetTransition,
+  computeMetaIntegrityHash,
   isWetExperimentState,
   renderDecision,
   renderWetExperiment,
   renderWetObservation,
+  verifyMetaIntegrity,
   type WetExperimentMeta,
   type WetExperimentState,
   type WetExperimentView,
@@ -32,12 +36,22 @@ import {
 
 // 湿实验闭环引擎（DESIGN 域 B2/B3 · AD-6）。
 //
-// 四条不变量：
+// 六条不变量（P10-d 在原有四条上加了 5/6）：
 //   1. **状态只在 experiment record 里**，走 `RecordStore.update()` 窄口回写（P4/P5 同一口径）。
-//   2. **唯一进入 `wet_run` 的门是 `approve()`**。安全门通过只把实验推到 `awaiting_approval`。
+//   2. **唯一进入 `approved` 的门是 `approve()`**。安全门通过只把实验推到 `awaiting_approval`；
+//      `approved` 本身也只是"批了、还没动手"——真正开始跑靠 execute() 内部再声明一次
+//      （见第 5 条），这就是 D-10 把原来的 `wet_run` 拆成 `approved`/`executing` 的原因：
+//      一个状态不能同时表示"可以执行"和"正在执行"，否则并发的两次 execute() 读到的
+//      是同一个"可以执行"，都会通过检查（D-9 的根）。
 //   3. **执行前二次核对协议 hash**：`approve` 批的是某一版协议；只要 hash 对不上就拒绝执行。
 //      这是给状态机之外的路径（有人直接改了 record、或并发编译）留的第二道防线。
 //   4. **非法转移一律拒绝，不做「顺手纠正」**。
+//   5. **execute() 用 CAS 原子声明执行权**（approved → executing）：`RecordStore.update(...,
+//      { expectedRev })` 写不进去就是被别的并发请求抢先了，直接判负，物理/模拟设备一次
+//      都不碰（D-9）。声明成功的同一次转移里把 approval 一次性消费掉（D-10）。
+//   6. **metadata 完整性可检测**：每次合法 transition() 都重算一份覆盖全部字段的哈希存回去，
+//      `get()` 读的时候核验——绕过状态机、用 `RecordStore.update()` 直接改 state/approval
+//      这类字段会让哈希对不上，下一次 get() 就会被拒绝，不是静默生效（D-9）。
 
 export interface WetLabLoopOptions {
   records: RecordStore;
@@ -97,10 +111,12 @@ function emptyWetMeta(input: {
     deck: [],
     compiledSteps: [],
     compileWarnings: [],
+    unconsumedWarnings: [],
     safetyChecks: [],
     safetyPassed: null,
     approval: null,
     rejection: null,
+    consumedApproval: null,
     runId: null,
     runDir: null,
     attempts: 0,
@@ -115,6 +131,7 @@ function emptyWetMeta(input: {
     observationId: null,
     conclusionId: null,
     lastError: null,
+    integrityHash: null,
   };
 }
 
@@ -158,22 +175,33 @@ export class WetLabLoop {
   }
 
   // 支持 id 前缀（与 P5 的 exp 一致）；前缀歧义时报错而不是猜。
+  //
+  // P10-d · D-9：这里是完整性核验（`RecordIntegrityError`）的唯一强制关口——所有会改状态的
+  // 方法（compile/safetyCheck/approve/reject/execute/analyze/conclude/iterate）都先 `get(ref)`
+  // 拿 view，所以在这一处堵住就等于处处堵住，不用在每个方法里各写一遍。
+  // `list()` **不**走这个关口（它直接调私有的 `toView`）：列表要能把「哪条记录坏了」显示出来，
+  // 一条记录的完整性问题不该让整份清单直接炸掉。
   get(ref: string): WetExperimentView {
     const exact = this.records.get(ref);
     if (exact && exact.type === "experiment" && (exact.metadata as { mode?: string }).mode === "wet") {
-      return this.toView(exact);
+      return this.assertIntegrity(this.toView(exact));
     }
     const matches = this.records
       .list({ type: "experiment" })
       .filter((r) => (r.metadata as { mode?: string }).mode === "wet")
       .filter((r) => r.id.startsWith(ref));
-    if (matches.length === 1) return this.toView(matches[0]!);
+    if (matches.length === 1) return this.assertIntegrity(this.toView(matches[0]!));
     if (matches.length > 1) {
       throw new WetExperimentNotFoundError(
         `${ref}（前缀命中 ${matches.length} 条：${matches.map((m) => m.id.slice(0, 12)).join(", ")}）`,
       );
     }
     throw new WetExperimentNotFoundError(ref);
+  }
+
+  private assertIntegrity(view: WetExperimentView): WetExperimentView {
+    if (!view.integrityOk) throw new RecordIntegrityError(view.id);
+    return view;
   }
 
   // ── design ────────────────────────────────────────────────────────────────
@@ -238,13 +266,10 @@ export class WetLabLoop {
     program: OpentronsProgram;
   } {
     const view = this.get(ref);
-    if (view.state === "wet_run" && view.runId) {
-      throw new WetStateError(
-        view.state,
-        "compile",
-        "这条实验已经执行过了，不能就地重编译——改协议请另起一条（iterate）",
-      );
-    }
+    // 「执行过的实验不能就地重编译」不再靠这里的特判：collect/analyze/concluded/iterated
+    // 都没有把 "compile" 列进合法转移表，assertTransition 自己就会拒——比这里手写一个
+    // 只覆盖 wet_run 状态、runId 又几乎不可能在 wet_run 期间非空的死条件更可靠。
+    // executing 状态**允许**转 compile：那是崩溃恢复的出口（D-10），不是漏洞。
     this.assertTransition(view.state, "compile");
     const naturalLanguage = options.naturalLanguage?.trim() || view.naturalLanguage;
     const protocol = this.compiler.compile(naturalLanguage, {
@@ -271,6 +296,8 @@ export class WetLabLoop {
         deck: program.deck,
         compiledSteps: program.steps,
         compileWarnings: program.warnings,
+        // D-8：编译器自己看到的「有信号但没人消费」清单，必须原样带到 view/正文里。
+        unconsumedWarnings: protocol.warnings,
         // 重新编译 = 重新走安全门 + 重新审批。两个字段一起清，不留半截状态。
         safetyChecks: [],
         safetyPassed: null,
@@ -338,13 +365,15 @@ export class WetLabLoop {
 
   // ── approve / reject（AD-6） ──────────────────────────────────────────────
 
-  // **唯一**能把实验推进 `wet_run` 的动作。落一条 decision record：谁、何时、批了哪个协议 hash。
+  // **唯一**能把实验推进 `approved` 的动作。落一条 decision record：谁、何时、批了哪个协议 hash。
+  // approve 只把实验推到「已批准、还没动手」——真正开始执行（approved → executing）由
+  // execute() 内部原子声明，approval 在那一刻被一次性消费（D-10）。
   approve(ref: string, input: ApproveInput): { view: WetExperimentView; decisionId: string } {
     const view = this.get(ref);
     if (view.state !== "awaiting_approval") {
       throw new WetStateError(
         view.state,
-        "wet_run",
+        "approved",
         "只有停在 awaiting_approval 的实验能被批准（先编译并通过安全门）",
       );
     }
@@ -389,7 +418,7 @@ export class WetLabLoop {
 
     const next = this.transition(
       view,
-      "wet_run",
+      "approved",
       `${input.actor} 批准执行（协议 hash ${view.protocolHash}）`,
       (meta) => ({
         ...meta,
@@ -458,17 +487,27 @@ export class WetLabLoop {
     return { view: next, decisionId: decision.id };
   }
 
-  // ── wet_run → collect ─────────────────────────────────────────────────────
+  // ── approved → executing → collect ───────────────────────────────────────
 
-  // 执行 + 回收。**三道门**依次守：
-  //   ① 状态必须是 wet_run（唯一入口是 approve）；
-  //   ② meta 里必须有 approval；
-  //   ③ approval 批的 hash 必须等于当前编译产物的 hash。
-  // ③ 看起来与 ① 冗余（compile 会清 approval），但它防的是状态机之外的路径：
-  //    有人直接改了 record、或者两个进程并发编译。物理世界的操作值得一道冗余的锁。
+  // 执行 + 回收。依次守：
+  //   ① 状态不能是 executing（有人已经声明了执行权——不管是并发的另一次请求，还是上一个
+  //      编排进程崩溃后卡住的残留，一律判负，不猜）；
+  //   ② 状态必须是 approved（唯一入口是 approve）；
+  //   ③ meta 里必须有 approval；
+  //   ④ approval 批的 hash 必须等于当前编译产物的 hash（防状态机之外的路径：有人直接
+  //      改了 record、或者两个进程并发编译）；
+  //   ⑤ **原子声明执行权**（D-9）：approved → executing 用 `expectedRev` 做 CAS，
+  //      写不进去说明 ①②③④ 检查完之后、真正声明之前，被别的并发请求抢先了——
+  //      这一步之前的检查全是「看起来能执行」，只有这一步写成功了才是「真的抢到了」。
+  //      声明成功的同一次 transition 里把 approval 一次性消费掉（D-10）。
   async execute(ref: string, options: { timeoutMs?: number; note?: string } = {}): Promise<WetExperimentView> {
     const view = this.get(ref);
-    if (view.state !== "wet_run") {
+    if (view.state === "executing") {
+      // executing 本身分不清「正在被别的并发请求执行」和「编排进程已经崩了、卡在这」——
+      // 两者都不该被这次调用当作「可以推进」。要跳出 executing 只能显式 compile()（人来决定）。
+      throw new WetExecutionConflictError(view.id);
+    }
+    if (view.state !== "approved") {
       throw new ApprovalRequiredError(
         `实验 ${view.id.slice(0, 8)} 当前状态 ${view.state}，未经 approve 不能执行湿实验（AD-6）。` +
           `合法路径：compile → safety_check → approve → execute`,
@@ -476,7 +515,7 @@ export class WetLabLoop {
     }
     if (!view.approval) {
       throw new ApprovalRequiredError(
-        `实验 ${view.id.slice(0, 8)} 处于 wet_run 但没有审批记录——拒绝执行`,
+        `实验 ${view.id.slice(0, 8)} 处于 approved 但没有审批记录——拒绝执行`,
       );
     }
     const program = this.programOf(view);
@@ -496,13 +535,27 @@ export class WetLabLoop {
       throw new ApprovalRequiredError(stale.lastError!);
     }
 
+    // 声明执行权。CAS 冲突时 transition() 会把 RecordConflictError 转成
+    // WetExecutionConflictError（409 语义）往外抛，这里不用再接一次。
+    const claimed = this.transition(
+      view,
+      "executing",
+      "声明执行权（原子 CAS；approval 一次性消费，D-9/D-10）",
+      (meta) => ({
+        ...meta,
+        consumedApproval: meta.approval,
+        approval: null,
+      }),
+      { expectedRev: view.rev },
+    );
+
     mkdirSync(this.root, { recursive: true });
     let result: WetRunResult;
     try {
       result = await this.backend.execute(program, { root: this.root, timeoutMs: options.timeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.transition(view, "failed", "湿实验执行失败", (meta) => ({
+      this.transition(claimed, "failed", "湿实验执行失败", (meta) => ({
         ...meta,
         attempts: meta.attempts + 1,
         lastError: message,
@@ -511,7 +564,7 @@ export class WetLabLoop {
     }
 
     if (result.status !== "completed") {
-      this.transition(view, "failed", "模拟器拒绝执行协议", (meta) => ({
+      this.transition(claimed, "failed", "模拟器拒绝执行协议", (meta) => ({
         ...meta,
         attempts: meta.attempts + 1,
         runId: result.runId,
@@ -523,9 +576,9 @@ export class WetLabLoop {
       );
     }
 
-    const artifactRecordIds = this.ingestRun(view, result);
+    const artifactRecordIds = this.ingestRun(claimed, result);
     return this.transition(
-      view,
+      claimed,
       "collect",
       `执行完成（${result.entries.length} 条 run log，${result.files.length} 个产出）`,
       (meta) => ({
@@ -543,12 +596,15 @@ export class WetLabLoop {
 
   private ingestRun(view: WetExperimentView, result: WetRunResult): string[] {
     const ids: string[] = [];
+    // D-10：调用这里时 approval 已经在声明执行权那一刻被消费（置空），审批人/时间要看
+    // consumedApproval——approval 只会在还没开始执行时非空，两者不会同时为真但要都兜一下。
+    const approvedBy = view.approval ?? view.consumedApproval;
     for (const file of result.files) {
       const provenance =
         `# 湿实验 ${view.title} · run ${result.runId}\n` +
         `# 后端: ${result.backend}\n` +
         `# 协议 hash: ${result.protocolHash}\n` +
-        `# 审批: ${view.approval?.actor ?? "?"} @ ${view.approval?.at ?? "?"}\n` +
+        `# 审批: ${approvedBy?.actor ?? "?"} @ ${approvedBy?.at ?? "?"}\n` +
         `# 产出角色: ${file.role}\n`;
       const saved = this.artifacts.save(
         file.path,
@@ -755,6 +811,8 @@ export class WetLabLoop {
   // ── 内部 ──────────────────────────────────────────────────────────────────
 
   private createRecord(title: string, meta: WetExperimentMeta, sessionId: string | null): WetExperimentView {
+    const { integrityHash: _drop, ...metaRest } = meta;
+    const withHash: WetExperimentMeta = { ...metaRest, integrityHash: computeMetaIntegrityHash(metaRest) };
     const record = this.records.create({
       type: "experiment",
       title,
@@ -762,7 +820,7 @@ export class WetLabLoop {
       // 实验设计是推出来的；执行产出的 observation 才是 observed。
       evidence: "inferred",
       origin: { kind: "session", sessionId, ref: null },
-      metadata: meta as unknown as Record<string, unknown>,
+      metadata: withHash as unknown as Record<string, unknown>,
     });
     const view = this.toView(record);
     this.records.update(record.id, { content: renderWetExperiment(view) });
@@ -773,33 +831,58 @@ export class WetLabLoop {
     if (!canWetTransition(from, to)) throw new WetStateError(from, to);
   }
 
+  // P10-d · D-9/D-10：`opts.expectedRev` 给了就是 CAS 写（execute() 的「声明执行权」用）；
+  // 不给就是原来的无条件覆盖（design/compile/safetyCheck/approve/reject/analyze/conclude/
+  // iterate 这些没有并发执行风险的转移，行为与改动前完全一致）。
+  // 每次转移都重算 integrityHash 存回去——这是 D-9「state/approval 绕过窄口被篡改可检测」
+  // 的落点：合法路径产出的 metadata 永远带着与内容匹配的哈希，绕过状态机的部分 patch 不会。
   private transition(
     view: WetExperimentView,
     to: WetExperimentState,
     note: string | null,
     patch: (meta: WetExperimentMeta) => WetExperimentMeta,
+    opts: { expectedRev?: number } = {},
   ): WetExperimentView {
     this.assertTransition(view.state, to);
     const at = this.now();
     const entry: WetTransitionEntry = { from: view.state, to, at, note };
-    const { id: _id, title: _title, createdAt: _createdAt, record: _record, ...base } = view;
-    const next: WetExperimentMeta = {
-      ...patch(base as WetExperimentMeta),
+    const { id: _id, title: _title, createdAt: _createdAt, record: _record, rev: _rev, integrityOk: _integrityOk, ...base } =
+      view;
+    const patched = patch(base as WetExperimentMeta);
+    const { integrityHash: _patchedHash, ...patchedRest } = patched;
+    const next: Omit<WetExperimentMeta, "integrityHash"> = {
+      ...patchedRest,
       state: to,
       history: [...view.history, entry],
       timestamps: { ...view.timestamps, [to]: at },
     };
+    const integrityHash = computeMetaIntegrityHash(next);
+    const finalMeta: WetExperimentMeta = { ...next, integrityHash };
     const nextView: WetExperimentView = {
-      ...next,
+      ...finalMeta,
       id: view.id,
       title: view.title,
       createdAt: view.createdAt,
       record: view.record,
+      rev: view.rev,
+      integrityOk: true,
     };
-    const updated = this.records.update(view.id, {
-      content: renderWetExperiment(nextView),
-      metadata: next as unknown as Record<string, unknown>,
-    });
+    let updated: ResearchRecord;
+    try {
+      updated = this.records.update(
+        view.id,
+        { content: renderWetExperiment(nextView), metadata: finalMeta as unknown as Record<string, unknown> },
+        opts.expectedRev !== undefined ? { expectedRev: opts.expectedRev } : {},
+      );
+    } catch (error) {
+      // rev 冲突：只在带 expectedRev 的调用（目前只有 execute() 的声明执行权）才可能发生。
+      // 统一转成 WetExecutionConflictError——它继承 WetStateError，HTTP 层已有的
+      // `WetStateError → 409` 映射不用改就能拿到正确语义。
+      if (error instanceof RecordConflictError) {
+        throw new WetExecutionConflictError(view.id);
+      }
+      throw error;
+    }
     return this.toView(updated);
   }
 
@@ -821,10 +904,12 @@ export class WetLabLoop {
       deck: meta.deck ?? [],
       compiledSteps: meta.compiledSteps ?? [],
       compileWarnings: meta.compileWarnings ?? [],
+      unconsumedWarnings: meta.unconsumedWarnings ?? [],
       safetyChecks: meta.safetyChecks ?? [],
       safetyPassed: meta.safetyPassed ?? null,
       approval: meta.approval ?? null,
       rejection: meta.rejection ?? null,
+      consumedApproval: meta.consumedApproval ?? null,
       runId: meta.runId ?? null,
       runDir: meta.runDir ?? null,
       attempts: Number(meta.attempts ?? 0),
@@ -839,10 +924,13 @@ export class WetLabLoop {
       observationId: meta.observationId ?? null,
       conclusionId: meta.conclusionId ?? null,
       lastError: meta.lastError ?? null,
+      integrityHash: meta.integrityHash ?? null,
       id: record.id,
       title: record.title,
       createdAt: record.createdAt,
       record,
+      rev: this.records.getRev(record.id) ?? 0,
+      integrityOk: verifyMetaIntegrity(meta),
     };
   }
 }
@@ -855,5 +943,8 @@ export {
   ApprovalRequiredError,
   WetStateError,
   WetExperimentNotFoundError,
+  WetExecutionConflictError,
+  RecordIntegrityError,
 } from "./wet_models";
 export type { WetExperimentState, WetExperimentView, WetExperimentMeta } from "./wet_models";
+export { RecordConflictError } from "../project/records";

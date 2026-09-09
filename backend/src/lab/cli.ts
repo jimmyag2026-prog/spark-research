@@ -112,6 +112,9 @@ function printView(view: WetExperimentView, out: (line: string) => void): void {
   if (view.approval) out(`    ✅ ${view.approval.actor} @ ${view.approval.at} 批准 ${view.approval.protocolHash}`);
   if (view.rejection) out(`    ❌ ${view.rejection.actor} 拒绝：${view.rejection.reason}`);
   if (view.lastError) out(`    ⚠️  ${view.lastError}`);
+  // D-8：approve 之前最后一次看到这份实验的地方也必须提醒——批准是人的判断，
+  // 判断的输入里不能漏掉「安全门根本没看见」这部分。
+  for (const warning of view.unconsumedWarnings) out(`    🚨 未被安全门消费：${warning}`);
 }
 
 function resolveActor(deps: LabCliDeps, flag: string | undefined): { actor: string; source: string } {
@@ -196,6 +199,12 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
             out(`    安全门 ✅ ${check.check}${check.detail ? ` — ${check.detail}` : ""}`);
           }
           for (const warning of view.compileWarnings) out(`    ⚠️  ${warning}`);
+          // D-8：**必须显示**——安全门没看见的信号不能只在 JSON 里才翻得到。
+          if (view.unconsumedWarnings.length > 0) {
+            out("");
+            out("🚨 以下内容安全门没有看见（编译器识别到了信号，但没有规则消费它）：");
+            for (const warning of view.unconsumedWarnings) out(`    🚨 ${warning}`);
+          }
           out("");
           out(`⏸  安全门通过 ≠ 可以执行。下一步需要**人工确认**（AD-6）：`);
           out(`   spark-research lab approve ${view.id.slice(0, 8)} --actor <你的名字>`);

@@ -17,6 +17,21 @@ import {
 //
 // 安全门是**必要非充分条件**：全过也只是允许进入 awaiting_approval，
 // 绝不等于可以执行（AD-6）。这条纪律由状态机守，不由本模块守。
+//
+// ⚠️ P10-d · D-8 口径收敛（评审原话：「过度声明的安全门比没有安全门更危险」）——
+// 这四条规则**不是**同等强度的四道防线：
+//   - `volume_capacity`：唯一全程接编译产物核对的规则，累计溢孔 / 移液器量程都查。
+//   - `chemical_compatibility`：认识一个**有限**的试剂词表（中文常见名 + 英文名/分子式，
+//     见 protocol.ts 的 REAGENT_PATTERNS）。词表之外的试剂（不管中英文）它完全看不见。
+//   - `concentration_limit` / `biosafety`：**在正常调用路径上永远空转**。它们需要的
+//     `concentration` / `biosafetyLevel` 字段，自然语言协议编译器（protocol.ts）
+//     目前完全不解析、不产生——本文件里的对抗测试用 `withReagents()` 手工往编译产物里
+//     注入这两个字段，验证的是「规则本身接住了会不会正确判断」，不代表真实用户写的协议
+//     能触发这两条规则。这不是本次收敛顺手修的范围，devlog 里写明了。
+// 唯一能补的是「让漏检可见」：protocol.ts 的 `Protocol.warnings`（unconsumed 信号）
+// 会把「这句话有浓度/生物安全描述但没人解析」列出来，且**必须**在 CLI / 正文里显示
+// （backend/src/lab/cli.ts、wet_models.ts 的 renderWetExperiment）——安全门看不见的东西，
+// 至少不能悄悄绿灯放行而不留痕迹。
 
 export const MAX_CONCENTRATION: Readonly<Record<string, number>> = {
   hypochlorite: 100,

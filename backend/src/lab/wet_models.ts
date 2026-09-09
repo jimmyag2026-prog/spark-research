@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ResearchRecord } from "../project/models";
 import type { SafetyCheckResult } from "./protocol";
 import type { CompiledStep, DeckSlotPlan } from "./opentrons_protocol";
@@ -12,20 +13,37 @@ import type { WetRunLogEntry, WetSummaryValue } from "./wet_backend";
 // 两者共用的是 record 存储、边语义与 `RecordStore.update()` 窄口，那些才是该复用的东西。
 //
 // ```
-// design → compile → safety_check → awaiting_approval → wet_run → collect → analyze → concluded
-//             ↑           │                 │              │                      └→ iterated
-//             │           └→ failed         └→ rejected    └→ failed
+// design → compile → safety_check → awaiting_approval → approved → executing → collect → analyze → concluded
+//             ↑           │                 │              │  ↑        │  └→ compile          │       └→ iterated
+//             │           └→ failed         └→ rejected    │  └────────┘（重连／崩溃恢复）      └→ failed
 //             └───────────── 重新编译（compile 会清掉已有 approve）
 // ```
 //
-// **唯一进入 `wet_run` 的门是 `approve()`**。这是 AD-6 的落点：安全门全过也只是
+// P10-d · D-10：`wet_run` 拆成了 `approved`（已批准、还没真的动手）与 `executing`
+// （execute() 已经原子声明了执行权、正在跑）两个态。拆开之前 `wet_run` 一个状态要同时
+// 表达「可以执行」和「正在执行」，并发的两个 execute() 读到的是同一个状态、都判断"能执行"，
+// 于是双双通过—这正是 D-9 的物理执行两次问题在状态机层面的根。approved → executing 这条边
+// **只能**由 execute() 内部一次 CAS（`RecordStore.update(..., { expectedRev })`）写出，
+// 写不进去（rev 冲突）说明已经有别的调用先声明了，本次直接判负、绝不碰后端设备。
+//
+// **唯一进入 `approved` 的门是 `approve()`**。这是 AD-6 的落点：安全门全过也只是
 // 允许停在 `awaiting_approval`，物理世界的操作不自动化审批。
+//
+// approval 是**一次性**的（D-10 第 2 点）：声明执行权（approved → executing）那一刻就把
+// `approval` 消费掉（置空，原值搬进 `consumedApproval` 存档），不是等执行结束才清。
+// 这样即使编排进程在 executing 期间被杀、重启后接手，`approval` 也已经不在了——
+// 免审批重跑不可能，只能重新走 compile → safety_check → approve。
+// `executing → compile` 这条边就是这条恢复路径：卡在 executing 的实验只能靠人显式
+// 重新编译才能挣脱，execute() 自己**不会**主动把 executing 判定成 failed
+// （那样会误伤另一个真的还在跑的并发请求——"卡住"和"正在跑"从状态本身分不出来，
+// 分不出来就不猜，一律要求人做主）。
 export const WET_EXPERIMENT_STATES = [
   "design", // 自然语言协议已记录，还没编译
   "compile", // 已编译成 Opentrons 脚本，还没过安全门
   "safety_check", // 安全门已跑且通过（不通过不会进这个状态）
   "awaiting_approval", // 等人工 approve —— 安全门通过 ≠ 可以执行
-  "wet_run", // 已被显式 approve，允许/正在执行
+  "approved", // 已被显式 approve，还没真的开始执行（D-10：与 executing 分开）
+  "executing", // execute() 已原子声明执行权，正在跑（或者：编排进程在这里挂了，等人恢复）
   "collect", // run log 与脚本已回收进 artifact
   "analyze", // 已产出 observation（evidence=observed）
   "concluded", // 终态：得出结论
@@ -41,8 +59,9 @@ export const WET_LEGAL_TRANSITIONS: Readonly<
   design: ["compile"],
   compile: ["safety_check", "compile", "failed"],
   safety_check: ["awaiting_approval", "compile"],
-  awaiting_approval: ["wet_run", "rejected", "compile"],
-  wet_run: ["collect", "failed", "compile"],
+  awaiting_approval: ["approved", "rejected", "compile"],
+  approved: ["executing", "failed", "compile"],
+  executing: ["collect", "failed", "compile"],
   collect: ["analyze", "failed"],
   analyze: ["concluded", "iterated"],
   rejected: ["compile"],
@@ -102,10 +121,16 @@ export interface WetExperimentMeta {
   deck: DeckSlotPlan[];
   compiledSteps: CompiledStep[];
   compileWarnings: string[];
+  // P10-d · D-8：编译器在句子里看到了量纲/试剂/温度等信号，但没有任何一步/一条安全规则
+  // 消费它——「用户写了但安全门没看见」。这条口径必须能被看见，见 renderWetExperiment。
+  unconsumedWarnings: string[];
   safetyChecks: SafetyCheckResult[];
   safetyPassed: boolean | null;
   approval: ApprovalRecordMeta | null;
   rejection: RejectionRecordMeta | null;
+  // P10-d · D-10：approval 是一次性的——声明执行权（approved → executing）那一刻就被消费
+  // （approval 置空），原值搬到这里存档，供审计/正文回看「当初是谁批的」。
+  consumedApproval: ApprovalRecordMeta | null;
   runId: string | null;
   runDir: string | null;
   attempts: number;
@@ -121,6 +146,12 @@ export interface WetExperimentMeta {
   observationId: string | null;
   conclusionId: string | null;
   lastError: string | null;
+  // P10-d · D-9：整个 meta（除这个字段自己）的完整性摘要，每次合法 transition() 都重算。
+  // `RecordStore.update()` 是通用窄口，允许任何调用方对 metadata 做**部分**patch——
+  // 如果有人绕开 WetLabLoop 直接 patch `state`/`approval`/`protocolHash` 那几个字段，
+  // 这里的哈希对不上，get() 会拒绝信任这条记录（见 verifyMetaIntegrity）。
+  // null = 这条记录还没被本机制保护过（老库迁移过来的历史记录）——不是「已验证安全」。
+  integrityHash: string | null;
 }
 
 export interface WetExperimentView extends WetExperimentMeta {
@@ -128,6 +159,10 @@ export interface WetExperimentView extends WetExperimentMeta {
   title: string;
   createdAt: string;
   record: ResearchRecord;
+  // RecordStore 行级版本号（D-9 乐观并发用），不进 metadata。
+  rev: number;
+  // 见 integrityHash 的注释；true = 完整性核验通过或该记录尚未纳入保护（历史记录）。
+  integrityOk: boolean;
 }
 
 export class WetStateError extends Error {
@@ -160,6 +195,62 @@ export class ApprovalRequiredError extends Error {
     super(message);
     this.name = "ApprovalRequiredError";
   }
+}
+
+// P10-d · D-9：并发 execute() 抢同一次执行权判负时抛这个。**继承 WetStateError**——
+// HTTP 层（backend/src/server/routes/lab.ts）已经把 `WetStateError` 映射成 409，
+// 这样并发冲突不需要再改一遍路由层的错误映射表就能拿到正确的 409 语义。
+export class WetExecutionConflictError extends WetStateError {
+  constructor(experimentId: string) {
+    super("approved", "executing", "");
+    this.message =
+      `实验 ${experimentId.slice(0, 8)} 的执行权已经被另一次并发请求抢先声明——本次请求判负，` +
+      `不会重复触碰物理/模拟设备（一次 approve 只允许一次真正执行，D-9）。`;
+    this.name = "WetExecutionConflictError";
+  }
+}
+
+// P10-d · D-9：`get()` 发现 metadata 完整性哈希对不上时抛这个——记录可能被绕过
+// WetLabLoop、直接用 `RecordStore.update()` 部分改写了 state/approval 等字段。
+// 不猜「只是无害的旁路修改」，一律拒绝信任、拒绝继续任何状态机操作。
+export class RecordIntegrityError extends Error {
+  constructor(experimentId: string) {
+    super(
+      `湿实验 ${experimentId.slice(0, 8)} 的 metadata 完整性校验失败——` +
+        `state / approval / protocolHash 等字段可能被绕过状态机直接改写，拒绝信任该记录。` +
+        `如需排查原始内容：RecordStore.get('${experimentId}')（不经过 WetLabLoop 的窄口）。`,
+    );
+    this.name = "RecordIntegrityError";
+  }
+}
+
+// 递归排序 object 的 key（数组顺序保留），保证同一份数据不管构造顺序如何都得到同一段 JSON——
+// 哈希要防的是「内容变了」，不能因为 key 插入顺序不同就误判。
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      out[key] = canonicalize((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+// 对整个 meta（除 integrityHash 自己）算 sha256。每次合法 transition() 之后都重算并存回去；
+// verifyMetaIntegrity 在读的时候重算一遍做比对。
+export function computeMetaIntegrityHash(meta: Omit<WetExperimentMeta, "integrityHash">): string {
+  return createHash("sha256").update(JSON.stringify(canonicalize(meta))).digest("hex");
+}
+
+// meta 缺 integrityHash（老记录，这个机制上线前就存在的）→ 视为「暂未纳入保护」，放行，
+// 不是「已验证安全」。有 integrityHash 就必须对得上，对不上就是被旁路改写过。
+export function verifyMetaIntegrity(meta: Partial<WetExperimentMeta>): boolean {
+  if (meta.integrityHash == null) return true;
+  const { integrityHash, ...rest } = meta;
+  void integrityHash;
+  return computeMetaIntegrityHash(rest as Omit<WetExperimentMeta, "integrityHash">) === meta.integrityHash;
 }
 
 function formatValue(value: unknown): string {
@@ -214,6 +305,20 @@ export function renderWetExperiment(view: Omit<WetExperimentView, "record">): st
       for (const note of notes) lines.push(`- ${note}`);
     }
   }
+  // P10-d · D-8：**必须显示**——「用户写了但安全门没看见」不能靠翻 JSON 才发现。
+  // 放在安全门表格之前：先让人知道安全门到底看到了多少输入，再看它对看到的部分下了什么结论。
+  if (view.unconsumedWarnings.length > 0) {
+    lines.push("");
+    lines.push("## ⚠️ 未被安全门消费的信号");
+    lines.push("");
+    lines.push(
+      "> 编译器在协议原文里看到了这些量纲/试剂/温度类信号，但没有任何一步或任何一条安全规则" +
+        "读取它们——安全门检查的是**编译产物**，看不到的东西不可能被拦截。以下不是「已核对通过」，" +
+        "是「压根没被核对」。",
+    );
+    lines.push("");
+    for (const warning of view.unconsumedWarnings) lines.push(`- ${warning}`);
+  }
   if (view.safetyChecks.length > 0) {
     lines.push("");
     lines.push("## 安全门");
@@ -225,6 +330,12 @@ export function renderWetExperiment(view: Omit<WetExperimentView, "record">): st
     }
     lines.push("");
     lines.push("> 安全门通过 ≠ 可以执行。执行前必须有人工 approve（AD-6）。");
+    lines.push(
+      "> 覆盖范围口径（P10-d D-8 收敛）：`chemical_compatibility` 认识中英文常见试剂名/分子式，" +
+        "`volume_capacity` 是唯一全程接编译产物核对的规则；`concentration_limit` / `biosafety` " +
+        "在自然语言主管线里仍然空转——协议原文里的浓度/生物安全等级描述目前不会被解析进这两条规则，" +
+        "有没有漏看，看上面「未被安全门消费的信号」。",
+    );
   }
   if (view.approval) {
     lines.push("");
@@ -234,6 +345,18 @@ export function renderWetExperiment(view: Omit<WetExperimentView, "record">): st
     lines.push(`- 批准的协议 hash: \`${view.approval.protocolHash}\``);
     lines.push(`- decision record: \`${view.approval.decisionRecordId}\``);
     if (view.approval.note) lines.push(`- 备注：${view.approval.note}`);
+  } else if (view.consumedApproval) {
+    // D-10：approval 在声明执行权那一刻就被消费（置空），这里是审计存档——
+    // 「当初是谁批的」不能因为已经开始执行就从正文里消失。
+    lines.push("");
+    lines.push("## 审批（已消费）");
+    lines.push("");
+    lines.push(`- ✅ ${view.consumedApproval.actor} 于 ${view.consumedApproval.at} 批准`);
+    lines.push(`- 批准的协议 hash: \`${view.consumedApproval.protocolHash}\``);
+    lines.push(`- decision record: \`${view.consumedApproval.decisionRecordId}\``);
+    lines.push(
+      "> 该批准已在声明执行权时一次性消费：这条实验若要重跑，必须重新 compile → safety_check → approve。",
+    );
   }
   if (view.rejection) {
     lines.push("");
