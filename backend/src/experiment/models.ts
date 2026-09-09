@@ -118,6 +118,8 @@ export function renderExperiment(view: Omit<ExperimentView, "record">): string {
   const lines: string[] = [];
   lines.push(`# 实验 · ${view.title}`);
   lines.push("");
+  // record id 写进正文：这条 record 就是一页实验记录本，撕下来也得认得出是哪一页。
+  lines.push(`- record: \`${view.id}\``);
   lines.push(`- 状态：**${view.state}**`);
   lines.push(`- 平台：${view.platform} / ${view.simKind}`);
   lines.push(`- 迭代：第 ${view.iteration} 轮 · 提交 ${view.attempts} 次`);
