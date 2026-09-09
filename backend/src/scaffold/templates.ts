@@ -162,11 +162,18 @@ export function connectorTemplate(ctx: TemplateContext, options: { withCredentia
 
   // 未配置凭据时的统一降级：明确回「未配置」，不是抛错。
   // 统一检索据此把这个源标成 skipped 而不是 failed——**未配置不是失败**。
-  async search(params: Record<string, unknown>): Promise<unknown> {
+  //
+  // 用构造函数里 \`this.handle("search", ...)\` 显式把这个方法注册成 "search" 工具的
+  // handler，而不是靠方法名与 tool 名相同被基类自动发现——「同名方法即 handler」的
+  // 魔法分发在 v0.3 已经移除：并发调用下它会让参数映射 / 凭据检查被静默跳过（P10-a
+  // 修的 P0 缺陷）。落到通用 URL 拼装路径时调 \`this.requestRaw(...)\`——**不要**再经
+  // 基类 \`call()\` 转一趟：对 "search" 那会重新命中刚注册的这个 handler，自己调自己，
+  // 死循环。
+  private async searchImpl(params: Record<string, unknown>): Promise<unknown> {
     if (!this.credential()) {
       return { configured: false, source: "${ctx.name}", results: [], note: "未配置凭据：spark-research 里为 ${ctx.name} 配置 api_key 后可用" };
     }
-    return super.call("search", params);
+    return this.requestRaw("search", params);
   }
 `
     : `
@@ -176,6 +183,10 @@ export function connectorTemplate(ctx: TemplateContext, options: { withCredentia
     return politeHeaders({ userAgent: this.options.userAgent, contactEmail: this.options.contactEmail });
   }
 `;
+
+  const constructorHandlerRegistration = options.withCredentials
+    ? `\n    this.handle("search", (p) => this.searchImpl(p));`
+    : "";
 
   return [
     {
@@ -188,7 +199,11 @@ import { politeHeaders } from "${politenessRel}";
 // 契约只有三件事：
 //   1. 一份 HttpConnectorConfig（baseUrl + tools + metadata）
 //   2. 可选的 headersFor / queryFor 覆写（礼貌头、鉴权头、mailto）
-//   3. 可选的与 tool 同名的方法覆写（需要自定义解析时）
+//   3. 需要自定义解析时：在构造函数里 \`this.handle(toolName, fn)\` 显式注册 handler，
+//      handler 内部落到通用路径时调 \`this.requestRaw(toolName, params)\`——**不要**再
+//      经基类 \`call()\` 转一趟，对同一个 toolName 那会重新命中刚注册的 handler，
+//      自己调自己，死循环。也**不要**靠「方法名与 tool 名相同」让基类自动发现——这套
+//      魔法反射分发在 v0.3 已经移除，并发调用下它会让参数映射 / 凭据检查被静默跳过。
 // 除此之外什么都不用做——HTTP 调用、路径参数替换、错误处理都在基类里。
 
 export const ${ctx.name.replace(/-/g, "")}Config: HttpConnectorConfig = {
@@ -219,7 +234,7 @@ export const ${ctx.name.replace(/-/g, "")}Config: HttpConnectorConfig = {
 
 export class ${ctx.className}Connector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
-    super("${ctx.name}", ${ctx.name.replace(/-/g, "")}Config, options);
+    super("${ctx.name}", ${ctx.name.replace(/-/g, "")}Config, options);${constructorHandlerRegistration}
   }
 ${credentialBits}}
 `,

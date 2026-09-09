@@ -14,6 +14,8 @@ export const pubmedConfig: HttpConnectorConfig = {
 export class PubMedConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pubmed", pubmedConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getAbstract", (p) => this.getAbstract(p));
   }
 
   async search(params: { query?: string; retmax?: number } & Record<string, unknown>): Promise<unknown> {
@@ -25,7 +27,7 @@ export class PubMedConnector extends HttpConnector {
     mapped.db ??= "pubmed";
     mapped.retmode ??= "json";
     mapped.retmax ??= params.retmax ?? 10;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getAbstract(params: { id?: string | number; rettype?: string } & Record<string, unknown>): Promise<unknown> {
@@ -35,7 +37,7 @@ export class PubMedConnector extends HttpConnector {
     }
     mapped.db ??= "pubmed";
     mapped.rettype ??= "abstract";
-    return super.call("getAbstract", mapped);
+    return this.requestRaw("getAbstract", mapped);
   }
 }
 
@@ -52,6 +54,7 @@ export const arxivConfig: HttpConnectorConfig = {
 export class arXivConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("arxiv", arxivConfig, options);
+    this.handle("search", (p) => this.search(p));
   }
 
   async search(params: { query?: string; max_results?: number } & Record<string, unknown>): Promise<unknown> {
@@ -63,7 +66,7 @@ export class arXivConnector extends HttpConnector {
     if (params.max_results !== undefined) {
       mapped.max_results = params.max_results;
     }
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 }
 
@@ -116,6 +119,9 @@ export const openalexConfig: HttpConnectorConfig = {
 export class OpenAlexConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("openalex", openalexConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getPaper", (p) => this.getPaper(p));
+    this.handle("getReferences", (p) => this.getReferences(p));
   }
 
   // OpenAlex 用 mailto 查询参数而不是 header 进 polite pool。
@@ -139,19 +145,19 @@ export class OpenAlexConnector extends HttpConnector {
     }
     mapped["per-page"] ??= 10;
     mapped.select ??= OPENALEX_SELECT;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
     const id = String(params.id ?? "");
     if (!id) throw new Error('Connector "openalex" tool "getPaper" 需要参数 id');
-    return super.call("getPaper", { ...params, id: openAlexEntityId(id), select: params.select ?? OPENALEX_SELECT });
+    return this.requestRaw("getPaper", { ...params, id: openAlexEntityId(id), select: params.select ?? OPENALEX_SELECT });
   }
 
   async getReferences(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
     const id = String(params.id ?? "");
     if (!id) throw new Error('Connector "openalex" tool "getReferences" 需要参数 id');
-    return super.call("getReferences", { ...params, id: openAlexEntityId(id), select: "id,referenced_works" });
+    return this.requestRaw("getReferences", { ...params, id: openAlexEntityId(id), select: "id,referenced_works" });
   }
 }
 
@@ -168,6 +174,8 @@ export const crossrefConfig: HttpConnectorConfig = {
 export class CrossRefConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("crossref", crossrefConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getPaper", (p) => this.getPaper(p));
   }
 
   protected override queryFor(): Record<string, string> {
@@ -185,7 +193,7 @@ export class CrossRefConnector extends HttpConnector {
       delete mapped.limit;
     }
     mapped.rows ??= 10;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getPaper(params: { id?: string; doi?: string } & Record<string, unknown>): Promise<unknown> {
@@ -194,7 +202,7 @@ export class CrossRefConnector extends HttpConnector {
     const doi = raw.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "");
     const rest = { ...params };
     delete rest.doi;
-    return super.call("getPaper", { ...rest, id: doi });
+    return this.requestRaw("getPaper", { ...rest, id: doi });
   }
 }
 
@@ -220,6 +228,8 @@ export function europePmcIdQuery(raw: string): string {
 export class EuropePMCConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("europepmc", europepmcConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getPaper", (p) => this.getPaper(p));
   }
 
   protected override headersFor(): Record<string, string> {
@@ -236,7 +246,7 @@ export class EuropePMCConnector extends HttpConnector {
     mapped.format ??= "json";
     // core 结果集才带 abstract 与 fullTextUrlList（PDF 下载管线依赖它）。
     mapped.resultType ??= "core";
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
@@ -244,7 +254,7 @@ export class EuropePMCConnector extends HttpConnector {
     if (!id) throw new Error('Connector "europepmc" tool "getPaper" 需要参数 id');
     const rest = { ...params };
     delete rest.id;
-    return super.call("getPaper", {
+    return this.requestRaw("getPaper", {
       ...rest,
       query: europePmcIdQuery(id),
       format: "json",
@@ -286,6 +296,8 @@ export function semanticScholarPaperId(raw: string): string {
 export class SemanticScholarConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("semanticscholar", semanticscholarConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getPaper", (p) => this.getPaper(p));
   }
 
   protected override headersFor(): Record<string, string> {
@@ -296,13 +308,13 @@ export class SemanticScholarConnector extends HttpConnector {
     const mapped: Record<string, unknown> = { ...params };
     mapped.limit = Math.min(Number(params.limit ?? 10) || 10, 100);
     mapped.fields ??= S2_FIELDS;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
     const id = String(params.id ?? "");
     if (!id) throw new Error('Connector "semanticscholar" tool "getPaper" 需要参数 id');
-    return super.call("getPaper", { ...params, id: semanticScholarPaperId(id), fields: params.fields ?? S2_FIELDS });
+    return this.requestRaw("getPaper", { ...params, id: semanticScholarPaperId(id), fields: params.fields ?? S2_FIELDS });
   }
 }
 

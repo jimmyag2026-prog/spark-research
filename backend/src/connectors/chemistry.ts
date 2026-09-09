@@ -13,6 +13,7 @@ export const chemblConfig: HttpConnectorConfig = {
 export class ChemBLConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("chembl", chemblConfig, options);
+    this.handle("search", (p) => this.search(p));
   }
 
   async search(params: { query?: string; q?: string; limit?: number } & Record<string, unknown>): Promise<unknown> {
@@ -22,7 +23,7 @@ export class ChemBLConnector extends HttpConnector {
       delete mapped.query;
     }
     if (params.limit !== undefined) mapped.limit = params.limit;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 }
 
@@ -39,6 +40,7 @@ export const pubchemConfig: HttpConnectorConfig = {
 export class PubChemConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pubchem", pubchemConfig, options);
+    this.handle("search", (p) => this.search(p));
   }
 
   async search(params: { name?: string; query?: string } & Record<string, unknown>): Promise<unknown> {
@@ -47,6 +49,6 @@ export class PubChemConnector extends HttpConnector {
       mapped.name = params.query;
       delete mapped.query;
     }
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 }

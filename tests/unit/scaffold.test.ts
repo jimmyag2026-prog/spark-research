@@ -152,6 +152,8 @@ describe("脚手架 · 生成物当场可用（CI 真跑一遍）", () => {
           err: out,
         }),
       ).toBe(0);
+      // 见下面「带 key」用例里的同款断言：免 key 模板同样不该出现旧的反射分发写法。
+      expect(readFileSync(join(dir, "openfree.ts"), "utf8")).not.toContain("super.call(");
       const result = await runGeneratedTests([join(testDir, "connector_openfree.test.ts")]);
       expect(result.output).toContain("0 fail");
       expect(result.code).toBe(0);
@@ -178,6 +180,14 @@ describe("脚手架 · 生成物当场可用（CI 真跑一遍）", () => {
       // 带 key 的模板必须把 AD-2 的两条纪律写进代码：降级不抛错、凭据只从 daemon 拿。
       expect(generated).toContain("configured: false");
       expect(generated).toContain("AD-2");
+      // P10-a 回归防线：生成的 connector 不得再用「同名方法即 handler」的旧写法
+      // （方法体内调 super.call(...) 落到通用路径）——v0.3 起这套魔法反射分发已经
+      // 从 HttpConnector 移除，并发调用下它会让参数映射 / 凭据检查被静默跳过（P0）。
+      // 新契约是构造函数里 this.handle(toolName, fn) 显式注册，handler 内部落到
+      // 通用路径时调 this.requestRaw(...)。
+      expect(generated).not.toContain("super.call(");
+      expect(generated).toContain('this.handle("search"');
+      expect(generated).toContain("this.requestRaw(");
       const result = await runGeneratedTests([join(testDir, "connector_paidsource.test.ts")]);
       expect(result.output).toContain("0 fail");
       expect(result.code).toBe(0);

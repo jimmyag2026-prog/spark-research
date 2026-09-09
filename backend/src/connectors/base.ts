@@ -64,7 +64,27 @@ export class HttpConnector {
     this.http = options.http ?? defaultHttp;
   }
 
-  private __handlingTool = "";
+  // 显式 handler 表（构造期由子类注册）。见下方 `handle()` 的注释了解为什么不是
+  // 「同名方法即 handler」的反射分发——那是 P9 及更早版本的设计，v0.3 已移除。
+  private readonly handlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
+
+  // 子类构造函数里调用：为某个工具名注册显式 handler。
+  //
+  // **v0.3 起这是唯一的分发机制**（P10-a）。P9 及更早版本里，`call()` 会反射检查
+  // 「有没有一个与 toolName 同名的实例方法」，命中就自动当 handler 调用——这套魔法
+  // 分发被外部评审判定为坏抽象：并发调用同一个 connector 实例时，旧实现靠一个跨请求
+  // 共享的实例字段 `__handlingTool` 判断「是否正在处理这个工具」防止 handler 内部
+  // 调用 `call()` 时死循环重入，但该字段会被并发请求互相污染，导致 handler（参数
+  // 映射、AD-2 的凭据缺失检查）被静默跳过、退化成零参数的通用直通——而且是偶发的，
+  // 单元测试测不出来，只在生产的并发场景（daemon 共享单例 registry + swarm 并发调用）
+  // 下现身。曾经试过用 `AsyncLocalStorage` 把反射分发做成竞态安全的兼容层，但那是给
+  // 一个已经被判定为坏抽象的契约续命，而且引入了真实的运行时开销；主会话裁定：
+  // 契约本身要改，不是加兜底——所以这里不再做任何反射，`handlers` 是构造期一次性
+  // 写入、运行期只读的表，`call()` 只有「查表命中就走 handler，否则走通用路径」
+  // 两条路，不存在任何跨请求共享的可变状态。
+  protected handle(toolName: string, fn: (params: Record<string, unknown>) => Promise<unknown>): void {
+    this.handlers.set(toolName, fn);
+  }
 
   // 子类可覆写：为请求追加礼貌头 / 鉴权头。
   protected headersFor(_toolName: string): Record<string, string> {
@@ -76,7 +96,7 @@ export class HttpConnector {
     return {};
   }
 
-  async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  private assertKnownTool(toolName: string): HttpTool {
     const tool = this.config.tools.find((t) => t.name === toolName);
     if (!tool) {
       throw new Error(
@@ -85,17 +105,24 @@ export class HttpConnector {
           .join(", ")}`,
       );
     }
+    return tool;
+  }
 
-    const handler = (this as unknown as Record<string, unknown>)[toolName];
-    if (typeof handler === "function" && toolName in this && this.__handlingTool !== toolName) {
-      this.__handlingTool = toolName;
-      try {
-        return await (handler as (p: Record<string, unknown>) => Promise<unknown>).call(this, params);
-      } finally {
-        this.__handlingTool = "";
-      }
+  async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    this.assertKnownTool(toolName);
+
+    const handler = this.handlers.get(toolName);
+    if (handler) {
+      return await handler(params);
     }
 
+    return this.requestRaw(toolName, params);
+  }
+
+  // 通用 URL 拼装 + 发请求路径。子类 handler 内部要落到这条路径时调用它，而不是
+  // `call()`——它不查 handler 表，所以不会递归回到 handler 自己（见上方 handlers 注释）。
+  protected async requestRaw(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const tool = this.assertKnownTool(toolName);
     let path = tool.endpoint;
     const remaining: Record<string, unknown> = { ...params };
     for (const key of Object.keys(remaining)) {

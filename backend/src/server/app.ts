@@ -7,6 +7,7 @@ import { ProtocolCompiler, validateProtocol } from "../lab/protocol";
 import type { Protocol } from "../lab/protocol";
 import { LabSafetyGate } from "../lab/orchestrator";
 import { HttpError, ServerContext, type ServerDeps } from "./context";
+import { resolveSetting } from "../config";
 import { experimentRoutes } from "./routes/experiments";
 import { ideationRoutes } from "./routes/ideation";
 import { labRoutes } from "./routes/lab";
@@ -66,6 +67,71 @@ function serveFile(dir: string, relative: string): Response | null {
   return new Response(file(path), { headers: { "Content-Type": mime } });
 }
 
+// ── D-7：写请求的 Origin/Host 校验 + Content-Type 强制 ─────────────────────
+//
+// 外部评审给出的攻击链：用户浏览器开一个恶意网页 → 该网页对本机 API 发一个
+// `Content-Type: text/plain` 的跨站 POST（这种「简单请求」不会触发 CORS 预检，
+// 浏览器照样把它发出去）→ 冒充用户调用写端点（比如 lab 的 approve）。
+// 现在后端是模拟器，后果有限；接了真实 Opentrons 设备之后这条直接是 P0。
+//
+// 两道闸：
+//   1) 写请求（POST/PUT/PATCH/DELETE）必须显式声明 `Content-Type: application/json`——
+//      堵住「用非 JSON Content-Type 绕开预检」这条路。跨站攻击者可以伪造这个头，
+//      但伪造了它就正好落进闸 2）。
+//   2) 若请求带 Origin header，必须在白名单内（本地默认 localhost/127.0.0.1，
+//      任意端口；可用 config 的 originAllowlist 扩展）。
+//
+// **关键判定，务必先想清楚再动**：缺 Origin header 的请求一律放行，不做任何拦截。
+// 这不是漏洞，是刻意口径——理由：
+//   - 现代浏览器对「非同源」的 fetch/XHR 写请求（含 text/plain 绕预检那种）与
+//     跨站 `<form>` POST 导航，都会强制带上 Origin，拿不掉、改不了。真实的
+//     跨站攻击者发不出「没有 Origin」的浏览器请求。
+//   - 没有 Origin 的写请求只可能来自非浏览器调用方：本机 CLI（`spark-research`
+//     直接调用 daemon，不经过这层 HTTP）、MCP server 的进程内 `app.fetch()`
+//     （backend/src/mcp/server.ts 用 `new Request()` 构造，从不带 Origin）、
+//     curl / 这个仓库里几十个直接打 HTTP 的既有测试。这些等价于「本机 shell
+//     里跑的东西」，挡住它们只会把没坏的路径打红，换不来任何真实的安全收益。
+//   - 换句话说：Origin 校验防的是「浏览器代替用户身份去打本机 API」，
+//     对没有浏览器参与的调用方无意义，也无法收窄。
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+// 本地回环地址恒信任，端口不限——开发/生产两种模式下前端与 API 经常不同端口
+// （dev server 代理、或生产构建产物由同一个 Hono 实例直出但端口仍可能变化）。
+function isLocalHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+}
+
+function parseAllowlist(raw: string | number | null | undefined): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function isAllowedOrigin(origin: string, allowlist: string[]): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(origin).hostname;
+  } catch {
+    // 解析不了的 Origin（畸形/伪造）一律当作不可信，绝不当成「缺 Origin」放行。
+    return false;
+  }
+  return isLocalHostname(hostname) || allowlist.includes(hostname) || allowlist.includes(origin);
+}
+
+function isJsonContentType(contentType: string): boolean {
+  // 只看 `;` 前的 media type，忽略 charset 等参数；大小写不敏感。
+  return contentType.split(";")[0]!.trim().toLowerCase() === "application/json";
+}
+
+// deps.root 已经是 ServerDeps 的既有字段（供各域测试注入 mkdtemp 工作区），
+// 这里复用它去解析 originAllowlist，不需要改 ServerDeps/ServerContext 的形状。
+function loadOriginAllowlist(deps: ServerDeps): string[] {
+  return parseAllowlist(resolveSetting("originAllowlist", { root: deps.root }).value);
+}
+
 export function createApp(deps: ServerDeps = {}): Hono {
   const app = new Hono();
   const ctx = new ServerContext(deps);
@@ -80,6 +146,31 @@ export function createApp(deps: ServerDeps = {}): Hono {
     }
     const message = error instanceof Error ? error.message : String(error);
     return c.json({ error: message }, 500);
+  });
+
+  // D-7：写请求安全闸，见上面大段注释。挂在所有路由之前，对 /api/* 与静态/SPA
+  // 路径统一生效（后者没有写方法，这道闸对它们等价于 no-op）。
+  const originAllowlist = loadOriginAllowlist(deps);
+  app.use("*", async (c, next) => {
+    const method = c.req.method.toUpperCase();
+    if (!WRITE_METHODS.has(method)) return next();
+
+    const contentType = c.req.header("content-type") ?? "";
+    if (!isJsonContentType(contentType)) {
+      return c.json(
+        { error: `写请求必须使用 Content-Type: application/json（收到 '${contentType || "(missing)"}'）` },
+        415,
+      );
+    }
+
+    const origin = c.req.header("origin");
+    // 缺 Origin = 同源/进程内调用（CLI、MCP 的 app.fetch()、curl 等）——恒放行，
+    // 理由见本文件顶部「关键判定」那段注释，不要在这里加「没有就当作可疑」的逻辑。
+    if (origin !== undefined && !isAllowedOrigin(origin, originAllowlist)) {
+      return c.json({ error: `拒绝跨站请求：Origin '${origin}' 不在白名单内` }, 403);
+    }
+
+    return next();
   });
 
   // ── v0.1 既有端点（保持不变） ───────────────────────────────────────────────

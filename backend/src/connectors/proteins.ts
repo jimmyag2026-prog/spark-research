@@ -32,6 +32,8 @@ export const pdbConfig: HttpConnectorConfig = {
 export class PDBConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pdb", pdbConfig, options);
+    this.handle("searchStructures", (p) => this.searchStructures(p));
+    this.handle("searchByUniProt", (p) => this.searchByUniProt(p));
   }
 
   async searchStructures(params: { query?: string; rows?: number } & Record<string, unknown>): Promise<unknown> {
@@ -56,7 +58,7 @@ export class PDBConnector extends HttpConnector {
       return_type: "entry",
       request_options: { paginate: { start: 0, rows } },
     };
-    return super.call("searchStructures", payload as unknown as Record<string, unknown>);
+    return this.requestRaw("searchStructures", payload as unknown as Record<string, unknown>);
   }
 
   // 按 UniProt accession 找该蛋白的实验结构。
@@ -88,6 +90,6 @@ export class PDBConnector extends HttpConnector {
       return_type: "entry",
       request_options: { paginate: { start: 0, rows }, sort: [{ sort_by: "score", direction: "desc" }] },
     };
-    return super.call("searchByUniProt", payload as unknown as Record<string, unknown>);
+    return this.requestRaw("searchByUniProt", payload as unknown as Record<string, unknown>);
   }
 }

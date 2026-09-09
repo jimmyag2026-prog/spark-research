@@ -1,14 +1,16 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CONFIG_SETTINGS,
   applyConfigEnvDefaults,
+  checkConfigPermissions,
   configPath,
   configuredMcpTimeoutMs,
   configuredSimulationPlatform,
   configuredWetBackend,
+  enforceConfigPermissions,
   loadConfig,
   resolveAll,
   resolveSetting,
@@ -150,6 +152,89 @@ describe("配置面 · 凭据不泄漏（AD-2 延伸）", () => {
     // dataDir 决定 config.json 自己在哪儿，倒过来设没有意义
     expect(env.SPARK_RESEARCH_DATA_DIR).toBeUndefined();
     expect(applied).toEqual([CONTACT_EMAIL_ENV]);
+  });
+});
+
+describe("配置面 · config.json 权限（D-6，与 credentials.json 同等保护）", () => {
+  // config.json 装着 KIMI_API_KEY / OPENROUTER_API_KEY——项目里最值钱的密钥。
+  // 保护不能弱于 connector 凭据（daemon/credentials.ts 的 0600）。
+  test("saveConfig 写入后文件权限是 0600", () => {
+    const root = tmpRoot();
+    saveConfig({ defaultProvider: "kimi" }, { root });
+    const mode = statSync(configPath({ root })).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  // 最容易漏的一条路径：writeFileSync 的 mode 只在**创建**文件时生效。
+  // 一个已经以 0644 存在的文件（例如老版本留下的、或被别的工具重建过）
+  // 必须在下一次写入时被**显式 chmod** 收紧，而不是继续带着旧权限。
+  test("文件已存在且是 0644 → 写入后被收紧到 0600", () => {
+    const root = tmpRoot();
+    saveConfig({ defaultProvider: "kimi" }, { root });
+    const path = configPath({ root });
+    chmodSync(path, 0o644);
+    expect(statSync(path).mode & 0o777).toBe(0o644);
+
+    saveConfig({ defaultProvider: "kimi", defaultModel: "x" }, { root });
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // 内容也确实是新写入的，不是权限修了但数据没变。
+    expect(JSON.parse(readFileSync(path, "utf8")).defaultModel).toBe("x");
+  });
+
+  test("checkConfigPermissions：不存在的文件视为 ok（不阻断首次运行）", () => {
+    const root = tmpRoot();
+    const result = checkConfigPermissions({ root });
+    expect(result.ok).toBe(true);
+    expect(result.mode).toBe("-");
+  });
+
+  test("checkConfigPermissions：0600 判定为 ok，过宽（0644）判定为不 ok 并带告警文案", () => {
+    const root = tmpRoot();
+    saveConfig({}, { root });
+    expect(checkConfigPermissions({ root }).ok).toBe(true);
+
+    chmodSync(configPath({ root }), 0o644);
+    const result = checkConfigPermissions({ root });
+    expect(result.ok).toBe(false);
+    expect(result.mode).toBe("644");
+    expect(result.warning).toContain("644");
+    // 只读检测：不该顺手把文件改了——那是 enforceConfigPermissions 的职责。
+    expect(statSync(configPath({ root })).mode & 0o777).toBe(0o644);
+  });
+
+  test("enforceConfigPermissions：发现权限过宽 → 立即收紧到 0600 并报告发现时的状态", () => {
+    const root = tmpRoot();
+    saveConfig({}, { root });
+    chmodSync(configPath({ root }), 0o644);
+
+    const result = enforceConfigPermissions({ root });
+    expect(result.ok).toBe(false);
+    expect(result.warning).toBeTruthy();
+    // 收紧已经发生（这才是启动自检要的效果，不是仅仅报告）。
+    expect(statSync(configPath({ root })).mode & 0o777).toBe(0o600);
+  });
+
+  test("loadConfig 在读取时触发同样的自检收紧，并把告警交给注入的 warn", () => {
+    const root = tmpRoot();
+    saveConfig({ defaultProvider: "kimi" }, { root });
+    chmodSync(configPath({ root }), 0o644);
+
+    const warnings: string[] = [];
+    const config = loadConfig({ root, warn: (m) => warnings.push(m) });
+
+    expect(config.defaultProvider).toBe("kimi");
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings[0]).toContain("644");
+    expect(statSync(configPath({ root })).mode & 0o777).toBe(0o600);
+  });
+
+  test("loadConfig 权限已经是 0600 时不告警", () => {
+    const root = tmpRoot();
+    saveConfig({}, { root });
+    const warnings: string[] = [];
+    loadConfig({ root, warn: (m) => warnings.push(m) });
+    expect(warnings).toHaveLength(0);
   });
 });
 

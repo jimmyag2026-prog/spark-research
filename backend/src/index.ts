@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { join } from "path";
 import { createInterface } from "readline";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
@@ -17,7 +17,7 @@ import { runLabCommand } from "./lab/cli";
 import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
 import { runConfigCommand } from "./config/cli";
-import { applyConfigEnvDefaults } from "./config";
+import { applyConfigEnvDefaults, enforceConfigPermissions } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
 import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
@@ -51,6 +51,11 @@ const HELP = `Spark Research v${pkg.version}
 
 const CONFIG_DIR = join(homedir(), ".spark-research");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+// D-6：这里落盘的是 LLM API key（KIMI_API_KEY / OPENROUTER_API_KEY）——与
+// daemon/credentials.ts 里的 connector 凭据同等敏感，理应同等保护（0600）。
+// 照抄 credentials.ts 的写法：目录 0700 / 文件 0600 / 写入后显式 chmod。
+const CONFIG_FILE_MODE = 0o600;
+const CONFIG_DIR_MODE = 0o700;
 
 interface Config {
   [key: string]: string | undefined;
@@ -67,8 +72,11 @@ function loadConfig(): Config {
 }
 
 function saveConfig(config: Config): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
+  // writeFileSync 的 mode 只在创建新文件时生效；已存在的文件（例如从 0644 升级而来）
+  // 要显式 chmod 才会真的被收紧。
+  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", { mode: CONFIG_FILE_MODE });
+  chmodSync(CONFIG_FILE, CONFIG_FILE_MODE);
 }
 
 const KEY_NAMES = {
@@ -253,6 +261,12 @@ function main() {
   // config.json 里的非凭据设置补进 env（已有 env 不动）——礼貌头这类在很深的调用栈里
   // 只读 env 的配置靠这一步生效，优先级仍是 env > config.json（P9 配置面收口）。
   applyConfigEnvDefaults();
+  // D-6：启动时权限自检——config.json 里可能躺着 LLM API key，发现权限过宽（非 0600）
+  // 立即收紧并告警，而不是等下一次 `config set`/`auth` 写入才顺带修复。
+  const permCheck = enforceConfigPermissions();
+  if (!permCheck.ok && permCheck.warning) {
+    console.warn(`⚠️  ${permCheck.warning}`);
+  }
   const cmd = process.argv[2];
   switch (cmd) {
     case undefined:
