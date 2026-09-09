@@ -415,6 +415,17 @@ export class ExperimentLoop {
     }));
   }
 
+  // 把一条 analyze 中的干实验直接推到终态 `iterated`，**不**新建干实验。
+  //
+  // P6 的干湿闭环接通点用它：干实验跑完观察之后，接棒的是一条**湿**实验
+  //（另一张状态机、另一个 record 类型形态），不是 `iterate()` 能建出来的东西。
+  // supersedes 边由调用方（WetLabLoop.deriveFromDry）在建完湿实验后补，方向与 iterate 一致。
+  markIterated(ref: string, note: string): ExperimentView {
+    const view = this.get(ref);
+    this.assertTransition(view.state, "iterated");
+    return this.transition(view, "iterated", note, (meta) => meta);
+  }
+
   // 改参数另起一条实验：新 record 走 supersedes 边连回旧的，旧的转入终态 iterated。
   async iterate(
     ref: string,
