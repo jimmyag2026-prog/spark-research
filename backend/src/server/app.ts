@@ -11,6 +11,7 @@ import { ideationRoutes } from "./routes/ideation";
 import { labRoutes } from "./routes/lab";
 import { literatureRoutes } from "./routes/literature";
 import { artifactRoutes, recordRoutes } from "./routes/records";
+import { conclusionRoutes, reportRoutes } from "./routes/report";
 import { sessionRoutes, taskRoutes } from "./routes/session";
 import { projectRoutes } from "./routes/projects";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
@@ -115,6 +116,8 @@ export function createApp(deps: ServerDeps = {}): Hono {
   app.route("/api/experiments", experimentRoutes(ctx));
   app.route("/api/lab", labRoutes(ctx));
   app.route("/api/records", recordRoutes(ctx));
+  app.route("/api/conclusions", conclusionRoutes(ctx));
+  app.route("/api/report", reportRoutes(ctx));
   app.route("/api/session", sessionRoutes(ctx));
   app.route("/api/tasks", taskRoutes(ctx));
 

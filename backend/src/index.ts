@@ -14,6 +14,8 @@ import { runLitCommand } from "./literature/cli";
 import { runIdeaCommand } from "./ideation/cli";
 import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
+import { runConclusionCommand } from "./conclusion/cli";
+import { runReportCommand } from "./report/cli";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -28,6 +30,8 @@ const HELP = `Spark Research v${pkg.version}
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
+  spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
+  spark-research report      研究报告导出（export —— 证据图 → Markdown）
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
   spark-research server      启动 Web 服务（默认 4321）
@@ -290,6 +294,19 @@ function main() {
     }
     case "lab": {
       runLabCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "conclusion":
+    case "conclusions": {
+      runConclusionCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "report": {
+      runReportCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;
