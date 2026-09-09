@@ -12,9 +12,16 @@ addopts = "--import-mode=importlib"
 [tool.uv]
 package = true
 
+# P5 起本机 .venv 用 uv 建（`uv venv --python 3.12 .venv`），依赖用
+# `VIRTUAL_ENV=.venv uv pip install <pkg>` 装进 .venv —— **不动系统 python**。
+# 实测：OpenMM 8.6 在 PyPI 上有 macOS arm64 wheel，无需 conda。
 [dependencies]
 numpy = ">=1.26"
 pandas = ">=2.0"
 jupyter-client = ">=8.0"
 ipykernel = ">=6.29"
 rdkit = ">=2023.9"
+# P5 干实验：OpenMM adapter（backend/src/simulation/openmm/）。
+# pyref adapter 刻意零依赖（纯标准库），所以 CI 里没装 openmm 也能跑契约测试。
+openmm = ">=8.1"
+pytest = ">=8.0"
