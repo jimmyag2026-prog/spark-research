@@ -8,6 +8,10 @@ license = { text = "Apache-2.0" }
 [tool.pytest.ini_options]
 pythonpath = ["backend/src"]
 addopts = "--import-mode=importlib"
+# 本仓约定的测试文件名是 `<模块>.test.py`，不匹配 pytest 默认的 `test_*.py` / `*_test.py`。
+# P5 之前 `pytest tests/` 会**静默收集到 0 个用例**（只有显式指定文件名才跑得到），
+# 等于整个 Python 侧没有测试门槛。这里把模式补上。
+python_files = ["*.test.py", "test_*.py", "*_test.py"]
 
 [tool.uv]
 package = true
