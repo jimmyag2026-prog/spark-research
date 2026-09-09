@@ -152,6 +152,23 @@ P5 落地口径：
 - v0.2 目标：**用 Opentrons 官方模拟器（`opentrons_simulate`）替换 mock**，跑通一次真实协议编译 → 模拟执行 → 结果回传
 - 物理设备对接留 v0.3+（需要真实硬件）
 
+P6 落地口径：
+- 编译目标是 **Opentrons Flex** / Python Protocol API v2（`apiLevel 2.21`），不是 OT-2。
+  两条理由：① opentrons 9.x 已移除 OT-2 支持，`simulate()` 对 OT-2 协议直接 `RuntimeError`；
+  ② OT-2 没有吸光度读板模块，「600 nm 读 OD」在 Flex 上才有真模块，不必退化成注释
+- 执行后端两个：`opentrons_simulate`（**默认**，官方模拟器）与 `mock_devices`（单测后端，
+  零依赖）。mock 验管线、不验协议合法性——一个 opentrons 拒绝解析的脚本在 mock 上一样「跑成功」，
+  所以默认必须是真模拟器
+- **Opentrons 上没有的硬件不假装有**：离心、非四档波长读数、<37 °C 孵育、离机配液一律编译成
+  `[spark-note]` 注释并标 `execution: "manual"`，run log 里是 note 不是执行记录
+- run log 锚定：编译器在每步前注入 `protocol.comment("[spark-step] <id> <action>")`，
+  结构化解析靠这个锚点把每条命令绑回编译产物里的某一步，不依赖 opentrons 的文案措辞
+- `protocolHash` = sha256(生成的脚本源码)，源码里刻意不含编译时间戳——approve gate 批的是这个
+  hash，带时间戳则每次编译都换 hash，approve 永远失效
+- 安全门从三段 if 拆成**四条彼此独立的纯函数规则**（`chemical_compatibility` /
+  `concentration_limit` / `biosafety` / **新增 `volume_capacity`**）。`volume_capacity` 吃编译产物：
+  「单孔累计溢孔」在自然语言层面看不出来，只有排完 deck 累加才知道
+
 **B3 干湿闭环引擎**
 - 状态机：`design → dry_run → (approve gate) → wet_run → collect → analyze → iterate | conclude`
 - 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
@@ -176,6 +193,30 @@ P5 落地口径（干实验部分；`wet_run` 与 approve gate 留 P6）：
   `conclusion --derives_from--> observation/experiment`。
   experiment 的 evidence 是 `inferred`（设计是推的），observation 是 `computed`（结果是算的）
 - 结论卡在 P5 只落最小结构且 `review` 一律 `pending`（完整 review 门槛见域 E2/P8）
+
+P6 落地口径（湿实验半边 + approve gate）：
+- 湿实验用**另一张状态机**，11 个状态：`design / compile / safety_check / awaiting_approval /
+  wet_run / collect / analyze / concluded / iterated / rejected / failed`，18 条合法转移。
+  与 P5 干实验状态机**刻意分表**：两条链的状态集不同，而且 P5 的转移表被一组穷举测试锁死，
+  往里加状态会把那组测试的语义悄悄改掉。两者共用的是 record 存储、边语义与
+  `RecordStore.update()` 窄口——那些才是该复用的
+- **AD-6 的落点在转移表**：`wet_run` 的唯一入边是 `awaiting_approval → wet_run`，
+  而这条边只有 `approve()` 会走。安全门通过后 `safetyCheck()` 连做两条转移
+  （`compile → safety_check` 与 `safety_check → awaiting_approval`），
+  「门过了」与「停下来等人」在证据图上分得开
+- approve / reject 各落一条 `decision` record（`evidence=inferred`，`derives_from` 边连实验），
+  metadata 记 **谁 / 何时 / 批的是哪个 protocolHash**；正文里列出批的那一版步骤表与当时的安全门结论
+- **重新编译一律清掉已有的 approve/reject 与安全门结论**：协议在改，旧批准不能跨版本存活。
+  另有第二道防线——`execute()` 在执行前把审批的 hash 与当前编译产物的 hash 再对一次，
+  防的是状态机之外的路径（有人直接改了 record、并发编译）
+- 干湿闭环接通两条路径：干实验在 `analyze` → 干线转 `iterated`、湿线 `supersedes` 接棒；
+  干实验已 `concluded` → 只连 `derives_from`（结论成立、拿去湿实验验证）
+- 湿实验的执行产出与 observation 的 `evidence` 是 **`observed`**（run log 记的是设备做了什么），
+  与干实验的 `computed` 区分。模拟器执行同样算 observed，但正文与 metadata 里明写
+  「硬件为模拟」——数据来源必须能被读图的人分辨
+- 湿实验模拟是秒级同步任务（实测单协议 30–60 ms），所以 `execute()` await 子进程结束，
+  不做 P5 那套 detach + poll。磁盘仍是真源（`protocol.py` / `runlog.json` / `done.json`
+  由 python 侧原子写），换进程照样能接回来
 
 ### 域 C：全流程数据记录（Research Record）
 
@@ -307,7 +348,7 @@ P4 落地口径：
 | novelty-check | D | 已知领域 idea → 对比报告 → 引用真实性核验 |
 | protein-analysis | B | UniProt/PDB/AlphaFold 链路（P5：真实录制 fixture 回放 e2e，12 用例） |
 | dry-experiment | B | OpenMM 最小 MD 任务端到端（P5：契约测试 ×2 实现 + 真实 SIGKILL 恢复 e2e） |
-| wet-protocol | B | 协议编译 → Opentrons 模拟器执行 |
+| wet-protocol | B | 协议编译 → Opentrons 模拟器执行（P6：2 类协议真模拟器 e2e + 安全门 4 条规则对抗矩阵 + approve gate 单测） |
 | research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效 |
 
 ### 5.4 模型路由

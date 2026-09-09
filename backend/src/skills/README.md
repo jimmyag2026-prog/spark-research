@@ -38,7 +38,7 @@ backend/src/skills/
 | literature-review | A | P3 落地 |
 | idea-coexplore | A | P4 落地 |
 | novelty-check | D | P4 落地 |
-| protein-analysis | B | P5 |
-| dry-experiment | B | P5 |
-| wet-protocol | B | P6 |
+| protein-analysis | B | P5 落地 |
+| dry-experiment | B | P5 落地 |
+| wet-protocol | B | P6 落地 |
 | research-report | C/E | P8 |

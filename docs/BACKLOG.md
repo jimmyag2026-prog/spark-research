@@ -11,7 +11,7 @@
 | G1 | E2 结论卡 review 门槛：pending/approved/vetoed，仅 approved 进报告结论区 | DESIGN E2，P5 只落了最小 conclusion record |
 | G2 | E1 数据-结论一致性检查器（结论引用的 observation 必须真实存在于执行记录） | DESIGN E1 |
 | G3 | E1 统计合理性 soft 提示检查器 | DESIGN E1 |
-| G4 | `deterministic` 位消费端：区间对账 vs 逐位对账的检查逻辑 | P5 验收批注 |
+| G4 | 能力位消费端：`deterministic`（区间 vs 逐位对账）与 `simulated`（模拟读数 0.0 不得当真实数据进结论）在 E1 检查器与 P8 报告中的消化 | P5/P6 验收批注 |
 | G5 | 「真 key 假内容」（模式 B）在真实模型下的判准率测量 | P3 devlog 批注 |
 | G6 | 删除 deprecated 的 `compute/providers.ts` 及其 v0.1 测试 | P5 验收批注 |
 | G7 | 证据图 → Markdown 报告导出 + research-report 技能（§5.3 第 10 个技能） | PLAN P8 |

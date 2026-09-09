@@ -13,6 +13,7 @@
 4. **凭据纪律**：任何凭据不进 repo/prompt/日志；新增文件 commit 前跑密钥 grep。
 5. **模型分工**：设计与验收评审用 Fable 5（主会话）；实现类任务可委派 Opus 5 子代理，子代理产出必须经主会话审查 + 测试验证后才 merge。
 6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
+7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时，用 `git worktree add ~/Desktop/spark-research-<topic>` 隔离，或等子代理收尾。事故记录见 devlog P6。
 
 ---
 

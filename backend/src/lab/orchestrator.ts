@@ -1,6 +1,6 @@
 import type { LabDevice, DeviceActionResult, DeviceDriver } from "./devices";
 import type { OpentronsProgram } from "./opentrons_protocol";
-import type { Protocol, ProtocolStep, SafetyCheckResult } from "./protocol";
+import type { Protocol, ProtocolStep } from "./protocol";
 import {
   CHEMICAL_COMPATIBILITY,
   MAX_BIOSAFETY_LEVEL,

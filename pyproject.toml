@@ -28,4 +28,9 @@ rdkit = ">=2023.9"
 # P5 干实验：OpenMM adapter（backend/src/simulation/openmm/）。
 # pyref adapter 刻意零依赖（纯标准库），所以 CI 里没装 openmm 也能跑契约测试。
 openmm = ">=8.1"
+# P6 湿实验：Opentrons 官方模拟器（backend/src/lab/opentrons_backend.py）。
+# 纯 Python 包，`opentrons.simulate` API 与 `opentrons_simulate` CLI 一并装上。
+# ⚠️ 它会把 numpy 钉到 1.26.x（opentrons-shared-data 的约束）——实测 openmm 8.6 在
+#    numpy 1.26.4 下照常工作，P5 的契约测试全绿。装的顺序无所谓，结果一样。
+opentrons = ">=9.0"
 pytest = ">=8.0"
