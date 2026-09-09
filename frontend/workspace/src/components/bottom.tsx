@@ -374,8 +374,14 @@ function WetDetail(props: { experiment: WetExperiment }): JSX.Element {
         <button
           class="btn btn-sm btn-primary"
           onClick={simulate}
-          disabled={ws.busy() !== null || props.experiment.state !== "wet_run"}
-          title={props.experiment.state !== "wet_run" ? "必须先经人工 approve 才能执行" : undefined}
+          disabled={ws.busy() !== null || props.experiment.state !== "approved"}
+          title={
+            props.experiment.state !== "approved"
+              ? props.experiment.state === "executing"
+                ? "已在执行中（执行权已被原子声明，approval 已消费）"
+                : "必须先经人工 approve 才能执行"
+              : undefined
+          }
         >
           执行（模拟器）
         </button>

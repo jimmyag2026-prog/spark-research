@@ -4,6 +4,7 @@ import { dirname, join, normalize, relative, resolve } from "node:path";
 import { ConnectorRegistry } from "../../backend/src/connectors/registry";
 import { MCP_TOOLS } from "../../backend/src/mcp/tools";
 import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/lab/wet_models";
+import { EXPERIMENT_STATES } from "../../backend/src/experiment/models";
 
 // AD-12「对外声称的每一项能力必须机器可核」的门禁实现（D-12）。
 //
@@ -17,6 +18,19 @@ import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const SRC = join(REPO_ROOT, "backend/src");
+
+function walkSource(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) {
+      if (entry === "__pycache__" || entry === "node_modules") continue;
+      walkSource(full, out);
+    } else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
 
 function walkTs(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -153,5 +167,49 @@ describe("叙事一致性门禁（AD-12）", () => {
       expect(inbound, `${label}.to='${gate.to}' 的入边不唯一：${inbound.join(",")}——门就不成其为门了`).toHaveLength(1);
       expect(inbound[0], `${label} 自报 from='${gate.from}'，但转移表说是 '${inbound[0]}'`).toBe(gate.from);
     }
+  });
+
+  // v0.3.0 发布后立刻暴露的缺口：后端 D-10 把 wet_run 拆成 approved/executing，
+  // 前端 bottom.tsx 的执行按钮仍然按 `state !== "wet_run"` 判禁用 → **按钮永远是灰的**，
+  // Web 工作台里可以批准却永远执行不了，湿实验闭环在 UI 上断掉。
+  //
+  // 为什么全绿：那是字符串比较不是枚举，tsc 管不着；后端测试不碰前端；
+  // 而 D-12 原本只查后端自描述端点，没查**前端消费方**。
+  // 这条断言补的就是这一段：状态词汇表是后端的真源，前端不许出现它之外的状态名。
+  test("前端引用的实验状态必须真实存在于后端状态机（退役状态不许残留）", () => {
+    const known = new Set<string>([...WET_EXPERIMENT_STATES, ...EXPERIMENT_STATES]);
+
+    // 已退役的状态名：出现在任何源码里都算 bug（文档/CHANGELOG 讲历史不算，故只扫 src）。
+    const RETIRED_STATES = ["wet_run"];
+    const roots = [join(REPO_ROOT, "frontend/workspace/src"), SRC];
+    for (const root of roots) {
+      for (const file of walkSource(root)) {
+        const text = readFileSync(file, "utf8");
+        for (const retired of RETIRED_STATES) {
+          expect(
+            text.includes(`"${retired}"`),
+            `${relative(REPO_ROOT, file)} 仍引用已退役的状态 "${retired}"——` +
+              `后端状态机里已经没有它了，这种字符串比较 tsc 抓不到`,
+          ).toBe(false);
+        }
+      }
+    }
+
+    // 前端 badge 色表的键里，凡是「看起来像实验状态」的都必须在真源里。
+    // 判据：出现在后端两套状态机并集里的键放行；其余键是 evidence 标签 / novelty 状态，
+    // 用显式白名单排除，避免这条断言变成一张什么都放行的空壳。
+    const NON_STATE_TONES = new Set([
+      "observed", "computed", "sourced", "inferred",
+      "checked-overlap", "checked-novel", "checked-incremental", "unchecked",
+    ]);
+    const ui = readFileSync(join(REPO_ROOT, "frontend/workspace/src/components/ui.tsx"), "utf8");
+    const block = ui.slice(ui.indexOf("const BADGE_TONE"), ui.indexOf("};", ui.indexOf("const BADGE_TONE")));
+    const keys = [...block.matchAll(/^\s*"?([A-Za-z_][\w-]*)"?\s*:/gm)].map((m) => m[1]!);
+    expect(keys.length, "没解析出 BADGE_TONE 的键——是不是结构改了？").toBeGreaterThan(5);
+    const bogus = keys.filter((k) => !known.has(k) && !NON_STATE_TONES.has(k));
+    expect(
+      bogus,
+      `BADGE_TONE 里这些键既不是后端状态、也不在非状态白名单里：${bogus.join(", ")}`,
+    ).toEqual([]);
   });
 });
