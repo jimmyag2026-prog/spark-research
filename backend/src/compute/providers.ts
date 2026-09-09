@@ -1,3 +1,5 @@
+// DEPRECATED（P5 验收决定）：干实验一律走 simulation/SimulationPlatform（跨进程、磁盘状态真源）。
+// 本模块是 v0.1 的内存态阻塞契约，无生产调用方；保留仅为旧测试，P8 收口时删除。
 import { randomUUID } from "node:crypto";
 
 export type JobStatus = "submitted" | "running" | "completed" | "failed";
