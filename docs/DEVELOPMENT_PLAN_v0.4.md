@@ -135,6 +135,14 @@ P16  文献域补强（arXiv/PubMed 走 manifest = 扩展机制的真实验收�
 **风险与对策**：国产 provider 的 tool calling 兼容性差异大。
 对策是**能力位在运行时可探测**，且降级路径有独立 e2e——不能只在「模型配合」时才工作。
 
+> **上游情报可用（2026-09-10 补）**：对 OpenScience v2.0.86 的 provider 层做过源码级调研，
+> per-provider 怪癖表在本地规划目录 `spark-research-v0.5-plan/workstreams/provider/PROVIDER_QUIRKS.md`
+> （刻意未入库，v0.5 评审时再定去留）。对 R-a/R-b 直接有用的三条：
+> ① DeepSeek 是唯一需要**结构性改写工具 schema** 的 provider，且 thinking 模式下要剔除 `tool_choice`；
+> ② OpenRouter 不显式请求会**静默丢弃推理轨迹**；
+> ③ Qwen 在上游几乎零专属适配，兼容性未经验证——正好是我们「能力位运行时可探测」要兜住的那类。
+> 实施 R-a/R-b 前先查这张表，别重新踩一遍坑。
+
 #### R-d：可达性闸门（新增，独立 lane）
 
 **问题**（v0.4 制订时实测了全部 10 个技能的可达性矩阵，结论比初判严重）：
@@ -176,6 +184,11 @@ P10 之后的修订：
    注意 D-12 门禁的 `ALLOWED_ORPHANS` 里有它的登记条目，**删代码后必须同步删登记**——
    门禁的「stale 条目」断言会强制这件事（这正是那条断言的用途）。
 5. **V16**：子代理独立模型暴露成用户配置项（`SubAgentSpec.model` 终于有真消费方）。
+6. **接口预留，不写实现（2026-09-10 补）**：v0.5 已拍板做远端算力（BACKLOG V4 启动条件触发），
+   它将是 ToolBus 的下一类消费者——**计费型后果动作**（提交一个 Modal GPU 任务 = 花真钱）。
+   P12 只需保证两点被测试锁死，不为 v0.5 写任何代码：
+   ① `MCP_WITHHELD` 的拒绝对子代理无例外（AD-14 对抗测试天然覆盖，将来 `compute approve` 加入扣留清单即可）；
+   ② 预算记账的接口不把计量单位硬编码为 token——留一个可扩展的计价维度，否则 v0.5 接算力成本时要拆了重做。
 
 ### 4.3 P13 · 研究循环
 
@@ -198,6 +211,10 @@ P10 之后的修订：
 - **V11 长任务句柄落盘**升级为必做：v0.2.1 的零上下文外部验收已经撞上这个
   （任务句柄在 server 进程内存里，连接一断即失效）。这是外部 agent 体验的头号摩擦点。
 - **V17 MCP 长任务进度回传** + **V18 `capabilities --probe` 缓存**一并做（同属「看得见在干活」）。
+- **本地模型接入有现成情报（2026-09-10 补）**：OpenScience `local.ts` 的实现清单已整理在本地规划目录
+  `spark-research-v0.5-plan/workstreams/provider/V05_PROVIDER_DESIGN.md` §c（未入库）。
+  三个上游实测坑：本地端点**不能设超时**（大模型冷加载分钟级）；Ollama 的上下文窗口要走
+  `/api/create` 别名机制而不是请求参数；Ollama/LM Studio 各有端口预设与响应形状差异。做 P14 本地模型时先读它。
 
 ### 4.5 P15 · 扩展面
 
@@ -211,6 +228,16 @@ manifest 的每个 tool 声明编译成一条 handler 注册，**天然继承 D-
 `ext verify` 的 connector 契约测试**直接复用 `tests/concurrency/connector_race.test.ts` 的不变式**：
 第三方 connector 也必须通过 100 并发参数映射一致性检查。
 
+**manifest 表达力的三条实测约束（2026-09-10 补）**：v0.5 规划期间对 30 个候选数据源
+做过 staged 实现调研（本地规划目录 `spark-research-v0.5-plan/workstreams/connectors/`，未入库），
+manifest schema 设计时要把这三条当验收用例，而不是做完才发现表达不了：
+
+1. **参数要支持 enum 校验**——bioRxiv 的 `server` 参数只认 `biorxiv|medrxiv`，声明不了枚举的 manifest 挡不住脏输入；
+2. **声明式映射覆盖不了响应体分支**——BindingDB 无匹配时返回 HTTP 200 + 空 body（不是 404），
+   这类源就该留在 TS 装载强度，manifest 不必追求全覆盖（三种装载强度并存正是为此）；
+3. **「一次 fetch 查多实体」的形态要拆**——OpenTargets 一个接口横跨 target/disease/drug 三类实体，
+   进 manifest 应拆成多个 tool 声明，而不是造一个万能参数。
+
 ### 4.6 P16 · 文献域 + 发布
 
 沿用 v0.3 文档 §4.6（E-1…E-6）。新增两条**验证性任务**（都来自 v0.3.1 的验证复盘）：
@@ -218,6 +245,11 @@ manifest 的每个 tool 声明编译成一条 handler 注册，**天然继承 D-
 - **跑一次真实网络的 `tests/integration/`**（`RECORDING=1`），重新录制 fixture 并核对
   上游 API 是否已漂移——这套用例从写下来之后**在本轮从未跑过**
 - **拿一个真实的 v0.2.x 老 `records.db` 跑迁移演练**，确认 D-9 的 `rev` 列迁移在真实老库上成立
+
+**限速预算注意（2026-09-10 补，登记为 BACKLOG V26，P16 不实现）**：connector 层目前只有
+礼貌头（`politeness.ts`），**没有任何限速器**。P16 的 pubmed manifest 与 v0.5 计划新增的
+ClinVar / GEO 都打 NCBI eutils 的**同一主机预算**——将来限速器若做，必须按 host 键控合池，
+不能按 connector 各自为政，否则四个 connector 会集体被 429。
 
 ---
 
