@@ -61,11 +61,15 @@ export interface WetDesignInput {
 
 export interface ApproveInput {
   actor: string;
+  // 署名来源："explicit"（调用方显式给出，默认）/ "env:SPARK_ACTOR" / "env:USER" / "unknown"。
+  // 审计时用于分清「显式署名」与「取自环境」。
+  actorSource?: string;
   note?: string;
 }
 
 export interface RejectInput {
   actor: string;
+  actorSource?: string;
   reason: string;
 }
 
@@ -372,6 +376,7 @@ export class WetLabLoop {
         kind: "approval",
         decision: "approve",
         actor: input.actor,
+        actorSource: input.actorSource ?? "explicit",
         at,
         protocolHash: view.protocolHash,
         experimentId: view.id,
@@ -430,6 +435,7 @@ export class WetLabLoop {
         kind: "approval",
         decision: "reject",
         actor: input.actor,
+        actorSource: input.actorSource ?? "explicit",
         at,
         protocolHash: view.protocolHash ?? null,
         experimentId: view.id,

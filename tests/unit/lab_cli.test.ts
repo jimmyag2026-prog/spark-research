@@ -117,6 +117,18 @@ describe("lab CLI · approve gate（AD-6）", () => {
     expect(c.errText()).toContain("compile → safety_check → approve → execute");
   });
 
+  test("actorSource 记进 decision record：显式署名 vs 取自环境可区分", async () => {
+    const c = cli();
+    const { id } = await compiled(c);
+    // deps.actor 注入 = 显式署名
+    expect(await c.run(["approve", id, "--json"])).toBe(0);
+    const decisionId = JSON.parse(c.text()).decisionId as string;
+    const project = c.manager.open("lab-proj");
+    const decision = project.records().get(decisionId)!;
+    expect(decision.metadata.actor).toBe("测试员");
+    expect(decision.metadata.actorSource).toBe("explicit");
+  });
+
   test("approve → simulate 才能跑通，并给出 observation", async () => {
     const c = cli();
     const { id } = await compiled(c);

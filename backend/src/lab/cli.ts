@@ -112,10 +112,14 @@ function printView(view: WetExperimentView, out: (line: string) => void): void {
   if (view.lastError) out(`    ⚠️  ${view.lastError}`);
 }
 
-function defaultActor(deps: LabCliDeps): string {
+function resolveActor(deps: LabCliDeps, flag: string | undefined): { actor: string; source: string } {
   // 落到 $USER 是诚实的：**就是**这个人在这台机器上敲的命令。
-  // 但 record 里会记下 source，审计时能分清「显式署名」与「取自环境」。
-  return deps.actor ?? process.env.SPARK_ACTOR ?? process.env.USER ?? "unknown";
+  // record 里记下 source，审计时能分清「显式署名」与「取自环境」。
+  if (flag) return { actor: flag, source: "explicit" };
+  if (deps.actor) return { actor: deps.actor, source: "explicit" };
+  if (process.env.SPARK_ACTOR) return { actor: process.env.SPARK_ACTOR, source: "env:SPARK_ACTOR" };
+  if (process.env.USER) return { actor: process.env.USER, source: "env:USER" };
+  return { actor: "unknown", source: "unknown" };
 }
 
 export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Promise<number> {
@@ -205,8 +209,10 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
         }
         project = manager.defaultProject();
         const loop = makeLoop(project, deps);
+        const signer = resolveActor(deps, flagString(flags.actor));
         const { view, decisionId } = loop.approve(ref, {
-          actor: flagString(flags.actor) ?? defaultActor(deps),
+          actor: signer.actor,
+          actorSource: signer.source,
           note: flagString(flags.note),
         });
         if (flags.json === true) {
@@ -228,8 +234,10 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
         }
         project = manager.defaultProject();
         const loop = makeLoop(project, deps);
+        const signer = resolveActor(deps, flagString(flags.actor));
         const { view, decisionId } = loop.reject(ref, {
-          actor: flagString(flags.actor) ?? defaultActor(deps),
+          actor: signer.actor,
+          actorSource: signer.source,
           reason,
         });
         if (flags.json === true) {

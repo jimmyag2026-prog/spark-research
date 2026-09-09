@@ -440,3 +440,11 @@ Python 侧 `tests/lab/opentrons_backend.test.py` 新增 **20** 个（`classify` 
   5. 协议 B 的稀释倍数目前只从句子里抠 `factor` 但没用于体积计算——
     真正的倍比稀释要按 factor 算稀释液与原液的比例，现在是等体积 1:2。
     要支持任意倍数得让 `serialDilute` 的体积参数联动
+
+## 主会话验收批注（2026-09-09）
+
+- **git 事故（主会话责任）**：主会话在子代理开发期间于共享工作树切分支，把 P6 前半段实现（~3300 行）连同 docs 卷进 PR #7 squash 推上了 main，绕过审查门。处置：不重写已推送历史；本次验收对 **P6 全量**（PR #7 混入部分 + 本分支 c18eaa9）完整审查；工程纪律新增第 7 条「工作树隔离」堵住流程漏洞。
+- **R1 维持**：approve 直达 wet_run（无 approved 中间态）+「进 compile 一律清 approve」+ 唯一守卫回边（wet_run→compile 仅 runId 为空时）。口径已定，P7 状态机可视化照此画。
+- **R2 → BACKLOG G4**：`simulated` 与 `deterministic` 并列为能力位，消费端（E1 检查器 + P8 报告不得把 0.0 模拟读数当真实数据）在 P8-gate 消化。
+- **R3 已当场落**：actorSource 贯通 CLI→wet_loop→decision metadata（explicit / env:SPARK_ACTOR / env:USER / unknown 四级），补一条单测。cli.ts 原注释承诺的「record 里会记下 source」此前并未实现，现兑现。
+- opentrons 9.x 装机把 numpy 2.5.3 降到 1.26.4：OpenMM 契约测试 26/26 复验无 skip，接受。
