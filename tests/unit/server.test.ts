@@ -3,6 +3,9 @@ import { startServer, type StartedServer } from "../../backend/src/server/server
 import { OrchestratorAgent } from "../../backend/src/agents/orchestrator";
 import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const mockLlm = {
   call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
@@ -74,5 +77,21 @@ describe("Spark Research HTTP server", () => {
   test("unknown route returns 404", async () => {
     const res = await fetch(`${base()}/api/nonexistent`);
     expect(res.status).toBe(404);
+  });
+});
+
+// P8：版本号单一真源。此前 /api/health 硬编码 "0.2.0" 而 package.json 是 "0.1.0"，
+// 两处漂移没有任何东西会报警。这条测试就是那个报警器。
+describe("版本号单一真源", () => {
+  test("/api/health 报的版本 == package.json 的版本", async () => {
+    const pkg = (await Bun.file(new URL("../../package.json", import.meta.url)).json()) as { version: string };
+    const server = startServer(0, { root: mkdtempSync(join(tmpdir(), "spark-version-")) });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/health`);
+      const body = (await res.json()) as { version: string };
+      expect(body.version).toBe(pkg.version);
+    } finally {
+      await server.stop();
+    }
   });
 });

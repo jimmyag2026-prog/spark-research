@@ -1,6 +1,6 @@
 # Spark Research v0.2 产品设计
 
-> 状态：设计定稿待评审 · 2026-09-09
+> 状态：随实现更新 · 终稿核对于 P8 收口（2026-09-09）
 > 上游输入：OpenScience 架构分析、AMiner 集成调研（2026-09-07）、Claude Science 产品形态、现有 v0.1 代码资产
 > 配套文档：[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（开发与验证计划）
 
@@ -69,7 +69,8 @@ OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限�
 | 11 个 connector + registry | `backend/src/connectors/` | 扩展凭据层 + 文献域增强 |
 | Orchestrator + swarm | `backend/src/agents/` | 保留，接入新子代理配置 |
 | Lab protocol compiler + safety gate | `backend/src/lab/` | 湿实验域，mock → 模拟器 |
-| 84 个单元测试 | `tests/unit/` | 测试基线，只增不减 |
+| 84 个单元测试 | `tests/unit/` | 测试基线，只增不减（P8 收口时 706） |
+| v0.1 的 `compute/` 任务抽象 | `backend/src/compute/` | **P8 删除**（内存态阻塞契约，被 `SimulationPlatform` 取代） |
 
 ---
 
@@ -253,6 +254,19 @@ P7 落地口径：
   力导向每次打开长得不一样、截图对不上，不适合做审计用的图
 - record 详情附带 artifact 内容（AD-3 的 id 互链在 API 层一次取到）
 
+P8 落地口径（报告导出，`backend/src/report/export.ts`）：
+- 分区：一、问题（项目描述 + idea 卡的 openQuestions + 文献基础统计）／二、思路（每张 idea 卡的
+  假设、novelty 状态、支持与反对文献，走 supports/contradicts 边）／三、实验（干湿实验的状态、
+  平台或后端、假设、摘要、观察）／四、结论（**只有 review approved 的卡**）／五、待验证
+  （pending 与 vetoed，逐条列出阻塞它的 hard finding）／附录 A 证据索引／附录 B 参考文献
+- **正文全部由代码渲染，不经过模型**。让模型写报告等于给它一次改数据的机会；
+  同一条纪律已经用在 experiment record 与 novelty 报告上
+- 每条陈述带 record id，读者可用 `conclusion show <id>` 或 `GET /api/records/<id>` 回原始记录核对；
+  附录 A 的每个 id 都必须在 records.db 里解析得到（有测试守着，不许有幽灵条目）
+- 能力位进措辞：`deterministic=false` → 「区间/趋势对账」；`simulated=true` → 结论标题挂
+  `[模拟数据]` 并附「模拟器不验证生物学」。混合证据取最保守的一条
+- 出口：`spark-research report export|stats`、`GET /api/report[?format=markdown]`、工作台导出按钮
+
 ### 域 D：创新性验证与梳理
 
 **D1 Novelty check pipeline**
@@ -295,6 +309,28 @@ P4 落地口径：
 **E2 结论卡（Conclusion card）**
 - 结构：claim + 证据列表（record 链接）+ limitations + confidence + review 状态（pending / approved / vetoed）
 - 只有 review approved 的结论卡才能进入导出报告的「结论」区（vetoed/pending 的进「待验证」区）
+
+P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_rules.ts`）：
+
+三个新检查器（与 `citation-integrity` 同形态：零 IO、可单测、**豁免位置加权**——
+结论卡正文是 markdown，位置加权会把所有 soft 升成 veto，直接毁掉「启发式只提示不否决」）：
+
+| rule | 严重度 | 判据 |
+|------|--------|------|
+| `data-consistency` | hard / soft | 证据必须是本项目里真实存在的 observation：断链 / 跨项目 / 类型不对 / 零证据 = hard；无 runId 与 experimentId 锚点（手工登记）、证据图上没连 derives_from 边 = soft |
+| `capability-labeling` | hard | 引用 `simulated=true` 的 observation 却没在 claim/limitations 标注 = hard；证据来自 `deterministic=false` 的平台却声称逐位/完全一致 = hard |
+| `stats-plausibility` | **只有 soft** | 启发式：样本量 < 6 / 多重比较未校正 / p ∈ [0.04, 0.05] / 强因果断言 + 弱证据基础。每条 finding 带 `heuristic: true`，误报漏报都在预期内 |
+
+- **判定规则不可协商**：任一 hard → `vetoed`，零 hard → `approved`。不提供「人工推翻 hard」
+  的路径——三条 hard 全部是可核对的事实判断，不是审美问题；反方向提供 `--veto`
+  （人挡下一条本来会自动通过的结论，理由必填）
+- 每次评审落一条 `decision` record（`kind=conclusion_review`，derives_from → 结论卡），
+  记谁、何时、判了什么、依据哪些 finding。CLI 落 `$USER` 时 `actorSource` 记 `env:USER`；
+  HTTP 缺 actor 直接 400 并记 `http:explicit`（AD-6 的 P7 补充）
+- **报告看的是卡上已落的 review 状态，不是「现在跑一遍会通过」**。没评审就是没评审，
+  报告不替评审人按通过键
+- `review` 字段兼容 P5/P6 的裸字符串形态；解析不出来一律落回 `pending`——
+  一个读不懂的 review 字段绝不能被当成 approved
 
 ---
 
@@ -359,7 +395,7 @@ P4 落地口径：
 | protein-analysis | B | UniProt/PDB/AlphaFold 链路（P5：真实录制 fixture 回放 e2e，12 用例） |
 | dry-experiment | B | OpenMM 最小 MD 任务端到端（P5：契约测试 ×2 实现 + 真实 SIGKILL 恢复 e2e） |
 | wet-protocol | B | 协议编译 → Opentrons 模拟器执行（P6：2 类协议真模拟器 e2e + 安全门 4 条规则对抗矩阵 + approve gate 单测） |
-| research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效 |
+| research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效（P8：三检查器单测 + 报告分区归属 + 全链路演练脚本） |
 
 ### 5.4 模型路由
 
@@ -387,3 +423,12 @@ P4 落地口径：
 2. 湿实验路径：一个自然语言协议 → 编译 → 安全门 → Opentrons 模拟器执行成功
 3. 测试基线：单元测试从 84 只增不减；每个技能有 e2e 验证；CI 全绿
 4. 文档：README 重写 + 每阶段 devlog + 本设计文档随实现更新
+
+P8 核验结论（逐条证据见 [devlog/P8-wrapup.md](devlog/P8-wrapup.md)）：
+
+| 判据 | 结论 | 证据 |
+|------|------|------|
+| 1 完整研究线索 | ✅ | `scripts/demo-research-thread.ts`（可重放、零网络、CI 入口 `tests/unit/demo_thread.test.ts`）+ 浏览器版 Playwright ①–⑫。**一处偏差**：干实验用 pyref 而非 OpenMM——CI 里不能依赖 openmm 装没装，OpenMM 走的是同一套契约测试 |
+| 2 湿实验路径 | ✅ | `tests/unit/wet_e2e.test.ts` 两类协议在**真** `opentrons.simulate` 下执行；安全门 4 条规则对抗矩阵；Playwright ⑦⑧⑨ 走浏览器版 |
+| 3 测试基线 | ✅ | 单元 706（基线 84 → 655 → 706；P8 删除 v0.1 compute 模块的 12 条属 G6 授权清理）· pytest 48 · Playwright 12 · typecheck 干净 |
+| 4 文档 | ✅ | README 重写、CHANGELOG v0.2.0、9 篇 devlog、本文档随实现更新 |

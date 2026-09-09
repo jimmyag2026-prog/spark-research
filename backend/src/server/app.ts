@@ -15,6 +15,7 @@ import { conclusionRoutes, reportRoutes } from "./routes/report";
 import { sessionRoutes, taskRoutes } from "./routes/session";
 import { projectRoutes } from "./routes/projects";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
+import { PACKAGE_VERSION } from "../version";
 
 export type { ServerDeps } from "./context";
 
@@ -82,7 +83,9 @@ export function createApp(deps: ServerDeps = {}): Hono {
 
   // ── v0.1 既有端点（保持不变） ───────────────────────────────────────────────
 
-  app.get("/api/health", (c) => c.json({ status: "ok", service: "spark-research", version: "0.2.0" }));
+  // 版本号单一真源是 package.json。此前这里硬编码 "0.2.0"，而 package.json 还写着 0.1.0——
+  // 两处不一致时没有任何东西会报警，只会让「你跑的是哪个版本」这个问题变得不可回答。
+  app.get("/api/health", (c) => c.json({ status: "ok", service: "spark-research", version: PACKAGE_VERSION }));
 
   app.get("/api/connectors", (c) => c.json({ connectors: ctx.connectors.listAll() }));
 
