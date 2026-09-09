@@ -5,6 +5,85 @@
 
 ---
 
+## [0.3.0] — 2026-09-10
+
+**闸门 D：把「单线程测试永远测不出」的那批债一次还清。**
+
+外部评审（对象 `b4aab02`，全量源码精读 + 本机复现）给出两条裂缝：一条是叙事超前于实现，
+一条是并发与超时等工程基本功缺口。本版消化后者的全部，并为前者装上 CI 门禁。
+**本版不含任何新功能**——评审列出的 Agent 层重做（真子代理 / contract / 扩展机制）顺延 v0.4.0，
+路线见 `docs/DEVELOPMENT_PLAN_v0.3.md`。
+
+### ⚠️ 破坏性变更
+
+- **湿实验状态 `wet_run` 已移除**，拆成 `approved`（已批准待执行）/ `executing`（执行中）。
+  读取实验 `state` 字符串的外部集成需要同步。
+- **`GET /api/lab/machine` 响应形状变化**：`approvalGate.to` 由 `"wet_run"` 改为 `"approved"`；
+  新增 `executionGate`（`approved → executing`，`consumesApproval: true`）。
+- **写请求（POST/PUT/PATCH/DELETE）现在强制 `Content-Type: application/json`**，否则 415。
+- **带 Origin 头的跨站写请求被拒**（403）。本地回环任意端口恒放行；
+  无 Origin 的调用方（CLI / MCP 进程内 / curl）不受影响。可用 `originAllowlist` 扩展白名单。
+- **approval 一次性消费**：执行权一旦被声明即消费 approval，**重跑必须重新审批**，
+  进程崩溃重启后也不例外（此前 approval 跨崩溃存活，可免审批整体重跑）。
+
+### 修复
+
+- **P0 并发竞态**：`HttpConnector.call()` 曾用跨请求共享的单值实例字段 `__handlingTool`
+  判定 handler 重入，并发下会被彼此的状态污染，导致参数映射与 AMiner 凭据检查被**静默跳过**、
+  退化成零参数通用直通。CLI / ServerContext 每次新建 registry 天然不共享该字段——
+  这就是 824 个既有单测测不出它的原因。改为构造期一次性写入、运行期只读的 handlers 表，
+  全程不写任何跨请求可变实例状态。**「同名方法即 handler」这个魔法分发契约同时废除**
+  （脚手架模板与 `EXTENDING.md` 已同步改为显式 `this.handle(toolName, fn)` 注册）。
+- **全链路超时**：`http/client.ts` 的裸 `fetch`、LLM 调用、`PythonKernel.execute`、
+  server 长任务此前全部无超时——任一上游挂起即永久卡死。四层各加显式超时，
+  默认值收进 config 注册表（`httpTimeoutMs` 30s / `llmTimeoutMs` 120s /
+  `kernelTimeoutMs` 120s / `taskTimeoutMs` 600s），优先级 env > config.json > 默认。
+- **Python kernel 死锁**：stderr 管道从不排空，长会话写满 64KB 缓冲后 kernel 永久卡死。
+- **LLM 失败被静默当成功**：orchestrator 四处 `llm.call()` 都不检查 `res.ok`，
+  没配 key 时整条链路「成功」地把错误文本当产出、review 照样放行。四处全部改为走失败路径，
+  且错误文本不再进入用户可见的 summary。
+- **`kernelManager.dispose()` 摧毁全部内核**：并发会话里先结束的会杀掉另一个正在执行的 kernel。
+  改为按 id 销毁。
+- **`config.json` 以 0644 存放 LLM API key**：系统里最值钱的密钥，保护弱于 connector 凭据（0600）。
+  改为目录 0700 / 文件 0600 + 显式 `chmod`，并在每次 `loadConfig()` 时自愈收紧。
+- **状态机无乐观并发控制**：并发执行同一份已获批协议会双双通过三道门 →
+  **同一协议被执行两次**。records 加 `rev` 列做 CAS，执行权原子声明，冲突返回 409 语义。
+- **`bun run test:py` 从未在干净环境跑通**（脚本写的是 `python` 而非 venv 解释器，
+  直接 `command not found`）；**`bun run test:lab` 是空转**（`tests/lab/` 下只有 `.test.py`，
+  `bun test` 一个都跑不到）。两条都已修——后者原本 0 个用例，现在 26 个。
+
+### 变更
+
+- **安全门声明收敛（口径诚实化）**：此前宣称「4 条独立规则」，实测只有 `volume_capacity`
+  在自然语言主管线上全程可信；`chemical_compatibility` 词表已扩到中英文与常见分子式但仍有限；
+  **`concentration_limit` / `biosafety` 在主管线上恒空转**（编译器从不产生它们所需的字段）。
+  README 与 DESIGN 现在如实写明真实覆盖范围。新增 `unconsumedWarnings`：
+  协议里出现却未被任何规则消费的量纲/试剂/条件会产出显式告警，CLI 编译与审批输出必须显示——
+  **「用户写了但安全门没看见」的内容绝不静默绿灯**。对接物理设备的硬前置见 BACKLOG V6/V25。
+- `record` 新增完整性哈希：绕过状态机直接改 `state` / `approval` 变得可检测。
+
+### 新增
+
+- **叙事一致性门禁（AD-12）** `tests/unit/narrative_parity.test.ts`：
+  ① 孤儿模块检测（生产代码零引用者必须在册并写清理由，白名单只许缩短）；
+  ② 文档数量声称与运行期真源对撞；
+  ③ **自描述端点必须能从真源推导**——`/api/lab/machine` 的两道门由转移表算出来比对。
+  第三条在本版就抓到一个真 bug：状态拆分后该端点仍自称 `to: "wet_run"`，
+  AD-6 的机器可读表达对外撒谎而全部测试皆绿。
+  门禁同时登记了两处**已知缺口**：`swarm.ts`（v0.1 遗留、零调用方，v0.4 P12 删除）与
+  `proteins/analysis.ts`（protein-analysis 技能有 e2e 却无任何生产入口，BACKLOG V22）。
+- **两个新测试维度**：`tests/concurrency/`（共享 connector 100 并发参数映射不变式、
+  N=30 并发执行同一份已批协议恰好 1 次成功、两 session kernel 互不摧毁）与
+  `tests/timeout/`（注入永不响应的上游，断言四个入口都在可控时间内返回可见超时错误）。
+- 配置项：`originAllowlist`、`httpTimeoutMs`、`llmTimeoutMs`、`kernelTimeoutMs`、`taskTimeoutMs`。
+
+### 测试
+
+单元 824 → 904（`bun test tests/unit/`，0 fail / 0 skip，含 venv 环境下的 OpenMM 契约测试）；
+新增 `tests/concurrency/` 8 例 + `tests/timeout/` 4 例；pytest 48；`test:lab` 由 0 → 26。
+
+---
+
 ## [0.2.1] — 2026-09-09
 
 零上下文外部验收（一个对本仓库一无所知、被禁止读源码的 agent 只靠 MCP + llms.txt

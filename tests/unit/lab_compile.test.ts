@@ -66,6 +66,88 @@ describe("ProtocolCompiler · P6 新增的自然语言能力", () => {
   });
 });
 
+// P10-d · D-8：安全门声明收敛。这里测的是**编译器**这一半——试剂词表扩到英文/分子式、
+// 续句试剂不再被吞、以及新增的"未消费"信号。规则本身接不接得住这些输入，
+// 由 lab_safety.test.ts 的对抗矩阵测；这里只管编译器产不产得出正确的输入。
+describe("ProtocolCompiler · D-8 试剂词表扩到英文/分子式", () => {
+  test("英文名与分子式都能被识别成试剂（评审原话：之前整体免疫）", () => {
+    const cases: Array<{ text: string; reagentId: string }> = [
+      { text: "加入10uL NaOH", reagentId: "hydroxide" },
+      { text: "加入10uL HCl", reagentId: "strong_acid" },
+      { text: "加入10uL ethanol", reagentId: "ethanol" },
+      { text: "加入10uL NaClO", reagentId: "hypochlorite" },
+      { text: "加入10uL H2O2", reagentId: "peroxide" },
+    ];
+    for (const { text, reagentId } of cases) {
+      const protocol = compiler.compile(text, { name: "formula" });
+      const reagents = protocol.steps[0]!.params.reagents as Array<{ reagentId?: string }>;
+      expect(reagents?.map((r) => r.reagentId)).toContain(reagentId);
+    }
+  });
+
+  test("分子式匹配大小写不敏感（naoh / NAOH 都认得出来）", () => {
+    const lower = compiler.compile("加入10uL naoh", { name: "lower" });
+    const upper = compiler.compile("加入10uL NAOH", { name: "upper" });
+    for (const protocol of [lower, upper]) {
+      const reagents = protocol.steps[0]!.params.reagents as Array<{ reagentId?: string }>;
+      expect(reagents?.map((r) => r.reagentId)).toContain("hydroxide");
+    }
+  });
+
+  test("中文关键词仍是 name（v0.1 起的对抗测试断言中文名，顺序不能倒）", () => {
+    const protocol = compiler.compile("加入10uL盐酸", { name: "zh" });
+    const reagents = protocol.steps[0]!.params.reagents as Array<{ name: string }>;
+    expect(reagents?.[0]?.name).toBe("盐酸");
+  });
+
+  test("续句里的第二种试剂不再被吞掉（原 bug：加盐酸50µL，其中再补加次氯酸钠10µL）", () => {
+    const protocol = compiler.compile("加入50uL盐酸，其中再补加10uL次氯酸钠", { name: "continuation-reagent" });
+    // 两种试剂都要落在**同一步**上——安全门的 chemical_compatibility 是按 protocol 里
+    // 出现过的所有试剂两两比对，不按 step 分组，但试剂要先进 params.reagents 才看得见。
+    expect(protocol.steps).toHaveLength(1);
+    const reagents = protocol.steps[0]!.params.reagents as Array<{ reagentId?: string }>;
+    expect(reagents.map((r) => r.reagentId).sort()).toEqual(["hypochlorite", "strong_acid"]);
+  });
+});
+
+// P10-d · D-8：「未消费」信号——编译器看到了量纲/试剂/浓度/生物安全等信号，
+// 但没有任何一步/任何一条安全规则读取它。方针是「不做完美的 NL 解析，但漏检必须可见」。
+describe("ProtocolCompiler · D-8 unconsumed 信号（漏检必须可见，不能静默绿灯）", () => {
+  test("同一句里出现两处体积 → 报未消费（extractVolume 结构性地只取第一个）", () => {
+    const protocol = compiler.compile("加入50uL样品并加30uL缓冲液", { name: "two-volumes" });
+    expect(protocol.warnings.join(" ")).toContain("2 处体积数值");
+  });
+
+  test("单句一个动作假设丢语义：温度被识别成加样步骤时不静默消失，产出未消费告警", () => {
+    // 评审原话的例子：「37°C 孵育 30 分钟后加入 500µL 样品」——句中没有切分标点，
+    // 整句被"加入"关键词命中成 addSample，温度/时长信息在现有实现下没有落点。
+    const protocol = compiler.compile("37°C孵育30分钟后加入500µL样品", { name: "single-action" });
+    expect(protocol.steps.map((s) => s.action)).toEqual(["addSample"]);
+    const joined = protocol.warnings.join(" ");
+    expect(joined).toContain("温度");
+    expect(joined).toContain("时长");
+  });
+
+  test("正常协议（A/B）不产出未消费告警——检测要保守，不能在干净协议上报警", () => {
+    const a = compiler.compile("取样品50µL加入96孔板，37°C孵育1小时，600nm读取OD", { name: "A" });
+    const b = compiler.compile("配制5000uL稀释液，对样品做6个梯度的连续稀释，每步转移100uL并混匀3次", {
+      name: "B",
+    });
+    expect(a.warnings).toEqual([]);
+    expect(b.warnings).toEqual([]);
+  });
+
+  test("浓度描述始终报未消费——concentration_limit 在主管线里空转，靠这个信号兜底", () => {
+    const protocol = compiler.compile("配制10%次氯酸钠溶液", { name: "concentration" });
+    expect(protocol.warnings.join(" ")).toContain("浓度");
+  });
+
+  test("生物安全等级描述始终报未消费——biosafety 在主管线里空转，靠这个信号兜底", () => {
+    const protocol = compiler.compile("BSL-2实验室内操作", { name: "biosafety" });
+    expect(protocol.warnings.join(" ")).toContain("生物安全");
+  });
+});
+
 describe("compileToOpentrons · 脚本骨架", () => {
   test("生成 Flex 协议头：requirements / metadata / def run", () => {
     const program = compileA();

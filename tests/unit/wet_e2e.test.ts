@@ -193,7 +193,7 @@ suite("P6 e2e · 自然语言 → 编译 → 安全门 → approve → 模拟执
       actor: "王五",
       note: "试剂与体积均已复核",
     });
-    expect(approved.state).toBe("wet_run");
+    expect(approved.state).toBe("approved");
     const decision = project.records().get(decisionId)!;
     expect(decision.type).toBe("decision");
     expect((decision.metadata as { protocolHash: string }).protocolHash).toBe(compiled.protocolHash!);

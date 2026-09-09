@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.2.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.3.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -143,6 +143,10 @@ spark-research mcp    # stdio 传输
 - `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
 - `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
+- `httpTimeoutMs`（默认 30000，env `SPARK_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）
+- `llmTimeoutMs`（默认 120000，env `SPARK_LLM_TIMEOUT_MS`）：单次 LLM 调用的超时上限（毫秒）
+- `kernelTimeoutMs`（默认 120000，env `SPARK_KERNEL_TIMEOUT_MS`）：单次 Python kernel execute 的超时上限（毫秒）
+- `taskTimeoutMs`（默认 600000，env `SPARK_TASK_TIMEOUT_MS`）：server 长任务整个生命周期的超时上限（毫秒）
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）

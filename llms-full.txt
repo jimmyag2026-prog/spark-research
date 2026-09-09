@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.2.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.3.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -143,6 +143,10 @@ spark-research mcp    # stdio 传输
 - `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
 - `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
+- `httpTimeoutMs`（默认 30000，env `SPARK_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）
+- `llmTimeoutMs`（默认 120000，env `SPARK_LLM_TIMEOUT_MS`）：单次 LLM 调用的超时上限（毫秒）
+- `kernelTimeoutMs`（默认 120000，env `SPARK_KERNEL_TIMEOUT_MS`）：单次 Python kernel execute 的超时上限（毫秒）
+- `taskTimeoutMs`（默认 600000，env `SPARK_TASK_TIMEOUT_MS`）：server 长任务整个生命周期的超时上限（毫秒）
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
@@ -189,6 +193,20 @@ spark-research mcp    # stdio 传输
    结果约束、结论引用的观察必须真实存在于执行记录。模型判断可以当输入，不能既当运动员又当裁判。
 3. **干湿闭环里物理世界的操作永远不自动化审批。** 湿实验的安全门是必要非充分条件，
    通过之后停在 `awaiting_approval` 等一个**具名的人**按批准，批的是某一版协议的 hash（AD-6）。
+
+> ⚠️ **安全门当前的真实覆盖范围**（v0.3.0 起如实写在这里，不再只说「四条规则」）：
+> 四条规则里**只有 `volume_capacity` 在自然语言主管线上全程可信**。
+> `chemical_compatibility` 的试剂词表已扩到中英文与常见分子式，但仍然是有限词表；
+> **`concentration_limit` 与 `biosafety` 在自然语言主管线上仍然空转**——协议编译器
+> 目前产不出它们所需的 `concentration` / `biosafetyLevel` 字段（规则本身有对抗测试，
+> 但真实入口喂不进那种输入）。
+>
+> 兜底的是 `unconsumedWarnings`：协议里出现了量纲/试剂/条件、却没有被任何规则消费的，
+> 编译产物会带出显式告警，CLI 的编译与审批输出**必须**显示它。口径是——
+> **「用户写了但安全门没看见」的内容绝不静默绿灯通过**。
+>
+> 这也是接物理设备的硬门槛：在 `concentration_limit` / `biosafety` 补齐之前，
+> 本项目不对接真实 Opentrons（BACKLOG V6）。**过度声明的安全门比没有安全门更危险。**
 
 ---
 
@@ -585,9 +603,21 @@ P6 落地口径：
 - 安全门从三段 if 拆成**四条彼此独立的纯函数规则**（`chemical_compatibility` /
   `concentration_limit` / `biosafety` / **新增 `volume_capacity`**）。`volume_capacity` 吃编译产物：
   「单孔累计溢孔」在自然语言层面看不出来，只有排完 deck 累加才知道
+  - **v0.3.0（P10 D-8）口径收敛**：「四条规则」说的是**规则本身存在且各有对抗测试**，
+    不等于四条都在自然语言主管线上生效。实测：`volume_capacity` 全程可信；
+    `chemical_compatibility` 词表已扩到中英文+分子式但仍有限；
+    `concentration_limit` / `biosafety` 所需字段编译器从不产生，**在主管线上恒空转**。
+    对抗测试当初是用 `withReagents()` 手工注入验证规则本身的——这验证了规则，没验证接线。
+    补位机制是 `unconsumedWarnings`（见 `lab/protocol.ts`）：本句出现了量纲/试剂/条件
+    却无任何规则消费 → 产出显式告警并强制在审批面前显示。
+    **「规则能被单独测到」不等于「规则在管线上生效」，这是本次外部评审最值得记住的一条教训。**
 
 **B3 干湿闭环引擎**
-- 状态机：`design → dry_run → (approve gate) → wet_run → collect → analyze → iterate | conclude`
+- 状态机：`design → dry_run → (approve gate) → approved → (execution gate) → executing → collect → analyze → iterate | conclude`
+  - **v0.3.0（P10 D-10）**：原 `wet_run` 一个状态同时表示「已批准待执行」与「执行中」，
+    拆成 `approved` / `executing` 两态。第二道门（`approved → executing`）由 `execute()` 用
+    乐观并发 CAS 原子声明执行权，**并在那一刻一次性消费 approval**——重跑必须重新审批，
+    崩溃重启后也不例外。两道门都在 `/api/lab/machine` 有机器可读形态（`approvalGate` / `executionGate`）
 - 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
 - 断点续跑：状态持久化到 Project 存储，进程重启可恢复
 - 人在环：湿实验执行前强制 approve gate（安全门通过 ≠ 自动执行）
@@ -799,6 +829,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
 | AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」。<br>**主会话裁定（v0.2.0）**：MCP 工具清单是**能力声明，不是访问控制**。真正的访问控制在别处（daemon 的 permit set、文件权限、物理设备要人去按）。一个有 Bash 权限的 agent 确实能绕道调 CLI——承认这一点，不假装挡得住。这条边界起的作用是另外三件事：**默认路径**（agent 的第一反应是「我有哪些工具」，自动批准不在默认可达集合里）、**意图显性化**（绕道要主动构造命令，是一个「我知道我在绕过设计」的留痕动作，用户在 permission 层看得见）、**责任归属**（经 MCP 调用是我们授权的能力；经 Bash 绕过是用户授予 Bash 权限的后果）。所以它是纵深防御的一层，不是唯一一层——说它能挡住有意绕过者是安全剧场，但说「反正能绕过所以不该做」同样错：默认值决定 99% 的行为。若要真正堵住绕道，正确做法不是加固 MCP 层，而是在 CLI 层要求审批必须来自可交互终端（见 BACKLOG V19） |
+| AD-12 | **对外声称的每一项能力必须机器可核**（v0.3.0 新增，门禁在 `tests/unit/narrative_parity.test.ts`） | 外部评审最大的一条发现是「叙事超前于实现」：README 宣传 100 并发 swarm 而 `swarm.ts` 生产代码零调用方、架构图写 18 个 connector 实际 17 个。这类漂移**不报错**——能编译、测试全绿、只有人去读才发现对不上，所以靠人自觉不可持续。门禁做三件事：① **孤儿模块检测**（生产代码零引用者必须在册且写清理由，白名单只许缩短不许悄悄变长）；② 文档里的数量声称与运行期真源对撞；③ **自描述端点必须能从真源推导**——`/api/lab/machine` 的两道门由转移表算出来比对，而不是手写（P10 就撞上过：D-10 拆了状态之后该端点仍自称 `to: "wet_run"`，AD-6 的机器可读表达对外撒谎且全部测试皆绿）。<br>**编号说明**：AD-10 / AD-11 预留给 v0.4 的 P13（完成判定问图不问模型）与 P15（扩展过契约才算装好），见 `docs/DEVELOPMENT_PLAN_v0.3.md` §八 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 
@@ -1515,6 +1546,18 @@ spark-research capabilities        # 你加的东西出现了吗？
 7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
 8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
 9. **阶段性成果及时保存**（P7 后新增，用户要求；P9 后加强）：**新分支创建后立即 `git push -u` 建立远端跟踪，再开始写代码**；此后每完成一个逻辑块就 commit 并 push。P9 曾在零 commit 状态遭遇额度中断，差点全丢。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
+10. **发布后立刻验证 tag 真在 main 的历史里**（v0.2.1 事故后新增）：打完 tag 执行
+    `git merge-base --is-ancestor <tag> origin/main`，不成立就说明被绕过了。
+    **事故经过**：`v0.2.1` 打在 `c5c7b11`，但 P10 的分支从更早的 `19a3586` 拉出并先行合并，
+    main 于是走上另一条路径——tag 与 Release 声称的三个修复在 main 上根本不存在、
+    版本号回退、回归测试文件消失，而且 v0.3 会基于缺修复的代码继续开发。
+    **最危险的地方是它不报错**：不冲突、不告警，只是静默消失。这次是截图时偶然瞥见
+    `/api/health` 报 0.2.0 才发现的，纯属运气。
+11. **跨阶段语义一致性要显式断言**（v0.2.1 × P10 后新增）：文件不冲突 ≠ 语义不冲突。
+    **样本**：v0.2.1 的工具描述建议「把 MCP 等待调到 900000」，P10 新增的任务生命周期兜底
+    默认却只有 600000——两处改动各自都对，合起来给出了错误的建议，**而且两边测试全绿**。
+    功能测试发现不了这类矛盾。凡是「两个旋钮必须一起拧」的关系（超时上限、能力位与其消费端、
+    工具描述与实际行为），都要有一条专门断言一致性的测试钉住。
 
 ---
 
@@ -2010,6 +2053,12 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估 |
 | V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等 |
 | V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎 |
+| V20 | `backend/src/index.ts` 的 `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR` | P10 lane D-c 发现：`config/index.ts` 的 `dataDir()` 认这个环境变量，`index.ts` 里的 `CONFIG_DIR` 是硬编码 `~/.spark-research`。默认设置下无害，但意味着测试注入的临时工作区对 `auth` 命令无效，两条路径对同一份 config.json 有两种解析 |
+| V21 | 超时类环境变量前缀不统一 | P10 收口时新登记的四个超时用了 `SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS`，而仓库既有约定是 `SPARK_RESEARCH_*`（如 `SPARK_RESEARCH_MCP_TIMEOUT_MS`）。**没有在 P10 一并改齐是刻意的**：v0.2.1 的 MCP 工具描述里已经把 `SPARK_TASK_TIMEOUT_MS` 写给外部 agent 看了，改名是 breaking change，要走废弃周期 |
+| V22 | **protein-analysis 技能没有任何生产入口** | P10 的 D-12 门禁（孤儿模块检测）发现：`backend/src/proteins/analysis.ts` 只被测试引用——无 CLI 命令、无 HTTP 路由、无 MCP 工具、不在 capabilities 里。但 DESIGN §5.3 把它列为 10 个技能之一，SKILL.md 还写着「代码入口：`ProteinAnalysis.analyze(query)`」。**e2e 有、AD-5 纸面满足，可用户与外部 agent 都调不到它**。要么补入口，要么从技能目录撤下 |
+| V23 | 湿实验 `unconsumedWarnings` 尚未在 HTTP / Web 审批面强制展示 | P10 lane D-d 交付：CLI 的编译与审批输出已强制显示，HTTP/UI 侧还没接。**接物理设备前必须补**——否则经 Web 批准的人看不到「你写了但安全门没看见」的部分 |
+| V24 | `RecordIntegrityError` 没有恢复路径 | P10 lane D-d 新增的 record 完整性哈希校验，检测到被篡改的记录只能拒绝信任，没有「人工确认后修复」的入口，只能用 `RecordStore` 原始接口手工处理 |
+| V25 | `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2029,6 +2078,85 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 
 本文件记录面向用户可见的变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [0.3.0] — 2026-09-10
+
+**闸门 D：把「单线程测试永远测不出」的那批债一次还清。**
+
+外部评审（对象 `b4aab02`，全量源码精读 + 本机复现）给出两条裂缝：一条是叙事超前于实现，
+一条是并发与超时等工程基本功缺口。本版消化后者的全部，并为前者装上 CI 门禁。
+**本版不含任何新功能**——评审列出的 Agent 层重做（真子代理 / contract / 扩展机制）顺延 v0.4.0，
+路线见 `docs/DEVELOPMENT_PLAN_v0.3.md`。
+
+### ⚠️ 破坏性变更
+
+- **湿实验状态 `wet_run` 已移除**，拆成 `approved`（已批准待执行）/ `executing`（执行中）。
+  读取实验 `state` 字符串的外部集成需要同步。
+- **`GET /api/lab/machine` 响应形状变化**：`approvalGate.to` 由 `"wet_run"` 改为 `"approved"`；
+  新增 `executionGate`（`approved → executing`，`consumesApproval: true`）。
+- **写请求（POST/PUT/PATCH/DELETE）现在强制 `Content-Type: application/json`**，否则 415。
+- **带 Origin 头的跨站写请求被拒**（403）。本地回环任意端口恒放行；
+  无 Origin 的调用方（CLI / MCP 进程内 / curl）不受影响。可用 `originAllowlist` 扩展白名单。
+- **approval 一次性消费**：执行权一旦被声明即消费 approval，**重跑必须重新审批**，
+  进程崩溃重启后也不例外（此前 approval 跨崩溃存活，可免审批整体重跑）。
+
+### 修复
+
+- **P0 并发竞态**：`HttpConnector.call()` 曾用跨请求共享的单值实例字段 `__handlingTool`
+  判定 handler 重入，并发下会被彼此的状态污染，导致参数映射与 AMiner 凭据检查被**静默跳过**、
+  退化成零参数通用直通。CLI / ServerContext 每次新建 registry 天然不共享该字段——
+  这就是 824 个既有单测测不出它的原因。改为构造期一次性写入、运行期只读的 handlers 表，
+  全程不写任何跨请求可变实例状态。**「同名方法即 handler」这个魔法分发契约同时废除**
+  （脚手架模板与 `EXTENDING.md` 已同步改为显式 `this.handle(toolName, fn)` 注册）。
+- **全链路超时**：`http/client.ts` 的裸 `fetch`、LLM 调用、`PythonKernel.execute`、
+  server 长任务此前全部无超时——任一上游挂起即永久卡死。四层各加显式超时，
+  默认值收进 config 注册表（`httpTimeoutMs` 30s / `llmTimeoutMs` 120s /
+  `kernelTimeoutMs` 120s / `taskTimeoutMs` 600s），优先级 env > config.json > 默认。
+- **Python kernel 死锁**：stderr 管道从不排空，长会话写满 64KB 缓冲后 kernel 永久卡死。
+- **LLM 失败被静默当成功**：orchestrator 四处 `llm.call()` 都不检查 `res.ok`，
+  没配 key 时整条链路「成功」地把错误文本当产出、review 照样放行。四处全部改为走失败路径，
+  且错误文本不再进入用户可见的 summary。
+- **`kernelManager.dispose()` 摧毁全部内核**：并发会话里先结束的会杀掉另一个正在执行的 kernel。
+  改为按 id 销毁。
+- **`config.json` 以 0644 存放 LLM API key**：系统里最值钱的密钥，保护弱于 connector 凭据（0600）。
+  改为目录 0700 / 文件 0600 + 显式 `chmod`，并在每次 `loadConfig()` 时自愈收紧。
+- **状态机无乐观并发控制**：并发执行同一份已获批协议会双双通过三道门 →
+  **同一协议被执行两次**。records 加 `rev` 列做 CAS，执行权原子声明，冲突返回 409 语义。
+- **`bun run test:py` 从未在干净环境跑通**（脚本写的是 `python` 而非 venv 解释器，
+  直接 `command not found`）；**`bun run test:lab` 是空转**（`tests/lab/` 下只有 `.test.py`，
+  `bun test` 一个都跑不到）。两条都已修——后者原本 0 个用例，现在 26 个。
+
+### 变更
+
+- **安全门声明收敛（口径诚实化）**：此前宣称「4 条独立规则」，实测只有 `volume_capacity`
+  在自然语言主管线上全程可信；`chemical_compatibility` 词表已扩到中英文与常见分子式但仍有限；
+  **`concentration_limit` / `biosafety` 在主管线上恒空转**（编译器从不产生它们所需的字段）。
+  README 与 DESIGN 现在如实写明真实覆盖范围。新增 `unconsumedWarnings`：
+  协议里出现却未被任何规则消费的量纲/试剂/条件会产出显式告警，CLI 编译与审批输出必须显示——
+  **「用户写了但安全门没看见」的内容绝不静默绿灯**。对接物理设备的硬前置见 BACKLOG V6/V25。
+- `record` 新增完整性哈希：绕过状态机直接改 `state` / `approval` 变得可检测。
+
+### 新增
+
+- **叙事一致性门禁（AD-12）** `tests/unit/narrative_parity.test.ts`：
+  ① 孤儿模块检测（生产代码零引用者必须在册并写清理由，白名单只许缩短）；
+  ② 文档数量声称与运行期真源对撞；
+  ③ **自描述端点必须能从真源推导**——`/api/lab/machine` 的两道门由转移表算出来比对。
+  第三条在本版就抓到一个真 bug：状态拆分后该端点仍自称 `to: "wet_run"`，
+  AD-6 的机器可读表达对外撒谎而全部测试皆绿。
+  门禁同时登记了两处**已知缺口**：`swarm.ts`（v0.1 遗留、零调用方，v0.4 P12 删除）与
+  `proteins/analysis.ts`（protein-analysis 技能有 e2e 却无任何生产入口，BACKLOG V22）。
+- **两个新测试维度**：`tests/concurrency/`（共享 connector 100 并发参数映射不变式、
+  N=30 并发执行同一份已批协议恰好 1 次成功、两 session kernel 互不摧毁）与
+  `tests/timeout/`（注入永不响应的上游，断言四个入口都在可控时间内返回可见超时错误）。
+- 配置项：`originAllowlist`、`httpTimeoutMs`、`llmTimeoutMs`、`kernelTimeoutMs`、`taskTimeoutMs`。
+
+### 测试
+
+单元 824 → 904（`bun test tests/unit/`，0 fail / 0 skip，含 venv 环境下的 OpenMM 契约测试）；
+新增 `tests/concurrency/` 8 例 + `tests/timeout/` 4 例；pytest 48；`test:lab` 由 0 → 26。
 
 ---
 

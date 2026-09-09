@@ -55,9 +55,17 @@ export function labRoutes(ctx: ServerContext): Hono {
       states: WET_EXPERIMENT_STATES,
       transitions: WET_LEGAL_TRANSITIONS,
       terminal: WET_TERMINAL_STATES,
-      // AD-6 的机器可读表达：唯一进 wet_run 的入边，以及那个必须停下来等人的状态。
+      // AD-6 的机器可读表达：必须停下来等人的状态，以及两道门各自唯一的入边。
+      //
+      // D-10 起 wet_run 拆成 approved / executing，于是门也变成两道：
+      //   approvalGate  —— 人工审批：awaiting_approval → approved（唯一入边，必须记名）
+      //   executionGate —— 执行权原子声明：approved → executing（唯一入边，CAS 抢占）
+      // 后者是「approval 一次性消费」的机器可读形态：执行权一旦声明，approval 即被消费，
+      // 重跑必须重新审批。两道门的 from/to 都从 WET_LEGAL_TRANSITIONS 推得出来，
+      // 这里写成显式字段是为了让外部调用方不必自己反推。
       awaiting: "awaiting_approval",
-      approvalGate: { from: "awaiting_approval", to: "wet_run", requires: ["actor"] },
+      approvalGate: { from: "awaiting_approval", to: "approved", requires: ["actor"] },
+      executionGate: { from: "approved", to: "executing", consumesApproval: true },
     }),
   );
 
