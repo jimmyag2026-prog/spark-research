@@ -1,0 +1,218 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildCapabilities } from "../../backend/src/capabilities";
+import { runCapabilitiesCommand } from "../../backend/src/capabilities/cli";
+import { CONFIG_SETTINGS, saveConfig } from "../../backend/src/config";
+import { BUILTIN_CONNECTORS, ConnectorRegistry } from "../../backend/src/connectors/registry";
+import { CredentialStore } from "../../backend/src/daemon/credentials";
+import { SAFETY_RULES } from "../../backend/src/lab/safety";
+import { WET_BACKEND_IDS, wetBackend } from "../../backend/src/lab/wet_backend";
+import { CONCLUSION_RULES } from "../../backend/src/reviewer/conclusion_rules";
+import { RATING_VIOLATION_CODES } from "../../backend/src/ideation/novelty";
+import { EDGE_TYPES, EVIDENCE_LABELS, RECORD_TYPES } from "../../backend/src/project/models";
+import { SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../../backend/src/simulation/registry";
+import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
+import { skillDirs } from "../../backend/src/skills/frontmatter";
+
+// P9 · 能力自描述的**一致性测试**。
+//
+// 手写清单必然漂移：写的时候对，加一个 connector 就错了，而且没有任何东西会报警。
+// 所以清单必须从真实注册表生成，并由这组测试双向核对：
+//   正向：清单里的每一项都真实存在**且可实例化**（不是「注册表里有这个名字」而已）。
+//   反向：注册表里的每一项都出现在清单里（防止静默漏项——那是更隐蔽的一种漂移）。
+
+const REPO_ROOT = join(import.meta.dir, "../..");
+
+function tmpRoot(): string {
+  return mkdtempSync(join(tmpdir(), "spark-caps-"));
+}
+
+const manifest = await buildCapabilities({ root: tmpRoot(), env: {} });
+
+describe("capabilities · connectors 双向一致", () => {
+  const registered = Object.entries(BUILTIN_CONNECTORS).flatMap(([domain, defs]) =>
+    defs.map((d) => ({ domain, name: d.name })),
+  );
+
+  test("正向：清单里的每个 connector 都能实例化并列出工具", () => {
+    const registry = new ConnectorRegistry().registerBuiltins();
+    for (const entry of manifest.connectors) {
+      const connector = registry.get(entry.id);
+      expect(connector, `connector '${entry.id}' 在清单里但注册表拿不到`).toBeDefined();
+      const tools = connector!.listTools();
+      expect(tools.map((t) => t.name).sort()).toEqual(entry.tools.map((t) => t.name).sort());
+      expect(entry.tools.every((t) => t.description.length > 0)).toBe(true);
+    }
+  });
+
+  test("反向：注册表里的每个 connector 都在清单里（不许静默漏项）", () => {
+    expect(manifest.connectors.map((c) => c.id).sort()).toEqual(registered.map((r) => r.name).sort());
+    for (const { domain, name } of registered) {
+      expect(manifest.connectors.find((c) => c.id === name)!.domain).toBe(domain);
+    }
+  });
+
+  test("可用性分档正确：占位 / 需凭据 / 可用", () => {
+    const byId = Object.fromEntries(manifest.connectors.map((c) => [c.id, c]));
+    // 占位实现（无公开 API 渠道）
+    expect(byId.cnki!.availability).toBe("placeholder");
+    expect(byId.wanfang!.availability).toBe("placeholder");
+    // 需凭据但未配置：明说会被 skip 而不是失败
+    expect(byId.aminer!.availability).toBe("needs_credential");
+    expect(byId.aminer!.reason).toContain("skipped");
+    // 免 key 源
+    expect(byId.openalex!.availability).toBe("available");
+    // 已知的坑要原样透出（P2 实测 S2 匿名 429）
+    expect(byId.semanticscholar!.caveat).toContain("429");
+  });
+
+  test("凭据配置后状态翻转，但值本体永远不出现在清单里（AD-2）", async () => {
+    const root = tmpRoot();
+    const credentials = new CredentialStore({ root });
+    credentials.set("aminer", { api_key: "sk-should-never-appear" });
+    const withKey = await buildCapabilities({ root, env: {}, credentials });
+    const aminer = withKey.connectors.find((c) => c.id === "aminer")!;
+    expect(aminer.credentialConfigured).toBe(true);
+    expect(aminer.availability).toBe("available");
+    expect(JSON.stringify(withKey)).not.toContain("sk-should-never-appear");
+  });
+});
+
+describe("capabilities · 平台与后端双向一致", () => {
+  test("正向：每个仿真平台都能实例化，kinds 非空", () => {
+    const registry = new SimulationRegistry({ root: tmpRoot() });
+    for (const p of manifest.simulationPlatforms) {
+      const platform = registry.get(p.id) as unknown as { kinds: readonly string[]; deterministic: boolean };
+      expect(platform.kinds.length).toBeGreaterThan(0);
+      expect([...platform.kinds].sort()).toEqual([...p.kinds].sort());
+      expect(platform.deterministic).toBe(p.deterministic);
+    }
+  });
+
+  test("反向：注册表里的平台与后端一个不少，默认项唯一", () => {
+    expect(manifest.simulationPlatforms.map((p) => p.id).sort()).toEqual([...SIMULATION_PLATFORM_IDS].sort());
+    expect(manifest.wetBackends.map((b) => b.id).sort()).toEqual([...WET_BACKEND_IDS].sort());
+    expect(manifest.simulationPlatforms.filter((p) => p.isDefault)).toHaveLength(1);
+    expect(manifest.wetBackends.filter((b) => b.isDefault)).toHaveLength(1);
+  });
+
+  test("正向：每个湿实验后端都能实例化", () => {
+    for (const b of manifest.wetBackends) {
+      expect(wetBackend(b.id).id).toBe(b.id);
+    }
+  });
+
+  test("不探测时可用性是 unknown 而不是假装 available", () => {
+    for (const p of manifest.simulationPlatforms) expect(p.availability).toBe("unknown");
+    for (const b of manifest.wetBackends) expect(b.availability).toBe("unknown");
+    expect(manifest.probed).toBe(false);
+  });
+
+  test("--probe 时给出真实探测结论（pyref 零依赖，必须可用）", async () => {
+    const probed = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+    expect(probed.probed).toBe(true);
+    const pyref = probed.simulationPlatforms.find((p) => p.id === "pyref")!;
+    expect(pyref.availability).toBe("available");
+    const mock = probed.wetBackends.find((b) => b.id === "mock_devices")!;
+    expect(mock.availability).toBe("available");
+    // 装没装 openmm/opentrons 因机器而异，但结论不能是 unknown——探测了就要给答案。
+    for (const p of probed.simulationPlatforms) expect(["available", "unavailable"]).toContain(p.availability);
+    for (const b of probed.wetBackends) expect(["available", "unavailable"]).toContain(b.availability);
+  }, 120_000);
+});
+
+describe("capabilities · 技能与规则双向一致", () => {
+  test("正向：每个技能的 SKILL.md 与 validation 文件都在磁盘上", () => {
+    for (const skill of manifest.skills) {
+      expect(existsSync(skill.path)).toBe(true);
+      for (const rel of skill.validation) expect(existsSync(join(REPO_ROOT, rel))).toBe(true);
+      expect(skill.triggers.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("反向：技能目录一个不少", () => {
+    expect(manifest.skills.map((s) => s.name).sort()).toEqual([...skillDirs()].sort());
+  });
+
+  test("规则清单覆盖四类真实规则，且 id 与真源一致", () => {
+    const ids = (kind: string) => manifest.rules.filter((r) => r.kind === kind).map((r) => r.id);
+    expect(ids("safety").sort()).toEqual(SAFETY_RULES.map((r) => r.id).sort());
+    expect(ids("conclusion").sort()).toEqual([...CONCLUSION_RULES].sort());
+    expect(ids("novelty-rating").sort()).toEqual([...RATING_VIOLATION_CODES].sort());
+    expect(ids("citation")).toEqual(["citation-integrity"]);
+    // 每条规则都要有非空描述——清单里出现一个只有 id 的规则等于没说明。
+    for (const rule of manifest.rules) expect(rule.description.length).toBeGreaterThan(8);
+  });
+
+  test("stats-plausibility 的严重度必须标成 soft-only（它只提示不否决）", () => {
+    expect(manifest.rules.find((r) => r.id === "stats-plausibility")!.severity).toBe("soft-only");
+  });
+});
+
+describe("capabilities · MCP 与证据图与配置", () => {
+  test("MCP 工具清单与真源一致，且刻意不暴露的动作被写进清单", () => {
+    expect(manifest.mcp.tools.map((t) => t.name)).toEqual(MCP_TOOLS.map((t) => t.name));
+    expect(manifest.mcp.withheld.map((w) => w.name)).toEqual(MCP_WITHHELD.map((w) => w.name));
+    for (const w of manifest.mcp.withheld) {
+      expect(w.reason.length).toBeGreaterThan(10);
+      expect(w.humanAction).toContain("spark-research");
+    }
+  });
+
+  test("证据图的类型集合来自真源", () => {
+    expect(manifest.recordTypes).toEqual(RECORD_TYPES);
+    expect(manifest.edgeTypes).toEqual(EDGE_TYPES);
+    expect(manifest.evidenceLabels).toEqual(EVIDENCE_LABELS);
+  });
+
+  test("配置段与设置表一一对应，凭据只报是否配置", async () => {
+    expect(manifest.config.map((c) => c.key)).toEqual(CONFIG_SETTINGS.map((s) => s.key));
+    const root = tmpRoot();
+    saveConfig({ KIMI_API_KEY: "sk-should-never-appear" }, { root });
+    const withSecret = await buildCapabilities({ root, env: {} });
+    expect(JSON.stringify(withSecret)).not.toContain("sk-should-never-appear");
+    expect(withSecret.config.find((c) => c.key === "KIMI_API_KEY")!.value).toBeNull();
+  });
+});
+
+describe("capabilities · CLI 两种输出同源", () => {
+  test("--json 输出可解析且与 buildCapabilities 同构", async () => {
+    const lines: string[] = [];
+    const code = await runCapabilitiesCommand(["--json"], {
+      root: tmpRoot(),
+      env: {},
+      out: (l) => lines.push(l),
+      err: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(lines.join("\n"));
+    expect(parsed.service).toBe("spark-research");
+    expect(parsed.connectors.map((c: { id: string }) => c.id)).toEqual(manifest.connectors.map((c) => c.id));
+    expect(parsed.mcp.tools).toHaveLength(MCP_TOOLS.length);
+  });
+
+  test("不带 --json 输出人看的表格，且包含不暴露动作的说明", async () => {
+    const lines: string[] = [];
+    await runCapabilitiesCommand([], { root: tmpRoot(), env: {}, out: (l) => lines.push(l), err: (l) => lines.push(l) });
+    const text = lines.join("\n");
+    expect(text).toContain("能力清单");
+    expect(text).toContain("Connector");
+    expect(text).toContain("刻意不暴露");
+    expect(text).toContain("lab_approve");
+    expect(text).toContain("人来做");
+  });
+
+  test("未知参数报错而不是静默忽略", async () => {
+    const lines: string[] = [];
+    const code = await runCapabilitiesCommand(["--jsno"], {
+      root: tmpRoot(),
+      env: {},
+      out: (l) => lines.push(l),
+      err: (l) => lines.push(l),
+    });
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("未知参数");
+  });
+});

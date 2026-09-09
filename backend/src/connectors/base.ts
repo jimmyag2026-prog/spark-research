@@ -14,6 +14,10 @@ export interface ConnectorMetadata {
   domain: string;
   apiKeyRequired: boolean;
   status: "available" | "placeholder";
+  // 已知限制（P9）。`status: "available"` 说的是「接口实现了」，不等于「无条件可用」——
+  // 例如 Semantic Scholar 匿名请求实测持续 429。这条会被 `capabilities` 原样透出，
+  // 让外部 agent 在选源之前就知道会撞什么墙，而不是撞完再猜。
+  caveat?: string;
 }
 
 export interface MCPConnectorConfig {

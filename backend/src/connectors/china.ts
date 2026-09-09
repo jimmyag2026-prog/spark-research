@@ -34,7 +34,12 @@ export const cnkiConfig: MCPConnectorConfig = {
   tools: [
     { name: "search", description: "检索知网文献（需通过 kns8s/brief/grid 或官方API）", endpoint: "/brief/grid", method: "POST" },
   ],
-  metadata: { domain: "cnki.net", apiKeyRequired: true, status: "placeholder" },
+  metadata: {
+    domain: "cnki.net",
+    apiKeyRequired: true,
+    status: "placeholder",
+    caveat: "占位实现：无公开 API 渠道，调用会失败。中文文献主路径请用 aminer",
+  },
 };
 
 export class CNKIConnector extends MCPConnector {
@@ -50,7 +55,12 @@ export const wanfangConfig: MCPConnectorConfig = {
   tools: [
     { name: "search", description: "检索万方文献", endpoint: "/search" },
   ],
-  metadata: { domain: "wanfangdata.com.cn", apiKeyRequired: true, status: "placeholder" },
+  metadata: {
+    domain: "wanfangdata.com.cn",
+    apiKeyRequired: true,
+    status: "placeholder",
+    caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中文文献主路径请用 aminer",
+  },
 };
 
 export class WanFangConnector extends MCPConnector {

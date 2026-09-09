@@ -264,7 +264,13 @@ export const semanticscholarConfig: MCPConnectorConfig = {
     { name: "search", description: "检索论文", endpoint: "/paper/search" },
     { name: "getPaper", description: "按 S2 ID / DOI / arXiv ID 获取单篇", endpoint: "/paper/{id}" },
   ],
-  metadata: { domain: "api.semanticscholar.org", apiKeyRequired: false, status: "available" },
+  metadata: {
+    domain: "api.semanticscholar.org",
+    apiKeyRequired: false,
+    status: "available",
+    // P2 实测：匿名请求持续 429（7 次尝试全挂）。接口是通的，配额不是。
+    caveat: "匿名调用共享公共限流额度，实测持续 429；实际使用建议申请免费 API key（凭据 id `semanticscholar`）",
+  },
 };
 
 // Semantic Scholar 支持带前缀的外部 id：DOI:10.x/y、arXiv:2101.00001、PMID:12345。

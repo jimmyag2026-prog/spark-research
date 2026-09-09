@@ -18,6 +18,9 @@ import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
 import { runConfigCommand } from "./config/cli";
 import { applyConfigEnvDefaults } from "./config";
+import { runCapabilitiesCommand } from "./capabilities/cli";
+import { runMcpStdio } from "./mcp/server";
+import { MCP_TOOLS } from "./mcp/tools";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -323,6 +326,23 @@ function main() {
     case "config": {
       const code = runConfigCommand(process.argv.slice(3));
       if (code !== 0) process.exitCode = code;
+      break;
+    }
+    case "capabilities":
+    case "caps": {
+      runCapabilitiesCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "mcp": {
+      // stdio 传输：**绝不能往 stdout 写任何非协议内容**，否则客户端解析 JSON-RPC 会挂。
+      // 提示信息一律走 stderr。
+      console.error(`Spark Research MCP server v${pkg.version}（stdio）— 暴露 ${MCP_TOOLS.length} 个工具`);
+      runMcpStdio().catch((error) => {
+        console.error(`MCP server 启动失败: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      });
       break;
     }
     case "info":

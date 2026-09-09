@@ -23,7 +23,12 @@ export const aminerConfig: MCPConnectorConfig = {
     { name: "search", description: "按标题检索论文", endpoint: "/paper/search" },
     { name: "getPaper", description: "按 AMiner paper id 批量取详情", endpoint: "/paper/info", method: "POST" },
   ],
-  metadata: { domain: "datacenter.aminer.cn", apiKeyRequired: true, status: "available" },
+  metadata: {
+    domain: "datacenter.aminer.cn",
+    apiKeyRequired: true,
+    status: "available",
+    caveat: "需配置凭据（`spark-research lit sources` 看是否已配）；未配置时统一检索把它标为 skipped，其余源照常返回",
+  },
 };
 
 // 无 key 时的统一降级返回体。调用方（统一检索、CLI）用 `configured === false` 判定。
