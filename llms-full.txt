@@ -142,6 +142,7 @@ spark-research mcp    # stdio 传输
 - `wetBackend`（默认 opentrons_simulate，env `SPARK_RESEARCH_WET_BACKEND`）：湿实验默认执行后端
 - `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
+- `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
