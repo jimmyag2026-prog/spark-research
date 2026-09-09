@@ -128,16 +128,22 @@ P8 收口发布 v0.2 ──────────► 报告导出 + README + d
 
 ### P7 前端工作台
 
-**范围**
-- 三栏升级：左=项目/文献库/思路库导航；中=会话+精读卡/综述编辑；右=record 时间线 + artifact 浏览；底=实验面板（干湿状态机可视化 + approve 按钮）
-- 保持 vanilla JS（AD-7），API 先行：P1-P6 的所有能力先有 HTTP API 再画 UI
-- 时间线过滤（按 record 类型/时间）
+**范围**（2026-09-09 用户修订：UI 详细程度参考 OpenScience 工作台，非冒烟版）
+- **第一步 API 层**（仍是重点）：P1-P6 全部能力补齐 HTTP API（project/lit/idea/exp/lab 端点 + SSE 会话流），server/app.ts 从 v0.1 形态升级；无 API 能力不许只存在于 UI
+- **第二步 UI 升级为 SolidJS 工作台**（AD-7 的「到 P7 再迁」触发）：对标 OpenScience `frontend/workspace` 的体验水准与交互模式（本地 clone 可研究其组件组织/主题/会话流渲染，Apache 2.0 可参考但代码自研）：
+  - 左：项目切换 + 文献库/思路库/实验导航树
+  - 中：会话流（含 coexplore 模式）+ 精读卡/综述/novelty 报告的富渲染
+  - 右：record 时间线（按类型/时间过滤）+ artifact/证据图浏览
+  - 底：实验面板——干湿状态机可视化 + approve/reject 按钮（decision record 联动）
+  - 明暗主题、键盘可用性、加载与错误态完整
+- 科学渲染以轻量为限（表格/曲线/run log），分子/结构 3D 渲染排 v0.3
 
 **验证**
 - API 层：每个新端点单测（现有 server.test.ts 模式）
-- e2e：浏览器冒烟（建项目 → 检索入库 → 时间线出现 record → 实验面板 approve 流程）
+- e2e：浏览器全流程（建项目 → 检索入库 → 精读/综述 → idea/novelty → 干实验 approve→湿实验模拟 → 时间线完整呈现），Playwright 或等价
+- UI 与 CLI 行为对照：同一操作两侧产生相同 record/artifact
 
-**退出标准**：冒烟 e2e 通过；无 API 能力只存在于 UI 层（UI 全部是 API 投影）。
+**退出标准**：全流程浏览器 e2e 通过；UI 全部是 API 投影；体验对照 OpenScience workspace 无明显断档（会话流/导航/时间线三项主观验收由用户过目）。
 
 ### P8 收口发布 v0.2
 
