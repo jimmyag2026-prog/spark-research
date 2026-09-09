@@ -359,6 +359,7 @@ export class ExperimentLoop {
         experimentId: view.id,
         runId: view.runId,
         platform: view.platform,
+        deterministic: this.platforms.get(view.platform).deterministic,
         simKind: view.simKind,
         params: view.params,
         summary,

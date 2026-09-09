@@ -16,6 +16,7 @@ export type PyRefKind = (typeof PYREF_KINDS)[number];
 // 而且有解析解可对照——它验证的是接口而不是运气。
 export class PyRefPlatform extends SubprocessSimulationPlatform {
   readonly id = "pyref";
+  readonly deterministic = true;
   readonly description = "纯 Python 阻尼谐振子参考仿真（零外部依赖，确定性，有解析解对照）";
   readonly kinds = PYREF_KINDS;
 

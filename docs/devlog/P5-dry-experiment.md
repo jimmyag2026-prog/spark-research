@@ -403,3 +403,10 @@ Python 侧 `tests/sim/oscillator.test.py` 新增 **22** 个（三种阻尼区间
      要等真实的 100 ps 量级任务才有意义
   5. `energy.csv` 之外的产出格式（DCD 轨迹）——现在 `final_state.xml` 有 125 KB，
      真实长任务的轨迹文件会是几百 MB，artifact store 直接 copy 到 `artifacts/` 的策略要重新评估
+
+## 主会话验收批注（2026-09-09）
+
+- **裁决 3（当场落地）**：`SimulationPlatform` 新增 `deterministic` 能力位（pyref=true / openmm=false），observation record metadata 携带——P8 报告与 E1 数据-结论检查器据此区分「逐位重算对账」与「分布区间对账」。趁 record 格式未定型先落。
+- **裁决 2**：`compute/providers.ts` 标记 DEPRECATED（文件头注释），P8 收口删除。不当场删的原因：v0.1 资产表登记在案，删除属破坏性清理，归入发布收口一并做。
+- **裁决 1（backlog）**：poll 的 pid 存活判断维持现状——done.json 优先的次序保证 PID 复用只会「多报 running」不会「把失败判成成功」，方向安全；进程 start-time 交叉核验（平台相关）排 backlog。
+- pytest 静默收集 0 用例的修复是本阶段的意外收获：P0-P4 期间 Python 侧其实没有测试门禁，现在补上了。

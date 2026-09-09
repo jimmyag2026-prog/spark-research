@@ -21,6 +21,8 @@ export const COMPUTE_PLATFORMS = ["CPU", "Reference", "OpenCL", "CUDA", "HIP"] a
 // 那就必须是一个独立进程 + 磁盘状态（见 platform.ts 的注释）。
 export class OpenMMPlatform extends SubprocessSimulationPlatform {
   readonly id = "openmm";
+  // CPU 平台多线程浮点归约 → 逐位不可复现（P5 实测三次 E_min 各不相同）。
+  readonly deterministic = false;
   readonly description = "OpenMM 分子动力学（水盒子能量最小化 + 短时 NVT 平衡，纯 CPU 秒级）";
   readonly kinds = OPENMM_KINDS;
 

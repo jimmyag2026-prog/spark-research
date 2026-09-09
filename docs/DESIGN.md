@@ -127,6 +127,7 @@ P4 落地口径：
 **B1 干实验（in silico）**
 - 执行引擎：现有 stateful Python kernel（RDKit/pandas/numpy 已配）
 - **Simulation adapter 接口**：统一的 `SimulationPlatform` 契约（prepare/submit/poll/collect），参照 connector 模式
+- 能力位 `deterministic`：同一 spec 是否逐位可复现（pyref=true；OpenMM CPU=false，多线程浮点归约所致，P5 实测）。observation record 携带该位，E1 检查器与 P8 报告据此选「重算对账」或「区间对账」
 - 首批参考实现（2 个，证明接口通用性）：
   - 本地进程型：OpenMM（分子动力学，pip 可装，纯本地）
   - 命令行型：GROMACS（若本机可装）或退一档用 Python 内置仿真脚本作第二实现

@@ -115,6 +115,7 @@ export interface SubprocessPlatformOptions {
 export abstract class SubprocessSimulationPlatform implements SimulationPlatform {
   abstract readonly id: string;
   abstract readonly description: string;
+  abstract readonly deterministic: boolean;
   // 每个 adapter 支持的任务种类。
   abstract readonly kinds: readonly string[];
 

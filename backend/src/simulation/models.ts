@@ -95,6 +95,10 @@ export interface PlatformAvailability {
 export interface SimulationPlatform {
   readonly id: string;
   readonly description: string;
+  // 能力位：同一 spec 重跑是否逐位可复现。false = 只在分布意义上可复现
+  // （如 OpenMM CPU 多线程浮点归约），下游（E1 检查器 / P8 报告）据此
+  // 决定「重算对账」还是「区间对账」。
+  readonly deterministic: boolean;
   available(): Promise<PlatformAvailability>;
   prepare(spec: SimulationSpec): Promise<PreparedRun>;
   submit(prepared: PreparedRun): Promise<string>;
