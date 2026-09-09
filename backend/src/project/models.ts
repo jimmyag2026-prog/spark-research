@@ -75,6 +75,11 @@ export interface RecordFilter {
   sessionId?: string;
   artifactId?: string;
   limit?: number;
+  // P7 时间线：时间窗（含端点，ISO8601 字符串按字典序比较即时序）+ 分页偏移。
+  // 过滤放在 SQL 里而不是取全量再切，是为了 total 与 page 用同一套谓词。
+  since?: string;
+  until?: string;
+  offset?: number;
 }
 
 export interface RecordGraphData {

@@ -305,6 +305,46 @@ describe("RecordStore", () => {
     expect(() => s.graph("missing")).toThrow(RecordValidationError);
     s.close();
   });
+
+  // P7：时间线端点要的三个过滤维度。放在存储层测是因为 total 与「这一页」共用同一套谓词，
+  // 谓词错了在 HTTP 层只会表现为「翻页时总数变来变去」，很难定位。
+  test("since / until 按时间窗过滤（含端点）", () => {
+    const s = store();
+    for (const day of ["2026-01-01", "2026-01-02", "2026-01-03"]) {
+      s.create({ type: "idea", content: day, createdAt: `${day}T00:00:00.000Z` });
+    }
+    expect(s.list({ since: "2026-01-02T00:00:00.000Z" })).toHaveLength(2);
+    expect(s.list({ until: "2026-01-02T00:00:00.000Z" })).toHaveLength(2);
+    expect(
+      s.list({ since: "2026-01-02T00:00:00.000Z", until: "2026-01-02T00:00:00.000Z" }).map((r) => r.content),
+    ).toEqual(["2026-01-02"]);
+    s.close();
+  });
+
+  test("offset 分页；只给 offset 不给 limit 也要正确跳过", () => {
+    const s = store();
+    for (let i = 0; i < 5; i++) {
+      s.create({ type: "idea", content: `i${i}`, createdAt: `2026-02-0${i + 1}T00:00:00.000Z` });
+    }
+    expect(s.list({ limit: 2 }).map((r) => r.content)).toEqual(["i0", "i1"]);
+    expect(s.list({ limit: 2, offset: 2 }).map((r) => r.content)).toEqual(["i2", "i3"]);
+    expect(s.list({ offset: 3 }).map((r) => r.content)).toEqual(["i3", "i4"]);
+    expect(s.list({ offset: 99 })).toHaveLength(0);
+    s.close();
+  });
+
+  test("count(filter) 与 list(filter) 用同一套谓词", () => {
+    const s = store();
+    s.create({ type: "idea", content: "a", createdAt: "2026-03-01T00:00:00.000Z" });
+    s.create({ type: "idea", content: "b", createdAt: "2026-03-05T00:00:00.000Z" });
+    s.create({ type: "paper", content: "c", createdAt: "2026-03-05T00:00:00.000Z" });
+    expect(s.count()).toBe(3);
+    expect(s.count({ type: "idea" })).toBe(2);
+    expect(s.count({ type: "idea", since: "2026-03-02T00:00:00.000Z" })).toBe(1);
+    // 分页参数不该影响总数——这正是把 limit/offset 排除在谓词之外的原因。
+    expect(s.count({ type: "idea", limit: 1 })).toBe(2);
+    s.close();
+  });
 });
 
 describe("record ↔ artifact 互链（AD-3）", () => {
