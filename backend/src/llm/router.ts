@@ -22,8 +22,11 @@ export const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
 // **已实装的 provider**。`SUPPORTED_PROVIDERS` 是「模型名能被识别成哪一家」的字典，
 // 这张表才是「真的能发出请求」的清单——v0.3.1 的实测缺口正是两者被混为一谈
 // （声明 6 个、实现 2 个，其余静默落到 OpenRouter）。
-// lane R-a 接入 openai / deepseek / qwen / 本地端点、R-b 接入 anthropic 时，
-// 加的是这张表，`capabilities` 与 narrative_parity 门禁都读它。
+//
+// R-a（P11-a）补上 openai / deepseek / qwen：三家都是 OpenAI 兼容端点，baseUrl 与官方文档
+// 已用 WebSearch 核实（见 docs/devlog/P11-a.md）——三家都支持 tools / response_format:json_object /
+// 流式，所以用 `OpenAiCompatAdapter` 的默认云端 capabilities（不传 `capabilities` 覆盖）。
+// R-b 接入 anthropic 时加的也是这张表。
 const ADAPTERS: Partial<Record<Provider, { adapter: ProviderAdapter; envKey: string }>> = {
   openrouter: {
     adapter: new OpenAiCompatAdapter({
@@ -37,10 +40,59 @@ const ADAPTERS: Partial<Record<Provider, { adapter: ProviderAdapter; envKey: str
     adapter: new OpenAiCompatAdapter({ id: "kimi", baseUrl: "https://api.moonshot.ai/v1" }),
     envKey: "KIMI_API_KEY",
   },
+  openai: {
+    adapter: new OpenAiCompatAdapter({ id: "openai", baseUrl: "https://api.openai.com/v1" }),
+    envKey: "OPENAI_API_KEY",
+  },
+  deepseek: {
+    // DeepSeek 官方文档的规范 baseUrl 是不带 /v1 的 https://api.deepseek.com
+    // （/v1 是给「照抄 OpenAI SDK 代码」用户准备的兼容别名，两者等价，这里用规范形式）。
+    adapter: new OpenAiCompatAdapter({ id: "deepseek", baseUrl: "https://api.deepseek.com" }),
+    envKey: "DEEPSEEK_API_KEY",
+  },
+  qwen: {
+    // 阿里云 DashScope 的 OpenAI 兼容模式。这里用中国大陆网关；国际网关是
+    // dashscope-intl.aliyuncs.com，两者 baseUrl 不同——本 lane 没有真实账号可验证
+    // 网络可达性（测试全部走注入的 fetchImpl），如实记在 devlog，需要国际网关时
+    // 交给 R-c 把它收进 CONFIG_SETTINGS 做成可配置项，而不是在这里猜。
+    adapter: new OpenAiCompatAdapter({
+      id: "qwen",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }),
+    envKey: "QWEN_API_KEY",
+  },
 };
 
 export function implementedProviders(): Provider[] {
   return Object.keys(ADAPTERS) as Provider[];
+}
+
+/**
+ * 本地端点（ollama / vLLM / 任意自建 OpenAI 兼容服务）。
+ *
+ * 不进 `SUPPORTED_PROVIDERS`/`Provider` 联合类型——那张表是「模型名 → provider」的
+ * 静态字典，本地服务器上的模型名是用户自己起的（"llama3.1" / "qwen2.5:7b" / ...），
+ * 硬塞一个空的 `PROVIDER_MODELS.local: []` 会踩中 `orchestrator.test.ts` 里
+ * 「每个 provider 的模型列表非空」的既有断言（那个文件不属于本 lane 的所有权，
+ * 不能为了本地端点去改它的期望）。
+ *
+ * 改用显式前缀路由：模型名形如 `local/<真实模型名>` 或 `local:<真实模型名>` 时命中，
+ * 前缀剥掉后才是发给本地服务器的 `model` 字段。baseUrl 从环境变量
+ * `SPARK_LOCAL_LLM_BASE_URL` 读（config/index.ts 是 R-c 的所有权，本 lane 不加新
+ * 配置项——需要收进 `CONFIG_SETTINGS` 交给 R-c 或后续处理，这里先用环境变量落地）。
+ * key 允许为空：`SPARK_LOCAL_LLM_API_KEY` 未设时以空字符串调用，adapter 会省略
+ * Authorization 头（很多本地服务不校验）。
+ *
+ * capabilities 保守上报（toolCalling/jsonMode: false，streaming: true，
+ * usageReported: false）——本地模型是否支持 function calling / json 模式因模型而异，
+ * 我们没有能力在不打真实网络的前提下探测，AD-12 不允许一刀切报 true。
+ */
+const LOCAL_MODEL_PREFIX = /^local[/:]/;
+const LOCAL_BASE_URL_ENV = "SPARK_LOCAL_LLM_BASE_URL";
+const LOCAL_API_KEY_ENV = "SPARK_LOCAL_LLM_API_KEY";
+
+function localCapabilities(): ProviderCapabilities {
+  return { toolCalling: false, jsonMode: false, streaming: true, usageReported: false };
 }
 
 function providerForModel(model: string): Provider {
@@ -92,33 +144,50 @@ export class LLMRouter {
       const configured = implementedProviders()
         .filter((p) => this.env[ADAPTERS[p]!.envKey])
         .join(" / ");
-      return failure(providerForModel(model), model, {
+      const isLocal = LOCAL_MODEL_PREFIX.test(model);
+      return failure(isLocal ? "local" : providerForModel(model), model, {
         kind: "auth",
-        message: configured
-          ? `模型 '${model}' 没有可用的 provider（已配置：${configured}）`
-          : "没有配置任何 API key。设置 KIMI_API_KEY 或 OPENROUTER_API_KEY，或运行 `spark-research auth`",
+        message: isLocal
+          ? `模型 '${model}' 以 local/ 开头，但没设置 ${LOCAL_BASE_URL_ENV}——本地端点（ollama / vLLM / 任意自建 OpenAI 兼容服务）需要先设这个环境变量指向其 baseUrl。`
+          : configured
+            ? `模型 '${model}' 没有可用的 provider（已配置：${configured}）`
+            : "没有配置任何 API key。设置 KIMI_API_KEY 或 OPENROUTER_API_KEY，或运行 `spark-research auth`",
         retryable: false,
       });
     }
 
     return entry.adapter.call({
-      model,
+      model: entry.wireModel(model),
       messages,
       options,
-      apiKey: this.env[entry.envKey]!,
+      // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
+      // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
+      apiKey: this.env[entry.envKey] ?? "",
       baseUrl: "",
       timeoutMs: options.timeoutMs ?? this.timeoutMs,
       fetchImpl: this.fetchImpl,
     });
   }
 
-  /** 选 adapter：优先模型所属的 provider；它没配 key 时退到任一已配置的兼容 provider。 */
-  private resolve(model: string): { adapter: ProviderAdapter; envKey: string } | null {
+  /**
+   * 选 adapter：`local/<model>` / `local:<model>` 前缀显式路由到本地端点
+   * （baseUrl 来自 `SPARK_LOCAL_LLM_BASE_URL`）；否则优先模型所属的 provider，
+   * 它没配 key 时退到任一已配置的兼容 provider（本地端点不参与这条隐式回退——
+   * 它是显式 opt-in，不应该在用户没提到 "local/" 时悄悄替对方发请求）。
+   */
+  private resolve(model: string): { adapter: ProviderAdapter; envKey: string; wireModel: (m: string) => string } | null {
+    if (LOCAL_MODEL_PREFIX.test(model)) {
+      const baseUrl = this.env[LOCAL_BASE_URL_ENV];
+      if (!baseUrl) return null;
+      const adapter = new OpenAiCompatAdapter({ id: "local", baseUrl, capabilities: localCapabilities });
+      return { adapter, envKey: LOCAL_API_KEY_ENV, wireModel: (m) => m.replace(LOCAL_MODEL_PREFIX, "") };
+    }
+    const identity = (m: string) => m;
     const preferred = ADAPTERS[providerForModel(model)];
-    if (preferred && this.env[preferred.envKey]) return preferred;
+    if (preferred && this.env[preferred.envKey]) return { ...preferred, wireModel: identity };
     for (const provider of implementedProviders()) {
       const entry = ADAPTERS[provider]!;
-      if (this.env[entry.envKey]) return entry;
+      if (this.env[entry.envKey]) return { ...entry, wireModel: identity };
     }
     return null;
   }
