@@ -114,7 +114,19 @@ Connector 是**幂等的数据读取**：给定参数返回数据，没有生命
 
 1. 一份 `HttpConnectorConfig`：`baseUrl` + `tools[]` + `metadata`
 2. 可选覆写 `headersFor(toolName)` / `queryFor(toolName)`：礼貌头、鉴权头、`mailto`
-3. 可选覆写与 tool 同名的方法：需要自定义解析或降级时
+3. 需要自定义解析或降级时：在构造函数里 `this.handle(toolName, fn)` **显式注册** handler。
+   `fn` 内部要落到通用 URL 拼装路径时调 `this.requestRaw(toolName, params)`，**不要**调
+   `super.call(...)`——那会重新查一遍 handler 表，对同一个 `toolName` 就是自己调自己，
+   死循环。
+
+> ⚠️ **v0.3 起不再支持「与 tool 同名的方法自动被当 handler」**。这套反射分发在 P9 及
+> 更早版本里是隐式契约（方法名恰好等于 tool 名就自动生效），P10-a 外部评审判定它是
+> 坏抽象：并发调用同一个 connector 实例时，旧实现靠一个跨请求共享的实例字段判断
+> 「是否正在处理这个工具」，会被并发请求互相污染，导致 handler（参数映射、AD-2 的
+> 凭据缺失检查）被静默跳过、退化成不带任何自定义逻辑的零参数直通——而且是偶发的，
+> 单元测试测不出来，只在生产的并发场景下现身。修复不是把这个反射分发做成竞态安全的
+> 版本，而是把它换成显式注册：`handlers` 是构造期一次性写入、运行期只读的表，`call()`
+> 只有「查表命中就走 handler，否则走通用路径」两条路，不存在任何跨请求共享的可变状态。
 
 `tools[].endpoint` 里的 `{name}` 是路径参数占位符，基类会用同名入参替换并 URL-encode，剩下的入参进查询串。
 
@@ -169,9 +181,16 @@ export class OpenfreeConnector extends HttpConnector {
 spark-research new connector paidsource --with-key
 ```
 
-带凭据的版本多两段，两段都是纪律：
+带凭据的版本多三段，三段都是纪律：
 
 ```ts
+export class PaidSourceConnector extends HttpConnector {
+  constructor(options: ConnectorOptions = {}) {
+    super("paidsource", paidsourceConfig, options);
+    // 显式注册——不要靠方法名恰好叫 "search" 让基类反射发现（v0.3 已移除）。
+    this.handle("search", (p) => this.searchImpl(p));
+  }
+
   // 凭据分层（AD-2）：connector 只声明自己需要什么，值本体由 daemon 内的
   // CredentialStore 提供。能拿到值是因为 connector 本来就跑在 daemon 进程里。
   private credential(): string | null {
@@ -188,12 +207,15 @@ spark-research new connector paidsource --with-key
   }
 
   // 未配置凭据 → 明确回「未配置」，不是抛错。统一检索据此标 skipped 而非 failed。
-  async search(params: Record<string, unknown>): Promise<unknown> {
+  private async searchImpl(params: Record<string, unknown>): Promise<unknown> {
     if (!this.credential()) {
       return { configured: false, source: "paidsource", results: [], note: "未配置凭据…" };
     }
-    return super.call("search", params);
+    // 落到通用路径调 requestRaw，不要调 super.call("search", ...)——对同一个
+    // toolName 那会重新命中上面刚注册的 handler，自己调自己死循环。
+    return this.requestRaw("search", params);
   }
+}
 ```
 
 配置凭据（值以 connector id 为键存进 `credentials.json`，0600）：

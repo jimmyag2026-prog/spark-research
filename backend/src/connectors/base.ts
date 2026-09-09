@@ -1,11 +1,4 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { defaultHttp, type HttpClient } from "../http/client";
-
-// 向后兼容用：仅供 `reflectedHandler()` 的重入判定使用（见下方注释）。
-// 用 AsyncLocalStorage 按「调用链」而不是按「实例」隔离状态——同一个 connector 实例
-// 上并发的两条调用链各自拿到独立的 store，互不污染。这与旧版 `__handlingTool`
-// 实例字段的关键区别：旧字段跨并发请求共享，是 P0 竞态的根源。
-const reflectionReentryGuard = new AsyncLocalStorage<string>();
 
 export type ToolResponseType = "json" | "text";
 
@@ -71,37 +64,26 @@ export class HttpConnector {
     this.http = options.http ?? defaultHttp;
   }
 
-  // 显式 handler 表（构造期由子类注册），取代「同名方法即 handler」的魔法反射分发。
-  //
-  // **P10-a 修复的并发竞态（P0）**：旧实现用单值实例字段 `__handlingTool` 标记「当前
-  // 正在走哪个工具的 handler」，用来防止 handler 内部调用 `super.call()` 时死循环重入
-  // 自己。但该字段跨请求共享——并发请求 A 在 `await` 期间字段保持为 "search"，此时
-  // 并发请求 B 调同一工具会被判定为「重入」而被跳过 handler，直接落到通用 URL 拼装
-  // 路径（零参数映射），导致 OpenAlex query 不翻译、EuropePMC 丢 format=json、AMiner
-  // 凭据检查被跳过等。
-  //
-  // 新实现全程不写任何实例可变状态：`handlers` 是构造期一次性写入、运行期只读的表；
-  // `call()` 查表分发，不判断「是否正在处理」。递归问题改为结构性解决——handler 内部
-  // 落到通用路径时调用 `requestRaw()`，它根本不查 handler 表，天然不会重入自己。
+  // 显式 handler 表（构造期由子类注册）。见下方 `handle()` 的注释了解为什么不是
+  // 「同名方法即 handler」的反射分发——那是 P9 及更早版本的设计，v0.3 已移除。
   private readonly handlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
 
   // 子类构造函数里调用：为某个工具名注册显式 handler。
+  //
+  // **v0.3 起这是唯一的分发机制**（P10-a）。P9 及更早版本里，`call()` 会反射检查
+  // 「有没有一个与 toolName 同名的实例方法」，命中就自动当 handler 调用——这套魔法
+  // 分发被外部评审判定为坏抽象：并发调用同一个 connector 实例时，旧实现靠一个跨请求
+  // 共享的实例字段 `__handlingTool` 判断「是否正在处理这个工具」防止 handler 内部
+  // 调用 `call()` 时死循环重入，但该字段会被并发请求互相污染，导致 handler（参数
+  // 映射、AD-2 的凭据缺失检查）被静默跳过、退化成零参数的通用直通——而且是偶发的，
+  // 单元测试测不出来，只在生产的并发场景（daemon 共享单例 registry + swarm 并发调用）
+  // 下现身。曾经试过用 `AsyncLocalStorage` 把反射分发做成竞态安全的兼容层，但那是给
+  // 一个已经被判定为坏抽象的契约续命，而且引入了真实的运行时开销；主会话裁定：
+  // 契约本身要改，不是加兜底——所以这里不再做任何反射，`handlers` 是构造期一次性
+  // 写入、运行期只读的表，`call()` 只有「查表命中就走 handler，否则走通用路径」
+  // 两条路，不存在任何跨请求共享的可变状态。
   protected handle(toolName: string, fn: (params: Record<string, unknown>) => Promise<unknown>): void {
     this.handlers.set(toolName, fn);
-  }
-
-  // 向后兼容路径：仓库外部（如脚手架生成的 connector、EXTENDING.md 里描述的旧契约）
-  // 可能还在用「与 tool 同名的实例方法即 handler」这套没有显式 `this.handle(...)`
-  // 注册的旧写法。仓库内部所有 connector 都已迁到显式 handlers 表（上面），不会走
-  // 到这条路径；这里只是不让没迁移的第三方 connector 悄悄退化成"零参数映射"。
-  private reflectedHandler(
-    toolName: string,
-  ): ((params: Record<string, unknown>) => Promise<unknown>) | undefined {
-    const candidate = (this as unknown as Record<string, unknown>)[toolName];
-    if (typeof candidate === "function" && toolName in this) {
-      return (candidate as (p: Record<string, unknown>) => Promise<unknown>).bind(this);
-    }
-    return undefined;
   }
 
   // 子类可覆写：为请求追加礼貌头 / 鉴权头。
@@ -132,14 +114,6 @@ export class HttpConnector {
     const handler = this.handlers.get(toolName);
     if (handler) {
       return await handler(params);
-    }
-
-    // 兼容旧契约（见 reflectedHandler 注释）。重入判定用调用链本地的 AsyncLocalStorage
-    // store，不是实例字段：并发调用各自的 store 互不可见，不会出现"请求 B 因为请求
-    // A 正在处理同名工具而被错误跳过 handler"的竞态。
-    const reflected = this.reflectedHandler(toolName);
-    if (reflected && reflectionReentryGuard.getStore() !== toolName) {
-      return await reflectionReentryGuard.run(toolName, () => reflected(params));
     }
 
     return this.requestRaw(toolName, params);
