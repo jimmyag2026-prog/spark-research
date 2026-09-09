@@ -377,36 +377,50 @@ export async function measure(
     judge: (input: { key: string; statement: string; baseline: CitationBaseline }) => Promise<CitationJudgement>;
   },
   model: string,
-  options: { cases?: Case[]; temperature?: string } = {},
+  options: { cases?: Case[]; temperature?: string; concurrency?: number; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<Measurement> {
   const cases = options.cases ?? buildCases();
-  const outcomes: JudgeOutcome[] = [];
-  for (const item of cases) {
-    let verdict: JudgeOutcome["verdict"] = "error";
-    let reason = "";
-    try {
-      const judgement = await judge.judge({
-        key: item.baseline.key,
-        statement: item.statement,
-        baseline: item.baseline,
-      });
-      verdict = judgement.verdict;
-      reason = judgement.reason;
-    } catch (error) {
-      reason = error instanceof Error ? error.message : String(error);
+  // 每条用例是一次独立判定（判定器无状态），可以并发。串行跑 48 条要几十分钟，
+  // 中途看不到任何进度——那种「不知道还要多久」的等待本身就会诱使人放弃测量。
+  const concurrency = Math.max(1, options.concurrency ?? 6);
+  const outcomes: JudgeOutcome[] = new Array(cases.length);
+  let done = 0;
+  let cursor = 0;
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const index = cursor++;
+      const item = cases[index];
+      if (!item) return;
+      let verdict: JudgeOutcome["verdict"] = "error";
+      let reason = "";
+      try {
+        const judgement = await judge.judge({
+          key: item.baseline.key,
+          statement: item.statement,
+          baseline: item.baseline,
+        });
+        verdict = judgement.verdict;
+        reason = judgement.reason;
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      outcomes[index] = {
+        id: item.id,
+        tier: item.tier,
+        pattern: item.pattern,
+        expected: item.conflicting ? "conflict" : "not-conflict",
+        verdict,
+        reason,
+        // 调用出错的用例不算对，也不进混淆矩阵（单独计 errors）——
+        // 「没测成」与「判错了」必须分开，否则会把接口故障读成模型能力问题。
+        correct: verdict !== "error" && (verdict === "conflict") === item.conflicting,
+      };
+      options.onProgress?.(++done, cases.length);
     }
-    outcomes.push({
-      id: item.id,
-      tier: item.tier,
-      pattern: item.pattern,
-      expected: item.conflicting ? "conflict" : "not-conflict",
-      verdict,
-      reason,
-      // 调用出错的用例不算对，也不进混淆矩阵（单独计 errors）——
-      // 「没测成」与「判错了」必须分开，否则会把接口故障读成模型能力问题。
-      correct: verdict !== "error" && (verdict === "conflict") === item.conflicting,
-    });
-  }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, cases.length) }, worker));
 
   const scored = outcomes.filter((o) => o.verdict !== "error");
   return {
@@ -439,7 +453,10 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  const result = await measure(new LlmCitationJudge(router, model), model);
+  const result = await measure(new LlmCitationJudge(router, model), model, {
+    onProgress: (n, total) => process.stderr.write(`\r判定中 ${n}/${total}…`),
+  });
+  process.stderr.write("\n\n");
   if (asJson) {
     console.log(JSON.stringify(result, null, 2));
   } else {
