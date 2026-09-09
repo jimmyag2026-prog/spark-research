@@ -10,6 +10,7 @@ import { ArtifactStore } from "../../backend/src/artifacts/store";
 import { OrchestratorAgent } from "../../backend/src/agents/orchestrator";
 import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { llmExtras } from "../../backend/src/llm/types";
 
 const dirs: string[] = [];
 
@@ -26,7 +27,7 @@ afterAll(() => {
 const mockLlm = {
   call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 80)}`, mock: false };
+    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 80)}`, ...llmExtras() };
   },
   listModels: () => ({
     kimi: [LLMRouter.DEFAULT_MODEL],

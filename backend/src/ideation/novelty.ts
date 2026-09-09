@@ -724,7 +724,7 @@ export class NoveltyChecker {
         ? await this.deps.llm.call(messages, this.deps.model)
         : await this.deps.llm.call(messages);
       if (!response.ok) {
-        lastErrors = [`模型调用失败: ${response.content}`];
+        lastErrors = [`模型调用失败: ${response.error?.message ?? "未知原因"}`];
         continue;
       }
       const validation = validateClaimsPayload(extractJsonObject(response.content));

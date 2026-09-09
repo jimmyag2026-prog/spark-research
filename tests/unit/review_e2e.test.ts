@@ -13,6 +13,7 @@ import { citationIntegrity } from "../../backend/src/reviewer/rules";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
 import { CASSETTES, PER_SOURCE, SEARCH_QUERY, SEARCH_SOURCES, searcherWith } from "../helpers/literature_scenario";
 import { FakeJudge } from "../helpers/review_scenario";
+import { llmExtras } from "../../backend/src/llm/types";
 
 // P3 e2e（回放，无网络）：P2 的 fixture 检索 → 10 篇入库 → 10 张精读卡 → 综述草稿
 // → citation-integrity 全过 → 再注入伪造引用跑对抗路径。
@@ -36,12 +37,13 @@ class ScriptedLlm {
     if (user.includes("可用引用 key 白名单")) {
       this.reviewPrompts.push(user);
       const keys = [...user.matchAll(/^- \[@([^\]]+)\]/gm)].map((m) => m[1]!);
-      return { ok: true, provider: "kimi", model, content: this.draftFor(keys), mock: false };
+      return { ok: true, provider: "kimi", model, content: this.draftFor(keys), ...llmExtras() };
     }
     this.cardPrompts.push(user);
     const title = user.match(/标题: (.+)/)?.[1] ?? "未知标题";
     return {
       ok: true,
+      ...llmExtras(),
       provider: "kimi",
       model,
       content: JSON.stringify({
@@ -51,7 +53,6 @@ class ScriptedLlm {
         limitations: ["摘要未提及完整局限"],
         relationToProject: "作为背景文献纳入综述",
       }),
-      mock: false,
     };
   };
 

@@ -17,6 +17,7 @@ import {
   type CitationBaseline,
 } from "../../backend/src/reviewer/rules";
 import { FakeJudge, FakeLlm } from "../helpers/review_scenario";
+import { llmExtras } from "../../backend/src/llm/types";
 
 // citation-integrity 检查器单测（P3 交付物 3）。纯函数 + 注入 fake judge，零网络零 LLM。
 
@@ -279,8 +280,8 @@ describe("LlmCitationJudge", () => {
         provider: "kimi" as const,
         model: "m",
         content: "让我分析一下：(A) 精读卡说",
-        mock: false,
         finishReason: "length",
+        ...llmExtras(),
       }),
     };
     await expect(

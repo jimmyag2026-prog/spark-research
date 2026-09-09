@@ -6,12 +6,19 @@ import {
   type ReviewerAdapter,
 } from "../../backend/src/agents/orchestrator";
 import { SubAgentFactory, type SubAgentType } from "../../backend/src/agents/sub_agent";
-import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { llmExtras, llmFailure } from "../../backend/src/llm/types";
 
 const mockLlm = {
-  call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+  call: async (
+        messages: ChatMessage[],
+        modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL,
+      ): Promise<LlmResponse> => {
+        // P11 起第二参可以是模型名或 CallOptions，假实现跟着归一化一次。
+        const model =
+          typeof modelOrOptions === "string" ? modelOrOptions : (modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL);
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, mock: false };
+    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, ...llmExtras() };
   },
   listModels: () => ({
     kimi: [LLMRouter.DEFAULT_MODEL],
@@ -91,13 +98,7 @@ describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () 
   // 模拟 router 无 key / 网络挂了时的真实返回形状：ok:false，content 是路由层
   // 拼出来的错误文本（不是模型产出）。
   const failingLlm = {
-    call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => ({
-      ok: false,
-      provider: "kimi",
-      model,
-      content: "[error] simulated upstream failure — should never leak into summary",
-      mock: false,
-    }),
+    call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => llmFailure({ provider: "kimi", model, kind: "upstream", message: "[error] simulated upstream failure — should never leak into summary" }),
     listModels: mockLlm.listModels,
   };
 
@@ -139,23 +140,23 @@ describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () 
     // 之后同一个 llm 对 subagent 任务本身的调用也失败，验证该调用点独立检查了 res.ok。
     let planCalls = 0;
     const subagentPlanLlm: Pick<LLMRouter, "call" | "listModels"> = {
-      call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+      call: async (
+        messages: ChatMessage[],
+        modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL,
+      ): Promise<LlmResponse> => {
+        // P11 起第二参可以是模型名或 CallOptions，假实现跟着归一化一次。
+        const model =
+          typeof modelOrOptions === "string" ? modelOrOptions : (modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL);
         planCalls++;
         if (planCalls === 1) {
           // 第一次调用是 plan()：产出一个 subagent 任务。
           const plan = JSON.stringify([
             { id: "t1", kind: "subagent", description: "delegate", params: { subagent: "execute" } },
           ]);
-          return { ok: true, provider: "kimi", model, content: plan, mock: false };
+          return { ok: true, provider: "kimi", model, content: plan, ...llmExtras() };
         }
         // 之后所有调用（subagent 任务本身、summarize）都失败。
-        return {
-          ok: false,
-          provider: "kimi",
-          model,
-          content: "[error] simulated upstream failure",
-          mock: false,
-        };
+        return llmFailure({ provider: "kimi", model, kind: "upstream", message: "[error] simulated upstream failure" });
       },
       listModels: mockLlm.listModels,
     };
@@ -216,7 +217,10 @@ describe("LLMRouter", () => {
         { role: "user", content: "hello world" },
       ]);
       expect(res.ok).toBe(false);
-      expect(res.content).toContain("No API key configured");
+      // AD-13：失败时 content 恒空；诊断信息只在 error.message。
+      expect(res.content).toBe("");
+      expect(res.error?.kind).toBe("auth");
+      expect(res.error?.message).toContain("没有配置任何 API key");
       expect(fetchCalled).toBe(false);
     } finally {
       globalThis.fetch = original;

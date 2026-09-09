@@ -35,7 +35,10 @@ describe("D-2 验收：LLM 调用路径不会挂死", () => {
     const elapsed = Date.now() - started;
 
     expect(res.ok).toBe(false);
-    expect(res.content.toLowerCase()).toContain("timeout");
+    // AD-13（P11）：失败时 content 恒空，超时与否读机器可读的 error.kind。
+    expect(res.content).toBe("");
+    expect(res.error?.kind).toBe("timeout");
+    expect(res.error?.retryable).toBe(true);
     expect(elapsed).toBeGreaterThanOrEqual(150);
     expect(elapsed).toBeLessThan(3_000);
   });
