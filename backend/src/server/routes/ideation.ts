@@ -70,6 +70,10 @@ export function ideationRoutes(ctx: ServerContext): Hono {
             critique: turn.card.critique,
             card: turn.card,
             stored,
+            // 顶层别名（v0.2.1）：下游 idea_novelty_check 要的参数就叫 ideaId，
+            // 外部验收发现得往下挖到 stored.recordId 才找得到，两个工具间命名不一致。
+            // 保留 stored.recordId 不动（向后兼容），这里只是把它抬到顺手的位置。
+            ideaId: stored?.recordId ?? null,
             grounding: turn.grounding,
             // 「库为空」不是错误但必须让用户看见：没有文献支撑的共探只是推断。
             emptyLibrary,

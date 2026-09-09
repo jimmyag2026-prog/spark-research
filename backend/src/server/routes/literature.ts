@@ -253,6 +253,10 @@ export function literatureRoutes(ctx: ServerContext): Hono {
     const paperRef = optionalString(body, "paperId");
     if (!all && !paperRef) throw new HttpError(400, "需要 paperId，或 all: true 批量精读");
     const tag = optionalString(body, "tag");
+    // 增量语义（v0.2.1）：批量精读默认跳过已读的论文。外部验收发现重试会把
+    // 已生成过卡片的论文重烧一遍模型调用，库越大代价越线性增长。
+    // 想强制重生成（比如换了模型或改了 prompt）时传 redoRead: true。
+    const redoRead = body.redoRead === true;
     const slug = projectSlug(c) ?? null;
 
     return taskResponse(c, ctx, body, {
@@ -262,8 +266,17 @@ export function literatureRoutes(ctx: ServerContext): Hono {
         const scope = ctx.openProject(slug);
         try {
           const library = scope.library();
-          const targets = all ? library.list({ tag }) : [resolvePaper(library.list(), paperRef!)];
-          if (targets.length === 0) throw new Error("没有可精读的论文（库为空或标签无匹配）");
+          const candidates = all ? library.list({ tag }) : [resolvePaper(library.list(), paperRef!)];
+          // 单篇精读一律照做（用户点名了就重生成）；批量才应用增量跳过。
+          const targets =
+            all && !redoRead ? candidates.filter((p) => p.readingStatus !== "read") : candidates;
+          if (candidates.length === 0) throw new Error("没有可精读的论文（库为空或标签无匹配）");
+          if (targets.length === 0) {
+            throw new Error(
+              `这 ${candidates.length} 篇都已经有精读卡了。要重新生成请传 redoRead: true，` +
+                `或用 GET /api/lit/cards 直接看已有的卡片。`,
+            );
+          }
           const generator = new ReadingCardGenerator({
             llm: ctx.llm(),
             library,
