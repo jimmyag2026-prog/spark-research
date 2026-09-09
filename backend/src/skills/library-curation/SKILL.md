@@ -3,6 +3,9 @@ name: library-curation
 description: "维护项目文献库（library.db）：按标识符或检索结果入库并自动去重合并，打标签、维护阅读状态与笔记，抓取库内互引边（OpenAlex referenced_works），导出 BibTeX / CSL-JSON。每篇入库论文自动在证据图中创建 type=paper 的 record 锚点。"
 category: literature
 domain: A
+triggers: [把这篇加进文献库, 整理文献库, 导出 BibTeX, 标记已读, 给这批论文打标签]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/literature.test.ts, tests/unit/literature_e2e.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

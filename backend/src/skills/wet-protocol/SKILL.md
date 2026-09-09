@@ -3,6 +3,9 @@ name: wet-protocol
 description: "湿实验协议：自然语言协议 → 编译成 Opentrons Python Protocol API v2 脚本 → 安全门 → **人工 approve** → 官方模拟器执行 → run log 入证据图。用于「把一个实验方案变成可执行、可审计、可复现的协议」「先在模拟器上验一遍再上真机」。物理世界的操作永远不自动化审批。"
 category: experiment
 domain: B
+triggers: [把这个实验方案变成协议, 先在模拟器上验一遍, 编译成 Opentrons 脚本, 这个协议安全吗]
+connectors: []
+validation: [tests/unit/lab_compile.test.ts, tests/unit/lab_safety.test.ts, tests/unit/wet_loop.test.ts, tests/unit/wet_e2e.test.ts, tests/lab/opentrons_backend.test.py]
 allowed-tools: [Bash, Read, Write]
 ---
 

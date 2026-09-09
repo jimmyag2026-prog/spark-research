@@ -3,6 +3,9 @@ name: novelty-check
 description: "创新性核验：从 Idea 卡抽出可检验的创新点 claim → 每条 claim 多路检索真实文献 → 逐条给出最接近的已有工作 + 相同点 + 不同点 + 评级（novel/incremental/existing）→ 引用核验 → 回写思路库状态。用于「这个想法有没有人做过 / 我们相对已有工作新在哪」。"
 category: ideation
 domain: D
+triggers: [这个想法有没有人做过, 我们相对已有工作新在哪, 查一下新颖性, 有没有撞车的论文]
+connectors: [openalex, crossref, europepmc, semanticscholar]
+validation: [tests/unit/novelty.test.ts, tests/unit/novelty_e2e.test.ts, tests/integration/novelty_record.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 

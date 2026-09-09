@@ -3,6 +3,9 @@ name: idea-coexplore
 description: "思路共探：围绕用户的研究想法做苏格拉底式批判性探讨，每个观点都锚在项目文献库里的真实论文上（[@key]）或显式标注 inferred，产出结构化 Idea 卡入思路库。用于「我有个想法，帮我想清楚 / 帮我挑毛病 / 这个方向值不值得做」。"
 category: ideation
 domain: A
+triggers: [我有个想法, 帮我挑毛病, 这个方向值不值得做, 陪我想清楚这个假设]
+connectors: []
+validation: [tests/unit/ideation.test.ts, tests/unit/ideation_cli.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 
