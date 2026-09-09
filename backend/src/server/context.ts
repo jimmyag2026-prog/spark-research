@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { OrchestratorAgent } from "../agents/orchestrator";
+import { configuredWetBackend, resolveSetting } from "../config";
 import { ConnectorRegistry } from "../connectors/registry";
 import { SparkResearchDaemon } from "../daemon/daemon";
 import { CredentialStore } from "../daemon/credentials";
@@ -135,7 +136,13 @@ export class ServerContext {
   }
 
   wetBackend(): WetLabBackend {
-    return this.deps.wetBackend ?? wetBackend(DEFAULT_WET_BACKEND);
+    // 注入 > 用户 config.json > 代码默认（P9 配置面收口）。
+    return this.deps.wetBackend ?? wetBackend(configuredWetBackend(DEFAULT_WET_BACKEND));
+  }
+
+  // 各 pipeline 用的模型：注入 > 用户 config.json > 各自的内部默认（传 undefined）。
+  model(): string | undefined {
+    return this.deps.model ?? resolveSetting("defaultModel").value?.toString();
   }
 
   simulationRegistry(project: Project): SimulationRegistry {
