@@ -5,7 +5,7 @@ category: experiment
 domain: B
 triggers: [这个蛋白长什么样, 有没有可用的结构, AlphaFold 模型信得过吗, 查一下这个 UniProt]
 connectors: [uniprot, pdb, alphafold]
-validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts]
+validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts, tests/unit/protein_cli.test.ts, tests/unit/protein_http.test.ts, tests/unit/protein_mcp.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 
@@ -44,6 +44,18 @@ alphafold.getModel → 模型 URL（pdb/cif）、PAE 图、全局 pLDDT、残基
 
 代码入口：`backend/src/proteins/analysis.ts` 的 `ProteinAnalysis.analyze(query)`。
 `persist` 默认开：结果会落一条 `observation` record（`evidence=sourced`）。
+
+三个生产入口（CLI / HTTP / MCP，R-d-2）都只是对这同一个 `analyze()` 的一层薄封装，
+不重实现逻辑：
+
+```bash
+spark-research protein "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"
+spark-research protein "P68871" --json          # 机器可读输出（含 recordId），脚本消费用
+spark-research protein "P68871" --no-persist    # 只看报告，不落 observation record
+```
+
+HTTP：`POST /api/proteins/analyze {"query": "..."}` → `{project, result}`。
+MCP：`protein_analyze` 工具（同一份 schema，见 `backend/src/mcp/tools.ts`）。
 
 ## 为什么不走 UniProt 的 PDB 交叉引用
 

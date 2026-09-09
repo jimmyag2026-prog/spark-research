@@ -26,6 +26,8 @@ spark-research idea new|list|check
     思路库：Co-explore 产出 Idea 卡 + novelty check
 spark-research exp new|run|status|list|platforms
     干实验闭环：设计 → 提交 → 回收 → 分析（断点可续跑）
+spark-research protein <query> [--json] [--no-persist]
+    蛋白结构调研：UniProt 身份 → RCSB PDB 实验结构 → AlphaFold 预测模型
 spark-research lab compile|approve|reject|simulate|status|backends
     湿实验：编译 → 安全门 → **人工批准** → 模拟器执行
 spark-research conclusion list|show|review
@@ -50,7 +52,7 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 24 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 25 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
@@ -68,6 +70,7 @@ spark-research mcp    # stdio 传输
 - `exp_design`：要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
 - `exp_run`（长任务，同步等待）：exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
 - `exp_list`：要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
+- `protein_analyze`：要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
 - `lab_compile`：要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
 - `lab_status`：要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
 - `records_timeline`：要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
@@ -3144,7 +3147,7 @@ category: experiment
 domain: B
 triggers: [这个蛋白长什么样, 有没有可用的结构, AlphaFold 模型信得过吗, 查一下这个 UniProt]
 connectors: [uniprot, pdb, alphafold]
-validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts]
+validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts, tests/unit/protein_cli.test.ts, tests/unit/protein_http.test.ts, tests/unit/protein_mcp.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 
@@ -3183,6 +3186,18 @@ alphafold.getModel → 模型 URL（pdb/cif）、PAE 图、全局 pLDDT、残基
 
 代码入口：`backend/src/proteins/analysis.ts` 的 `ProteinAnalysis.analyze(query)`。
 `persist` 默认开：结果会落一条 `observation` record（`evidence=sourced`）。
+
+三个生产入口（CLI / HTTP / MCP，R-d-2）都只是对这同一个 `analyze()` 的一层薄封装，
+不重实现逻辑：
+
+```bash
+spark-research protein "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"
+spark-research protein "P68871" --json          # 机器可读输出（含 recordId），脚本消费用
+spark-research protein "P68871" --no-persist    # 只看报告，不落 observation record
+```
+
+HTTP：`POST /api/proteins/analyze {"query": "..."}` → `{project, result}`。
+MCP：`protein_analyze` 工具（同一份 schema，见 `backend/src/mcp/tools.ts`）。
 
 ## 为什么不走 UniProt 的 PDB 交叉引用
 
@@ -4238,6 +4253,46 @@ conclusion               --derives_from--> observation / experiment
       ]
     }
   },
+  "additionalProperties": false
+}
+```
+
+## protein_analyze
+
+【何时调】要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
+【参数示例】{"query": "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"} —— UniProt 检索语法；查询越收敛越好，见下面「常见错误」。
+【何时不该用】① 已经知道要用哪个 PDB id、只是想跑仿真——直接 exp_design，不必先过这个工具。② 想找论文/背景调研——那是 lit_search，这个工具只查结构数据库，不查文献。
+【典型链路】protein_analyze → 看返回体最后一段「拿哪个结构去跑干实验」的判断 → 若判断是「该停下」就不要往下走；否则把选定的 PDB id / AlphaFold 模型带进 exp_design。
+【常见错误】query 只写基因名或俗名（比如只写 "hemoglobin"）会撞到多个物种/多个同源基因的条目，UniProt 只回第一条未必是你要的那个——务必加 organism_id 与 reviewed:true 收敛到唯一条目；查不到唯一匹配会返回 422，不是故障，是查询不够收敛。
+【读法】experimentalStructureCount 是 RCSB 的真实总数（服务端全量统计，不是截断后的数组长度）；structures 数组只展示前几条（默认 3 条）。alphafold.available=false 且 note 有内容是正常结论（未收录/取不到，不代表调用出错）——不要把 available=false 当失败重试。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "UniProt 检索查询。建议带 organism_id 与 reviewed:true 收敛到唯一条目，否则容易撞车到同名基因/跨物种同源",
+      "examples": [
+        "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"
+      ]
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "是否把结果落一条 observation record（evidence=sourced），默认 true"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "query"
+  ],
   "additionalProperties": false
 }
 ```
