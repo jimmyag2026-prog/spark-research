@@ -132,6 +132,20 @@ P4 落地口径：
   - 命令行型：GROMACS（若本机可装）或退一档用 Python 内置仿真脚本作第二实现
 - 后续按需求接：材料计算（VASP/LAMMPS）、EDA 等——接口先行，实现按用户真实课题拉动
 
+P5 落地口径：
+- 两个实现分别是 `openmm`（水盒子能量最小化 + 短时 NVT 平衡，实测 OpenMM 8.6 有 PyPI wheel，
+  纯 CPU 秒级）与 `pyref`（阻尼谐振子 RK4，**零外部依赖 + 有解析解可对照**）。
+  第二实现选 pyref 而不是 GROMACS：契约测试需要一个在任何环境都跑得通的实现，
+  否则 CI 里 openmm 一缺就整套 skip，等于没有契约测试
+- 两个 adapter 都是**子进程型**而非 kernel 内执行：MD 任务动辄数分钟起，占着 stateful kernel
+  会把会话堵死；更关键的是「编排进程被 kill 后任务还在跑」要求任务是独立进程
+- 状态真源在磁盘：`experiments/<platform>/runs/<runId>/{run.json,params.json,done.json,stdout.log}`，
+  `prepared/<specHash>/params.json` 存归一化输入。`poll` **先看 done.json 再看 pid**——
+  任务写完结果才退出，所以结果在就以结果为准，PID 复用最坏只让已死任务多「运行中」一会儿，
+  不会把失败报成成功
+- 不复用 `compute/providers.ts` 的 `ComputeProvider`：那套 `wait()` 是阻塞语义、状态全在内存，
+  跨进程接不上，与 AD-4 要的生命周期契约不是一回事
+
 **B2 湿实验（wet lab）**
 - 现有：protocol compiler（自然语言 → 设备指令）+ safety gate（试剂兼容/浓度上限/生物安全）+ mock 设备
 - v0.2 目标：**用 Opentrons 官方模拟器（`opentrons_simulate`）替换 mock**，跑通一次真实协议编译 → 模拟执行 → 结果回传
@@ -142,6 +156,25 @@ P4 落地口径：
 - 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
 - 断点续跑：状态持久化到 Project 存储，进程重启可恢复
 - 人在环：湿实验执行前强制 approve gate（安全门通过 ≠ 自动执行）
+
+P5 落地口径（干实验部分；`wet_run` 与 approve gate 留 P6）：
+- 状态集 7 个：`design / dry_run / collect / analyze / concluded / iterated / failed`。
+  `iterate` 与 `conclude` 实现为**终态**而不是动作名——iterate 的语义是「这条实验到此为止，
+  另起一条」，新实验是新的 experiment record，用 `supersedes` 边连回旧的
+- 合法转移只有 7 条（`design→dry_run`、`dry_run→collect|failed`、`collect→analyze`、
+  `analyze→concluded|iterated`、`failed→dry_run`）；表外一律拒绝，**不做「顺手纠正」**
+- 状态回写全部走 `RecordStore.update()` 窄口（P4 定的口径：生命周期字段可变，
+  `type/evidence/origin/artifactId/createdAt` 不可变）；每次转移在
+  `metadata.history` 与 `metadata.timestamps` 留时间戳
+- 断点续跑的三种情形由 `resume()` 区分：**任务仍在跑**（无 done.json 且 pid 活着）→ 保持 dry_run；
+  **任务已完成**（有 done.json）→ 直接 collect；**任务已丢失**（无 done.json 且 pid 没了）→
+  标 `failed` 且 `recoverable=true`，可 `retry` 换新 run。
+  「随进程一起被杀」与「算例本身跑挂」必须能分开——前者重跑就好，后者要改参数
+- 证据图：`artifact record --derives_from--> experiment`（每个产出一条）、
+  `observation --derives_from--> experiment` 与各 artifact record、
+  `conclusion --derives_from--> observation/experiment`。
+  experiment 的 evidence 是 `inferred`（设计是推的），observation 是 `computed`（结果是算的）
+- 结论卡在 P5 只落最小结构且 `review` 一律 `pending`（完整 review 门槛见域 E2/P8）
 
 ### 域 C：全流程数据记录（Research Record）
 
@@ -241,7 +274,8 @@ P4 落地口径：
 │  存储层（本地优先）                                            │
 │  ~/.spark-research/projects/<slug>/                          │
 │    project.json  · library.db · records.db ·                 │
-│    papers/ · artifacts/(含 artifacts.db) · experiments/       │
+│    papers/ · artifacts/(含 artifacts.db) ·                   │
+│    experiments/<platform>/{prepared,runs}/  (P5 仿真状态真源)  │
 │  ~/.spark-research/state.json (当前项目 + session→project)    │
 │  ~/.spark-research/credentials.json (0600, daemon-only)      │
 └────────────────────────────────────────────────────────────┘
@@ -270,8 +304,8 @@ P4 落地口径：
 | literature-review | A | 10 篇文献 → 综述 → 引用核验全过 |
 | idea-coexplore | A | 对话产出 Idea 卡 + 文献 grounding 检查 |
 | novelty-check | D | 已知领域 idea → 对比报告 → 引用真实性核验 |
-| protein-analysis | B | UniProt/PDB/AlphaFold 链路（连接器已有） |
-| dry-experiment | B | OpenMM 最小 MD 任务端到端 |
+| protein-analysis | B | UniProt/PDB/AlphaFold 链路（P5：真实录制 fixture 回放 e2e，12 用例） |
+| dry-experiment | B | OpenMM 最小 MD 任务端到端（P5：契约测试 ×2 实现 + 真实 SIGKILL 恢复 e2e） |
 | wet-protocol | B | 协议编译 → Opentrons 模拟器执行 |
 | research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效 |
 
