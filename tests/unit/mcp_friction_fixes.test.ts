@@ -40,6 +40,25 @@ describe("摩擦点 1 · 长任务句柄的跨连接语义必须说清楚", () =
   });
 });
 
+describe("跨阶段语义一致 · 两个超时上限必须一起说", () => {
+  // v0.2.1 建议「把 MCP 等待调到 900000」，P10 之后新增了任务生命周期兜底
+  // SPARK_TASK_TIMEOUT_MS（默认 600000）——只调前者，任务仍会在 10 分钟被掐掉，
+  // 用户等到一个莫名其妙的超时失败。两处改动各自都对，合起来却矛盾，
+  // 且两边测试都过：这类语义漂移只能靠断言「两个变量必须同时出现」来钉住。
+  test("exp_run 与 task_status 都同时提到两个超时变量", () => {
+    for (const name of ["exp_run", "task_status"]) {
+      const d = tool(name).description;
+      expect(d).toContain("SPARK_RESEARCH_MCP_TIMEOUT_MS");
+      expect(d).toContain("SPARK_TASK_TIMEOUT_MS");
+    }
+  });
+
+  test("点明任务生命周期的默认值，别让用户以为不设就是无限", () => {
+    const joined = [tool("exp_run").description, tool("task_status").description].join("\n");
+    expect(joined).toContain("600000");
+  });
+});
+
 describe("摩擦点 2 · 批量精读默认跳过已读", () => {
   test("lit_read_cards 暴露 redoRead 参数", () => {
     const props = (tool("lit_read_cards").inputSchema as { properties: Record<string, unknown> }).properties;
