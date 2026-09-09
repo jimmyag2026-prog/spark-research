@@ -201,6 +201,8 @@ spark-research mcp    # stdio 传输
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
 
+外部 agent 可以经 **MCP** 把整个工作台当工具箱接入（`spark-research mcp`），见下方「扩展与接入」。
+
 界面上，CLI 与 HTTP API 是能力真源，Web 工作台是它们的投影（AD-7）——
 UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（有对照测试守着）。
 
@@ -327,6 +329,7 @@ bun test tests/unit/     # 单元 + 契约 + fixture 回放 e2e
 bun test tests/integration/
 bun run test:py          # pytest（仿真 kernel + Opentrons 后端）
 bun run test:e2e         # Playwright 浏览器全流程（会自动构建前端）
+bun run check:llms       # llms.txt 是否与当前文档同步
 ```
 
 LLM 与网络在测试里一律走 fake / 录制回放，**没有一条 CI 路径打真实模型或外部 API**。
@@ -334,21 +337,70 @@ LLM 与网络在测试里一律走 fake / 录制回放，**没有一条 CI 路�
 
 ---
 
-## 扩展（v0.3 预告）
+## 扩展与接入
 
-六个扩展点已经在架构上就位，`docs/EXTENDING.md` 与脚手架命令排在下一阶段（P9）：
+六个扩展点，每个都有契约 + 最小可运行示例 + 测试方法 + 文件位置：**[docs/EXTENDING.md](docs/EXTENDING.md)**。
 
-| 扩展点 | 现在的位置 | 加一个新的要写什么 |
-|--------|-----------|------------------|
-| Skill | `backend/src/skills/<name>/SKILL.md` | 一份带 frontmatter 的说明 + 配套 e2e（AD-5：没有验证不算完成） |
-| Connector | `backend/src/connectors/` | 实现 Connector 契约；要 key 就走 CredentialStore |
-| 仿真平台 | `backend/src/simulation/<id>/` | 实现 `SimulationPlatform`，直接复用现成的契约测试套件当验收 |
-| 湿实验后端 | `backend/src/lab/wet_backend.ts` | 同设备族即插即用；换设备族要把「结构化步骤→设备语言」下沉进 backend |
-| 安全门规则 | `backend/src/lab/orchestrator.ts` | 一个纯函数 + 一条对抗单测 |
+| 扩展点 | 位置 | 加一个新的要写什么 |
+|--------|------|------------------|
+| Skill | `backend/src/skills/<name>/SKILL.md` | 带规范化 frontmatter 的说明 + 配套验证（AD-5：`validation` 字段由 CI 去磁盘核对） |
+| Connector | `backend/src/connectors/` | 一份 `HttpConnectorConfig`；要 key 就走 CredentialStore（AD-2） |
+| 仿真平台 | `backend/src/simulation/<id>/` | 实现 `SimulationPlatform`，**直接复用现成契约测试套件当验收** |
+| 湿实验后端 | `backend/src/lab/wet_backend.ts` | 同设备族即插即用；换设备族按 EXTENDING 第 4 节的五步施工说明 |
+| 安全门规则 | `backend/src/lab/safety.ts` | 一个纯函数 + 一条对抗单测 + 一条阴性对照 |
 | Prompt 与模型路由 | `backend/src/agents/prompt/` | 双层 prompt（core + workflow），子代理可配独立模型 |
 
-P9 还会补：`spark-research capabilities --json`（机器可读能力清单）、
-llms.txt / llms-full.txt、MCP server 模式（把工作台当工具箱接入任意 MCP 客户端）。
+三个扩展点有脚手架，生成的测试桩当场能跑（CI 里真跑一遍）：
+
+```bash
+spark-research new skill <name>
+spark-research new connector <name> [--with-key]
+spark-research new platform <name>
+```
+
+### 能力自描述
+
+```bash
+spark-research capabilities            # 人看的表格
+spark-research capabilities --json     # agent 看的清单：schema + 可用性状态
+spark-research capabilities --probe    # 真去探测 openmm / opentrons 装没装
+```
+
+清单**从真实注册表生成**（有双向一致性测试守着），不是手写的。你接进来的东西注册之后自动出现。
+
+### 用户配置
+
+`~/.spark-research/config.json` 是配置真源，优先级 **环境变量 > config.json > 默认值**：
+
+```bash
+spark-research config list       # 每一项都写清「当前值 / 来源 / 改了影响什么」
+spark-research config set contactEmail you@lab.edu
+```
+
+凭据与设置同文件，但 `config list` 只显示「已设置 / 未设置」，值永不打印。
+
+### 作为 MCP 工具箱接入外部 agent
+
+```bash
+spark-research mcp    # stdio 传输
+```
+
+```json
+{ "mcpServers": { "spark-research": { "command": "spark-research", "args": ["mcp"] } } }
+```
+
+暴露 24 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告）。
+接入后第一步调 `research_capabilities`。
+
+**`lab approve` / `lab reject` / `lab simulate` / `conclusion review` 刻意不暴露为 MCP 工具**：
+若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，approve gate 退化成注释（AD-6）。
+`lab_compile` 会停在 `awaiting_approval` 并在返回体里写清「需要人执行哪条命令」。
+这条边界有结构性测试守着——遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点。
+
+### 给外部 LLM 读的文本
+
+[`llms.txt`](llms.txt)（索引）与 [`llms-full.txt`](llms-full.txt)（全量文档 + 技能手册 + MCP 工具描述），
+由 `bun run gen:llms` 生成，幂等且有 CI 门守着与文档同步。
 
 ---
 
@@ -704,7 +756,8 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 ┌────────────────────────────────────────────────────────────┐
 │  界面层                                                      │
 │  CLI（完整功能）· Web 工作台（项目导航+会话+时间线+实验面板）    │
-│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 是它的投影）     │
+│  MCP server（P9：24 工具，外部 agent 接入；审批类刻意不暴露）    │
+│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 与 MCP 都是投影） │
 ├────────────────────────────────────────────────────────────┤
 │  Agent 层（TypeScript）                                      │
 │  research agent（唯一用户可见）                               │
@@ -728,6 +781,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 │    experiments/<platform>/{prepared,runs}/  (P5 仿真状态真源)  │
 │  ~/.spark-research/state.json (当前项目 + session→project)    │
 │  ~/.spark-research/credentials.json (0600, daemon-only)      │
+│  ~/.spark-research/config.json (P9：配置真源，env > file > 默认)│
 └────────────────────────────────────────────────────────────┘
 ```
 
@@ -743,6 +797,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
 | AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
+| AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 
@@ -762,8 +817,18 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 ### 5.4 模型路由
 
 - 保持模型无关（现有 LLMRouter：kimi/openai/anthropic/deepseek/qwen/openrouter）
-- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）
+- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）。P9 核对：这一层目前是**代码内配置**，暴露成用户配置项记在 BACKLOG V16
 - 默认模型保持 OpenRouter 路由，用户 BYOK
+
+## 5.5 扩展面与自描述（P9）
+
+- **六个扩展点**（Skill / Connector / SimulationPlatform / WetLabBackend / 安全门规则 / Prompt 与模型路由）的契约、最小可运行示例、测试方法与文件位置见 [EXTENDING.md](EXTENDING.md)
+- **脚手架**：`spark-research new skill|connector|platform`，生成的测试桩当场可跑（CI 真跑一遍）
+- **能力自描述**：`spark-research capabilities [--json] [--probe]`，**全部从真实注册表生成**并有双向一致性测试（清单里的每一项可实例化；注册表里的每一项都在清单里）。可用性分静态档（零 IO）与探测档（spawn 子进程）两层，不混
+- **配置面收口**：`~/.spark-research/config.json` + 一张设置表（`backend/src/config/index.ts`）作单一真源，优先级 env > config.json > 默认值；凭据与设置同文件但标 `secret`，值永不打印、永不进 env
+- **SKILL.md frontmatter 规范化**：新增 `triggers` / `connectors` / `validation` 三个必填字段，schema 校验进 CI；`validation` 让 AD-5 从口号变成一道门（校验器去磁盘核对测试文件存在）
+- **llms.txt / llms-full.txt**：由 `bun run gen:llms` 幂等生成，CI 守与文档同步
+- **命名修正**：connector 基类 `MCPConnector` → `HttpConnector`（与 MCP 协议无关，是 v0.1 的历史包袱）。旧名保留 deprecated 别名，移除记在 BACKLOG V15
 
 ---
 
@@ -794,6 +859,17 @@ P8 核验结论（逐条证据见 [devlog/P8-wrapup.md](devlog/P8-wrapup.md)）�
 | 2 湿实验路径 | ✅ | `tests/unit/wet_e2e.test.ts` 两类协议在**真** `opentrons.simulate` 下执行；安全门 4 条规则对抗矩阵；Playwright ⑦⑧⑨ 走浏览器版 |
 | 3 测试基线 | ✅ | 单元 706（基线 84 → 655 → 706；P8 删除 v0.1 compute 模块的 12 条属 G6 授权清理）· pytest 48 · Playwright 12 · typecheck 干净 |
 | 4 文档 | ✅ | README 重写、CHANGELOG v0.2.0、9 篇 devlog、本文档随实现更新 |
+
+P9 追加核验（扩展面与 LLM 友好化，逐条证据见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)）：
+
+| 项 | 结论 | 证据 |
+|----|------|------|
+| 六个扩展点有文档且示例可跑 | ✅ | [EXTENDING.md](EXTENDING.md) 六节；skill/connector/platform 示例=脚手架产物，CI 生成后真跑；安全门规则示例 `examples/extending/flammable_over_heat_rule.ts` 带 11 例（含阴性对照） |
+| 能力清单从注册表生成 | ✅ | `tests/unit/capabilities.test.ts` 双向一致（19 例） |
+| MCP 可被真实客户端跑通 | ✅ | `tests/unit/mcp_e2e.test.ts` 用 SDK Client + InMemoryTransport 走完 capabilities → 检索入库 → idea → novelty → 时间线 → 报告 |
+| 审批类动作在 MCP 层不可达 | ✅ | `tests/unit/mcp_server.test.ts` 对抗组，含遍历全部工具请求构造的结构性防线 |
+| llms.txt 幂等 | ✅ | `tests/unit/llms_txt.test.ts`（含「改了文档忘了重新生成 → 红」这道门） |
+| 测试基线 | ✅ | 单元 716 → 824（+108）· pytest 48 · Playwright 12 · typecheck 干净 |
 
 ------------------------------------------------------------------------------
 ## 文件：docs/EXTENDING.md
@@ -1593,6 +1669,11 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 
 **退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
 
+**P9 完成状态（2026-09-09）**：范围全部落地，见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)。
+机器版退出标准已由 `tests/unit/mcp_e2e.test.ts` 覆盖（真实 MCP 客户端跑通
+capabilities → 检索入库 → idea → novelty → 时间线 → 报告，零网络零真实模型）；
+**人版外部验收（全新 Claude Code 会话接 MCP）留给主会话执行**，tag 与 Release 同。
+
 | 层 | 工具 | 网络 | 运行时机 |
 |----|------|------|---------|
 | 单元 | bun test | 无 | 每次 commit |
@@ -1620,8 +1701,11 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 # Spark Research · 外部评审简报
 
 > 面向不了解本项目的评审者（人或 agent）。目标：15 分钟内进入状态，直接指出真问题。
-> 快照时间：2026-09-09 · 对应 commit：`b4aab02`（main，P1–P7 已合入；P8 在 `feat/p8-wrapup` 分支进行中）
-> 配套文档：[DESIGN.md](DESIGN.md)（设计真源）· [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（阶段计划）· [BACKLOG.md](BACKLOG.md)（未决事项）· [devlog/](devlog/)（每阶段实施记录与验收批注）
+> 快照时间：2026-09-09 · 对应版本：**v0.2.0**（P1–P9 全部合入 main）
+> 配套文档：[DESIGN.md](DESIGN.md)（设计真源）· [EXTENDING.md](EXTENDING.md)（六个扩展点）· [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（阶段计划）· [BACKLOG.md](BACKLOG.md)（未决事项）· [devlog/](devlog/)（每阶段实施记录与验收批注）
+>
+> 如果你是一个 LLM：直接读 [`llms.txt`](../llms.txt)（索引）或 [`llms-full.txt`](../llms-full.txt)（全量），
+> 或者把工作台当工具箱接进来：`spark-research mcp`。
 
 ---
 
@@ -1629,17 +1713,17 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 
 **是什么**：面向科研人员的开源科研工作台。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性验证 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先，模型无关，Apache 2.0。
 
-**当前状态**：v0.2 开发中。P1–P7 已合入 main（项目基座、文献域、综述与引用核验、思路库与 novelty、干实验闭环、湿实验闭环、API 层 + SolidJS 工作台）。P8（功能收口）进行中，P9（扩展面与 LLM 友好化）待启动。
+**当前状态**：v0.2.0。P1–P9 全部合入（项目基座、文献域、综述与引用核验、思路库与 novelty、干实验闭环、湿实验闭环、API 层 + SolidJS 工作台、功能收口、扩展面与 LLM 友好化）。
 
-**规模**：后端 TypeScript ~18k 行（14 个域模块）+ Python（kernel/仿真/实验室后端）· 前端 SolidJS ~3.1k 行 · 66 个 HTTP 端点 · 18 个 connector · 9 个技能（第 10 个在 P8）· 测试：655 bun unit + 48 pytest + 10 Playwright，全绿。
+**规模**：后端 TypeScript ~23k 行（18 个域模块）+ Python ~1.2k（kernel / 仿真 / 实验室后端）· 前端 SolidJS ~3.4k 行 · 66 个 HTTP 路由 · 24 个 MCP 工具 · 17 个 connector · 10 个技能 · 测试 ~15.8k 行：**824 bun unit + 48 pytest + 12 Playwright，全绿**。
 
-**最想被挑战的**：见 §7。简报刻意包含了全部已知缺陷与未决判断——**发现我们没写在 §7 里的问题，价值最大**。
+**最想被挑战的**：见 §8。简报刻意包含全部已知缺陷与未决判断——**发现我们没写在 §8 里的问题，价值最大**。
 
 ---
 
 ## 1. 定位与三个差异化赌注
 
-参照系是 Anthropic 的 Claude Science（闭源托管）与 OpenScience（`synthetic-sciences/openscience`，Apache 2.0，3.5k★，本项目的架构蓝本）。相对两者，我们押三件事：
+参照系是 Anthropic 的 Claude Science（闭源托管）与 OpenScience（`synthetic-sciences/openscience`，Apache 2.0，本项目的架构蓝本）。相对两者，我们押三件事：
 
 1. **Project-centric，不是 session-centric**。两个参照系都以会话/workspace 为单位；科研的真实单位是**课题**——横跨数月、数百次会话。本项目的持久层以 Project 为根：文献库、思路库、实验记录、结论卡跨会话累积。
 2. **全流程 Research Record**。不只记录代码产物，还记录思路（idea）、决策（decision）、精读（reading）、观察（observation）、结论（conclusion），全部进同一张证据图（8 种 record 类型 + 5 种边）。副产品是天然的电子实验记录本与可审计 research trail。
@@ -1652,8 +1736,8 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 ## 2. 架构
 
 ```
-界面层    CLI（能力真源） · SolidJS 工作台（API 投影）
-             ↓
+界面层    CLI（能力真源） · SolidJS 工作台 · MCP server（外部 agent 接入）
+             ↓  三者都是 HTTP API 的投影，共享同一套 service 层
 Agent 层  research agent（唯一用户可见）+ 任务型子代理（explore/execute/review）
           会话模式：chat / coexplore
           双层 prompt：provider-neutral 契约 + agent workflow
@@ -1661,10 +1745,11 @@ Agent 层  research agent（唯一用户可见）+ 任务型子代理（explore/
 Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
           Record/Artifact 存储 · 执行记录 · Reviewer
              ↓
-能力层    Kernel(Python stateful) · Connector×18 · SimulationPlatform · WetLabBackend
+能力层    Kernel(Python stateful) · Connector×17 · SimulationPlatform×2 · WetLabBackend×2
              ↓
 存储层    ~/.spark-research/projects/<slug>/{project.json, records.db, library.db,
           artifacts/, papers/, experiments/}  ·  credentials.json (0600, daemon-only)
+          ·  config.json（配置真源，env > file > 默认）
 ```
 
 ### 架构决策（ADR，完整列表见 DESIGN §5.2）
@@ -1674,11 +1759,12 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 | AD-1 | Project 为持久层根 | 科研单位是课题 |
 | AD-2 | 凭据只在 daemon 进程，kernel 经 `mcp_call` 代访问 | 源于对 OpenScience 沙箱的实测：它的三层隔离使自定义付费数据源无法在 agent 内使用，只能 fork。我们把这个教训变成原生设计 |
 | AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制 |
-| AD-4 | SimulationPlatform 独立于 Connector | connector 是幂等数据读取，仿真是长任务生命周期（prepare/submit/poll/collect） |
-| AD-5 | 技能少而深：每个技能必须有 e2e 才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
+| AD-4 | SimulationPlatform 独立于 Connector | connector 是幂等数据读取，仿真是长任务生命周期 |
+| AD-5 | 技能少而深：每个技能必须有配套验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应。P9 起 `SKILL.md` 的 `validation` 字段由 CI 去磁盘核对 |
 | AD-6 | 湿实验执行前强制人工 approve | 安全门通过是必要非充分条件 |
 | AD-7 | 前端 vanilla → P7 迁 SolidJS，API 先行 | CLI/API 是能力真源，UI 是投影 |
-| AD-8 | Novelty 评级由确定性代码校验，不由 LLM 独断 | 见 §4 |
+| AD-8 | 模型结论要被确定性代码约束 | 不能既当运动员又当裁判 |
+| AD-9 | **MCP 暴露面按「谁承担后果」切**（P9 新增） | 审批类动作不做成工具，否则 approve gate 退化成注释。见 §5 |
 
 ---
 
@@ -1688,9 +1774,10 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 |----|------|------|
 | **A 文献调研与写作** | 多源统一检索（OpenAlex/CrossRef/EuropePMC/S2 + AMiner 带凭据）、DOI+标题模糊去重、项目文献库、PDF 下载管线、BibTeX/CSL 导出、精读卡、综述草稿 | ✅ P2/P3 |
 | **B 实验验证** | 干：SimulationPlatform 契约 + OpenMM（真实 MD）+ pyref（确定性参考实现）+ 7 态状态机 + 断点续跑；湿：自然语言→Opentrons Protocol API v2 编译 + 4 条安全规则 + approve gate + 真模拟器执行 | ✅ P5/P6 |
-| **C 全流程记录** | 8 类 record + 5 类边的证据图、时间线（类型/时间过滤）、证据子图展开 | ✅ P1/P7 |
-| **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → 评级（novel/incremental/existing）+ 确定性评级校验层 | ✅ P4 |
-| **E 结论与评审** | citation-integrity 检查器（引用真伪）✅ P3；结论卡 review 门槛、数据-结论一致性、统计合理性提示 🔄 P8 进行中 |
+| **C 全流程记录** | 8 类 record + 5 类边的证据图、时间线、证据子图、Markdown 报告导出 | ✅ P1/P7/P8 |
+| **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → 评级 + 确定性评级校验层 | ✅ P4 |
+| **E 结论与评审** | citation-integrity + 结论卡 review 门槛 + data-consistency + capability-labeling + stats-plausibility | ✅ P3/P8 |
+| **扩展面** | 六个扩展点文档 + 脚手架 + 能力自描述 + MCP + 配置收口 + llms.txt | ✅ P9 |
 
 ---
 
@@ -1699,78 +1786,111 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 **对抗测试优先于 happy path**。每个涉及可信度的功能都配对抗用例：
 - 引用核验：3 种伪造模式（编造 key / 真 key 假内容 / 库外真文献）× 3 变体 = **9/9 检出**，外加 4 个阴性对照防误杀
 - 安全门：超浓度 / 不兼容试剂 / 超 BSL / 单次溢孔 / **累计溢孔**（单看每步都合法）+ 绕过状态机直改协议原文（被协议 hash 复核拦下）
-- Novelty 评级：反向对抗——fake LLM 硬说已发表工作是 novel，被确定性校验层**按证据升级为 existing**；反之硬说杜撰组合是 existing 则**降级**。这就是 AD-8
+- Novelty 评级：反向对抗——fake LLM 硬说已发表工作是 novel，被确定性校验层**按证据升级为 existing**；反之硬说杜撰组合是 existing 则降级。这就是 AD-8
+- MCP 暴露面（P9 新增）：**结构性防线**——遍历全部已暴露工具的请求构造函数，断言没有一个能打到审批类端点。比「工具名里没有 approve」强得多
 
 **真实验证一次，fixture 回放到永远**。真实网络/仿真跑通后录制，CI 只回放。真实验证抓到的 bug 包括：EuropePMC 官方 PDF 端点已死、bibtex key 因随机排序在两次运行间**互换**（会让引用悄悄指错论文）、fixture 录制器把超大响应截断成坏 JSON。
 
 **诚实记录不可复现性**。OpenMM 同一 spec 三次运行 E_min 各不相同（CPU 多线程浮点归约）→ 抽象成 `deterministic` 能力位写进 record，下游据此区分「逐位对账」与「区间对账」。同理 Opentrons 模拟读数全 0.0 → `simulated` 位。
 
+**让模板承载纪律**（P9 新增）。脚手架生成的模板里注释比代码多：connector 的凭据降级要回「未配置」而不是抛错、platform 的 runner 必须写完结果再写 `done.json`、skill 必须有配套验证。这些是 P2–P6 实测踩出来的，靠读文档记不住。同一轮里，让 CI 真跑生成物这条测试立刻抓到了三个模板缺陷。
+
 ---
 
-## 5. 代码库导航
+## 5. P9 新增面：扩展性与外部 agent 接入
 
-| 路径 | 职责 | 规模 |
-|------|------|------|
+评审这一部分时最值得看的是**边界怎么划**。
+
+**能力自描述必须从注册表生成**。`spark-research capabilities [--json]` 的每一项都来自真实注册表，并由双向一致性测试守着：正向「清单里的每一项可实例化」，反向「注册表里的每一项都在清单里」。反向那条防的是更隐蔽的漂移——静默漏项。可用性刻意分两档：静态档零 IO 永远可算，探测档才 spawn 子进程；不探测时如实写 `unknown`，不假装 `available`。
+
+**MCP 暴露面按「谁承担后果」切（AD-9）**。`lab approve` / `lab reject` / `lab simulate` / `conclusion review` / `project archive` 不做成工具。理由不是「怕出错」，是 AD-6 的字面含义：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行。三条落地要求：
+
+1. 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions——外部 agent 一眼看到边界，而不是调用失败后自己猜；
+2. 相邻的**只读**能力照常开放（`lab_status`、`conclusion_get` 的预评估）——拒绝要精确，不要一刀切；
+3. `lab_compile` 停在 `awaiting_approval` 并在返回体里写清「需要人执行哪条命令」——把人拉回环里，而不是甩一句「无权限」。
+
+**长任务在 MCP 层默认同步**。P7 的 HTTP 层是 202 + 句柄语义（给浏览器的）；外部 agent 的心智应当是「调用 → 拿结果」。所以 MCP 层自己轮询到落定，只有超时才降级成句柄 + `task_status` 提示，并说明任务仍在后台跑。
+
+**工具描述有写法标准且进测试**：每条必须含「何时调 / 参数示例 / 何时不该用 / 典型链路」四段。反面教材是 `"Search literature. Args: query (string)"`。
+
+---
+
+## 6. 代码库导航
+
+| 路径 | 职责 | 规模（行） |
+|------|------|-----------|
 | `backend/src/project/` | Project 管理、records 证据图 | 880 |
 | `backend/src/literature/` | 统一检索、文献库、PDF、精读卡、综述、导出 | 2670 |
 | `backend/src/ideation/` | Idea 卡、思路库、相似度、novelty pipeline | 1969 |
-| `backend/src/experiment/` | 干实验闭环状态机 | 1110 |
-| `backend/src/simulation/` | SimulationPlatform 契约 + OpenMM/pyref | 1357 |
-| `backend/src/lab/` | 协议编译、安全门、湿实验状态机、Opentrons 后端 | 4060 |
-| `backend/src/reviewer/` | veto 机制、citation-integrity、LLM 辅助判定 | 514 |
-| `backend/src/connectors/` | 18 个数据源 + registry | 1026 |
-| `backend/src/server/` | 66 端点 API、SSE、长任务句柄 | 2236 |
+| `backend/src/experiment/` | 干实验闭环状态机 | 1112 |
+| `backend/src/simulation/` | SimulationPlatform 契约 + OpenMM/pyref | 869 (+py) |
+| `backend/src/lab/` | 协议编译、安全门、湿实验状态机、Opentrons 后端 | 3479 |
+| `backend/src/reviewer/` | veto 机制、citation-integrity、结论卡检查器 | 1058 |
+| `backend/src/connectors/` | 17 个数据源 + registry | 1070 |
+| `backend/src/server/` | 66 路由、SSE、长任务句柄 | 2400 |
+| `backend/src/mcp/` | MCP server + 24 个工具定义 | 896 |
+| `backend/src/capabilities/` | 能力自描述（从注册表生成） | 478 |
+| `backend/src/scaffold/` | 三种扩展点的脚手架模板 | 732 |
+| `backend/src/config/` | 用户配置面（设置表是单一真源） | 474 |
 | `backend/src/daemon/` | permit set、凭据服务 | 465 |
-| `frontend/workspace/src/` | SolidJS 工作台（零运行时第三方库） | 3127 |
+| `frontend/workspace/src/` | SolidJS 工作台（零运行时第三方库） | 3417 |
 
-**建议的阅读顺序**：`DESIGN.md` → `project/records.ts`（证据图是全局枢纽）→ `reviewer/rules.ts`（可信度机制）→ 任一域的 pipeline（`literature/review.ts` 或 `ideation/novelty.ts`）→ `experiment/loop.ts` + `lab/wet_loop.ts`（两个状态机）。
+**建议的阅读顺序**：`DESIGN.md` → `project/records.ts`（证据图是全局枢纽）→ `reviewer/rules.ts`（可信度机制）→ 任一域的 pipeline（`literature/review.ts` 或 `ideation/novelty.ts`）→ `experiment/loop.ts` + `lab/wet_loop.ts`（两个状态机）→ `mcp/tools.ts`（对外暴露面与边界）。
 
 ---
 
-## 6. 未完成与已知缺陷（完整清单见 BACKLOG.md）
-
-**P8 进行中**：结论卡 review 门槛、数据-结论一致性检查器、统计合理性提示、能力位消费端、真实模型判准率测量、报告导出。
-
-**P9 待启动**：EXTENDING.md（六个扩展点的自助配置文档）、脚手架 CLI、`capabilities --json` 能力自描述、llms.txt、**MCP server 模式**。
+## 7. 未完成与已知缺陷（完整清单见 BACKLOG.md）
 
 **已知缺陷（我们自己发现并记录的）**：
-- Semantic Scholar 匿名请求持续 429（7 次尝试全挂），实际需要 API key
+- Semantic Scholar 匿名请求持续 429（7 次尝试全挂），实际需要 API key。已作为 `caveat` 写进 connector 元数据并透出到 capabilities
 - Novelty 相似度是**词面**而非语义（覆盖率 + 中文二元组），阈值 0.75，标定样本仅 2 个 claim，最近邻余量 0.08
-- 「真 key 假内容」的检出此前只用确定性 FakeJudge 验证管线，**真实模型判准率尚未测量**（P8 G5 正在做）
-- HTTP 层 approve 的 actor 是「谁自称就是谁」，单用户本地诚实，**多用户前必须换真实身份认证**
-- 长任务句柄不落盘，进程重启后任务列表丢失（实验状态本身在磁盘上，可 resume）
-- SSE 是生命周期事件而非 token 流（orchestrator 尚未流式化）
-- WetLabBackend 的 `execute()` 入参是 `OpentronsProgram`——接**非 Opentrons 设备族**时需要把设备语言编译下沉进 backend（已知重构点，等第二个设备族选定再动）
+- 真实模型下「真 key 假内容」的判准率：precision 全档 100%，easy/medium recall 100%，**hard 档 recall 71–100%**（P8-G5 实测，5 次运行）
+- kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON。已加重试，根治要 `response_format` 支持（V12）
+- HTTP 层 approve 的 actor 是「谁自称就是谁」，单用户本地诚实，**多用户前必须换真实身份认证**（V10）
+- 长任务句柄不落盘，进程重启后任务列表丢失（实验状态本身在磁盘上，可 resume）（V11）
+- SSE 是生命周期事件而非 token 流；MCP 长任务的进度同样不回传（V17）
+- **WetLabBackend 的 `execute()` 入参是 `OpentronsProgram`**——接非 Opentrons 设备族时需要把设备语言编译下沉进 backend。P9 已把五步施工说明写进 EXTENDING 第 4 节，但**代码尚未重构**（V6，等第二设备族选定）
 - arXiv/PubMed 尚未接入统一检索（缺 XML parser）；CNKI/万方仍是占位（无公开 API）
 - 中文检索式召回极差，novelty 的检索式限定英文
+- 位置加权豁免靠调用路径隔离而非显式白名单（V14）
+- `capabilities --probe` 每次都 spawn 子进程，无缓存（V18）
+- P9 引入的 deprecated 别名（`MCPConnector` 等）待 v0.3 移除（V15）
 
-**流程事故（已记录在 devlog）**：P6 期间主会话在共享工作树切分支，把子代理半成品卷进 docs PR 推上 main，绕过审查门 → 新增工作树隔离纪律。P7 期间 worktree 目录中途变为不可访问导致未提交成果全丢 → 新增 worktree 路径与「阶段性成果及时推送」纪律。
+**流程事故（已记录在 devlog）**：P6 期间主会话在共享工作树切分支，把子代理半成品卷进 docs PR 推上 main，绕过审查门 → 新增工作树隔离纪律。P7 期间 worktree 目录中途变为不可访问导致未提交成果全丢 → 新增 worktree 路径与「阶段性成果及时推送」纪律。P9 期间子代理再次因额度中断在零 commit 状态下暂停，成果险些全失 → 「每个逻辑块 commit + push」从建议升级为执行前置动作。
 
 ---
 
-## 7. 希望评审重点看的问题
+## 8. 希望评审重点看的问题
 
 按我们自己的不确定程度排序。**发现不在此列的问题，价值最大**。
 
-1. **证据图的设计是否站得住**：8 类 record + 5 类边能否覆盖真实科研流程？边方向约定（`supports`/`contradicts` 是 paper→idea，`cites` 是新产物→旧文献）是否会在图遍历时造成歧义？`RecordStore.update()` 允许改 content（用于结论/状态的整卡重渲染）是否破坏了「可审计证据链」的承诺？
-2. **可信度机制是否真的可信**：citation-integrity + 评级校验层 + 安全门，这套「用确定性代码约束 LLM 输出」的路子，边界在哪里？哪些地方我们其实还是在信任 LLM 而不自知？
-3. **两个状态机的口径**：干实验 7 态、湿实验 11 态；湿实验 `approve` 直达 `wet_run`（无 approved 中间态）、「进入 compile 一律清空 approve」、唯一守卫回边 `wet_run→compile`（仅 runId 为空时）。这套口径有没有能绕过审批的路径？
-4. **抽象是否过早或过晚**：SimulationPlatform 由两个实现验证过；WetLabBackend 只有 Opentrons 一族（已知重构点）；Connector 契约承载了 18 个源。哪个抽象是错的？
-5. **相对参照系的判断**：我们不吸收 OpenScience 的 313 技能铺量路线而走「少而深 + 每技能 e2e」，这个赌注对吗？Project-centric 是真需求还是过度设计？
-6. **安全边界**：凭据只在 daemon（AD-2）、Markdown 渲染是唯一 innerHTML 写入点（已审计+10 个 XSS 回归测试）、协议 hash 复核。还有哪些面没覆盖？
+1. **证据图的设计是否站得住**：8 类 record + 5 类边能否覆盖真实科研流程？边方向约定（`supports`/`contradicts` 是 paper→idea，`cites` 是新产物→旧文献）是否会在图遍历时造成歧义？`RecordStore.update()` 允许改 content 是否破坏了「可审计证据链」的承诺？
+2. **可信度机制是否真的可信**：citation-integrity + 评级校验层 + 安全门 + 结论卡三检查器，这套「用确定性代码约束 LLM 输出」的路子，边界在哪里？哪些地方我们其实还是在信任 LLM 而不自知？
+3. **两个状态机的口径**：干实验 7 态、湿实验 11 态；湿实验 `approve` 直达 `wet_run`（无 approved 中间态）、「进入 compile 一律清空 approve」、唯一守卫回边 `wet_run→compile`。这套口径有没有能绕过审批的路径？
+4. **MCP 边界的划法（P9 新增，最想被挑战）**：把审批类动作挡在 MCP 之外，是真安全还是安全剧场？一个外部 agent 完全可以直接 `Bash` 调 `spark-research lab approve --actor 它自己编的名字`——我们挡住的到底是什么？我们的回答是「挡住的是**默认路径**与**责任归属**：MCP 工具是 agent 的第一反应，而绕道 shell 是一个显式的、留痕的、用户能在 permission 层看见的动作；`actorSource` 也会如实记录来源」。这个回答够不够？
+5. **抽象是否过早或过晚**：SimulationPlatform 由两个实现验证过；WetLabBackend 只有 Opentrons 一族（已知重构点）；Connector 契约承载 17 个源。哪个抽象是错的？
+6. **扩展面的赌注（P9 新增）**：我们赌「模板承载纪律」比「文档陈述纪律」有效，所以脚手架的注释比代码多、CI 真跑生成物。这个赌注对吗？还是说没人会用脚手架，真正的扩展者都会直接抄现成实现？
+7. **相对参照系的判断**：不吸收 OpenScience 的 313 技能铺量路线而走「少而深 + 每技能 e2e」，这个赌注对吗？Project-centric 是真需求还是过度设计？
+8. **安全边界**：凭据只在 daemon（AD-2）、Markdown 渲染是唯一 innerHTML 写入点（已审计 + 10 个 XSS 回归测试）、协议 hash 复核、MCP 结构性防线。还有哪些面没覆盖？
 
-## 8. 如何跑起来
+---
+
+## 9. 如何跑起来
 
 ```bash
 git clone https://github.com/jimmyag2026-prog/spark-research && cd spark-research
 bun install && bun run typecheck
-bun test tests/unit/                       # 655 pass
+bun test tests/unit/                       # 824 pass（17 skip：环境相关）
 .venv/bin/python -m pytest tests/ -q       # 48 passed（需先建 .venv 装 openmm/opentrons）
-bun run test:e2e                           # Playwright 10 pass（需 bunx playwright install chromium）
+bun run test:e2e                           # Playwright 12 pass（需 bunx playwright install chromium）
+bun run check:llms                         # llms.txt 是否与文档同步
+
 bun run dev                                # 工作台 http://127.0.0.1:4321
+spark-research capabilities                # 这台机器上有什么
+spark-research mcp                         # 作为 MCP 工具箱接入外部 agent
 ```
 
-CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / `report`）。
+CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report` / `capabilities` / `config` / `new` / `mcp`。
 
 ------------------------------------------------------------------------------
 ## 文件：docs/BACKLOG.md
@@ -1780,7 +1900,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / 
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > 分级：**P8-gate** = v0.2 发布前必须消化；**v0.3** = 下版本候选；**待定** = 等外部输入/用户拍板。
-> 最后更新：2026-09-09（P8 收口：G1-G7 全部消化，见 devlog/P8-wrapup.md；新增 v0.3 候选 V12/V13）
+> 最后更新：2026-09-09（P9 扩展面与 LLM 友好化收口；新增 v0.3 候选 V15-V18。V6 的施工说明已展开进 docs/EXTENDING.md 第 4 节）
 
 ## P8-gate（发布前验证清单）—— **已全部消化（P8，2026-09-09）**
 
@@ -1799,15 +1919,12 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / 
 | # | 项 | 备注 |
 |---|-----|------|
 | V14 | 位置加权豁免改白名单制 | P3 D3 说「第二个例外再重构」；P8 三条新 rule 一起成了例外，阈值已到。当前靠调用路径隔离，能工作但不显式 |
-
-| # | 项 | 备注 |
-|---|-----|------|
 | V1 | arXiv/PubMed 接入统一检索 | 缺 XML parser，目前统一检索只有 4 个 JSON 源 |
 | V2 | novelty 相似度语义化（embedding provider 决策 + 集成） | 词面 0.75 阈值余量 0.08；与 G5 一起看 |
 | V3 | poll 的进程 start-time 交叉核验 | 现状「done.json 优先」方向安全，只会多报 running |
 | V4 | 远端算力真实实现（Docker/SSH/Modal/火山引擎） | DESIGN 明示按需求拉动 |
 | V5 | R kernel | v0.1 遗留 permit set 已有位置 |
-| V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。施工说明：同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（P6 验收核对：当前 execute() 入参为 OpentronsProgram），等第二设备族选定再动（AD-4 教训：两个真实实现验证接口） |
+| V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（当前 execute() 入参为 OpentronsProgram）。**P9 已把五步施工说明写进 [EXTENDING.md 第 4 节](EXTENDING.md)**（含 protocolHash 语义搬迁与 volume_capacity 规则的降级口径）；等第二设备族选定再动（AD-4 教训：两个真实实现才验证得了接口） |
 | V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估 |
 | V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差 |
 | V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
@@ -1815,6 +1932,11 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / 
 | V9 | AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200） |
 | V12 | LLM 结构化输出（`response_format` / JSON mode） | P8-G5 实测：kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON（`finish_reason` 不是 `length`，不是截断）。已加「解析失败重试一次」但治标不治本。根治要么让 LLMRouter 支持 `response_format: json_object`，要么给判定器配一个支持结构化输出的模型。现状是安全的（降级为可见的 `citation_judge_unavailable` soft finding，不假装通过），代价是这部分引用本轮没被检查 |
 | V13 | 判定 prompt 对「凭空归因」的口径 | P8-G5 实测：难档唯一稳定的漏报模式是「草稿给出卡片里没有的归因解释」。prompt 写的是「声称了卡片里明确没有的结果 = conflict」，模型读成「卡片没覆盖 → unclear」。两种读法都讲得通，是 prompt 的歧义而非模型的错。改口径前要先想清楚：收紧会不会把合法的概括也扫进来（那正是 P3 刻意避免的误报） |
+
+| V15 | 移除 `MCPConnector` 等 deprecated 别名 | P9 已改名 `HttpConnector`（连同 `HttpConnectorConfig` / `HttpTool`）并保留三个别名兼容外部引用。v0.3 可删——但要先确认没有外部集成在用旧名 |
+| V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估 |
+| V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等 |
+| V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎 |
 
 ## 待定（等外部输入 / 用户拍板，2026-09-09 用户确认入册）
 
@@ -1835,7 +1957,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / 
 
 ---
 
-## [0.2.0] — 未发布（tag 与 GitHub Release 在 P9 末尾一并打出）
+## [0.2.0] — 2026-09-09
 
 从「科学 Agent 平台」重新定位为**面向科研人群的开源科研工作台**：项目成为持久层的根，
 五大功能域（文献 / 实验 / 记录 / 创新性 / 评审）围绕一张可审计的证据图组织。
@@ -1913,8 +2035,37 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab`（P8 增 `conclusion` / 
 - `scripts/demo-research-thread.ts`：一条完整研究线索的可重放演练（CI 可跑，零网络）
 - `scripts/measure-citation-judge.ts`：真实模型下的引用一致性判准率测量（分三档报告，不进 CI）
 
+**P9 · 扩展面与 LLM 友好化**
+- **[docs/EXTENDING.md](docs/EXTENDING.md)**：六个扩展点（Skill / Connector /
+  SimulationPlatform / WetLabBackend / 安全门规则 / Prompt 与模型路由）各一节，
+  每节 = 契约 + 最小可运行示例 + 怎么测 + 放哪里。示例全部在 CI 里真跑：
+  skill/connector/platform 三类是脚手架产物（生成后 `bun test` 一遍），
+  安全门规则是 `examples/extending/flammable_over_heat_rule.ts`（11 例，含阴性对照）
+- **脚手架**：`spark-research new skill|connector|platform <name>`，
+  生成带可执行测试桩的模板；connector 有免 key 与 `--with-key` 两版；
+  platform 生成的测试**直接接 P5 契约测试套件**（新平台的验收标准）
+- **能力自描述**：`spark-research capabilities [--json] [--probe]` 与 `GET /api/capabilities`。
+  **全部从真实注册表生成**并有双向一致性测试；可用性分静态档（零 IO）与探测档（spawn 子进程）
+- **MCP server**：`spark-research mcp`（stdio）。24 个工具覆盖检索 / 文献库 / 思路 /
+  novelty / 实验 / 记录 / 结论 / 报告；长任务默认同步等待，超时才降级为任务句柄。
+  **`lab approve` / `lab reject` / `lab simulate` / `conclusion review` / `project archive`
+  刻意不暴露**（AD-9）：不暴露清单是显式数据，进 capabilities 与 server instructions，
+  `lab_compile` 返回体里直接给出「需要人执行哪条命令」
+- **用户配置面收口**：`~/.spark-research/config.json` + 一张设置表作单一真源，
+  优先级 env > config.json > 默认值。`spark-research config list|get|set|unset|path`，
+  每一项都写清「改了影响什么」；凭据同文件但只显示「已设置 / 未设置」
+- **SKILL.md frontmatter 规范化**：新增 `triggers` / `connectors` / `validation` 三个必填字段，
+  schema 校验进 CI。`validation` 让 AD-5 从口号变成一道门——校验器去磁盘核对测试文件真实存在
+- **llms.txt / llms-full.txt**：`bun run gen:llms` 幂等生成，CI 守与文档同步
+- connector 元数据新增 `caveat`：`status: available` 只说明「接口实现了」，
+  不等于「无条件可用」（如 Semantic Scholar 匿名请求实测持续 429）
+
 ### 变更
 
+- **connector 基类 `MCPConnector` 改名 `HttpConnector`**（连同 `MCPConnectorConfig` →
+  `HttpConnectorConfig`、`MCPTool` → `HttpTool`）。这个类与 Model Context Protocol
+  毫无关系，名字是 v0.1 的历史包袱；P9 落地了真正的 MCP 实现之后，同名会主动误导读者。
+  **旧名保留为 deprecated 别名，外部代码不会断**；移除记在 BACKLOG V15
 - 报告与检查器统一「可复现性口径」措辞：证据来自非确定性平台一律写**区间/趋势对账**，
   不再出现「逐位可复现」这类承诺
 - 结论卡 `review` 字段从裸字符串升级为结构化评审记录（谁 / 何时 / 依据哪些 finding）。

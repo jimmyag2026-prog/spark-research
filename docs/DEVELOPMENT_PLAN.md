@@ -193,6 +193,11 @@ P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabiliti
 
 **退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
 
+**P9 完成状态（2026-09-09）**：范围全部落地，见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)。
+机器版退出标准已由 `tests/unit/mcp_e2e.test.ts` 覆盖（真实 MCP 客户端跑通
+capabilities → 检索入库 → idea → novelty → 时间线 → 报告，零网络零真实模型）；
+**人版外部验收（全新 Claude Code 会话接 MCP）留给主会话执行**，tag 与 Release 同。
+
 | 层 | 工具 | 网络 | 运行时机 |
 |----|------|------|---------|
 | 单元 | bun test | 无 | 每次 commit |

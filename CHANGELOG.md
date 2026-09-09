@@ -5,7 +5,7 @@
 
 ---
 
-## [0.2.0] — 未发布（tag 与 GitHub Release 在 P9 末尾一并打出）
+## [0.2.0] — 2026-09-09
 
 从「科学 Agent 平台」重新定位为**面向科研人群的开源科研工作台**：项目成为持久层的根，
 五大功能域（文献 / 实验 / 记录 / 创新性 / 评审）围绕一张可审计的证据图组织。
@@ -83,8 +83,37 @@
 - `scripts/demo-research-thread.ts`：一条完整研究线索的可重放演练（CI 可跑，零网络）
 - `scripts/measure-citation-judge.ts`：真实模型下的引用一致性判准率测量（分三档报告，不进 CI）
 
+**P9 · 扩展面与 LLM 友好化**
+- **[docs/EXTENDING.md](docs/EXTENDING.md)**：六个扩展点（Skill / Connector /
+  SimulationPlatform / WetLabBackend / 安全门规则 / Prompt 与模型路由）各一节，
+  每节 = 契约 + 最小可运行示例 + 怎么测 + 放哪里。示例全部在 CI 里真跑：
+  skill/connector/platform 三类是脚手架产物（生成后 `bun test` 一遍），
+  安全门规则是 `examples/extending/flammable_over_heat_rule.ts`（11 例，含阴性对照）
+- **脚手架**：`spark-research new skill|connector|platform <name>`，
+  生成带可执行测试桩的模板；connector 有免 key 与 `--with-key` 两版；
+  platform 生成的测试**直接接 P5 契约测试套件**（新平台的验收标准）
+- **能力自描述**：`spark-research capabilities [--json] [--probe]` 与 `GET /api/capabilities`。
+  **全部从真实注册表生成**并有双向一致性测试；可用性分静态档（零 IO）与探测档（spawn 子进程）
+- **MCP server**：`spark-research mcp`（stdio）。24 个工具覆盖检索 / 文献库 / 思路 /
+  novelty / 实验 / 记录 / 结论 / 报告；长任务默认同步等待，超时才降级为任务句柄。
+  **`lab approve` / `lab reject` / `lab simulate` / `conclusion review` / `project archive`
+  刻意不暴露**（AD-9）：不暴露清单是显式数据，进 capabilities 与 server instructions，
+  `lab_compile` 返回体里直接给出「需要人执行哪条命令」
+- **用户配置面收口**：`~/.spark-research/config.json` + 一张设置表作单一真源，
+  优先级 env > config.json > 默认值。`spark-research config list|get|set|unset|path`，
+  每一项都写清「改了影响什么」；凭据同文件但只显示「已设置 / 未设置」
+- **SKILL.md frontmatter 规范化**：新增 `triggers` / `connectors` / `validation` 三个必填字段，
+  schema 校验进 CI。`validation` 让 AD-5 从口号变成一道门——校验器去磁盘核对测试文件真实存在
+- **llms.txt / llms-full.txt**：`bun run gen:llms` 幂等生成，CI 守与文档同步
+- connector 元数据新增 `caveat`：`status: available` 只说明「接口实现了」，
+  不等于「无条件可用」（如 Semantic Scholar 匿名请求实测持续 429）
+
 ### 变更
 
+- **connector 基类 `MCPConnector` 改名 `HttpConnector`**（连同 `MCPConnectorConfig` →
+  `HttpConnectorConfig`、`MCPTool` → `HttpTool`）。这个类与 Model Context Protocol
+  毫无关系，名字是 v0.1 的历史包袱；P9 落地了真正的 MCP 实现之后，同名会主动误导读者。
+  **旧名保留为 deprecated 别名，外部代码不会断**；移除记在 BACKLOG V15
 - 报告与检查器统一「可复现性口径」措辞：证据来自非确定性平台一律写**区间/趋势对账**，
   不再出现「逐位可复现」这类承诺
 - 结论卡 `review` 字段从裸字符串升级为结构化评审记录（谁 / 何时 / 依据哪些 finding）。
