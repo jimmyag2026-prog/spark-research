@@ -34,6 +34,38 @@ export const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
 const KIMI_ENDPOINT = "https://api.moonshot.ai/v1/chat/completions";
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 
+// D-2（P10-b）：无超时的裸 fetch 会让任何一次卡住的模型调用把整条 orchestrator
+// 流程挂死。config/ 面板（P9）没有对应设置项（只读不改，见 docs/devlog/P10-b.md），
+// 走 env + 常量默认。120s：对照 backend/src/lab/wet_backend.ts 的湿实验后端超时
+// 惯例（同为「一次外部调用整体等多久算挂」的量级），也留够长文本生成的余量。
+const DEFAULT_LLM_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.SPARK_LLM_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+})();
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchImpl: typeof fetch,
+): Promise<Response> {
+  if (timeoutMs <= 0) return fetchImpl(url, init);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 超时是否命中：AbortController 触发的失败一律是 DOMException("AbortError")
+// （或等价的 name === "AbortError"）。用它把「超时」与「网络层其它失败」
+// （DNS 解析失败、连接被拒等，同样是 fetch() 抛错）分开报出去。
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function providerForModel(model: string): Provider {
   for (const provider of SUPPORTED_PROVIDERS) {
     if (PROVIDER_MODELS[provider].includes(model)) return provider;
@@ -53,9 +85,19 @@ export class LLMRouter {
   static readonly DEFAULT_MODEL = DEFAULT_MODEL;
 
   private env: Record<string, string | undefined>;
+  private fetchImpl: typeof fetch;
+  private timeoutMs: number;
 
-  constructor(env: Record<string, string | undefined> = process.env) {
+  // 第二个参数是新增的可选项（D-2）：fetchImpl 供测试注入「永不响应」的假实现而不必
+  // monkey-patch 全局 fetch；timeoutMs 覆盖模块级默认，同样只为测试用短超时跑得快。
+  // 两者都可选，所有既有调用点（`new LLMRouter()` / `new LLMRouter(env)`）不用改。
+  constructor(
+    env: Record<string, string | undefined> = process.env,
+    opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+  ) {
     this.env = env;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.timeoutMs = opts.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
   }
 
   private keys(): { kimi?: string; openrouter?: string } {
@@ -91,16 +133,38 @@ export class LLMRouter {
     model: string,
     key: string,
   ): Promise<LlmResponse> {
-    const response = await fetch(OPENROUTER_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-        "HTTP-Referer": "https://spark-research.local",
-        "X-Title": "Spark Research",
-      },
-      body: JSON.stringify({ model, messages, temperature: 0.2 }),
-    });
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        OPENROUTER_ENDPOINT,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+            "HTTP-Referer": "https://spark-research.local",
+            "X-Title": "Spark Research",
+          },
+          body: JSON.stringify({ model, messages, temperature: 0.2 }),
+        },
+        this.timeoutMs,
+        this.fetchImpl,
+      );
+    } catch (error) {
+      // 「超时」与「上游报错」在这里就分岔：超时是请求根本没落地（无 HTTP 状态码可言），
+      // 上游报错是拿到了响应但 status 不在 2xx——下面 !response.ok 分支处理的是后者。
+      const timedOut = isAbortError(error);
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        provider: "openrouter",
+        model,
+        content: timedOut
+          ? `[error] timeout: openrouter request exceeded ${this.timeoutMs}ms`
+          : `[error] network: ${message}`,
+        mock: false,
+      };
+    }
     if (!response.ok) {
       const text = await response.text();
       return {
@@ -131,14 +195,34 @@ export class LLMRouter {
     model: string,
     key: string,
   ): Promise<LlmResponse> {
-    const response = await fetch(KIMI_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({ model, messages, temperature: 0.2 }),
-    });
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        KIMI_ENDPOINT,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({ model, messages, temperature: 0.2 }),
+        },
+        this.timeoutMs,
+        this.fetchImpl,
+      );
+    } catch (error) {
+      const timedOut = isAbortError(error);
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        provider: "kimi",
+        model,
+        content: timedOut
+          ? `[error] timeout: kimi request exceeded ${this.timeoutMs}ms`
+          : `[error] network: ${message}`,
+        mock: false,
+      };
+    }
     if (!response.ok) {
       return { ok: false, provider: "kimi", model, content: `[error] HTTP ${response.status}`, mock: false };
     }

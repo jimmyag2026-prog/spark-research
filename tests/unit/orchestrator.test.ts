@@ -87,6 +87,99 @@ describe("OrchestratorAgent.processRequest", () => {
   });
 });
 
+describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () => {
+  // 模拟 router 无 key / 网络挂了时的真实返回形状：ok:false，content 是路由层
+  // 拼出来的错误文本（不是模型产出）。
+  const failingLlm = {
+    call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => ({
+      ok: false,
+      provider: "kimi",
+      model,
+      content: "[error] simulated upstream failure — should never leak into summary",
+      mock: false,
+    }),
+    listModels: mockLlm.listModels,
+  };
+
+  test("summarize 失败时 summary 不包含错误文本，且明确标注是 LLM 调用失败", async () => {
+    const { orch } = createOrchestrator({ llm: failingLlm });
+    const result = await orch.processRequest("分析数据集", "sess_llm_fail_summary");
+
+    expect(result.summary).not.toContain("simulated upstream failure");
+    expect(result.summary).not.toContain("[error]");
+    expect(result.summary).toContain("LLM 调用失败");
+  });
+
+  test("plan 失败时落到 defaultPlan，且执行日志里能看到 plan-llm-failed（可见，不是静默）", async () => {
+    const { daemon, orch } = createOrchestrator({ llm: failingLlm });
+    const result = await orch.processRequest("分析数据集", "sess_llm_fail_plan");
+
+    // defaultPlan()：单个 analysis 任务。
+    expect(result.plan).toHaveLength(1);
+    expect(result.plan[0]?.kind).toBe("analysis");
+
+    const entries = (daemon.executionLog as unknown as { entries: Array<Record<string, unknown>> }).entries;
+    const planFailed = entries.find((e) => e.action === "plan-llm-failed");
+    expect(planFailed).toBeDefined();
+  });
+
+  test("analysis task 的 LLM 调用失败：ExecutionOutcome.ok=false，output 明确标注非模型产出", async () => {
+    const { orch } = createOrchestrator({ llm: failingLlm });
+    const result = await orch.processRequest("分析数据集", "sess_llm_fail_analysis");
+
+    const analysisOutcome = result.execution.find((e) => e.kind === "analysis");
+    expect(analysisOutcome).toBeDefined();
+    expect(analysisOutcome?.ok).toBe(false);
+    expect(analysisOutcome?.output).toContain("llm call failed");
+    expect(analysisOutcome?.output).toContain("not a model output");
+  });
+
+  test("subagent task 的 LLM 调用失败：同样 ok=false 而不是把错误文本当产出放行", async () => {
+    // 用一个总是产出单个 subagent 任务的假 llm 驱动 plan()，让 subagent 分支被执行到；
+    // 之后同一个 llm 对 subagent 任务本身的调用也失败，验证该调用点独立检查了 res.ok。
+    let planCalls = 0;
+    const subagentPlanLlm: Pick<LLMRouter, "call" | "listModels"> = {
+      call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+        planCalls++;
+        if (planCalls === 1) {
+          // 第一次调用是 plan()：产出一个 subagent 任务。
+          const plan = JSON.stringify([
+            { id: "t1", kind: "subagent", description: "delegate", params: { subagent: "execute" } },
+          ]);
+          return { ok: true, provider: "kimi", model, content: plan, mock: false };
+        }
+        // 之后所有调用（subagent 任务本身、summarize）都失败。
+        return {
+          ok: false,
+          provider: "kimi",
+          model,
+          content: "[error] simulated upstream failure",
+          mock: false,
+        };
+      },
+      listModels: mockLlm.listModels,
+    };
+    const { orch } = createOrchestrator({ llm: subagentPlanLlm });
+    const result = await orch.processRequest("随便什么请求", "sess_llm_fail_subagent");
+
+    const subagentOutcome = result.execution.find((e) => e.kind === "subagent");
+    expect(subagentOutcome).toBeDefined();
+    expect(subagentOutcome?.ok).toBe(false);
+    expect(subagentOutcome?.output).toContain("llm call failed");
+  });
+
+  test("LLM 调用成功时行为完全不变（回归防护）", async () => {
+    const { orch } = createOrchestrator();
+    const result = await orch.processRequest("分析数据集", "sess_llm_ok");
+    expect(result.summary).not.toContain("LLM 调用失败");
+    for (const outcome of result.execution) {
+      if (outcome.kind === "analysis" || outcome.kind === "subagent") {
+        expect(outcome.ok).toBe(true);
+      }
+    }
+  });
+});
+
 describe("SubAgentFactory", () => {
   test("创建各类型子代理", () => {
     const factory = new SubAgentFactory();
