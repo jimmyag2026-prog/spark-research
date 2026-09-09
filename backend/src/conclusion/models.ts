@@ -16,8 +16,11 @@ export function isConclusionReviewState(value: unknown): value is ConclusionRevi
   return typeof value === "string" && (CONCLUSION_REVIEW_STATES as readonly string[]).includes(value);
 }
 
-// 结论卡的来源模式：干实验 / 湿实验 / 手工登记。
-export type ConclusionMode = "dry" | "wet" | "manual";
+// 结论卡的来源模式：干实验 / 湿实验 / 文献推导 / 手工登记。
+// `literature` 是 P8 验收补的（主会话）：域 A3 的综述结论、理论推演不产生 observation，
+// 其证据是精读卡（reading）与文献（paper）。没有这一档，综述类研究永远拿不到
+// approved 结论——「结论必须有可追溯证据」的承诺照旧，只是证据种类不同。
+export type ConclusionMode = "dry" | "wet" | "literature" | "manual";
 
 // 一条 finding 的可持久化摘要（存进 record metadata，供 CLI/报告/前端复读）。
 // 与 `Finding` 的区别：这里不带 artifactId（结论卡不是 artifact），且一定带 rule。
@@ -128,7 +131,9 @@ function parseEvidenceIds(meta: Record<string, unknown>): string[] {
 }
 
 function parseMode(meta: Record<string, unknown>): ConclusionMode {
-  if (meta.mode === "wet" || meta.mode === "dry" || meta.mode === "manual") return meta.mode;
+  if (meta.mode === "wet" || meta.mode === "dry" || meta.mode === "literature" || meta.mode === "manual") {
+    return meta.mode;
+  }
   // P5 的干实验结论卡没写 mode（湿的写了）；有 experimentId 就当干实验，否则手工。
   return typeof meta.experimentId === "string" && meta.experimentId ? "dry" : "manual";
 }

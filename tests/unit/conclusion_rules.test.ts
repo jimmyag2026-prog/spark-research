@@ -160,6 +160,73 @@ describe("G2 data-consistency：结论引用的 observation 必须真实存在�
     expect(hard[0]!.detail).toMatchObject({ actualType: "idea" });
   });
 
+  // 主会话 P8 验收补：域 A3 的综述/理论推演结论不产生 observation，
+  // 若一刀切要求实验证据，综述类研究永远拿不到 approved 结论。
+  test("literature 模式：引用精读卡 → 零 hard（综述结论能进结论区）", () => {
+    const project = newProject();
+    const records = project.records();
+    const reading = records.create({
+      type: "reading",
+      content: "该文报告 X 在低温下失效",
+      evidence: "sourced",
+      metadata: { kind: "reading_card" },
+    });
+    const card = new ConclusionStore(records).create({
+      claim: "现有方法在低温场景普遍缺乏验证",
+      mode: "literature",
+      evidenceIds: [reading.id],
+    });
+    const result = dataConsistency({ card, lookup: records });
+    expect(result.findings.filter((f) => f.severity === "hard")).toHaveLength(0);
+    // 文献证据没有执行锚点是本分，不该报 evidence_without_execution
+    expect(result.findings.map((f) => f.message).join()).not.toContain("evidence_without_execution");
+  });
+
+  test("literature 模式：引用 paper record 同样合法", () => {
+    const project = newProject();
+    const records = project.records();
+    const paper = records.create({ type: "paper", content: "Vaswani et al. 2017", evidence: "sourced" });
+    const card = new ConclusionStore(records).create({
+      claim: "自注意力已成为序列建模主流",
+      mode: "literature",
+      evidenceIds: [paper.id],
+    });
+    expect(dataConsistency({ card, lookup: records }).findings.filter((f) => f.severity === "hard")).toHaveLength(0);
+  });
+
+  test("literature 模式仍守底线：零证据照样 hard", () => {
+    const project = newProject();
+    const records = project.records();
+    const card = new ConclusionStore(records).create({ claim: "我读了很多文献所以这是对的", mode: "literature" });
+    const hard = dataConsistency({ card, lookup: records }).findings.filter((f) => f.severity === "hard");
+    expect(hard).toHaveLength(1);
+    expect(hard[0]!.message).toContain("no_evidence");
+  });
+
+  test("literature 模式拿 observation 当证据 → hard（模式与证据类型必须自洽）", () => {
+    const project = newProject();
+    const records = project.records();
+    const obsId = makeObservation(records);
+    const card = new ConclusionStore(records).create({
+      claim: "混用证据类型",
+      mode: "literature",
+      evidenceIds: [obsId],
+    });
+    const hard = dataConsistency({ card, lookup: records }).findings.filter((f) => f.severity === "hard");
+    expect(hard).toHaveLength(1);
+    expect(hard[0]!.message).toContain("evidence_type_mismatch");
+  });
+
+  test("实验模式引用精读卡 → hard（反向不许混）", () => {
+    const project = newProject();
+    const records = project.records();
+    const reading = records.create({ type: "reading", content: "读到的东西", metadata: { kind: "reading_card" } });
+    const card = new ConclusionStore(records).create({ claim: "实验结论", mode: "dry", evidenceIds: [reading.id] });
+    const hard = dataConsistency({ card, lookup: records }).findings.filter((f) => f.severity === "hard");
+    expect(hard).toHaveLength(1);
+    expect(hard[0]!.message).toContain("evidence_type_mismatch");
+  });
+
   test("observation 没有执行锚点 → soft（手工登记的观察，合法但要被看见）", () => {
     const project = newProject();
     const records = project.records();

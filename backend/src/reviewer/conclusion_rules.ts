@@ -106,11 +106,18 @@ export function dataConsistency(input: DataConsistencyInput): DataConsistencyRes
   const resolved = resolveEvidence(card, lookup);
   const findings: Finding[] = [];
 
+  // 文献推导的结论（域 A3 综述/理论推演）证据是精读卡与文献，不是实验观察。
+  // 其余模式一律要求 observation。
+  const literatureMode = card.mode === "literature";
+  const allowedTypes = literatureMode ? ["reading", "paper"] : ["observation"];
+  const evidenceNoun = literatureMode ? "精读卡或文献" : "observation";
+
   // ① 一条证据都没有 = 这不是结论，是主张。hard。
   if (card.evidenceIds.length === 0) {
     findings.push(
-      finding("hard", DATA_CONSISTENCY_RULE, card, location, "no_evidence: 结论卡没有引用任何 observation。", {
+      finding("hard", DATA_CONSISTENCY_RULE, card, location, `no_evidence: 结论卡没有引用任何${evidenceNoun}。`, {
         claim: card.claim.slice(0, 160),
+        mode: card.mode,
       }),
     );
   }
@@ -158,16 +165,17 @@ export function dataConsistency(input: DataConsistencyInput): DataConsistencyRes
       continue;
     }
 
-    // ④ 类型不对：拿 idea / paper / 另一条 conclusion 当「数据」。
-    if (item.record.type !== "observation") {
+    // ④ 类型不对：拿 idea / 另一条 conclusion 当「数据」。
+    // 允许的类型随 mode 变：实验结论要 observation，文献结论要 reading/paper。
+    if (!allowedTypes.includes(item.record.type)) {
       findings.push(
         finding(
           "hard",
           DATA_CONSISTENCY_RULE,
           card,
           location,
-          `evidence_type_mismatch: \`${item.id}\` 是 ${item.record.type} record，不是 observation——` +
-            `结论的数据支撑只能是观察记录。`,
+          `evidence_type_mismatch: \`${item.id}\` 是 ${item.record.type} record——` +
+            `${card.mode} 模式结论的证据只能是 ${allowedTypes.join(" / ")}。`,
           { evidenceId: item.id, actualType: item.record.type },
         ),
       );
@@ -175,7 +183,8 @@ export function dataConsistency(input: DataConsistencyInput): DataConsistencyRes
     }
 
     // ⑤ observation 存在但没有执行锚点 = 手工登记的观察。soft：合法但要被看见。
-    if (!item.runId && !item.experimentId) {
+    // 文献证据（reading/paper）本就不来自执行，不适用这条。
+    if (!literatureMode && !item.runId && !item.experimentId) {
       findings.push(
         finding(
           "soft",

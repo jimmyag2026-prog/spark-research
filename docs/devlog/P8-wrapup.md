@@ -315,3 +315,13 @@ P8 新增的测试文件：
 - **V13** 判定 prompt 对「凭空归因」的口径 —— 难档唯一稳定的漏报模式，是 prompt 歧义
 
 P9（扩展面与 LLM 友好化）是发布前最后一阶段，`v0.2.0` tag 与 GitHub Release 在那里打出。
+
+## 主会话验收批注（2026-09-09）
+
+- **R2 已修（发现真缺陷）**：`data-consistency` 要求证据必须是 `observation` 类型，且零证据 = hard。这让**域 A3 的综述结论、理论推演永远拿不到 approved**——纯文献推导的结论要么无证据、要么引用 `reading`/`paper`，两条路都撞 hard veto。而文献综述是本项目的核心功能之一，等于自己把主线堵死。
+  修法：`ConclusionMode` 增加 `literature` 档，证据类型按 mode 分派（实验结论要 observation，文献结论要 reading/paper）；`evidence_without_execution` 这条 soft 对文献证据跳过（文献本就不来自执行，否则全是噪音）。**底线一条没松**：零证据照样 hard、断链/跨项目照样 hard、模式与证据类型必须自洽（两个方向都不许混）。补 5 个测试钉住。
+  顺带修了一个静默 bug：`parseMode` 的白名单没跟着更新，新模式会**悄悄落回 `manual`**——这类白名单漏更新不会报错，只会让功能沉默失效。
+- **R1 → BACKLOG V14**：位置加权豁免的第二个例外确已到达，登记重构项。不在收口阶段动 reviewer 的分派结构——P8 的任务是收口，不是重构。
+- **R3 G5 难档标注争议**：保留子代理的标注。把分歧写在明处（devlog 已记）比调高一个好看的 recall 更有价值；`chen2020simple` 那条本就可争议，不该由我单方面裁定成「模型对了」。
+- **force-push 复核**：范围仅 `feat/p8-wrapup`（feature 分支），main 未受影响，9 个 commit 内容完整、旧对象仍可达。系主会话授权 rebase 的必然结果，可接受；但后续任务书应显式写明「rebase 后需 force-with-lease 推送」以免再触发安全告警。
+- **REVIEW_BRIEF.md 不在本 PR 刷新**：子代理的判断对——外部评审在途中改文档更糟。合并后由主会话统一更新。
