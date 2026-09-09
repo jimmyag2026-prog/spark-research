@@ -191,7 +191,8 @@ export class RecordStore {
     return this.get(id)!;
   }
 
-  list(filter: RecordFilter = {}): ResearchRecord[] {
+  // 过滤谓词的单一真源：list() 与 count() 共用，保证「这一页」与「总数」口径一致。
+  private whereClause(filter: RecordFilter): { where: string; params: (string | number)[] } {
     const clauses: string[] = [];
     const params: (string | number)[] = [];
     if (filter.type) {
@@ -211,19 +212,43 @@ export class RecordStore {
       clauses.push("artifact_id = ?");
       params.push(filter.artifactId);
     }
-    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-    const limit = filter.limit ? " LIMIT ?" : "";
-    if (filter.limit) params.push(filter.limit);
+    if (filter.since) {
+      clauses.push("created_at >= ?");
+      params.push(filter.since);
+    }
+    if (filter.until) {
+      clauses.push("created_at <= ?");
+      params.push(filter.until);
+    }
+    return { where: clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "", params };
+  }
+
+  list(filter: RecordFilter = {}): ResearchRecord[] {
+    const { where, params } = this.whereClause(filter);
+    // SQLite 的 OFFSET 必须跟在 LIMIT 后面；只给 offset 时用 -1 表示「不限条数」。
+    let tail = "";
+    if (filter.limit) {
+      tail += " LIMIT ?";
+      params.push(filter.limit);
+    } else if (filter.offset) {
+      tail += " LIMIT -1";
+    }
+    if (filter.offset) {
+      tail += " OFFSET ?";
+      params.push(filter.offset);
+    }
     // 次序键用 rowid 而不是 id：同一毫秒内创建的多条 record（如批量生成精读卡）
     // created_at 完全相同，用随机 uuid 排序会让「哪条更新」不确定；rowid 就是插入顺序。
     const rows = this.db
-      .query(`SELECT * FROM records${where} ORDER BY created_at, rowid${limit}`)
+      .query(`SELECT * FROM records${where} ORDER BY created_at, rowid${tail}`)
       .all(...params) as RecordRow[];
     return rows.map(mapRow);
   }
 
-  count(): number {
-    const row = this.db.query("SELECT COUNT(*) AS n FROM records").get() as { n: number };
+  // 无参 = 全表条数（P1 起的既有语义）；带 filter = 该谓词下的条数（P7 分页用）。
+  count(filter: RecordFilter = {}): number {
+    const { where, params } = this.whereClause(filter);
+    const row = this.db.query(`SELECT COUNT(*) AS n FROM records${where}`).get(...params) as { n: number };
     return row.n;
   }
 

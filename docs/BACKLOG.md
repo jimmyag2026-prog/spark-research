@@ -28,6 +28,8 @@
 | V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。施工说明：同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（P6 验收核对：当前 execute() 入参为 OpentronsProgram），等第二设备族选定再动（AD-4 教训：两个真实实现验证接口） |
 | V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估 |
 | V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差 |
+| V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
+| V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘 |
 | V9 | AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200） |
 
 ## 待定（等外部输入 / 用户拍板，2026-09-09 用户确认入册）

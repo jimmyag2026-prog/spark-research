@@ -7,6 +7,7 @@ import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
 import { OrchestratorAgent } from "./agents/orchestrator";
 import { startServer } from "./server/server";
+import { DEFAULT_FRONTEND_DIR } from "./server/app";
 import { ProjectManager } from "./project/manager";
 import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
@@ -305,6 +306,11 @@ function main() {
         console.log("⚠️  未配置 API Key，服务将返回错误。运行 spark-research auth 进行配置。");
       }
       const port = Number(process.argv[3]) || 4321;
+      // 工作台前端是构建产物，不入 git。缺了就明说该跑什么，而不是让用户
+      // 打开一个 503 页面自己猜（API 这时是好的，只有 UI 没有）。
+      if (!existsSync(join(DEFAULT_FRONTEND_DIR, "index.html"))) {
+        console.log("⚠️  工作台前端尚未构建，Web UI 不可用（API 正常）。先跑一次：bun run build:web");
+      }
       const server = startServer(port);
       console.log(`Spark Research server listening at http://127.0.0.1:${server.port}`);
       console.log("Press Ctrl+C to stop");

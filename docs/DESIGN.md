@@ -244,6 +244,14 @@ Record 类型：
 - 项目时间线视图（前端）：按时间/类型过滤的 record 流
 - 导出：Markdown 研究报告（按证据图组织：问题 → 思路 → 实验 → 结论，每条带证据链接）；后续可加 PDF
 
+P7 落地口径：
+- 时间线端点 `GET /api/records`，过滤维度 `type`（多选）/ `evidence` / `session` / `since` / `until`，
+  分页 `limit` + `offset`。过滤谓词在 `RecordStore` 里抽成单一真源，`list()` 与 `count()` 共用——
+  否则「这一页」与「总数」两套口径，翻页时总数会自相矛盾
+- 证据子图 `GET /api/records/:id/graph?depth`（1-5），前端用**确定性环形布局**渲染：
+  力导向每次打开长得不一样、截图对不上，不适合做审计用的图
+- record 详情附带 artifact 内容（AD-3 的 id 互链在 API 层一次取到）
+
 ### 域 D：创新性验证与梳理
 
 **D1 Novelty check pipeline**
@@ -297,6 +305,7 @@ P4 落地口径：
 ┌────────────────────────────────────────────────────────────┐
 │  界面层                                                      │
 │  CLI（完整功能）· Web 工作台（项目导航+会话+时间线+实验面板）    │
+│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 是它的投影）     │
 ├────────────────────────────────────────────────────────────┤
 │  Agent 层（TypeScript）                                      │
 │  research agent（唯一用户可见）                               │
@@ -332,8 +341,8 @@ P4 落地口径：
 | AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致。P1 落地：`records.artifact_id` → `artifacts.id`，且 `artifacts.project_slug` 指向真实 project |
 | AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
 | AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
-| AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批 |
-| AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影 |
+| AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
+| AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）

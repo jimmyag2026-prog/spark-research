@@ -1,126 +1,99 @@
 import { Hono } from "hono";
 import { file } from "bun";
-import { existsSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
-import { OrchestratorAgent } from "../agents/orchestrator";
-import { SparkResearchDaemon } from "../daemon/daemon";
-import { ArtifactStore } from "../artifacts/store";
-import { ConnectorRegistry } from "../connectors/registry";
-import { LabSafetyGate, LabOrchestrator } from "../lab/orchestrator";
 import { ProtocolCompiler, validateProtocol } from "../lab/protocol";
 import type { Protocol } from "../lab/protocol";
-import {
-  OPENTRONS_LIQUID_HANDLER,
-  THERMAL_SHAKER,
-  PLATE_READER,
-  CENTRIFUGE,
-} from "../lab/devices";
-import type {
-  ArtifactListResponse,
-  ChatRequest,
-  ChatResponse,
-  LineageResponse,
-} from "./types";
+import { LabSafetyGate } from "../lab/orchestrator";
+import { HttpError, ServerContext, type ServerDeps } from "./context";
+import { experimentRoutes } from "./routes/experiments";
+import { ideationRoutes } from "./routes/ideation";
+import { labRoutes } from "./routes/lab";
+import { literatureRoutes } from "./routes/literature";
+import { artifactRoutes, recordRoutes } from "./routes/records";
+import { sessionRoutes, taskRoutes } from "./routes/session";
+import { projectRoutes } from "./routes/projects";
+import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 
-export interface ServerDeps {
-  agent?: OrchestratorAgent;
-  connectors?: ConnectorRegistry;
-  lab?: LabOrchestrator;
-  store?: ArtifactStore;
-}
+export type { ServerDeps } from "./context";
 
-const FRONTEND_DIR = join(import.meta.dir, "../../../frontend/workspace");
+// SolidJS 工作台的构建产物目录。构建产物不入 git（纪律），所以运行时可能不存在——
+// 那种情况下 API 照常工作，UI 路径返回一页带构建指引的 503，而不是一个空白 200。
+export const DEFAULT_FRONTEND_DIR = join(import.meta.dir, "../../../frontend/workspace/dist");
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".map": "application/json; charset=utf-8",
 };
 
-function safeResolve(base: string, rel: string): string {
+const NOT_BUILT_HTML = `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>Spark Research · 工作台未构建</title>
+<style>body{font:15px/1.7 ui-sans-serif,system-ui,sans-serif;max-width:44rem;margin:12vh auto;padding:0 1.5rem;color:#1c1c1f}
+code{background:#f2f2f4;padding:.15em .4em;border-radius:.3em}
+@media(prefers-color-scheme:dark){body{background:#111113;color:#e8e8ea}code{background:#232326}}</style>
+</head><body>
+<h1>工作台前端还没有构建</h1>
+<p>API 已经在跑（试试 <code>/api/health</code>）。前端构建产物不入 git，需要本地构建一次：</p>
+<pre><code>bun install
+bun run build:web</code></pre>
+<p>构建完刷新本页即可。</p>
+</body></html>`;
+
+function safeResolve(base: string, rel: string): string | null {
+  // 逐段过滤掉 `.` 与 `..`：不给任何拼出上级目录的机会。
   const clean = rel.split("/").filter((p) => p && p !== "." && p !== "..").join("/");
+  if (!clean) return null;
   const resolved = join(base, clean);
-  return resolved.startsWith(base) ? resolved : base;
+  return resolved.startsWith(base) ? resolved : null;
 }
 
-function serveFile(relative: string): Response {
-  const path = safeResolve(FRONTEND_DIR, relative);
-  if (!existsSync(path)) {
-    return new Response("Not Found", { status: 404 });
-  }
+function serveFile(dir: string, relative: string): Response | null {
+  const path = safeResolve(dir, relative);
+  if (!path || !existsSync(path)) return null;
   const mime = MIME_TYPES[extname(path).toLowerCase()] ?? "application/octet-stream";
   return new Response(file(path), { headers: { "Content-Type": mime } });
 }
 
-function resolveStore(explicit?: ArtifactStore): () => ArtifactStore | undefined {
-  let cached: ArtifactStore | undefined = explicit;
-  return () => {
-    if (cached) return cached;
-    try {
-      const base = process.env.SPARK_RESEARCH_DATA_DIR ?? join(homedir(), ".spark-research");
-      mkdirSync(base, { recursive: true });
-      cached = new ArtifactStore(join(base, "artifacts.db"), join(base, "artifacts"));
-    } catch {
-      cached = undefined;
-    }
-    return cached;
-  };
-}
-
 export function createApp(deps: ServerDeps = {}): Hono {
   const app = new Hono();
-  const agent = deps.agent ?? new OrchestratorAgent(new SparkResearchDaemon());
-  const connectors = deps.connectors ?? new ConnectorRegistry().registerBuiltins();
-  const lab =
-    deps.lab ??
-    (() => {
-      const o = new LabOrchestrator(new LabSafetyGate());
-      o.registerDevice(OPENTRONS_LIQUID_HANDLER);
-      o.registerDevice(THERMAL_SHAKER);
-      o.registerDevice(PLATE_READER);
-      o.registerDevice(CENTRIFUGE);
-      return o;
-    })();
+  const ctx = new ServerContext(deps);
+  const frontendDir = deps.frontendDir ?? DEFAULT_FRONTEND_DIR;
   const compiler = new ProtocolCompiler();
   const safetyGate = new LabSafetyGate();
-  const store = resolveStore(deps.store);
 
-  app.get("/api/health", (c) =>
-    c.json({ status: "ok", service: "spark-research", version: "0.1.0" }),
-  );
+  // 统一错误出口：HttpError 带自己的状态码，其余一律 500 且不外泄堆栈。
+  app.onError((error, c) => {
+    if (error instanceof HttpError) {
+      return c.json({ error: error.message, detail: error.detail ?? undefined }, error.status as 400);
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return c.json({ error: message }, 500);
+  });
 
-  app.get("/", () => serveFile("index.html"));
+  // ── v0.1 既有端点（保持不变） ───────────────────────────────────────────────
 
-  app.get("/workspace/*", (c) => serveFile(c.req.path.replace(/^\/workspace\//, "")));
+  app.get("/api/health", (c) => c.json({ status: "ok", service: "spark-research", version: "0.2.0" }));
 
-  app.get("/api/connectors", (c) => c.json({ connectors: connectors.listAll() }));
+  app.get("/api/connectors", (c) => c.json({ connectors: ctx.connectors.listAll() }));
 
   app.post("/api/chat", async (c) => {
     const req = await c.req.json<ChatRequest>();
-    const result = await agent.chat(req);
+    const result = await ctx.agent.chat(req);
     return c.json(result satisfies ChatResponse);
   });
 
-  app.get("/api/artifacts/:sessionId", (c) => {
-    const sessionId = c.req.param("sessionId");
-    const artifacts = store()?.listBySession(sessionId) ?? [];
-    return c.json({ artifacts } satisfies ArtifactListResponse);
-  });
+  app.get("/api/lab/devices", (c) => c.json({ devices: ctx.lab.listDevices() }));
 
-  app.get("/api/lineage/:versionId", (c) => {
-    const versionId = c.req.param("versionId");
-    const graph =
-      store()?.getLineageGraph(versionId) ?? { versionId, nodes: [], edges: [] };
-    return c.json({ graph } satisfies LineageResponse);
-  });
-
-  app.get("/api/lab/devices", (c) => c.json({ devices: lab.listDevices() }));
-
+  // 协议编译预览：不建 record、不落库，纯粹给 UI 「先看看会编译成什么」。
   app.post("/api/lab/protocol", async (c) => {
     const body = await c.req.json<{ name?: string; text?: string }>();
     const text = body?.text;
@@ -131,11 +104,64 @@ export function createApp(deps: ServerDeps = {}): Hono {
     const validation = validateProtocol(protocol);
     const safety = safetyGate.checkProtocol(protocol);
     const compiled: Protocol = { ...protocol, safetyChecks: safety.checks };
-    return c.json({
-      protocol: compiled,
-      valid: validation.valid && safety.passed,
-      validation,
-      safety,
+    return c.json({ protocol: compiled, valid: validation.valid && safety.passed, validation, safety });
+  });
+
+  // ── P7 域端点 ──────────────────────────────────────────────────────────────
+
+  app.route("/api/projects", projectRoutes(ctx));
+  app.route("/api/lit", literatureRoutes(ctx));
+  app.route("/api/ideas", ideationRoutes(ctx));
+  app.route("/api/experiments", experimentRoutes(ctx));
+  app.route("/api/lab", labRoutes(ctx));
+  app.route("/api/records", recordRoutes(ctx));
+  app.route("/api/session", sessionRoutes(ctx));
+  app.route("/api/tasks", taskRoutes(ctx));
+
+  // v0.1 遗留：按 session 取 artifact / 取 lineage。新代码用 /api/artifacts?session=。
+  app.get("/api/artifacts/:sessionId", async (c) => {
+    const sessionId = c.req.param("sessionId");
+    // `version` 是新端点的前缀段，交给 artifactRoutes 处理。
+    if (sessionId === "version") return c.notFound();
+    const explicit = deps.store;
+    if (explicit) {
+      return c.json({ artifacts: explicit.listBySession(sessionId) } satisfies ArtifactListResponse);
+    }
+    const slug = ctx.projects.sessionProjectSlug(sessionId);
+    return ctx.withProject(slug ?? undefined, (scope) =>
+      c.json({ artifacts: scope.project.artifacts().listBySession(sessionId) } satisfies ArtifactListResponse),
+    );
+  });
+
+  app.route("/api/artifacts", artifactRoutes(ctx));
+
+  app.get("/api/lineage/:versionId", async (c) => {
+    const versionId = c.req.param("versionId");
+    const explicit = deps.store;
+    if (explicit) {
+      return c.json({ graph: explicit.getLineageGraph(versionId) } satisfies LineageResponse);
+    }
+    return ctx.withProject(undefined, (scope) =>
+      c.json({ graph: scope.project.artifacts().getLineageGraph(versionId) } satisfies LineageResponse),
+    );
+  });
+
+  // 未命中的 /api/* 一律 404 JSON（不能掉进 SPA 兜底，否则前端会把 HTML 当 JSON 解析）。
+  app.all("/api/*", (c) => c.json({ error: `未知端点 ${c.req.path}` }, 404));
+
+  // ── 静态资源与 SPA 兜底 ────────────────────────────────────────────────────
+
+  app.get("*", (c) => {
+    const path = c.req.path;
+    const asset = path === "/" ? null : serveFile(frontendDir, path.slice(1));
+    if (asset) return asset;
+    // 带扩展名却没找到 = 资源缺失，报 404；不带扩展名 = 前端路由，回 index.html。
+    if (path !== "/" && extname(path) !== "") return c.notFound();
+    const index = serveFile(frontendDir, "index.html");
+    if (index) return index;
+    return new Response(NOT_BUILT_HTML, {
+      status: 503,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   });
 

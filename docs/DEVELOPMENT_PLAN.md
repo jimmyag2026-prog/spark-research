@@ -13,7 +13,9 @@
 4. **凭据纪律**：任何凭据不进 repo/prompt/日志；新增文件 commit 前跑密钥 grep。
 5. **模型分工**：设计与验收评审用 Fable 5（主会话）；实现类任务可委派 Opus 5 子代理，子代理产出必须经主会话审查 + 测试验证后才 merge。
 6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
-7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时，用 `git worktree add ~/Desktop/spark-research-<topic>` 隔离，或等子代理收尾。事故记录见 devlog P6。
+7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
+8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
+9. **阶段性成果及时保存**（P7 后新增，用户要求）：每完成一个逻辑块就 commit **并 push feature 分支**到远端。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
 
 ---
 

@@ -24,6 +24,13 @@ export class FakeLlm {
     this.queue = [...responses];
   }
 
+  // 把一条回答插到队首：**下一次**调用返回它，之后回到原来的队列。
+  // P7 用它来「先跑精读卡拿到真实 bibtex key，再决定综述正文引哪些 key」——
+  // 构造时还不知道 key，硬编码就等于把 key 生成规则复制一份到测试里。
+  queueNext(response: string | { ok: false; content: string }): void {
+    this.queue.unshift(response);
+  }
+
   call = async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
     this.calls.push({ messages, model });
     const next = this.queue.length > 1 ? this.queue.shift()! : (this.queue[0] ?? "");
