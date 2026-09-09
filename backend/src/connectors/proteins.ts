@@ -1,6 +1,6 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 
-export const uniprotConfig: MCPConnectorConfig = {
+export const uniprotConfig: HttpConnectorConfig = {
   baseUrl: "https://rest.uniprot.org",
   description: "UniProt 蛋白质序列与功能注释数据库",
   tools: [
@@ -11,13 +11,13 @@ export const uniprotConfig: MCPConnectorConfig = {
   metadata: { domain: "uniprot.org", apiKeyRequired: false, status: "available" },
 };
 
-export class UniProtConnector extends MCPConnector {
+export class UniProtConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("uniprot", uniprotConfig, options);
   }
 }
 
-export const pdbConfig: MCPConnectorConfig = {
+export const pdbConfig: HttpConnectorConfig = {
   baseUrl: "https://data.rcsb.org/rest/v1",
   description: "RCSB Protein Data Bank 蛋白质结构数据库",
   tools: [
@@ -29,7 +29,7 @@ export const pdbConfig: MCPConnectorConfig = {
   metadata: { domain: "rcsb.org", apiKeyRequired: false, status: "available" },
 };
 
-export class PDBConnector extends MCPConnector {
+export class PDBConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pdb", pdbConfig, options);
   }

@@ -1,4 +1,4 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 import { politeHeaders } from "./politeness";
 
 // AMiner 开放平台 connector（DESIGN §2.3 / AD-2：唯一带凭据的文献源）。
@@ -16,7 +16,7 @@ import { politeHeaders } from "./politeness";
 export const AMINER_CONNECTOR_ID = "aminer";
 export const AMINER_CREDENTIAL_KEY = "api_key";
 
-export const aminerConfig: MCPConnectorConfig = {
+export const aminerConfig: HttpConnectorConfig = {
   baseUrl: "https://datacenter.aminer.cn/gateway/open_platform/api",
   description: "AMiner 开放平台（学术大数据；需 API Key，凭据只在 daemon 内取用）",
   tools: [
@@ -72,7 +72,7 @@ export function isCredentialMissing(value: unknown): value is CredentialMissingR
   );
 }
 
-export class AMinerConnector extends MCPConnector {
+export class AMinerConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super(AMINER_CONNECTOR_ID, aminerConfig, options);
   }

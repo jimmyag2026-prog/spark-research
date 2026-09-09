@@ -1,6 +1,6 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 
-export const ensemblConfig: MCPConnectorConfig = {
+export const ensemblConfig: HttpConnectorConfig = {
   baseUrl: "https://rest.ensembl.org",
   description: "Ensembl 基因组数据库（EMBL-EBI）",
   tools: [
@@ -11,7 +11,7 @@ export const ensemblConfig: MCPConnectorConfig = {
   metadata: { domain: "ensembl.org", apiKeyRequired: false, status: "available" },
 };
 
-export class EnsemblConnector extends MCPConnector {
+export class EnsemblConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("ensembl", ensemblConfig, options);
   }
@@ -24,7 +24,7 @@ export class EnsemblConnector extends MCPConnector {
   }
 }
 
-export const ncbiConfig: MCPConnectorConfig = {
+export const ncbiConfig: HttpConnectorConfig = {
   baseUrl: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
   description: "NCBI E-utilities（GenBank 等序列数据）",
   tools: [
@@ -35,7 +35,7 @@ export const ncbiConfig: MCPConnectorConfig = {
   metadata: { domain: "ncbi.nlm.nih.gov", apiKeyRequired: false, status: "available" },
 };
 
-export class NCBIConnector extends MCPConnector {
+export class NCBIConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("ncbi", ncbiConfig, options);
   }

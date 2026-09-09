@@ -90,7 +90,7 @@ export function planScaffold(
         ),
         followUp: [
           `在 backend/src/connectors/registry.ts 的 BUILTIN_CONNECTORS 里按域加一条 { name: "${name}", config: ${name.replace(/-/g, "")}Config }`,
-          `并在 CONNECTOR_CLASSES 里登记 ${name}: ${className}Connector（否则会退化成不带自定义头的通用 MCPConnector）`,
+          `并在 CONNECTOR_CLASSES 里登记 ${name}: ${className}Connector（否则会退化成不带自定义头的通用 HttpConnector）`,
           ...(options.withCredentials
             ? [
                 `配置凭据：凭据以 connector id '${name}' 为键存进 ~/.spark-research/credentials.json（0600），值本体永不出 daemon`,

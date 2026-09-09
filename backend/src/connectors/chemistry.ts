@@ -1,6 +1,6 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 
-export const chemblConfig: MCPConnectorConfig = {
+export const chemblConfig: HttpConnectorConfig = {
   baseUrl: "https://www.ebi.ac.uk/chembl/api/data",
   description: "ChEMBL 生物活性化合物数据库",
   tools: [
@@ -10,7 +10,7 @@ export const chemblConfig: MCPConnectorConfig = {
   metadata: { domain: "ebi.ac.uk/chembl", apiKeyRequired: false, status: "available" },
 };
 
-export class ChemBLConnector extends MCPConnector {
+export class ChemBLConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("chembl", chemblConfig, options);
   }
@@ -26,7 +26,7 @@ export class ChemBLConnector extends MCPConnector {
   }
 }
 
-export const pubchemConfig: MCPConnectorConfig = {
+export const pubchemConfig: HttpConnectorConfig = {
   baseUrl: "https://pubchem.ncbi.nlm.nih.gov/rest/pug",
   description: "PubChem 化合物数据库",
   tools: [
@@ -36,7 +36,7 @@ export const pubchemConfig: MCPConnectorConfig = {
   metadata: { domain: "pubchem.ncbi.nlm.nih.gov", apiKeyRequired: false, status: "available" },
 };
 
-export class PubChemConnector extends MCPConnector {
+export class PubChemConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pubchem", pubchemConfig, options);
   }

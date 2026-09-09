@@ -89,7 +89,7 @@ class DefaultCompute implements ComputeService {
   }
 }
 
-class DefaultMCPConnector {
+class DefaultHttpConnector {
   private servers = new Map<string, Record<string, (a: any) => any>>([
     ["math", {
       add: (a: any) => (a.a ?? 0) + (a.b ?? 0),
@@ -106,9 +106,9 @@ class DefaultMCPConnector {
   }
 }
 
-class RealMCPConnector {
+class RealHttpConnector {
   private registry: ConnectorRegistry;
-  private builtin = new DefaultMCPConnector();
+  private builtin = new DefaultHttpConnector();
 
   constructor(registry?: ConnectorRegistry) {
     this.registry = registry ?? new ConnectorRegistry().registerBuiltins();
@@ -164,7 +164,7 @@ export class SparkResearchDaemon {
     this.lineage = deps.lineage ?? new DefaultLineage();
     this.executionLog = deps.executionLog ?? new DefaultExecutionLog();
     this.compute = deps.compute ?? new DefaultCompute();
-    this.connectors = deps.connectors ?? { mcp: new RealMCPConnector() };
+    this.connectors = deps.connectors ?? { mcp: new RealHttpConnector() };
     this.skills = deps.skills ?? new DefaultSkills();
     this.llm = deps.llm ?? new DefaultLLM();
     this.credentials = deps.credentials ?? new CredentialStore();

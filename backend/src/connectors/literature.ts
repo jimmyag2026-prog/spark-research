@@ -1,7 +1,7 @@
-import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "./base";
+import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 import { politeHeaders } from "./politeness";
 
-export const pubmedConfig: MCPConnectorConfig = {
+export const pubmedConfig: HttpConnectorConfig = {
   baseUrl: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
   description: "PubMed 生物医学文献数据库（NCBI E-utilities）",
   tools: [
@@ -11,7 +11,7 @@ export const pubmedConfig: MCPConnectorConfig = {
   metadata: { domain: "ncbi.nlm.nih.gov", apiKeyRequired: false, status: "available" },
 };
 
-export class PubMedConnector extends MCPConnector {
+export class PubMedConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pubmed", pubmedConfig, options);
   }
@@ -39,7 +39,7 @@ export class PubMedConnector extends MCPConnector {
   }
 }
 
-export const arxivConfig: MCPConnectorConfig = {
+export const arxivConfig: HttpConnectorConfig = {
   baseUrl: "https://export.arxiv.org/api",
   description: "arXiv 预印本数据库",
   tools: [
@@ -49,7 +49,7 @@ export const arxivConfig: MCPConnectorConfig = {
   metadata: { domain: "arxiv.org", apiKeyRequired: false, status: "available" },
 };
 
-export class arXivConnector extends MCPConnector {
+export class arXivConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("arxiv", arxivConfig, options);
   }
@@ -102,7 +102,7 @@ export const OPENALEX_SELECT = [
   "referenced_works",
 ].join(",");
 
-export const openalexConfig: MCPConnectorConfig = {
+export const openalexConfig: HttpConnectorConfig = {
   baseUrl: "https://api.openalex.org",
   description: "OpenAlex 开放学术图谱（作品/作者/机构，免 key，支持 polite pool）",
   tools: [
@@ -113,7 +113,7 @@ export const openalexConfig: MCPConnectorConfig = {
   metadata: { domain: "api.openalex.org", apiKeyRequired: false, status: "available" },
 };
 
-export class OpenAlexConnector extends MCPConnector {
+export class OpenAlexConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("openalex", openalexConfig, options);
   }
@@ -155,7 +155,7 @@ export class OpenAlexConnector extends MCPConnector {
   }
 }
 
-export const crossrefConfig: MCPConnectorConfig = {
+export const crossrefConfig: HttpConnectorConfig = {
   baseUrl: "https://api.crossref.org",
   description: "CrossRef DOI 注册元数据（免 key，mailto 进 polite pool）",
   tools: [
@@ -165,7 +165,7 @@ export const crossrefConfig: MCPConnectorConfig = {
   metadata: { domain: "api.crossref.org", apiKeyRequired: false, status: "available" },
 };
 
-export class CrossRefConnector extends MCPConnector {
+export class CrossRefConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("crossref", crossrefConfig, options);
   }
@@ -198,7 +198,7 @@ export class CrossRefConnector extends MCPConnector {
   }
 }
 
-export const europepmcConfig: MCPConnectorConfig = {
+export const europepmcConfig: HttpConnectorConfig = {
   baseUrl: "https://www.ebi.ac.uk/europepmc/webservices/rest",
   description: "Europe PMC 生命科学文献（免 key，含 OA 全文链接）",
   tools: [
@@ -217,7 +217,7 @@ export function europePmcIdQuery(raw: string): string {
   return `DOI:"${doi}"`;
 }
 
-export class EuropePMCConnector extends MCPConnector {
+export class EuropePMCConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("europepmc", europepmcConfig, options);
   }
@@ -257,7 +257,7 @@ export class EuropePMCConnector extends MCPConnector {
 export const S2_FIELDS =
   "paperId,externalIds,title,abstract,year,venue,publicationVenue,authors,openAccessPdf,citationCount,referenceCount,url,isOpenAccess";
 
-export const semanticscholarConfig: MCPConnectorConfig = {
+export const semanticscholarConfig: HttpConnectorConfig = {
   baseUrl: "https://api.semanticscholar.org/graph/v1",
   description: "Semantic Scholar 学术图谱（免 key；无 key 时共享公共限流额度）",
   tools: [
@@ -283,7 +283,7 @@ export function semanticScholarPaperId(raw: string): string {
   return id;
 }
 
-export class SemanticScholarConnector extends MCPConnector {
+export class SemanticScholarConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("semanticscholar", semanticscholarConfig, options);
   }

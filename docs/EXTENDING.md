@@ -112,7 +112,7 @@ Connector 是**幂等的数据读取**：给定参数返回数据，没有生命
 
 契约只有三件事（基类 `backend/src/connectors/base.ts` 把 HTTP 调用、路径参数替换、错误处理都做完了）：
 
-1. 一份 `MCPConnectorConfig`：`baseUrl` + `tools[]` + `metadata`
+1. 一份 `HttpConnectorConfig`：`baseUrl` + `tools[]` + `metadata`
 2. 可选覆写 `headersFor(toolName)` / `queryFor(toolName)`：礼貌头、鉴权头、`mailto`
 3. 可选覆写与 tool 同名的方法：需要自定义解析或降级时
 
@@ -128,7 +128,7 @@ Connector 是**幂等的数据读取**：给定参数返回数据，没有生命
 
 `caveat` 值得单独说：Semantic Scholar 的 `apiKeyRequired` 是 `false`，但 P2 实测匿名请求持续 429（7 次尝试全挂）。这种「能调但会撞墙」的事实必须让使用者在选源之前就看到，所以它是元数据的一部分，会原样出现在 `capabilities` 输出里。
 
-> ⚠️ 命名历史包袱：基类叫 `MCPConnector`，但它与 Model Context Protocol **毫无关系**，是一个普通的 HTTP 客户端基类（名字来自 v0.1 的早期设想）。真正的 MCP 实现在 `backend/src/mcp/`。v0.3 会把它改名为 `HttpConnector` 并保留别名，见 BACKLOG V15。
+> ⚠️ **命名历史包袱已在 P9 修正**：基类原名 `MCPConnector`，但它与 Model Context Protocol 毫无关系——名字来自 v0.1 的早期设想（那时打算让每个数据源都是一个 MCP server）。真正的 MCP 实现在 `backend/src/mcp/`。两个东西同名会让读者以为 connector 层在说 MCP 协议，所以在 v0.2.0 把公开 API 定下来**之前**改名为 `HttpConnector` / `HttpConnectorConfig` / `HttpTool`。旧名保留为 deprecated 别名，外部代码不会断；仓库内部一律用新名。
 
 ### 最小可运行示例（免 key）
 
@@ -139,7 +139,7 @@ spark-research new connector openfree
 核心就这么点：
 
 ```ts
-export const openfreeConfig: MCPConnectorConfig = {
+export const openfreeConfig: HttpConnectorConfig = {
   baseUrl: "https://api.example.org/v1",
   description: "（一句话说清覆盖什么、不覆盖什么）",
   tools: [
@@ -149,7 +149,7 @@ export const openfreeConfig: MCPConnectorConfig = {
   metadata: { domain: "api.example.org", apiKeyRequired: false, status: "available" },
 };
 
-export class OpenfreeConnector extends MCPConnector {
+export class OpenfreeConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("openfree", openfreeConfig, options);
   }
@@ -224,7 +224,7 @@ tests/unit/connector_<name>.test.ts              契约测试
 tests/fixtures/<domain>/<cassette>.json          真实响应录制（可选）
 ```
 
-注册两处（漏了第二处会静默退化成不带自定义头的通用 `MCPConnector`）：
+注册两处（漏了第二处会静默退化成不带自定义头的通用 `HttpConnector`）：
 
 - `backend/src/connectors/registry.ts` 的 `BUILTIN_CONNECTORS`：按域加 `{ name, config }`
 - 同文件的 `CONNECTOR_CLASSES`：加 `name: YourConnector`

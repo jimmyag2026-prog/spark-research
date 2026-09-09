@@ -180,18 +180,18 @@ export function connectorTemplate(ctx: TemplateContext, options: { withCredentia
   return [
     {
       path: `${ctx.targetDir}/${ctx.name}.ts`,
-      content: `import { MCPConnector, type ConnectorOptions, type MCPConnectorConfig } from "${baseRel}";
+      content: `import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "${baseRel}";
 import { politeHeaders } from "${politenessRel}";
 
 // ${ctx.name} connector。
 //
 // 契约只有三件事：
-//   1. 一份 MCPConnectorConfig（baseUrl + tools + metadata）
+//   1. 一份 HttpConnectorConfig（baseUrl + tools + metadata）
 //   2. 可选的 headersFor / queryFor 覆写（礼貌头、鉴权头、mailto）
 //   3. 可选的与 tool 同名的方法覆写（需要自定义解析时）
 // 除此之外什么都不用做——HTTP 调用、路径参数替换、错误处理都在基类里。
 
-export const ${ctx.name.replace(/-/g, "")}Config: MCPConnectorConfig = {
+export const ${ctx.name.replace(/-/g, "")}Config: HttpConnectorConfig = {
   baseUrl: "https://api.example.org/v1",
   description: "（一句话说清这个源覆盖什么、有什么不覆盖）",
   tools: [
@@ -217,7 +217,7 @@ export const ${ctx.name.replace(/-/g, "")}Config: MCPConnectorConfig = {
   },
 };
 
-export class ${ctx.className}Connector extends MCPConnector {
+export class ${ctx.className}Connector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("${ctx.name}", ${ctx.name.replace(/-/g, "")}Config, options);
   }
@@ -438,6 +438,12 @@ import time
 from pathlib import Path
 
 
+def wall_seconds(started: float) -> float:
+    """墙钟耗时。**下限 1 µs**：秒级以下的算例四舍五入成 0.0 会让
+    「跑过」与「没跑」在下游看起来一样，契约测试也会因此变成 flaky。"""
+    return round(max(time.time() - started, 1e-6), 6)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--params", required=True)
@@ -479,7 +485,7 @@ def main() -> int:
             "status": "completed",
             "startedAt": started_iso,
             "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "wallSeconds": round(time.time() - started, 3),
+            "wallSeconds": wall_seconds(started),
             "summary": {"steps": steps, "final": round(value, 6)},
             "files": [
                 {"filename": "series.csv", "role": "data"},
@@ -493,7 +499,7 @@ def main() -> int:
             "error": f"{type(exc).__name__}: {exc}",
             "startedAt": started_iso,
             "finishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "wallSeconds": round(time.time() - started, 3),
+            "wallSeconds": wall_seconds(started),
         }
 
     # 原子写：先写临时文件再 rename，避免 poll 读到半个 JSON。

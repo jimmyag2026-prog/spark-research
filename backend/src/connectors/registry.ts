@@ -1,9 +1,9 @@
 import {
-  MCPConnector,
+  HttpConnector,
   type ConnectorMetadata,
   type ConnectorOptions,
-  type MCPConnectorConfig,
-  type MCPTool,
+  type HttpConnectorConfig,
+  type HttpTool,
 } from "./base";
 import { PDBConnector, UniProtConnector, pdbConfig, uniprotConfig } from "./proteins";
 import {
@@ -25,7 +25,7 @@ import { CNCBConnector, CNKIConnector, WanFangConnector, cncbConfig, cnkiConfig,
 import { EnsemblConnector, NCBIConnector, ensemblConfig, ncbiConfig } from "./genomics";
 import { ChemBLConnector, PubChemConnector, chemblConfig, pubchemConfig } from "./chemistry";
 
-const alphafoldConfig: MCPConnectorConfig = {
+const alphafoldConfig: HttpConnectorConfig = {
   baseUrl: "https://alphafold.ebi.ac.uk/api",
   description: "AlphaFold 蛋白质结构预测数据库（EMBL-EBI）",
   tools: [
@@ -35,7 +35,7 @@ const alphafoldConfig: MCPConnectorConfig = {
   metadata: { domain: "alphafold.ebi.ac.uk", apiKeyRequired: false, status: "available" },
 };
 
-export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: MCPConnectorConfig }>> = {
+export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: HttpConnectorConfig }>> = {
   proteins: [
     { name: "uniprot", config: uniprotConfig },
     { name: "pdb", config: pdbConfig },
@@ -63,7 +63,7 @@ export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: MC
   ],
 };
 
-const CONNECTOR_CLASSES: Record<string, new (options?: ConnectorOptions) => MCPConnector> = {
+const CONNECTOR_CLASSES: Record<string, new (options?: ConnectorOptions) => HttpConnector> = {
   uniprot: UniProtConnector,
   pdb: PDBConnector,
   pubmed: PubMedConnector,
@@ -83,7 +83,7 @@ const CONNECTOR_CLASSES: Record<string, new (options?: ConnectorOptions) => MCPC
 };
 
 export class ConnectorRegistry {
-  private connectors = new Map<string, MCPConnector>();
+  private connectors = new Map<string, HttpConnector>();
   private options: ConnectorOptions;
 
   // options 在这里注入一次，之后所有内置 connector 共用同一个 http / 凭据提供方。
@@ -98,20 +98,20 @@ export class ConnectorRegistry {
         const Cls = CONNECTOR_CLASSES[name];
         this.connectors.set(
           name,
-          Cls ? new Cls(this.options) : new MCPConnector(name, config, this.options),
+          Cls ? new Cls(this.options) : new HttpConnector(name, config, this.options),
         );
       }
     }
     return this;
   }
 
-  registerCustom(name: string, config: MCPConnectorConfig): MCPConnector {
-    const connector = new MCPConnector(name, config, this.options);
+  registerCustom(name: string, config: HttpConnectorConfig): HttpConnector {
+    const connector = new HttpConnector(name, config, this.options);
     this.connectors.set(name, connector);
     return connector;
   }
 
-  get(name: string): MCPConnector | undefined {
+  get(name: string): HttpConnector | undefined {
     return this.connectors.get(name);
   }
 
@@ -123,7 +123,7 @@ export class ConnectorRegistry {
     return connector.call(toolName, params);
   }
 
-  listTools(connectorName: string): MCPTool[] {
+  listTools(connectorName: string): HttpTool[] {
     const connector = this.connectors.get(connectorName);
     if (!connector) throw new Error(`Unknown connector "${connectorName}"`);
     return connector.listTools();
@@ -135,7 +135,7 @@ export class ConnectorRegistry {
     description: string;
     baseUrl: string;
     metadata: ConnectorMetadata | null;
-    tools: MCPTool[];
+    tools: HttpTool[];
   }> {
     return [...this.connectors.values()].map((connector) => ({
       name: connector.name,
@@ -147,9 +147,9 @@ export class ConnectorRegistry {
     }));
   }
 
-  listDomain(domain: string): MCPConnector[] {
+  listDomain(domain: string): HttpConnector[] {
     const names = (BUILTIN_CONNECTORS[domain] ?? []).map((d) => d.name);
-    return names.map((name) => this.connectors.get(name)).filter((c): c is MCPConnector => c !== undefined);
+    return names.map((name) => this.connectors.get(name)).filter((c): c is HttpConnector => c !== undefined);
   }
 
   private domainOf(name: string): string {
