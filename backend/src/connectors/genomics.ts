@@ -14,13 +14,14 @@ export const ensemblConfig: HttpConnectorConfig = {
 export class EnsemblConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("ensembl", ensemblConfig, options);
+    this.handle("search", (p) => this.search(p));
   }
 
   async search(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
     const mapped: Record<string, unknown> = { ...params };
     if (params.id !== undefined) mapped.id = params.id;
     mapped["content-type"] = "application/json";
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 }
 
@@ -38,6 +39,8 @@ export const ncbiConfig: HttpConnectorConfig = {
 export class NCBIConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("ncbi", ncbiConfig, options);
+    this.handle("search", (p) => this.search(p));
+    this.handle("getSummary", (p) => this.getSummary(p));
   }
 
   async search(params: { query?: string; db?: string; retmax?: number } & Record<string, unknown>): Promise<unknown> {
@@ -49,7 +52,7 @@ export class NCBIConnector extends HttpConnector {
     mapped.db ??= "nucleotide";
     mapped.retmode ??= "json";
     mapped.retmax ??= params.retmax ?? 10;
-    return super.call("search", mapped);
+    return this.requestRaw("search", mapped);
   }
 
   async getSummary(params: { id?: string | number; db?: string } & Record<string, unknown>): Promise<unknown> {
@@ -57,6 +60,6 @@ export class NCBIConnector extends HttpConnector {
     if (params.id !== undefined) mapped.id = params.id;
     mapped.db ??= "gene";
     mapped.retmode ??= "json";
-    return super.call("getSummary", mapped);
+    return this.requestRaw("getSummary", mapped);
   }
 }
