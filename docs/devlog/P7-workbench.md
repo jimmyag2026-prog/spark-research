@@ -408,3 +408,12 @@ a0adda4 test(e2e): Playwright 浏览器全流程 + UI↔CLI 行为对照
 ```
 
 分支已推到 `origin/feat/p7-workbench`，未建 PR（按纪律等主会话审查）。
+
+## 主会话验收批注（2026-09-09）
+
+- **R3 Markdown 渲染器（已当场补测）**：独立审计 `escapeHtml` 五字符全覆盖且 `&` 先行、**无链接渲染面**（故无 `javascript:` URL 注入）、引用 key 限定 `[A-Za-z0-9][A-Za-z0-9_\-:]*` 白名单字符集，设计正确。但此前**零测试**——补 `tests/unit/markdown_render.test.ts`（10 例：script 标签/事件处理器/javascript 链接/引号逃逸/二次转义/行内代码/畸形 key + 3 例正常功能）。将来若有人加链接渲染，`javascript:` 用例会立刻变红。
+- **R1 → BACKLOG V10**：HTTP 层拒绝 env 兜底的判断正确（服务进程的 OS 用户不是审批人）。但「谁自称就是谁」仅在单用户本地成立，多用户前必须换真实身份认证。
+- **R2 → BACKLOG V11**：长任务句柄不落盘可接受——P5 起「磁盘是状态真源」，任务句柄只是 HTTP 层便利，实验状态本身不丢且可 resume。
+- **SSE 是生命周期事件而非 token 流**：接受这个诚实的处理。把已完成正文切成假 token 是自欺，传输层已就位，等 orchestrator 真流式化再接。
+- **P7 环境事故**：任务书指定的 `~/Desktop/spark-research-p7` 在会话中途整体变为 EPERM（沙箱只放行 `~/Desktop/AI4S/` 子树），零 commit 状态下 server 层成果全部丢失并重做。处置：worktree 路径纪律改为 `~/Desktop/AI4S/<repo>-<topic>`（第 8 条），并新增「阶段性成果及时 commit+push」（第 9 条，用户要求）。旧目录已由主会话清除。
+- **Playwright 10/10 主会话独立复跑通过**，其覆盖范围（项目→检索→精读→综述→idea→novelty→干实验→湿实验审批→时间线）实际已是 DESIGN §7 判据 1 的浏览器版预演。
