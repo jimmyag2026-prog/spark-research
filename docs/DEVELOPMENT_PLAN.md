@@ -28,7 +28,8 @@ P4 Co-explore 与 Novelty ──► 域 A4 + 域 D
 P5 干实验闭环 ─────────────► 域 B1/B3 + 域 C 实验记录
 P6 湿实验模拟器 ───────────► 域 B2
 P7 前端工作台 ─────────────► 时间线 + 项目导航 + 实验面板升级
-P8 收口发布 v0.2 ──────────► 报告导出 + README + demo + 发布判据核验
+P8 功能收口 ───────────────► 报告导出 + README + P8-gate 清偿 + 判据核验
+P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabilities + MCP + 发布 v0.2.0
 ```
 
 依赖关系：P1 是所有阶段前置；P2→P3→P4 串行（同域递进）；P5、P6 可在 P1 后与文献域并行；P7 需要 P1-P5 的 API 稳定；P8 收口。
@@ -156,11 +157,39 @@ P8 收口发布 v0.2 ──────────► 报告导出 + README + d
 
 **验证**：§7 成功标准即验收清单——特别是那条完整研究线索的全流程演练（文献 → idea → novelty → 干实验 → 结论 → 报告），作为最终 e2e 保存为可重放脚本。
 
-**退出标准**：4 条判据全过；tag `v0.2.0` + GitHub Release。
+**退出标准**：4 条判据全过。（2026-09-09 修订：tag 与 Release 移至 P9 末尾——发布必须带完整的扩展性故事。）
 
----
+### P9 扩展面梳理与 LLM 友好化（2026-09-09 用户新增，发布前最后一阶段）
 
-## 三、测试策略汇总
+> 用户原话口径：梳理 skill / tool / connector 这些方便科研人员自己配置和修改的地方，并进行 LLM 友好的封装和适配。
+
+**范围**
+
+一、扩展面梳理（面向科研人员的自助配置）
+- `docs/EXTENDING.md`：六个扩展点各一节，每节 = 契约说明 + 最小可运行示例 + 测试方法 + 文件放置位置：
+  1. **Skill**（`backend/src/skills/<name>/SKILL.md`，规范化 frontmatter：name/description/triggers/所需 connector）
+  2. **Connector**（Connector 契约 + 凭据经 CredentialStore，AD-2；免 key 与带 key 两个示例）
+  3. **SimulationPlatform**（干实验平台，P5 契约测试套件直接复用作新平台的验收）
+  4. **WetLabBackend**（湿实验执行端；含 V6 施工说明：非 Opentrons 设备族需把设备语言编译下沉进 backend）
+  5. **安全门规则**（纯函数规则，加一条 = 一个函数 + 单测）
+  6. **Prompt 与模型路由**（agents/prompt/*.txt 双层结构 + 每子代理独立模型配置）
+- 脚手架：`spark-research new skill|connector|platform <name>` 生成带测试桩的模板
+- 用户配置面收口：`~/.spark-research/config.json` 统一登记（默认模型、politeness header 的 mailto、backend 选择），文档写清哪些能改、改了影响什么
+
+二、LLM 友好封装与适配
+- **能力自描述**：`spark-research capabilities --json` 输出机器可读清单（全部 connectors/platforms/backends/skills/安全规则 + 各自的输入 schema 与可用性状态）——agent 一次调用即可 introspect 整个工作台
+- **llms.txt + llms-full.txt**（对标 OpenScience docs 的做法）：纯文本全量文档，外部 LLM 可直接消化
+- **SKILL.md 规范化**：统一 frontmatter schema，校验进 CI；agent 按需加载（技能目录 = LLM 的操作手册，不预填 context）
+- **MCP server 模式**：`spark-research mcp` 把核心能力（lit search/library/idea/novelty/exp/lab/records）暴露为 MCP tools——任何外部 LLM agent（Claude Code、其他 MCP 客户端）可直接把 Spark Research 当科研工具箱接入。approve 类危险动作在 MCP 层保持人工确认语义
+- 工具描述打磨：每个 MCP tool / API 端点的 description 按「LLM 第一次见就会用」标准写（参数示例 + 常见错误 + 何时不该用）
+
+**验证**
+- EXTENDING.md 六节各带的最小示例真实可跑（CI 里跑通示例 skill/connector/规则各一个）
+- `capabilities --json` schema 校验 + 与实际注册表一致性测试（清单里的每一项真实存在）
+- MCP server：用 MCP 客户端真实连接跑通 lit search → idea → novelty 链路的 e2e；approve 动作在 MCP 层被要求确认的对抗测试
+- llms.txt 生成脚本幂等（文档变更后重新生成 diff 干净）
+
+**退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
 
 | 层 | 工具 | 网络 | 运行时机 |
 |----|------|------|---------|
