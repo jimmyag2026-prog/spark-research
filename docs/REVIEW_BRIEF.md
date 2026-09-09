@@ -180,7 +180,7 @@ Daemon    permit set · 凭据服务（唯一持凭据进程）· Project 管理
 ```bash
 git clone https://github.com/jimmyag2026-prog/spark-research && cd spark-research
 bun install && bun run typecheck
-bun test tests/unit/                       # 824 pass（17 skip：环境相关）
+bun test tests/unit/                       # 824 pass（没装 openmm 时其中 17 条整套 skip）
 .venv/bin/python -m pytest tests/ -q       # 48 passed（需先建 .venv 装 openmm/opentrons）
 bun run test:e2e                           # Playwright 12 pass（需 bunx playwright install chromium）
 bun run check:llms                         # llms.txt 是否与文档同步
