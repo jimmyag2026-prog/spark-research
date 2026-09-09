@@ -113,14 +113,14 @@ export function taskRoutes(ctx: ServerContext): Hono {
 
   app.get("/:id", (c) => {
     const task = ctx.tasks.get(c.req.param("id"));
-    if (!task) throw new HttpError(404, `task '${c.req.param("id")}' 不存在`);
+    if (!task) throw new HttpError(404, `task '${c.req.param("id")}' 不存在（任务句柄存在 server 进程内存里，只在本次连接/进程存活期间有效；若连接断过，干实验用 exp_list + exp_run --resume 接回，文献类长任务需重跑）`);
     return c.json({ task });
   });
 
   app.get("/:id/stream", (c) => {
     const id = c.req.param("id");
     const task = ctx.tasks.get(id);
-    if (!task) throw new HttpError(404, `task '${id}' 不存在`);
+    if (!task) throw new HttpError(404, `task '${id}' 不存在（任务句柄存在 server 进程内存里，只在本次连接/进程存活期间有效；若连接断过，干实验用 exp_list + exp_run --resume 接回，文献类长任务需重跑）`);
     return sseResponse(
       (sender) => {
         const forward = (event: TaskEvent) => {
@@ -132,7 +132,7 @@ export function taskRoutes(ctx: ServerContext): Hono {
         };
         const subscription = ctx.tasks.subscribe(id, forward);
         if (!subscription) {
-          sender.send("error", { message: `task '${id}' 不存在` });
+          sender.send("error", { message: `task '${id}' 不存在（任务句柄存在 server 进程内存里，只在本次连接/进程存活期间有效；若连接断过，干实验用 exp_list + exp_run --resume 接回，文献类长任务需重跑）` });
           sender.close();
           return;
         }

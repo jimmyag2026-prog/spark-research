@@ -227,14 +227,19 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 【参数示例】{"all": true, "tag": "background"} 批量精读某个标签下的全部论文；或 {"paperId": "a1b2c3d4"} 只精读一篇。
 【何时不该用】库里还没有论文时（先 lit_search --add）；只想看已有卡片时用 lit_list 的 readingCards。
 【典型链路】lit_search(add=true) → lit_read_cards(all=true) → lit_review_draft。
-【代价提示】每篇一次模型调用，20 篇就是 20 次——先用 tag 收窄范围。`,
+【代价提示】每篇一次模型调用，20 篇就是 20 次——先用 tag 收窄范围。
+【增量语义（v0.2.1）】all=true 批量精读**默认跳过已有精读卡的论文**：中途超时重跑不会把已读的重烧一遍模型调用。想强制重生成（换了模型或改了 prompt）传 redoRead=true；若目标全部已读会明确报「都已经有精读卡了」，不静默空跑。`,
     longRunning: true,
     inputSchema: {
       type: "object",
       properties: {
         paperId: str("单篇精读时给论文 id（支持前 8 位前缀）", "a1b2c3d4"),
-        all: { type: "boolean", description: "批量精读（与 tag 组合收窄范围）" },
+        all: { type: "boolean", description: "批量精读（与 tag 组合收窄范围）；默认跳过已有精读卡的论文" },
         tag: str("批量精读时按标签过滤", "background"),
+        redoRead: {
+          type: "boolean",
+          description: "强制重新生成已有精读卡的论文（默认 false：批量精读跳过已读，避免重试时重烧模型调用）",
+        },
         project: PROJECT_ARG,
       },
       additionalProperties: false,
@@ -290,6 +295,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
     description: `【何时调】用户抛出一个研究想法、想被挑毛病、想判断方向值不值得做时。这不是「附和式头脑风暴」：产出的 Idea 卡**强制**包含至少一条反对证据，每条观点要么给库内 bibtexKey，要么显式标 inferred。
 【参数示例】{"message": "我想用 MD 轨迹的互信息找 β2AR 的隐藏变构口袋，比序列共进化更直接", "persist": true}
 【何时不该用】① 文献库为空时先做检索——库空时返回体里 emptyLibrary=true，那一轮的观点全是推断，不要当成有文献支撑的判断。② 多轮讨论的中间轮用 persist=false，别把每一轮都落成一张卡。
+【读法】落库后返回体顶层有 ideaId（也可从 stored.recordId 取，两者相同），直接把它传给 idea_novelty_check 即可。
 【典型链路】lit_search(add=true) → idea_coexplore(persist=true) → idea_novelty_check。`,
     longRunning: true,
     inputSchema: {
@@ -385,7 +391,10 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 【参数示例】{"experimentId": "9c8b7a6d", "note": "第一轮基线"}；进程中断后重连用 {"experimentId": "9c8b7a6d", "resume": true}。
 【何时不该用】① 实验已经 concluded 时（状态机会拒绝）。② 想直接下结论时——conclude 参数只在这一轮确实得到结论时才给，别用它跳过分析。
 【典型链路】exp_design → exp_run → record_get（看 observation）→ 需要结论时 exp_run 的 conclude 参数或另起一轮。
-【超时行为】MD 任务可能跑几分钟。超过配置的等待上限会返回任务句柄，之后用 task_status 查——任务**仍在后台跑**，不会因为工具返回而中断。`,
+【超时行为】MD 任务可能跑几分钟。超过配置的等待上限会返回任务句柄，之后用 task_status 查。
+【句柄的有效范围（重要）】任务句柄存在 **server 进程内存里**，只在**当前这条 MCP 连接存活期间**有效。连接断开后 taskId 就查不到了。
+  但干实验的**状态真源在磁盘上**（AD-4）——所以新连接里用 exp_list 找到该实验，再 exp_run 带 resume 接回来即可，进度不会丢。
+【想避免超时】把等待上限调大：环境变量 SPARK_RESEARCH_MCP_TIMEOUT_MS=900000（毫秒），或 spark-research config set mcpTimeoutMs 900000。`,
     longRunning: true,
     inputSchema: {
       type: "object",
@@ -638,7 +647,11 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 【参数示例】{"taskId": "6d5e4f3a-..."}
 【何时不该用】工具已经返回了结果时——那就是终态，不必再查。
 【典型链路】exp_run（超时，返回 taskId）→ 等一会 → task_status → state=succeeded 时取 result。
-【提醒】超时返回句柄不代表任务被取消：任务在后台继续跑，实验状态的真源在磁盘上。`,
+【句柄的有效范围（重要）】taskId 存在 **server 进程内存里**，只在**当前这条 MCP 连接存活期间**有效——连接一断，句柄就查不到了（返回「task 不存在」）。这不代表任务被取消，而是句柄没了。
+【连接断了怎么办】分两种：
+  · **干实验（exp_run）**：状态真源在磁盘上，用 exp_list 找到实验后 exp_run 带 resume 接回，进度不丢。
+  · **文献/思路类长任务（lit_read_cards、lit_review_draft、idea_novelty_check）**：没有磁盘 checkpoint，连接断开后**任务确实会随进程一起结束**，已完成的部分（已落库的精读卡等）保留，未完成的需要重跑。
+【所以更该做的是别让它超时】调大等待上限 SPARK_RESEARCH_MCP_TIMEOUT_MS=900000，或缩小单次范围（如 lit_read_cards 用 tag 分批）。`,
     inputSchema: {
       type: "object",
       properties: { taskId: str("长任务句柄 id", "6d5e4f3a-1b2c-4d5e-8f90-1a2b3c4d5e6f") },
