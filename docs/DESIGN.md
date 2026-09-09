@@ -292,7 +292,7 @@ P4 落地口径：
 | AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
 | AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
 | AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批 |
-| AD-7 | 前端保持轻量 vanilla JS 到 P7，API 先行 | CLI/API 是能力真源，UI 是投影；避免过早绑定框架 |
+| AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影 |
 | AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）

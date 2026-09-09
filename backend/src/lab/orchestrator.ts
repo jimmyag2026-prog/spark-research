@@ -1,5 +1,14 @@
 import type { LabDevice, DeviceActionResult, DeviceDriver } from "./devices";
+import type { OpentronsProgram } from "./opentrons_protocol";
 import type { Protocol, ProtocolStep, SafetyCheckResult } from "./protocol";
+import {
+  CHEMICAL_COMPATIBILITY,
+  MAX_BIOSAFETY_LEVEL,
+  MAX_CONCENTRATION,
+  runSafetyRules,
+  SAFETY_RULES,
+  type SafetyReport,
+} from "./safety";
 
 export interface ExecutionLogEntry {
   timestamp: string;
@@ -12,10 +21,8 @@ export interface ExecutionLogEntry {
   data?: Record<string, unknown>;
 }
 
-export interface SafetyReport {
-  passed: boolean;
-  checks: SafetyCheckResult[];
-}
+export type { SafetyReport };
+export { SAFETY_RULES } from "./safety";
 
 export interface DryWetIteration {
   iteration: number;
@@ -38,78 +45,20 @@ export class LabSafetyError extends Error {
   }
 }
 
+// 安全门的**门面**。规则本体在 `safety.ts`（P6 起每条规则是独立可单测的纯函数）；
+// 这里只保留 v0.1 起就在的调用面与那三张表的静态引用，避免上游调用方改口径。
 export class LabSafetyGate {
-  static readonly MAX_CONCENTRATION: Record<string, number> = {
-    hypochlorite: 100,
-    ethanol: 95,
-    strong_acid: 200,
-  };
+  static readonly MAX_CONCENTRATION: Readonly<Record<string, number>> = MAX_CONCENTRATION;
+  static readonly CHEMICAL_COMPATIBILITY: Readonly<Record<string, readonly string[]>> =
+    CHEMICAL_COMPATIBILITY;
+  static readonly MAX_BIOSAFETY_LEVEL = MAX_BIOSAFETY_LEVEL;
+  static readonly RULES = SAFETY_RULES;
 
-  static readonly CHEMICAL_COMPATIBILITY: Record<string, string[]> = {
-    strong_acid: ["hypochlorite", "hydroxide"],
-    hypochlorite: ["strong_acid"],
-    hydroxide: ["strong_acid"],
-  };
-
-  static readonly MAX_BIOSAFETY_LEVEL = 2;
-
-  checkProtocol(protocol: Protocol): SafetyReport {
-    const checks: SafetyCheckResult[] = [];
-
-    const reagents = protocol.steps.flatMap((s) => {
-      const list = (s.params.reagents ?? []) as ReagentLike[];
-      return list.map((r) => ({ ...r, stepId: s.id }));
-    });
-
-    const incompatible: string[] = [];
-    for (let i = 0; i < reagents.length; i++) {
-      for (let j = i + 1; j < reagents.length; j++) {
-        const a = reagents[i];
-        const b = reagents[j];
-        if (!a.reagentId || !b.reagentId) continue;
-        const conflicts =
-          (LabSafetyGate.CHEMICAL_COMPATIBILITY[a.reagentId] ?? []).includes(b.reagentId) ||
-          (LabSafetyGate.CHEMICAL_COMPATIBILITY[b.reagentId] ?? []).includes(a.reagentId);
-        if (conflicts) incompatible.push(`${a.name} + ${b.name}`);
-      }
-    }
-    checks.push({
-      check: "chemical compatibility",
-      passed: incompatible.length === 0,
-      detail: incompatible.length ? `incompatible reagents: ${incompatible.join(", ")}` : undefined,
-    });
-
-    const overLimit = reagents.filter(
-      (r) =>
-        r.reagentId != null &&
-        r.concentration != null &&
-        (LabSafetyGate.MAX_CONCENTRATION[r.reagentId] ?? Infinity) < r.concentration,
-    );
-    checks.push({
-      check: "concentration limit",
-      passed: overLimit.length === 0,
-      detail: overLimit.length
-        ? `over-limit reagents: ${overLimit.map((r) => `${r.name} (${r.concentration})`).join(", ")}`
-        : undefined,
-    });
-
-    const biohazardous = protocol.steps.some(
-      (s) => Number(s.params.biosafetyLevel ?? 1) > LabSafetyGate.MAX_BIOSAFETY_LEVEL,
-    );
-    checks.push({
-      check: "biosafety",
-      passed: !biohazardous,
-      detail: biohazardous ? "biosafety level exceeds allowed maximum" : undefined,
-    });
-
-    return { passed: checks.every((c) => c.passed), checks };
+  // program 是可选的编译产物：给了就用真实 deck 体积核对孔板容量（规则 4），
+  // 不给就只核对协议声明的单次加液（detail 里明说没查什么，不静默放行）。
+  checkProtocol(protocol: Protocol, program?: OpentronsProgram | null): SafetyReport {
+    return runSafetyRules({ protocol, program: program ?? null });
   }
-}
-
-interface ReagentLike {
-  name: string;
-  reagentId?: string;
-  concentration?: number;
 }
 
 export class LabOrchestrator {
