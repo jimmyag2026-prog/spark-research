@@ -19,6 +19,7 @@ import { runReportCommand } from "./report/cli";
 import { runConfigCommand } from "./config/cli";
 import { applyConfigEnvDefaults } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
+import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
 
@@ -325,6 +326,11 @@ function main() {
     }
     case "config": {
       const code = runConfigCommand(process.argv.slice(3));
+      if (code !== 0) process.exitCode = code;
+      break;
+    }
+    case "new": {
+      const code = runNewCommand(process.argv.slice(3));
       if (code !== 0) process.exitCode = code;
       break;
     }

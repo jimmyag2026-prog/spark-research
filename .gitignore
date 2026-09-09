@@ -19,3 +19,6 @@ papers/
 # P7: Playwright 产物（trace/截图/报告）不入库
 test-results/
 playwright-report/
+
+# P9: 脚手架测试用的仓库内临时目录（生成物当场跑一遍后删除）
+.tmp-scaffold-*/
