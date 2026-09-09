@@ -187,14 +187,14 @@ export class OrchestratorAgent {
 
     const skills = this.identifySkills(userMessage);
     const skillContext = this.loadSkillContext(skills);
-    const plan = await this.plan(userMessage, skills, skillContext);
+    const plan = await this.plan(sessionId, userMessage, skills, skillContext);
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
       execution.push(await this.executeTask(sessionId, task));
     }
 
-    let summary = await this.summarize(userMessage, plan, execution);
+    let summary = await this.summarize(sessionId, userMessage, plan, execution);
     let review = await this.reviewSession(sessionId);
     let reviewRounds = 1;
 
@@ -205,7 +205,7 @@ export class OrchestratorAgent {
       for (const fix of fixes) {
         execution.push(await this.executeTask(sessionId, fix));
       }
-      summary = await this.summarize(userMessage, plan, execution);
+      summary = await this.summarize(sessionId, userMessage, plan, execution);
       review = await this.reviewSession(sessionId);
       reviewRounds++;
     }
@@ -266,6 +266,7 @@ export class OrchestratorAgent {
   }
 
   private async plan(
+    sessionId: string,
     userMessage: string,
     skills: string[],
     skillContext: Record<string, string>,
@@ -288,6 +289,16 @@ export class OrchestratorAgent {
       },
     ];
     const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    // D-4（战术版）：规划这一步的 LLM 调用失败时，`res.content` 是路由层拼出的错误
+    // 文本（例如 "[error] No API key configured..."），不是模型产出的 JSON 计划——
+    // 不检查 res.ok 就直接喂给 parsePlan 虽然「碰巧」解析不出方括号数组从而落到
+    // defaultPlan()，但这纯属误打误撞：换一种上游错误格式（比如错误文本里恰好带
+    // 一对方括号）就会把错误文本当成计划解析。显式检查一次，把这一步的失败记进
+    // 执行日志（可见），再统一落到同一个 defaultPlan() 兜底。
+    if (!res.ok) {
+      this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.content.slice(0, 200)}`);
+      return this.defaultPlan();
+    }
     return this.parsePlan(res.content) ?? this.defaultPlan();
   }
 
@@ -319,6 +330,18 @@ export class OrchestratorAgent {
             [{ role: "system", content: agent.prompt }, { role: "user", content: task.description }],
             agent.model,
           );
+          // D-4（战术版）：无 key 时 router 返回 ok:false + content 是错误文本
+          // （比如 "[error] No API key configured..."）。不检查 res.ok 就把它当
+          // explore 的产出放行，review 会把一段错误消息误判成合法的探索结论。
+          if (!res.ok) {
+            this.record(sessionId, "explore", "llm-failed", res.content.slice(0, 200));
+            return {
+              taskId: task.id,
+              kind: task.kind,
+              ok: false,
+              output: `[llm call failed, not a model output] ${res.content}`,
+            };
+          }
           this.record(sessionId, "explore", "run", res.content.slice(0, 200));
           return { taskId: task.id, kind: task.kind, ok: true, output: res.content };
         }
@@ -331,7 +354,10 @@ export class OrchestratorAgent {
             this.record(sessionId, "python", "execute", `${task.id}: ${result.status}`);
             return { taskId: task.id, kind: task.kind, ok: result.status === "ok", output: String(output) };
           } finally {
-            this.daemon.kernelManager.dispose();
+            // D-5：只销毁这一次 code task 自己创建的内核（按 id），不能用无参 dispose()——
+            // 那会摧毁 KernelManager 里当前存在的**所有**内核，并发会话里先跑完的
+            // 请求会把另一个还在执行中的内核一起杀掉。
+            this.daemon.kernelManager.dispose(kernelId);
           }
         }
         case "connector": {
@@ -367,6 +393,17 @@ export class OrchestratorAgent {
             [{ role: "system", content: agent.prompt }, { role: "user", content: task.description }],
             agent.model,
           );
+          // D-4（战术版）：与 analysis 分支同一处漏洞（本 lane 委托的三处之外顺带发现的
+          // 第四处调用点，同一个模式，见 docs/devlog/P10-b.md）。
+          if (!res.ok) {
+            this.record(sessionId, agent.type, "llm-failed", res.content.slice(0, 200));
+            return {
+              taskId: task.id,
+              kind: task.kind,
+              ok: false,
+              output: `[llm call failed, not a model output] ${res.content}`,
+            };
+          }
           this.record(sessionId, agent.type, "run", res.content.slice(0, 200));
           return { taskId: task.id, kind: task.kind, ok: true, output: res.content };
         }
@@ -388,6 +425,7 @@ export class OrchestratorAgent {
   }
 
   private async summarize(
+    sessionId: string,
     userMessage: string,
     plan: PlannedTask[],
     execution: ExecutionOutcome[],
@@ -410,6 +448,17 @@ export class OrchestratorAgent {
       },
     ];
     const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    // D-4（战术版）：这是三处委托里最要紧的一处——summarize() 的返回值**就是**
+    // 用户最终看到的 `OrchestrationResult.summary`，也是 reviewer 读的正文。
+    // 之前不检查 res.ok，router 的错误文本（"[error] No API key configured..."）会
+    // 原样冒充成分析结论被 review 放行。现在失败时既不把 res.content 塞进 summary
+        // （"summary 不得包含错误文本"——错误文本本身可能含误导性描述，不该出现在
+    // 面向用户的产出里），也不静默吞掉——具体错误进执行日志供排查，summary 只留一句
+    // 结构化、无法被误读成模型产出的失败说明。
+    if (!res.ok) {
+      this.record(sessionId, "orchestrator", "summarize-llm-failed", res.content.slice(0, 200));
+      return "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。";
+    }
     return res.content;
   }
 

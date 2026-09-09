@@ -41,7 +41,9 @@ export interface TaskSnapshot {
   finishedAt: string | null;
   progress: TaskProgress | null;
   result: unknown;
-  error: { message: string } | null;
+  // timeout=true 时这是 D-2 的超时兜底触发的失败，不是任务体自己抛的错——
+  // 让轮询/SSE 的消费方能把「上游挂起」和「上游报错」分开处理。
+  error: { message: string; timeout?: boolean } | null;
   events: TaskEvent[];
 }
 
@@ -60,6 +62,49 @@ export interface StartTaskOptions {
   kind: string;
   project?: string | null;
   run: (handle: TaskHandle) => Promise<unknown>;
+  // 单个任务的超时上限（毫秒），覆盖 TaskRegistry 的默认值。传 0 或负数显式关闭。
+  timeoutMs?: number;
+}
+
+// D-2：任务体本身可能因为一次没设超时的上游调用（旧代码路径、第三方库内部裸 fetch
+// 之类）而永久挂起——TaskRegistry 是长任务的最后一道兜底，即便任务体自己没有任何
+// 超时逻辑，也不能让 `GET /api/tasks/:id` 或 `{"await":true}` 的调用方永远等下去。
+// config/ 面板（P9）没有对应设置项（只读不改，见 docs/devlog/P10-b.md），走
+// env + 常量默认。10 分钟：比 config 里已有的 mcpTimeoutMs（300_000ms，MCP 工具
+// 同步等长任务的上限）更宽——这里包的是任务体的整个生命周期（可能内含多轮
+// review 修正循环），不是单次工具调用，需要更大的余量；同时仍然是个有限值，
+// 一次真正挂死的调用最终会被结构化地报出来而不是让任务句柄永远停在 running。
+const DEFAULT_TASK_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.SPARK_TASK_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
+})();
+
+export class TaskTimeoutError extends Error {
+  readonly timeout = true;
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`task timed out after ${timeoutMs}ms`);
+    this.name = "TaskTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TaskTimeoutError(timeoutMs)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 export class TaskRegistry {
@@ -67,10 +112,12 @@ export class TaskRegistry {
   private readonly now: () => string;
   // 只保留最近 N 条：本地单用户场景下够用，也避免长跑进程无上限吃内存。
   private readonly capacity: number;
+  private readonly defaultTimeoutMs: number;
 
-  constructor(options: { now?: () => string; capacity?: number } = {}) {
+  constructor(options: { now?: () => string; capacity?: number; timeoutMs?: number } = {}) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.capacity = options.capacity ?? 200;
+    this.defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
   }
 
   start(options: StartTaskOptions): TaskSnapshot {
@@ -114,19 +161,21 @@ export class TaskRegistry {
     entry.snapshot.startedAt = this.now();
     this.emit(entry, "state", "running", { state: "running" });
 
+    const timeoutMs = options.timeoutMs ?? this.defaultTimeoutMs;
     void (async () => {
       try {
-        const result = await options.run(handle);
+        const result = await withTimeout(options.run(handle), timeoutMs);
         entry.snapshot.state = "succeeded";
         entry.snapshot.result = result ?? null;
         entry.snapshot.finishedAt = this.now();
         this.emit(entry, "result", null, result ?? null);
       } catch (error) {
+        const timeout = error instanceof TaskTimeoutError;
         const message = error instanceof Error ? error.message : String(error);
         entry.snapshot.state = "failed";
-        entry.snapshot.error = { message };
+        entry.snapshot.error = timeout ? { message, timeout: true } : { message };
         entry.snapshot.finishedAt = this.now();
-        this.emit(entry, "error", message, { message });
+        this.emit(entry, "error", message, { message, timeout });
       } finally {
         this.emit(entry, "state", entry.snapshot.state, { state: entry.snapshot.state });
         entry.subscribers.clear();
