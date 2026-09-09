@@ -6,7 +6,8 @@ workspaces/
 .pytest_cache/
 __pycache__/
 *.pyc
-.venv/
+# `.venv/` 只匹配目录；worktree 里 .venv 是指向主仓 venv 的符号链接，要去掉斜杠才匹配得上。
+.venv
 .DS_Store
 logs/
 .env
