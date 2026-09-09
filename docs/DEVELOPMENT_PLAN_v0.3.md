@@ -84,7 +84,7 @@ v0.3 就是唯一一次把运行时债一次性还清的窗口——**再往后�
 ## 三、闸门 D：债务清算（P10）
 
 > **门禁语义**：D 全绿之前，P11 及之后的任何功能代码不合入 main。
-> 全部是评审第一/第二优先项，评估量级 1–2 周。
+> 全部是评审第一/第二优先项。量级：2–3 个会话，4 条 lane 并行（见 §6.3.2）。
 
 | # | 项 | 位置 | 做法 | 验收 |
 |---|---|---|---|---|
@@ -484,24 +484,145 @@ spark-research ext verify <path>
 
 ---
 
-## 六、路线与排期
+## 六、路线、排期与执行方式
 
-| 阶段 | 内容 | 量级 | 依赖 | 阶段门 |
-|---|---|---|---|---|
-| **P10** | 闸门 D：D-1…D-12 | 1–1.5 周 | P9 合入 + `v0.2.0` tag | 并发/超时新套件全绿；655 用例零回归 |
-| **P11** | LLM Runtime v2 | 1.5 周 | P10 | provider 矩阵契约测试；tool calling / JSON 模式 / 流式 / usage 各一条真实录制回放 |
-| **P12** | ToolBus + 真子代理；删 swarm | 2 周 | P11 | Agent loop 对抗五条全过；README 宣传语与实现对齐（D-12 门禁） |
-| **P13** | contract + replan + 帧级记账 + findings 状态机 | 2 周 | P12 | AD-9 对抗测试（伪造完成 / 无进展停机 / 记账诚实）全过 |
-| **P14** | 上手性：npx/单二进制/零参数 UI/向导/依赖分层/demo/本地模型/SSE 流 | 1.5 周 | P11（流式） | 干净机器外部验收 ②通过 |
-| **P15** | 扩展装载 + 声明式 connector + MCP client + `ext verify` | 2 周 | P12（ToolBus） | 恶意扩展矩阵全过；`EXTENDING.md` 三类示例 CI 全绿 |
-| **P16** | 文献域补强（arXiv/PubMed 走 manifest）+ 收口 + `v0.3.0` | 1 周 | P15 | 外部验收 ①③④ 全过 |
+### 6.0 排期单位说明（重要）
 
-**合计 ~11 周**（单人 + agent 协作口径，与 P1–P9 的实际节奏同量纲）。
+**本方案不用「周」作单位。** v0.2 的实测节奏是：P0 设计定稿到 P9 收尾
+（18.6k 行后端 TS + 3.1k 前端 + 13.5k 行测试 + 655 用例）**在 2026-09-09 一天之内完成**，
+含一夜睡眠，实际工作时间约 15 小时。逐阶段墙钟：
+
+```
+00:52 P0 设计  →  01:08 P1(16m)  →  01:40 P2(32m)  →  02:07 P3(27m)  →  02:43 P4(36m)
+      ⋯ 过夜 ⋯
+09:12 P5  →  10:01 P6(49m)  →  13:24 P7(3h23，56 端点 + SolidJS + Playwright)
+20:22 P8  →  21:33–22:09 P9 五个 commit(36m)
+```
+
+在这个 tempo 下「周」是没有意义的刻度。**阶段量级一律用「会话」计**
+（一个会话 ≈ 一次完整的「范围确认 → 委派实现 → 跑测试 → 审代码 → 对照设计验收 → PR」循环，
+对应 P1–P9 的 30 分钟至 3 小时不等）。
+
+v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试），
+但阶段数相当——**整体量级：2–4 个工作日**。
+
+### 6.1 阶段表
+
+| 阶段 | 内容 | 量级 | 并行 lane | 主用模型 | 依赖 | 阶段门 |
+|---|---|---|---|---|---|---|
+| **P10** | 闸门 D：D-1…D-12 | 2–3 会话 | **4** | **Sonnet 5** | P9 合入 + `v0.2.0` tag | 并发/超时新套件全绿；655 用例零回归 |
+| **P11** | LLM Runtime v2 | 2 会话 | 3（接口先行后） | **Opus 5** | P10 | provider 矩阵契约测试；tool calling / JSON 模式 / 流式 / usage 各一条真实录制回放 |
+| **P12** | ToolBus + 真子代理；删 swarm | 2 会话 | 2 | **Opus 5** | P11 | Agent loop 对抗五条全过；README 宣传语与实现对齐（D-12 门禁） |
+| **P13** | contract + replan + 帧级记账 + findings 状态机 | 2 会话 | 2 | **Opus 5** | P12 | AD-9 对抗测试（伪造完成 / 无进展停机 / 记账诚实）全过 |
+| **P14** | 上手性：npx/单二进制/零参数 UI/向导/依赖分层/demo/本地模型/SSE 流 | 2 会话 | 2 | **Sonnet 5** | P11（流式） | 干净机器外部验收 ②通过 |
+| **P15** | 扩展装载 + 声明式 connector + MCP client + `ext verify` | 2 会话 | 2 | **Opus 5** | P12（ToolBus） | 恶意扩展矩阵全过；`EXTENDING.md` 三类示例 CI 全绿 |
+| **P16** | 文献域补强（arXiv/PubMed 走 manifest）+ 收口 + `v0.3.0` | 1–2 会话 | 3 | **Sonnet 5** | P15 | 外部验收 ①③④ 全过 |
+
+**关键路径**：P10 → P11 → P12 → P13 → P16。
+**P14 与 P12/P13 并行**（只依赖 P11 的流式），**P15 与 P13 并行**（只依赖 P12 的 ToolBus）——
+两者都不占关键路径。
 
 **可裁剪顺序**（若要提前发布）：P15 的 ③ MCP client → P14 的 Homebrew/curl → P13 的 findings 状态机。
 **不可裁剪**：P10 全部、P11、P12、AD-9 的确定性完成判据——这四项是 v0.3 主题本身。
 
-### 6.1 里程碑与外部可见价值
+### 6.2 模型分配依据
+
+不做全局切换，按**任务形状**分。依据来自评审自己的发现：
+
+> 「越靠近可信度核心的代码质量越高，越靠近『AI Agent 平台』宣传语的代码越虚」
+
+翻译成模型选型：v0.2 里质量高的地方是**规格明确的机械活**（状态机、fixture 纪律、对抗测试），
+出问题的地方全在**设计判断的边界**上——connector 的魔法分发被判定为「坏抽象」（P0 根因）、
+全链路零超时、LLM 失败静默当成功、Agent 层抽象建好但没接线。
+**这些不是「写不出代码」，是品味与盲区。**
+
+| 形状 | 阶段 | 模型 | 理由 |
+|---|---|---|---|
+| 照方抓药（评审已写明改哪个文件第几行） | P10 · P16 | Sonnet 5 | 12 项里 10 项规格完备，Opus 在这里是浪费；且这两阶段并行 lane 最多 |
+| 规格清楚的工程活（打包 / 向导 / 依赖分层） | P14 | Sonnet 5 | — |
+| 抽象设计（错了要返工三条主线） | P11 | Opus 5 | 一个抽象同时承载 tool calling / 流式 / 记账 / JSON 模式 |
+| 抽象设计（v0.2 唯一被判「坏抽象」的那一层的继任者） | P12 | Opus 5 | 同一个位置栽过一次 |
+| 原创设计（AD-9「完成判定问图不问模型」） | P13 | Opus 5 | v0.3 最有原创性的一条 |
+| 安全边界设计 | P15 | Opus 5 | 错了就是 S-3「沙箱一行逃逸」那种过度声明 |
+
+**关于单轮等待**：v0.2 的总吞吐不慢，若痛点是「一次回复等太久」，
+先试 Opus 的 `/fast`（同一个 Opus、输出更快，**不降级到小模型**），而不是换模型。
+
+### 6.3 并行开发方案
+
+#### 6.3.1 地基已经具备（实测）
+
+| 检查项 | 结论 |
+|---|---|
+| 测试状态隔离 | 全部 `mkdtempSync` 建临时工作区，`SPARK_RESEARCH_DATA_DIR` 可注入，**没有一个测试碰 `~/.spark-research`** |
+| 端口占用 | 单元 / MCP / server 测试走 `app.fetch()` **进程内调用，不监听端口** |
+| 唯一共享资源 | Playwright 固定端口 4399，但已有 `SPARK_E2E_PORT` 环境变量兜底 |
+
+**结论：N 个 agent 同时跑 `bun test` 是安全的**，只需给每条 lane 分配不同的 `SPARK_E2E_PORT`。
+
+#### 6.3.2 lane 划分与文件所有权
+
+> **铁律：一个文件同一时刻只属于一条 lane。** 下表就是所有权登记，越界即冲突。
+
+**P10（4 lane，Sonnet 5）**
+
+| lane | 负责 | 独占文件 |
+|---|---|---|
+| `D-a` 连接器 | D-1 | `connectors/base.ts` `connectors/registry.ts` `connectors/*.ts` `tests/concurrency/connector_race.test.ts` |
+| `D-b` 运行时管道 | D-2 D-3 D-5 D-4(战术版) V3 | `http/client.ts` `kernels/manager.ts` `server/tasks.ts` `agents/orchestrator.ts` `tests/timeout/**` |
+| `D-c` 安全面 | D-6 D-7 | `index.ts`(auth 写入段) `config/index.ts` `server/app.ts` `http/body.ts` |
+| `D-d` 湿域与状态机 | D-8 D-9 D-10 | `lab/**` `project/records.ts` `tests/concurrency/approve_once.test.ts` |
+
+> D-4 在 P10 只做战术版（orchestrator 三处检查 `res.ok`）；
+> **AD-12 的类型层根治在 P11 完成**（`ok=false ⇒ content=""`）——分两步是因为类型改动属 P11 的抽象。
+
+**P11（接口先行 → 3 lane，Opus 5）**
+
+| lane | 独占文件 |
+|---|---|
+| **接口先行**（必须先单独合入） | `llm/types.ts` + `llm/router.ts` 门面 |
+| `R-a` OpenAI 兼容基座（含 ollama / vLLM / 本地端点） | `llm/providers/openai_compat.ts` |
+| `R-b` Anthropic 原生 | `llm/providers/anthropic.ts` |
+| `R-c` 记账与能力位 | `llm/budget.ts` `llm/providers/registry.ts` |
+
+**P12（2 lane，Opus 5）**：`agents/toolbus.ts` ‖ `agents/subagent.ts` + `agents/prompt/*.txt` + 删 swarm
+**P13（2 lane，Opus 5）**：`agents/contract.ts` + replan + `agents/ledger.ts` ‖ `reviewer/findings_store.ts` + CLI（**完全独立**）
+**P14（2 lane，Sonnet 5）**：分发与打包 ‖ 向导 + demo + SSE 流
+**P15（2 lane，Opus 5）**：扩展装载 + `ext verify` ‖ 声明式 connector + MCP client
+**P16（3 lane，Sonnet 5）**：E-1 manifest 源 ‖ E-2 judge 降本 ‖ E-3…E-6 元数据修复
+
+#### 6.3.3 四条纪律（前三条是 P6 事故的直接延伸）
+
+1. **一 lane 一 worktree**：`~/Desktop/AI4S/spark-research-<lane>`，与现有 `-p9` / `-v03` 同惯例。
+   **绝不共享工作树**——P6 那次就是主会话在共享工作树切分支，把子代理半成品卷进了 docs PR 推上 main
+   （已入 repo 工程纪律第 7 条）。
+2. **接口先行**：两条 lane 触及同一类型时，先落一个**只改接口**的小 PR 到 main，再 fan out。
+   本方案已知的两处：P10 的 `HttpClient.RequestOptions.timeoutMs`（D-a 依赖 D-b）、
+   P11 的 `llm/types.ts`（三条 lane 全依赖）。
+3. **高冲突文件禁止 lane 触碰**：`CHANGELOG.md` / `BACKLOG.md` / `README.md` 一律由**收口 commit 统一写**；
+   devlog 每 lane 写自己的 `docs/devlog/P10-<lane>.md`（分文件 = 零冲突）。
+4. **多 lane 阶段走 integration 分支**：`lane → feat/P10-integration`（在这里跑全量测试）→ **一个 PR 进 main**。
+   否则会出现「每个 PR 单独绿、合进 main 红」——这正是评审说的那类**单线程测不出的语义冲突**。
+
+#### 6.3.4 两个必须记住的例外
+
+- **D-12 叙事一致性门禁必须放在串行尾巴**。它是全局测试，
+  在任何 lane 分支上都会因为看不见其他 lane 的改动而误报红。D-11 文档漂移同理。
+- **真正的瓶颈是审查带宽，不是 agent 数量**。现有工作流是「主会话审代码 + 对照设计验收 → PR」，
+  4 条 lane 同时产出就是 4 份 PR 等审。**这是并行度的上限**——所以本方案最多开到 4 条，不开 6–8 条。
+
+#### 6.3.5 lane 启动清单（写进每份子代理任务书）
+
+```
+① git worktree add ~/Desktop/AI4S/spark-research-<lane> -b feat/<phase>-<lane> origin/main
+② export SPARK_E2E_PORT=<4400 + lane 序号>
+③ 只改所有权表里属于本 lane 的文件；越界先回报，不自行扩权
+④ 不碰 CHANGELOG / BACKLOG / README；devlog 只写 docs/devlog/<phase>-<lane>.md
+⑤ 提 PR 前跑**全量** bun test（不只是本 lane 的测试）+ bun run typecheck
+⑥ 目标分支是 feat/<phase>-integration，不是 main
+```
+
+### 6.4 里程碑与外部可见价值
 
 | 里程碑 | 完成即可对外说的话 |
 |---|---|
@@ -575,7 +696,7 @@ spark-research ext verify <path>
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 范围过大，11 周做不完 | 拖到 v0.4 也发不出 | 三条主线**互相解耦**（除共用 P11）；§6 已给可裁剪顺序；P14 单独可发 v0.2.1 |
+| 范围过大，跨度失控 | 拖到 v0.4 也发不出 | 三条主线**互相解耦**（除共用 P11）；§6.1 已给可裁剪顺序与关键路径；P14 单独可发 v0.2.1 |
 | tool calling 在国产 provider 上兼容性差 | 主线 A 落空 | P11 的能力位 `toolCalling` 是**运行时可查**的：不支持就降级为「JSON 计划 + 代码执行」模式并如实告知，不假装 |
 | 声明式 connector 的映射 DSL 越做越像编程语言 | 复杂度失控 | 硬约束：只支持受限 JSONPath 子集 + 固定归一化字段；**表达不了就写 TS 扩展**，这是特性不是缺陷 |
 | 外部扩展 = 同 UID 代码执行 | 安全面扩大 | 默认推声明式（不执行代码）；TS 扩展需 `--trust` + 指纹确认；凭据与工具授权都要显式 grant；**文档必须直说这不是沙箱**（不重蹈 S-3「沙箱一行逃逸」的过度声明） |
