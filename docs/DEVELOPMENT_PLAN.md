@@ -29,6 +29,26 @@
     功能测试发现不了这类矛盾。凡是「两个旋钮必须一起拧」的关系（超时上限、能力位与其消费端、
     工具描述与实际行为），都要有一条专门断言一致性的测试钉住。
 
+12. **push 后必验远端 ref**（v0.3.0 空 PR 事故后新增）：`git push -q …; echo ok` 会用
+    无条件 echo **掩盖推送失败**。开 PR 前 `git ls-remote --heads origin <branch>` 确认
+    远端 ref 就是本地 HEAD；合并后 `git diff --stat <本地分支> origin/main` 应为空。
+    **事故经过**：PR #22 的分支根本没推上去，远端停在旧 commit，于是 PR 相对 main 的
+    diff 为空，GitHub 照常 squash「合并」——32 文件 / 2027 行整个阶段成果没进 main，不报错。
+
+13. **跨层改动必须跑 e2e + 消费方清扫**（v0.3.0 UI 回归后新增）：后端改动只要触及
+    **对外词汇表或响应形状**（状态名、枚举、端点字段、错误码），就必须 ① 跑
+    `bun run test:e2e`；② 清扫消费方：`frontend/workspace/src`、`mcp/tools.ts` 的工具描述、
+    `llms.txt`、`skills/*/SKILL.md`、capabilities 输出、docs。
+    **事故经过**：v0.3.0 拆掉 `wet_run` 后，工作台执行按钮仍按旧状态名判可用 →
+    批准后按钮永远是灰的，湿实验闭环在 Web 上断掉。**e2e 用例本来就存在，只是没跑**；
+    typecheck 抓不到，因为那是字符串比较不是枚举。
+
+14. **单一合并权**（跨会话事故后新增）：同一时刻只有一个会话拥有向 `main` 合并的权力，
+    其他会话产出一律停在分支上。integration 分支开 PR 前必须 `git fetch` 并确认
+    `origin/main` 是自己的祖先，且复验**全部既有 tag 仍在 `origin/main` 历史里**。
+    **事故经过**：另一个会话把 P10 的 lane 分支直接合进 main，而那些 lane 是从 v0.2.1
+    之前拉出来的 → v0.2.1 的三个修复被静默绕过。
+
 ---
 
 ## 一、阶段总览
