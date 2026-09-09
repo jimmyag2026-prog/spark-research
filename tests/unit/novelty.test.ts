@@ -24,6 +24,8 @@ import { emptyPaper, type Paper } from "../../backend/src/literature/models";
 import type { LiteratureSearchOptions, LiteratureSearchResult } from "../../backend/src/literature/search";
 import type { LiteratureSearcher } from "../../backend/src/literature/search";
 import { FakeLlm, makeProjectWithPapers } from "../helpers/review_scenario";
+import { llmExtras } from "../../backend/src/llm/types";
+import type { ChatMessage } from "../../backend/src/llm/router";
 
 // P4 · Novelty pipeline 单测。重点在**评级校验层**（constrainRating）：
 // 它是唯一一处「模型说了不算」的地方，所以它的每条规则都要单独被打到。
@@ -471,9 +473,9 @@ describe("NoveltyChecker 管线", () => {
         const key = user.match(/- \[@([^\]]+)\] Attention Is All You Need/)![1]!;
         return {
           ok: true as const,
+          ...llmExtras(),
           provider: "kimi" as const,
           model: model ?? "m",
-          mock: false,
           content: JSON.stringify({
             claims: [
               {
@@ -526,17 +528,17 @@ describe("NoveltyChecker 管线", () => {
       "transformer recurrence": [],
     });
     const scripted = {
-      call: async (messages: { role: string; content: string }[], model?: string) => {
+      call: async (messages: ChatMessage[], model?: string) => {
         const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
         if (!user.includes("候选工作")) {
-          return { ok: true as const, provider: "kimi" as const, model: model ?? "m", mock: false, content: claimsJson };
+          return { ok: true as const, provider: "kimi" as const, model: model ?? "m", ...llmExtras(), content: claimsJson };
         }
         const key = user.match(/- \[@([^\]]+)\]/)![1]!;
         return {
           ok: true as const,
+          ...llmExtras(),
           provider: "kimi" as const,
           model: model ?? "m",
-          mock: false,
           content: JSON.stringify({
             claims: [
               {
@@ -572,12 +574,12 @@ describe("NoveltyChecker 管线", () => {
     const { f, records, idea } = await seed("novelty-empty");
     const searcher = new StubSearcher({});
     const scripted = {
-      call: async (messages: { role: string; content: string }[], model?: string) => {
+      call: async (messages: ChatMessage[], model?: string) => {
         const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
         const content = user.includes("候选工作")
           ? JSON.stringify({ claims: [{ claimId: "c1", rating: "novel", nearestWorks: [], verdict: "查不到" }] })
           : claimsJson;
-        return { ok: true as const, provider: "kimi" as const, model: model ?? "m", mock: false, content };
+        return { ok: true as const, provider: "kimi" as const, model: model ?? "m", ...llmExtras(), content };
       },
     };
     const checker = new NoveltyChecker({
@@ -619,17 +621,17 @@ describe("NoveltyChecker 管线", () => {
     const before = records.count();
     const searcher = new StubSearcher({ "self attention transduction": [paper({ title: "某工作" })] });
     const scripted = {
-      call: async (messages: { role: string; content: string }[], model?: string) => {
+      call: async (messages: ChatMessage[], model?: string) => {
         const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
         if (!user.includes("候选工作")) {
-          return { ok: true as const, provider: "kimi" as const, model: model ?? "m", mock: false, content: claimsJson };
+          return { ok: true as const, provider: "kimi" as const, model: model ?? "m", ...llmExtras(), content: claimsJson };
         }
         const key = user.match(/- \[@([^\]]+)\]/)![1]!;
         return {
           ok: true as const,
+          ...llmExtras(),
           provider: "kimi" as const,
           model: model ?? "m",
-          mock: false,
           content: JSON.stringify({
             claims: [{ claimId: "c1", rating: "novel", nearestWorks: [{ key, sameness: "同", difference: "异" }], verdict: "新" }],
           }),

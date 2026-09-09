@@ -10,6 +10,8 @@ import type { LiteratureSearchResult, LiteratureSearcher } from "../../backend/s
 import { emptyPaper, type Paper } from "../../backend/src/literature/models";
 import { ProjectManager } from "../../backend/src/project/manager";
 import { FakeLlm } from "../helpers/review_scenario";
+import { llmExtras } from "../../backend/src/llm/types";
+import type { ChatMessage } from "../../backend/src/llm/router";
 
 // `spark-research idea ...` 的 CLI 单测：输出/退出码走注入，不打网络也不调真实模型。
 
@@ -228,15 +230,15 @@ describe("idea CLI", () => {
       year: 2017,
     };
     const llm = {
-      call: async (messages: { role: string; content: string }[], model?: string) => {
+      call: async (messages: ChatMessage[], model?: string) => {
         const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
         if (user.includes("候选工作")) {
           const key = user.match(/- \[@([^\]]+)\]/)![1]!;
           return {
             ok: true as const,
+            ...llmExtras(),
             provider: "kimi" as const,
             model: model ?? "m",
-            mock: false,
             content: JSON.stringify({
               claims: [
                 {
@@ -251,9 +253,9 @@ describe("idea CLI", () => {
         }
         return {
           ok: true as const,
+          ...llmExtras(),
           provider: "kimi" as const,
           model: model ?? "m",
-          mock: false,
           content: JSON.stringify({
             claims: [
               {
@@ -298,12 +300,12 @@ describe("idea CLI", () => {
     project.close();
 
     const llm = {
-      call: async (messages: { role: string; content: string }[], model?: string) => {
+      call: async (messages: ChatMessage[], model?: string) => {
         const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
         const content = user.includes("候选工作")
           ? JSON.stringify({ claims: [{ claimId: "c1", rating: "novel", nearestWorks: [], verdict: "查不到" }] })
           : JSON.stringify({ claims: [{ statement: "杜撰的组合", queries: ["q1", "q2"] }] });
-        return { ok: true as const, provider: "kimi" as const, model: model ?? "m", mock: false, content };
+        return { ok: true as const, provider: "kimi" as const, model: model ?? "m", ...llmExtras(), content };
       },
     };
     const s = sink();

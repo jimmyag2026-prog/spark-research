@@ -36,28 +36,35 @@ describe("LLMRouter 超时（D-2）", () => {
     );
     const elapsed = Date.now() - started;
     expect(res.ok).toBe(false);
-    expect(res.content).toContain("timeout");
+    // AD-13：失败时 content 恒空，错误只在 error 字段。
+    expect(res.content).toBe("");
+    expect(res.error?.kind).toBe("timeout");
+    expect(res.error?.message).toContain("未返回");
     expect(elapsed).toBeLessThan(5_000);
   });
 
-  test("kimi 调用超时与 HTTP 错误在 content 里可区分（D-2 要求：能分辨超时 vs 上游报错）", async () => {
+  test("kimi 调用超时与 HTTP 错误可被机器区分（error.kind，不靠读文案）", async () => {
     const timeoutRouter = new LLMRouter(
       { KIMI_API_KEY: "test-key" },
       { fetchImpl: neverRespondingFetch(), timeoutMs: 150 },
     );
     const timeoutRes = await timeoutRouter.call([{ role: "user", content: "hi" }], "kimi-k2");
     expect(timeoutRes.ok).toBe(false);
-    expect(timeoutRes.content).toContain("timeout");
+    expect(timeoutRes.content).toBe("");
+    expect(timeoutRes.error?.kind).toBe("timeout");
 
     const httpErrorFetch: typeof fetch = (async () =>
       new Response("boom", { status: 500 })) as unknown as typeof fetch;
     const errorRouter = new LLMRouter({ KIMI_API_KEY: "test-key" }, { fetchImpl: httpErrorFetch });
     const errorRes = await errorRouter.call([{ role: "user", content: "hi" }], "kimi-k2");
     expect(errorRes.ok).toBe(false);
-    expect(errorRes.content).toContain("HTTP 500");
-    // 两条失败路径的文案必须不同，调用方（orchestrator 的 D-4 检查）不需要靠猜就能
-    // 区分「网络/超时没有落地」与「上游给了一个明确的错误状态码」。
-    expect(errorRes.content).not.toContain("timeout");
+    expect(errorRes.content).toBe("");
+    // 两条失败路径必须能被调用方区分开，而且**不靠读文案**：
+    // P11 起 error.kind 是机器可读的枚举，「网络/超时没有落地」是 "timeout"，
+    // 「上游给了明确错误状态码」是 "upstream"/"auth"/"rate_limit"。
+    expect(errorRes.error?.kind).toBe("upstream");
+    expect(errorRes.error?.message).toContain("HTTP 500");
+    expect(errorRes.error?.retryable).toBe(true);
   });
 
   test("timeoutMs 未传时仍走模块级默认（构造函数签名向后兼容：不传第二个参数）", () => {
