@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectManager, ProjectError, slugify } from "../../backend/src/project/manager";
-import { RecordStore, RecordValidationError } from "../../backend/src/project/records";
+import { RecordConflictError, RecordStore, RecordValidationError } from "../../backend/src/project/records";
 import { runProjectCommand } from "../../backend/src/project/cli";
 import { ArtifactStore } from "../../backend/src/artifacts/store";
 import { OrchestratorAgent } from "../../backend/src/agents/orchestrator";
@@ -343,6 +343,121 @@ describe("RecordStore", () => {
     expect(s.count({ type: "idea", since: "2026-03-02T00:00:00.000Z" })).toBe(1);
     // 分页参数不该影响总数——这正是把 limit/offset 排除在谓词之外的原因。
     expect(s.count({ type: "idea", limit: 1 })).toBe(2);
+    s.close();
+  });
+});
+
+// P10-d · D-9：records 表的乐观并发版本号。这一段直接打 RecordStore，不经过 WetLabLoop，
+// 目的是把 CAS 机制本身的正确性（不依赖时序巧合）与「湿实验并发 execute 只许一次成功」
+// 这个更大的场景测试（tests/concurrency/approve_once.test.ts）分开验证。
+describe("RecordStore · rev 与乐观并发（D-9）", () => {
+  function store(): RecordStore {
+    return new RecordStore(join(tempRoot("spark-records-rev-"), "records.db"), "demo");
+  }
+
+  test("新记录 rev 从 1 起，每次 update 不管带不带 expectedRev 都 +1", () => {
+    const s = store();
+    const rec = s.create({ type: "idea", content: "a" });
+    expect(s.getRev(rec.id)).toBe(1);
+    s.update(rec.id, { content: "b" });
+    expect(s.getRev(rec.id)).toBe(2);
+    s.update(rec.id, { content: "c" }, { expectedRev: 2 });
+    expect(s.getRev(rec.id)).toBe(3);
+    s.close();
+  });
+
+  test("expectedRev 对得上 → 正常写入并推进 rev；对不上 → RecordConflictError，不写入", () => {
+    const s = store();
+    const rec = s.create({ type: "idea", content: "orig" });
+    expect(s.getRev(rec.id)).toBe(1);
+
+    const updated = s.update(rec.id, { content: "v2" }, { expectedRev: 1 });
+    expect(updated.content).toBe("v2");
+    expect(s.getRev(rec.id)).toBe(2);
+
+    // 拿着已经过期的 rev=1 再写一次：必须被拒绝，且内容/rev 都不能被这次失败的调用动过。
+    expect(() => s.update(rec.id, { content: "v3-stale" }, { expectedRev: 1 })).toThrow(RecordConflictError);
+    const after = s.get(rec.id)!;
+    expect(after.content).toBe("v2");
+    expect(s.getRev(rec.id)).toBe(2);
+    s.close();
+  });
+
+  test("并发写入模拟：谁先带对的 rev 写进去谁赢，另一个必须拿 rev 冲突而不是静默覆盖", () => {
+    const s = store();
+    const rec = s.create({ type: "idea", content: "start" });
+    const rev = s.getRev(rec.id)!;
+    // 两个「并发」写手都读到了同一个 rev（典型的 read-then-write 竞争起点）。
+    const winner = s.update(rec.id, { content: "writer-A" }, { expectedRev: rev });
+    expect(winner.content).toBe("writer-A");
+    let loserError: unknown;
+    try {
+      s.update(rec.id, { content: "writer-B" }, { expectedRev: rev });
+    } catch (error) {
+      loserError = error;
+    }
+    expect(loserError).toBeInstanceOf(RecordConflictError);
+    // 输家的写入没有生效——数据仍是赢家写的那份，不是被悄悄覆盖成 writer-B。
+    expect(s.get(rec.id)!.content).toBe("writer-A");
+    s.close();
+  });
+
+  test("对不存在的记录做 CAS 写：报的是「找不到」，不是别的错误伪装", () => {
+    const s = store();
+    expect(() => s.update("does-not-exist", { content: "x" }, { expectedRev: 1 })).toThrow(RecordValidationError);
+    s.close();
+  });
+
+  test("getRev 对不存在的 id 返回 null，不是 0 或抛错", () => {
+    const s = store();
+    expect(s.getRev("does-not-exist")).toBeNull();
+    s.close();
+  });
+
+  test("老库没有 rev 列也能正常打开：迁移自动补列，默认值 1", () => {
+    const dbPath = join(tempRoot("spark-records-legacy-"), "records.db");
+    // 手工建一张**没有 rev 列**的 records 表，模拟这个字段上线前就存在的老库。
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE records (
+        id TEXT PRIMARY KEY,
+        project TEXT NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL DEFAULT '',
+        evidence TEXT NOT NULL,
+        origin_kind TEXT NOT NULL DEFAULT 'manual',
+        origin_ref TEXT,
+        origin_connector TEXT,
+        session_id TEXT,
+        artifact_id TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE record_edges (
+        source_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source_id, target_id, type)
+      );
+    `);
+    legacy.query(
+      `INSERT INTO records (id, project, type, title, content, evidence, origin_kind, metadata, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("legacy-1", "demo", "idea", "老记录", "上线前就存在", "inferred", "manual", "{}", "2026-01-01T00:00:00.000Z");
+    legacy.close();
+
+    // 老项目打开不能报错——这是 D-9 迁移最基本的验收线。
+    const s = new RecordStore(dbPath, "demo");
+    const record = s.get("legacy-1")!;
+    expect(record.content).toBe("上线前就存在");
+    // 迁移补的默认值是 1：老记录「从这一刻起」被纳入版本管理，之前没有历史可追溯。
+    expect(s.getRev("legacy-1")).toBe(1);
+    // 补完列之后，老记录也能正常参与 CAS——不是只有新记录能用这套机制。
+    const updated = s.update("legacy-1", { content: "迁移后可以正常改" }, { expectedRev: 1 });
+    expect(updated.content).toBe("迁移后可以正常改");
+    expect(s.getRev("legacy-1")).toBe(2);
     s.close();
   });
 });

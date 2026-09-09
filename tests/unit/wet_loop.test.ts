@@ -8,14 +8,17 @@ import { MockDeviceBackend } from "../../backend/src/lab/wet_backend";
 import { WetLabLoop } from "../../backend/src/lab/wet_loop";
 import {
   ApprovalRequiredError,
+  RecordIntegrityError,
   WET_EXPERIMENT_STATES,
   WET_LEGAL_TRANSITIONS,
+  WetExecutionConflictError,
   WetExperimentNotFoundError,
   WetStateError,
   canWetTransition,
   isWetExperimentState,
   type WetExperimentState,
 } from "../../backend/src/lab/wet_models";
+import { RecordConflictError } from "../../backend/src/project/records";
 import { ProjectManager, type Project } from "../../backend/src/project/manager";
 import { SimulationRegistry } from "../../backend/src/simulation/registry";
 
@@ -66,10 +69,12 @@ describe("湿实验状态机 · 转移表", () => {
         legal++;
       }
     }
-    expect(legal).toBe(18);
+    // P10-d · D-10：wet_run 拆成 approved/executing 两个态，各自的合法转移数
+    // （3 + 3）比原来单个 wet_run 的 3 条多出 3 条，18 → 21。
+    expect(legal).toBe(21);
   });
 
-  test("表外一律拒绝（穷举 11×11）", () => {
+  test("表外一律拒绝（穷举 12×12）", () => {
     let rejected = 0;
     for (const from of WET_EXPERIMENT_STATES) {
       for (const to of WET_EXPERIMENT_STATES) {
@@ -78,7 +83,7 @@ describe("湿实验状态机 · 转移表", () => {
         rejected++;
       }
     }
-    expect(rejected).toBe(WET_EXPERIMENT_STATES.length ** 2 - 18);
+    expect(rejected).toBe(WET_EXPERIMENT_STATES.length ** 2 - 21);
   });
 
   test("concluded / iterated 是终态", () => {
@@ -86,9 +91,14 @@ describe("湿实验状态机 · 转移表", () => {
     expect(WET_LEGAL_TRANSITIONS.iterated).toEqual([]);
   });
 
-  test("**只有 awaiting_approval 能进 wet_run** —— AD-6 在转移表层面的落点", () => {
-    const doors = WET_EXPERIMENT_STATES.filter((s) => WET_LEGAL_TRANSITIONS[s].includes("wet_run"));
+  test("**只有 awaiting_approval 能进 approved** —— AD-6 在转移表层面的落点", () => {
+    const doors = WET_EXPERIMENT_STATES.filter((s) => WET_LEGAL_TRANSITIONS[s].includes("approved"));
     expect(doors).toEqual(["awaiting_approval"]);
+  });
+
+  test("**只有 execute() 的原子声明能进 executing**，且只能从 approved 出发 —— D-9/D-10", () => {
+    const doors = WET_EXPERIMENT_STATES.filter((s) => WET_LEGAL_TRANSITIONS[s].includes("executing"));
+    expect(doors).toEqual(["approved"]);
   });
 
   test("isWetExperimentState 认全部状态、不认别的", () => {
@@ -226,7 +236,7 @@ describe("approve gate（AD-6）· API 层", () => {
     const view = upToApproval(loop);
     const { view: approved, decisionId } = loop.approve(view.id, { actor: "张三", note: "剂量合理" });
 
-    expect(approved.state).toBe("wet_run");
+    expect(approved.state).toBe("approved");
     expect(approved.approval?.actor).toBe("张三");
     expect(approved.approval?.protocolHash).toBe(view.protocolHash!);
     expect(approved.approval?.decisionRecordId).toBe(decisionId);
@@ -308,7 +318,7 @@ describe("approve gate · 协议 hash 变了要重新走一遍", () => {
     const loop = loopFor(project);
     const view = upToApproval(loop);
     const approved = loop.approve(view.id, { actor: "张三" }).view;
-    expect(approved.state).toBe("wet_run");
+    expect(approved.state).toBe("approved");
 
     const recompiled = loop.compile(view.id, { naturalLanguage: PROTOCOL_B }).view;
     expect(recompiled.state).toBe("compile");
@@ -337,18 +347,57 @@ describe("approve gate · 协议 hash 变了要重新走一遍", () => {
     project.close();
   });
 
-  test("**状态机之外**改了协议同样拦得住（execute 前二次核对 hash）", async () => {
+  // P10-d · D-9：这条测试的行为在这一轮改动前后不一样，记录一下为什么。
+  // 改动前：execute() 内部拿当前 naturalLanguage 重新编译、核对 hash，在 execute() 那一步
+  // 才发现协议变了。改动后：**任何**绕过状态机的 metadata 部分改写（哪怕只改了
+  // naturalLanguage 这一个字段）都会让 integrityHash 对不上，下一次 `get(ref)`——
+  // 不管是 execute() 内部调的，还是外面直接调的——立刻拒绝信任整条记录。
+  // 这是更早、更严格的一道关口，覆盖面比原来的「execute 前二次核对 hash」更宽
+  // （原来那道只查 naturalLanguage/hash 是否自洽，这道管全部字段）。
+  test("**状态机之外**改了协议 → 完整性校验立刻拦下（比原来的 execute 前 hash 复核更早更严）", async () => {
     const { project } = newWorkspace();
     const loop = loopFor(project);
     const view = upToApproval(loop);
     loop.approve(view.id, { actor: "张三" });
-    // 模拟「有人直接改了 record」：状态仍是 wet_run、审批还在，但协议原文被换了。
+    // 模拟「有人直接改了 record」：状态仍是 approved、审批还在，但协议原文被换了。
     project.records().update(view.id, { metadata: { naturalLanguage: PROTOCOL_B } });
-    await expect(loop.execute(view.id)).rejects.toThrow(ApprovalRequiredError);
-    const after = loop.get(view.id);
-    expect(after.state).toBe("failed");
-    expect(after.approval).toBeNull();
-    expect(after.lastError).toContain("协议在审批之后变了");
+    // execute() 第一步就是 get(ref)，这里就会炸——根本走不到「重新编译核对 hash」那一段。
+    await expect(loop.execute(view.id)).rejects.toThrow(RecordIntegrityError);
+    // 不只 execute()：这条记录从此谁都读不进 WetLabLoop，直到有人用 RecordStore 原始接口修复它。
+    expect(() => loop.get(view.id)).toThrow(RecordIntegrityError);
+    // 原始数据仍在，绕开 WetLabLoop 直接读还是能看到——这是「可检测」的落点，不是数据丢失。
+    const raw = project.records().get(view.id)!;
+    expect((raw.metadata as { naturalLanguage: string }).naturalLanguage).toBe(PROTOCOL_B);
+    project.close();
+  });
+
+  // 更贴近评审原话的场景：不是改一个无关字段，而是**一次性伪造** state + approval +
+  // 匹配的 protocolHash——「进程内 RecordStore.update() 可以让整套伪造自洽通过」。
+  // integrityHash 挡的就是这个：伪造者要么也伪造出一个能通过校验的哈希（那已经是在走
+  // 与合法 transition() 相同的计算，不再是"绕过"），要么就会被下一次 get() 拒绝。
+  test("一次性伪造 state + approval + 匹配的 protocolHash 同样过不了完整性校验", async () => {
+    const { project } = newWorkspace();
+    const loop = loopFor(project);
+    const view = loop.design({ title: "伪造测试", naturalLanguage: PROTOCOL_A });
+    const compiled = loop.compile(view.id).view;
+
+    // 伪造一条「看起来自洽」的审批：hash 与当前编译产物一致，其余字段照抄合法形状。
+    project.records().update(view.id, {
+      metadata: {
+        state: "approved",
+        approval: {
+          decisionRecordId: "forged",
+          actor: "冒充的人",
+          at: new Date().toISOString(),
+          protocolHash: compiled.protocolHash,
+          note: null,
+        },
+      },
+    });
+
+    // 没有 WetLabLoop 记录过这次"审批"的 integrityHash，伪造的 metadata 对不上——拒绝信任。
+    expect(() => loop.get(view.id)).toThrow(RecordIntegrityError);
+    await expect(loop.execute(view.id)).rejects.toThrow(RecordIntegrityError);
     project.close();
   });
 
@@ -462,7 +511,7 @@ describe("状态只在 record 里（换进程接得回来）", () => {
 
     const reopened = restart(manager, project);
     const after = reopened.loop.get(view.id);
-    expect(after.state).toBe("wet_run");
+    expect(after.state).toBe("approved");
     expect(after.approval?.actor).toBe("张三");
     expect(after.approval?.protocolHash).toBe(view.protocolHash!);
     expect(after.compiledSteps).toHaveLength(3);
@@ -478,7 +527,7 @@ describe("状态只在 record 里（换进程接得回来）", () => {
     const view = upToApproval(loop);
     const approved = loop.approve(view.id, { actor: "张三" }).view;
     const content = approved.record.content;
-    expect(content).toContain("状态：**wet_run**");
+    expect(content).toContain("状态：**approved**");
     expect(content).toContain("张三");
     expect(content).toContain("安全门通过 ≠ 可以执行");
     expect(content).toContain("design → compile");
@@ -568,7 +617,43 @@ describe("list / 过滤", () => {
     expect(loop.list()).toHaveLength(2);
     expect(loop.list({ state: "awaiting_approval" as WetExperimentState })).toHaveLength(1);
     expect(loop.list({ state: "design" as WetExperimentState })).toHaveLength(1);
-    expect(loop.list({ state: "wet_run" as WetExperimentState })).toHaveLength(0);
+    expect(loop.list({ state: "approved" as WetExperimentState })).toHaveLength(0);
+    project.close();
+  });
+});
+
+// P10-d · D-8：编译器算出来的 unconsumedWarnings 必须原样带到湿实验 view / 正文里——
+// 这条链路（compile() → WetExperimentMeta.unconsumedWarnings → renderWetExperiment）
+// 才是"用户写了但安全门没看见"真正会被人看到的地方，不是只在 protocol.ts 单测里存在。
+describe("D-8 · unconsumed 信号接到湿实验 view / 正文", () => {
+  test("浓度描述编译进去后：安全门四条全过，但 view 与正文里都能看到未消费告警", () => {
+    const { project } = newWorkspace();
+    const loop = loopFor(project);
+    // 「配制10%次氯酸钠溶液」：prepareReagent 认得出来（有"配制"关键词），
+    // 但浓度 10% 不会被编译器解析进 concentration_limit 需要的字段——安全门看不见它，
+    // 只会看到一个体积正常的 prepareReagent 步骤，四条规则理应全过。
+    const view = loop.design({ title: "浓度未消费", naturalLanguage: "配制10%次氯酸钠溶液200uL" });
+    loop.compile(view.id);
+    const { view: checked, report } = loop.safetyCheck(view.id);
+    expect(report.passed).toBe(true);
+    expect(checked.state).toBe("awaiting_approval");
+    // 但绝不能是「安全门全过、没有任何提示」的静默绿灯——unconsumedWarnings 必须非空。
+    expect(checked.unconsumedWarnings.length).toBeGreaterThan(0);
+    expect(checked.unconsumedWarnings.join(" ")).toContain("浓度");
+    // 正文（record.content，撕下来也认得出的那份）必须显示，不能只在 JSON 字段里才有。
+    expect(checked.record.content).toContain("未被安全门消费的信号");
+    expect(checked.record.content).toContain("浓度");
+    project.close();
+  });
+
+  test("干净协议（PROTOCOL_A）unconsumedWarnings 为空，正文不出现未消费小节", () => {
+    const { project } = newWorkspace();
+    const loop = loopFor(project);
+    const view = upToApproval(loop, PROTOCOL_A, "干净协议");
+    expect(view.unconsumedWarnings).toEqual([]);
+    // 安全门表格下面固定有一句"覆盖范围口径"提示，会提到"未被安全门消费的信号"这个词组本身；
+    // 真正要断言的是那个独立小节标题**没有**出现——干净协议不该多出一整段空的警告小节。
+    expect(view.record.content).not.toContain("## ⚠️ 未被安全门消费的信号");
     project.close();
   });
 });

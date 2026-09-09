@@ -88,6 +88,33 @@ describe("对抗 ① 不兼容试剂组合", () => {
     expect(chemicalCompatibilityRule.evaluate({ protocol }).passed).toBe(true);
     expect(concentrationLimitRule.evaluate({ protocol }).passed).toBe(false);
   });
+
+  // P10-d · D-8：评审实测「英文/分子式协议整体免疫」——试剂词表只有 6 个中文关键词时，
+  // 下面这些输入压根提取不出 reagentId，chemical_compatibility 无从判断，静默放行。
+  // 词表扩到英文名/分子式之后，同样的化学冲突要在**真实编译入口**（不是 withReagents
+  // 手工注入）就能被拦下。
+  test("英文名协议：HCl + NaClO 走真实编译入口也会被拦（不再靠手工注入）", () => {
+    const protocol = compiler.compile("加入10uL HCl，加入10uL NaClO", { name: "english" });
+    const result = chemicalCompatibilityRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+  });
+
+  test("分子式协议：NaOH + HCl（强碱 × 强酸）同样被拦", () => {
+    const protocol = compiler.compile("加入10uL NaOH，加入10uL HCl", { name: "formula" });
+    expect(chemicalCompatibilityRule.evaluate({ protocol }).passed).toBe(false);
+  });
+
+  test("中英混写同一份协议：盐酸（中文）+ NaClO（分子式）照样识别成同一对冲突", () => {
+    const protocol = compiler.compile("加入10uL盐酸，加入10uL NaClO", { name: "mixed" });
+    const result = chemicalCompatibilityRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain("盐酸");
+  });
+
+  test("阴性对照：ethanol（英文名）单独出现不误杀", () => {
+    const protocol = compiler.compile("加入10uL ethanol", { name: "ethanol-alone" });
+    expect(chemicalCompatibilityRule.evaluate({ protocol }).passed).toBe(true);
+  });
 });
 
 describe("对抗 ② 超浓度", () => {

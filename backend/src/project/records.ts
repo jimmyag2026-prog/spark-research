@@ -35,6 +35,24 @@ interface RecordRow {
   created_at: string;
 }
 
+// P10-d · D-9：乐观并发版本号。**不**放进 `ResearchRecord`/schema.sql（避免动共享类型、
+// 影响其他 lane）——`rev` 只在 records 表这一列里，读写都走 RecordStore 自己的窄口
+// （`getRev` / `update(..., { expectedRev })`），对外仍是原来的 `ResearchRecord` 形状。
+export class RecordConflictError extends Error {
+  constructor(
+    readonly id: string,
+    readonly expectedRev: number,
+    readonly currentRev: number | null,
+  ) {
+    super(
+      `RecordConflict: record '${id}' 并发写入冲突（期望 rev=${expectedRev}，当前 rev=${
+        currentRev ?? "(记录已不存在)"
+      }）——本次写入被拒绝，不是静默覆盖`,
+    );
+    this.name = "RecordConflictError";
+  }
+}
+
 interface EdgeRow {
   source_id: string;
   target_id: string;
@@ -97,6 +115,27 @@ export class RecordStore {
   initSchema(): void {
     const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
     this.db.exec(schema);
+    this.migrateRevColumn();
+  }
+
+  // P10-d · D-9：老 records.db 没有 rev 列 —— 不能让老项目打不开。
+  // schema.sql 刻意**不**加这一列（那是所有 lane 共用的建表脚本，改它风险面更大）；
+  // 迁移完全在这里做，对全新库和老库是同一条路径：新库先被上面的 CREATE TABLE IF NOT EXISTS
+  // 建出来（自然没有 rev 列），然后这里统一 ALTER 补上，新库和老库补出来的列完全一样。
+  private migrateRevColumn(): void {
+    const columns = this.db.query("PRAGMA table_info(records)").all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === "rev")) {
+      // 老库里已有的行没有 rev：DEFAULT 1 是唯一诚实的起点——它们「从这一刻起」被纳入版本管理，
+      // 之前的历史无从追溯（旧库本来就没记录过）。
+      this.db.exec("ALTER TABLE records ADD COLUMN rev INTEGER NOT NULL DEFAULT 1");
+    }
+  }
+
+  // rev 不进 ResearchRecord（那是共享类型，改了会牵连其他 lane）。需要 CAS 的调用方
+  // （目前只有湿实验 execute() 的「声明执行权」）单独读这一列。
+  getRev(id: string): number | null {
+    const row = this.db.query("SELECT rev FROM records WHERE id = ?").get(id) as { rev: number } | null;
+    return row ? row.rev : null;
   }
 
   create(input: RecordInput): ResearchRecord {
@@ -178,16 +217,35 @@ export class RecordStore {
   // 为什么需要它（P4）：idea 卡的 novelty 状态是**生命周期字段**（unchecked → checked-*），
   // 与 library.reading_status 同类；审计痕迹由 novelty 报告 record + derives_from 边承担，
   // 不靠在思路库里堆同一个 idea 的历史副本。
+  // P10-d · D-9：`opts.expectedRev` 是**可选**的（新增可选参数，不改变有 rev 的签名）——
+  // 不给就是原来的行为（无条件覆盖，last-write-wins，rev 仍然 +1，只是没人核对它）；
+  // 给了就是 `UPDATE ... WHERE id=? AND rev=?`：影响行数为 0 说明别的写入抢先了，
+  // 抛 RecordConflictError 而不是静默覆盖——这是并发执行/并发审批那类物理世界操作要的语义。
   update(
     id: string,
     patch: { title?: string; content?: string; metadata?: Record<string, unknown> },
+    opts: { expectedRev?: number } = {},
   ): ResearchRecord {
     const existing = this.get(id);
     if (!existing) throw new RecordValidationError(`record '${id}' not found`);
     const metadata = patch.metadata ? { ...existing.metadata, ...patch.metadata } : existing.metadata;
+    const title = patch.title ?? existing.title;
+    const content = patch.content ?? existing.content;
+    const metadataJson = JSON.stringify(metadata);
+
+    if (opts.expectedRev !== undefined) {
+      const result = this.db
+        .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ? AND rev = ?")
+        .run(title, content, metadataJson, id, opts.expectedRev);
+      if (result.changes === 0) {
+        throw new RecordConflictError(id, opts.expectedRev, this.getRev(id));
+      }
+      return this.get(id)!;
+    }
+
     this.db
-      .query("UPDATE records SET title = ?, content = ?, metadata = ? WHERE id = ?")
-      .run(patch.title ?? existing.title, patch.content ?? existing.content, JSON.stringify(metadata), id);
+      .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ?")
+      .run(title, content, metadataJson, id);
     return this.get(id)!;
   }
 
