@@ -427,13 +427,39 @@ export function extractBiorxivList(payload: unknown): unknown[] {
   return asArray(asObject(payload)?.collection);
 }
 
+// V54 附带发现：bioRxiv 的 JSON 响应里标题/摘要偶尔带未解码的 HTML 实体
+// （比如 "COVID-19 &amp; Long Covid" 里的 "&amp;"）——上游没有解码它们，原样入库会把
+// 字面的 "&amp;" 而不是 "&" 流进 BibTeX 与报告。仓库里没有现成的 HTML 实体解码 helper
+// （已搜过 backend/src），这里只处理常见的几个命名实体 + 数字实体（十进制/十六进制），
+// 不引入完整 HTML 解析依赖——bioRxiv 标题不会出现需要完整解析器才能处理的复杂标记。
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+};
+
+export function decodeCommonHtmlEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (match, entity: string) => {
+    if (entity[0] === "#") {
+      const isHex = entity[1] === "x" || entity[1] === "X";
+      const code = Number.parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+    }
+    const replacement = NAMED_HTML_ENTITIES[entity];
+    return replacement ?? match;
+  });
+}
+
 export function fromBiorxiv(raw: unknown): Paper | null {
   const item = asObject(raw);
   if (!item) return null;
   const title = asString(item.title);
   if (!title) return null;
   const paper = emptyPaper();
-  paper.title = title.replace(/\s+/g, " ").trim();
+  paper.title = decodeCommonHtmlEntities(title.replace(/\s+/g, " ").trim());
   paper.sources = ["biorxiv"];
   // authors 是分号分隔的 "Last, F.;Last2, F2." 字符串（bioRxiv API 约定，没有结构化数组）。
   const authorsRaw = asString(item.authors) ?? "";
@@ -448,7 +474,8 @@ export function fromBiorxiv(raw: unknown): Paper | null {
   paper.venue = server ?? "bioRxiv";
   paper.doi = normalizeDoi(item.doi);
   if (paper.doi) paper.ids.biorxiv = paper.doi;
-  paper.abstract = asString(item.abstract);
+  const abstract = asString(item.abstract);
+  paper.abstract = abstract ? decodeCommonHtmlEntities(abstract) : null;
   // 预印本本身公开可读，不看 published 字段（那是"是否已被正式期刊收录"，与
   // "现在能不能免费读全文"是两回事，"NA" 不代表不可读）。
   paper.isOpenAccess = true;
