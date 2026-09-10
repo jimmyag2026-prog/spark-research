@@ -75,14 +75,12 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // backend/src/llm/budget.ts 曾在此登记「等接线：W1-a（ToolBus）接上后必须删除本条」——
   // W1-a 的 backend/src/agents/toolbus.ts 已经 import BudgetLedger 并在每次工具调用后
   // record()，budget.ts 有了真实生产调用方，按对称检查删除本条。
-
-  "backend/src/agents/toolbus.ts":
-    "**等接线**：v0.4 P12 波次 W1-a 交付的 AgentToolBus（授权 / 预算 / 审计三层，套在 P9 的" +
-    "McpToolRunner 外）。它的消费方是 W2-a 的子代理 tool loop（`agents/orchestrator.ts` /" +
-    "`agents/sub_agent.ts`，见 DEVELOPMENT_PLAN_v0.4.md §5·补.2 的任务级依赖图" +
-    "`R-c → T-a ToolBus → T-b 子代理 tool loop`），本 lane 尚未落地，所以现在没有生产调用方。" +
-    "**W2-a 接上子代理 tool loop 后必须删除本条**——门禁的『多余登记必须删除』对称检查会强制这件事" +
-    "（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  //
+  // backend/src/agents/toolbus.ts 曾在此登记「等接线：W2-a（子代理 tool loop）接上后必须
+  // 删除本条」——W2-a 的 backend/src/agents/sub_agent.ts 现在
+  // `import { AgentToolBus, isDenied, ... } from "./toolbus"` 并在 runSubAgent() 的真 tool
+  // loop 里为每个子代理构造一个 AgentToolBus 实例，toolbus.ts 有了真实生产调用方，
+  // 按对称检查删除本条。
 
   "backend/src/connectors/manifest.ts":
     "**等接线**：v0.4 W1-c 交付的声明式 connector manifest 编译器（P15 X-b）。" +
