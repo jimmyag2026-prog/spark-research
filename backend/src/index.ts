@@ -254,7 +254,7 @@ async function interactive() {
   console.log("Spark Research CLI（输入 exit 退出）");
   console.log(`API: ${auth.provider}`);
   console.log(`项目: ${project?.slug ?? "未绑定"}`);
-  console.log("可用技能: literature, protein, genomics, chemistry, compute, lab");
+  console.log("可用技能: literature, protein, genomics, chemistry, lab");
   console.log("");
 
   const rl = createInterface({

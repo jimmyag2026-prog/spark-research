@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import {
   OrchestratorAgent,
+  TASK_KINDS,
   type OrchestratorDeps,
   type ReviewerAdapter,
 } from "../../backend/src/agents/orchestrator";
@@ -49,12 +50,11 @@ describe("OrchestratorAgent.processRequest", () => {
   test("识别请求需要的技能", async () => {
     const { orch } = createOrchestrator();
     const result = await orch.processRequest(
-      "搜索蛋白质结构和相关文献（UniProt/PDB/PubMed）并做计算分析",
+      "搜索蛋白质结构和相关文献（UniProt/PDB/PubMed）",
       "sess_skills",
     );
     expect(result.skills).toContain("protein");
     expect(result.skills).toContain("literature");
-    expect(result.skills).toContain("compute");
     expect(result.plan.length).toBeGreaterThan(0);
   });
 
@@ -518,5 +518,105 @@ describe("OrchestratorAgent.runResearchLoop", () => {
     expect(result.observations[0]!.subagentType).toBe("literature");
     expect(result.observations[0]!.newRecordIds.length).toBe(1);
     expect(result.report.allDone).toBe(true);
+  });
+});
+
+// F-a / F-5：清掉活了四个版本的假 ComputeService 之后，「未知 task kind」不能再有
+// 第二条静默通路——normalizeTask() 曾经把不在 TASK_KINDS 白名单里的 kind 直接过滤掉
+// （计划里凭空少一个任务，执行日志没有痕迹），这跟假 compute 的"LLM 计划出任务 →
+// 拿到看似成功但什么都没发生的结果"是同一类问题，只是换了个位置。下面两个测试锁住
+// 修完之后的两条不变式：① 未知 kind 显式失败且可见 ② planner prompt 里的 kind 白名单
+// 与逐项说明文字跟 TASK_KINDS 同源，不会再出现"表里删了、说明文字忘了删"。
+describe("OrchestratorAgent F-5：未知 task kind 显式失败，planner prompt 与 TASK_KINDS 同源", () => {
+  function llmWithPlan(planTasks: unknown[]): typeof mockLlm {
+    return {
+      call: async (
+        messages: ChatMessage[],
+        modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL,
+      ): Promise<LlmResponse> => {
+        const model =
+          typeof modelOrOptions === "string" ? modelOrOptions : (modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL);
+        const userContent = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+        if (userContent.includes('MUST be one of')) {
+          return { ok: true, provider: "kimi", model, content: JSON.stringify(planTasks), ...llmExtras() };
+        }
+        // summarize() 等其他阶段的调用：随便给点内容，这些测试不关心摘要正文。
+        return { ok: true, provider: "kimi", model, content: "[test summary]", ...llmExtras() };
+      },
+      listModels: mockLlm.listModels,
+    };
+  }
+
+  test("规划出一个已废弃的 'compute' kind：计划里不被静默丢弃，执行结果显式 ok:false，执行日志可见", async () => {
+    const llm = llmWithPlan([{ id: "t1", kind: "compute", description: "run a compute job" }]);
+    const { daemon, orch } = createOrchestrator({ llm });
+    const result = await orch.processRequest("跑一个计算任务", "sess_unknown_kind");
+
+    // 计划里仍然保留这个任务——不是被 normalizeTask 悄悄过滤掉换成 defaultPlan()。
+    expect(result.plan).toHaveLength(1);
+    expect(result.plan[0]?.kind).toBe("compute");
+
+    // 执行结果是显式失败，不是假成功（这正是被清掉的 DefaultCompute 曾经做的事：
+    // `case "compute"` 会在这里返回 `ok:true`）。
+    const outcome = result.execution.find((e) => e.taskId === "t1");
+    expect(outcome).toBeDefined();
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.output).toContain("unknown task kind");
+    expect(outcome?.output).toContain("compute");
+
+    // 不只是返回值里有，执行日志（调用方不读 execution 细节也能查到）里也有一条。
+    const entries = (daemon.executionLog as unknown as { entries: Array<Record<string, unknown>> }).entries;
+    const logged = entries.find(
+      (e) => e.action === "unknown-kind" && typeof e.message === "string" && e.message.includes("compute"),
+    );
+    expect(logged).toBeDefined();
+  });
+
+  test("planner prompt 的 kind 白名单 + 逐项说明文字与 TASK_KINDS 同源（双向）", async () => {
+    let capturedPrompt = "";
+    const llm = {
+      call: async (
+        messages: ChatMessage[],
+        modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL,
+      ): Promise<LlmResponse> => {
+        const model =
+          typeof modelOrOptions === "string" ? modelOrOptions : (modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL);
+        const userContent = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+        if (userContent.includes('MUST be one of')) {
+          capturedPrompt = userContent;
+          return {
+            ok: true,
+            provider: "kimi",
+            model,
+            content: JSON.stringify([{ id: "t1", kind: "analysis", description: "x" }]),
+            ...llmExtras(),
+          };
+        }
+        return { ok: true, provider: "kimi", model, content: "[test summary]", ...llmExtras() };
+      },
+      listModels: mockLlm.listModels,
+    };
+    const { orch } = createOrchestrator({ llm });
+    await orch.processRequest("随便什么请求", "sess_prompt_sync");
+
+    expect(capturedPrompt).not.toBe("");
+
+    // 白名单那句本来就是 `TASK_KINDS.join(",")` 拼出来的，这里做格式层面的回归锁定。
+    const listMatch = capturedPrompt.match(/MUST be one of: ([^.]+)\./);
+    expect(listMatch).not.toBeNull();
+    const listedKinds = listMatch![1]!.split(",").map((s) => s.trim());
+    expect(listedKinds).toEqual([...TASK_KINDS]);
+
+    // 逐项说明文字（`"kind"=...`）是手写的，容易跟 TASK_KINDS 漂移——双向核对：
+    // 提到的每个 kind 必须在白名单里（防止"表里删了，说明文字忘了删"，即 compute
+    // 当年活下来的方式）；白名单里的每个 kind 也必须有说明文字（防止反过来只加
+    // 白名单不写用法）。
+    const describedKinds = [...capturedPrompt.matchAll(/"(\w+)"=/g)].map((m) => m[1]!);
+    for (const k of describedKinds) {
+      expect(TASK_KINDS as readonly string[]).toContain(k);
+    }
+    for (const k of TASK_KINDS) {
+      expect(describedKinds).toContain(k);
+    }
   });
 });

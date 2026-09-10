@@ -42,7 +42,10 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
 
   out("▎依赖分层（core 零依赖 · science=openmm · lab=opentrons）");
   for (const tier of report.tiers) {
-    out(`  ${mark(tier.available)} ${pad(tier.label, 10)}${tier.summary}`);
+    // F-c：打包限制（BACKLOG V27）跟真没装依赖不是一回事，图标也得分开——
+    // ❌ 意味着"装一下就好"，这里如果照样打 ❌ 会跟 reason 里已经澄清的话自相矛盾。
+    const icon = tier.packagingLimitation ? "⚠️ " : `${mark(tier.available)} `;
+    out(`  ${icon}${pad(tier.label, 10)}${tier.summary}`);
     if (!tier.available && tier.reason) {
       out(`      ${tier.reason}`);
     }

@@ -58,12 +58,8 @@ export class ControlRepl {
         this.daemon.handleKernelCall(this.kernelId, "create_agent", config ?? {}),
       delegateTask: (spec?: any) =>
         this.daemon.handleKernelCall(this.kernelId, "delegate_task", spec ?? {}),
-      queryFrames: (query?: any) =>
-        this.daemon.handleKernelCall(this.kernelId, "query_frames", query ?? {}),
       manageSkills: (action?: any) =>
         this.daemon.handleKernelCall(this.kernelId, "manage_skills", action ?? {}),
-      computeSubmit: (job?: any) =>
-        this.daemon.handleKernelCall(this.kernelId, "compute_submit", job ?? {}),
     };
 
     const params = Object.keys(sandbox);

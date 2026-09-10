@@ -30,6 +30,10 @@ export interface DependencyTierStatus {
   summary: string;
   available: boolean;
   reason: string | null;
+  // F-c：`reason` 是「依赖真没装」还是「BACKLOG V27 那个单二进制打包限制」，
+  // 机器可读地分开（见下面 isPackagingLimitation）。--json 的消费方（脚本/agent）
+  // 不该靠正则猜 reason 文本，这个字段就是给它们的。
+  packagingLimitation: boolean;
 }
 
 export interface ProviderKeyStatus {
@@ -112,6 +116,43 @@ async function defaultProbeLab(python: string): Promise<TierProbeResult> {
   return { ok: status.ok, reason: status.reason };
 }
 
+// F-c（BACKLOG V27 定性 lane）：`doctor` 的一个真实误报。
+//
+// `bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟路径 `/$bunfs/root/`，
+// `lab/wet_backend.ts` 的 `BACKEND_SCRIPT = join(import.meta.dir, "opentrons_backend.py")`
+// 在这种产物里读不到真实文件，`Bun.spawn` 报 ENOENT，`OpentronsSimulatorBackend.available()`
+// 把这条子进程报错原样透传成 `reason`——**用户看到的文案长得跟"没装 opentrons"一模一样**
+// （`docs/devlog/F-c.md` §4 有真实终端输出）：
+//
+//   opentrons 模拟器不可用（python=python3, exit=2）：
+//   .../python3: can't open file '/$bunfs/root/opentrons_backend.py': No such file or directory。
+//   安装：VIRTUAL_ENV=.venv uv pip install opentrons
+//
+// 照着这条"安装"命令走，`uv pip install opentrons` 装完问题分毫不动——病灶不是依赖，
+// 是打包产物没把 opentrons_backend.py 一起带上。`doctor` 作为诊断工具，自己给错误的
+// 诊断方向，比不诊断更糟。
+//
+// 判定法：不需要额外接一条"是不是编译产物"的环境标志——失败原因里出现 `/$bunfs/` 这个
+// 子串本身就是**唯一**、无歧义的证据（只有 `import.meta.dir` 在编译产物里才会展开成这个
+// 虚拟路径；源码运行/npm/npx 三条路径下这个子串永远不会出现在任何真实报错里）。
+// 好处：不用在 doctor 里另外判断"当前是不是跑在编译产物里"，也不用给测试注入假的
+// `import.meta.dir`——注入一个真实产物才会产生的 reason 文本，就是最贴近真实场景的用例。
+function isPackagingLimitation(reason: string | null): boolean {
+  return typeof reason === "string" && reason.includes("/$bunfs/");
+}
+
+// 命中 V27 打包限制时，把 reason 从"看起来像装依赖失败"改写成如实的诊断——不建议
+// 用户去装依赖（那解决不了问题），指向已知限制 + 可行的绕过路径，原始报错保留在末尾供排障。
+function describeTierReason(reason: string | null): string {
+  if (!isPackagingLimitation(reason)) return reason ?? "";
+  return (
+    `这不是依赖没装——是单二进制发行版的已知限制（BACKLOG V27）：` +
+    `编译产物（bun build --compile）没有把运行期脚本一起打包，探测子进程读不到文件，` +
+    `装依赖解决不了。请改用源码运行（\`bun backend/src/index.ts ...\`）或 npm/npx 安装方式。` +
+    `原始报错：${reason}`
+  );
+}
+
 export async function buildDoctorReport(options: DoctorOptions = {}): Promise<DoctorReport> {
   const env = options.env ?? process.env;
   const config = loadConfig(options);
@@ -134,20 +175,23 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
       summary: "文献 / idea / novelty / 记录 / 报告（零 Python 依赖，只需要 bun）",
       available: true,
       reason: null,
+      packagingLimitation: false,
     },
     {
       id: "science",
       label: "science",
       summary: "干实验仿真（openmm）",
       available: science.ok,
-      reason: science.reason,
+      reason: science.ok ? null : describeTierReason(science.reason),
+      packagingLimitation: isPackagingLimitation(science.reason),
     },
     {
       id: "lab",
       label: "lab",
       summary: "湿实验模拟器（opentrons）",
       available: lab.ok,
-      reason: lab.reason,
+      reason: lab.ok ? null : describeTierReason(lab.reason),
+      packagingLimitation: isPackagingLimitation(lab.reason),
     },
   ];
 
