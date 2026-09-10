@@ -22,8 +22,13 @@ fi
 echo "   ok: $BIN_VERSION"
 
 echo "== ② capabilities 技能数 =="
-SKILLS=$("$BIN" capabilities --json | bun -e 'const d=JSON.parse(await new Response(Bun.stdin.stream()).text());console.log((d.skills??[]).length)')
-if [ "$SKILLS" -lt 1 ]; then echo "❌ 二进制报告技能 0 个（V27 形状）"; exit 1; fi
+CAP_OUT=$("$BIN" capabilities --json 2>&1 || true)
+SKILLS=$(printf '%s' "$CAP_OUT" | bun -e 'try{const d=JSON.parse(await new Response(Bun.stdin.stream()).text());console.log((d.skills??[]).length)}catch{console.log("PARSE_FAIL")}')
+if [ "$SKILLS" = "PARSE_FAIL" ] || [ "$SKILLS" -lt 1 ]; then
+  echo "❌ 二进制报告技能 $SKILLS（V27 形状）。capabilities 原始输出前 800 字节："
+  printf '%s' "$CAP_OUT" | head -c 800; echo
+  exit 1
+fi
 echo "   ok: $SKILLS 个技能"
 
 echo "== ③ server 起得来且有真 UI =="
