@@ -1,6 +1,8 @@
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { configuredDefaultModel } from "../config";
+import { UsageStore, parseBudgetUsd, usageTrackingLlm } from "../usage/ledger";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import type { HttpClient } from "../http/client";
@@ -157,8 +159,21 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
       case "new": {
         const { project, library } = openProject(manager);
         const records = project.records();
+        const budget = parseBudgetUsd(flags["budget-usd"], err);
+        if (!budget.ok) {
+          library.close();
+          project.close();
+          return 1;
+        }
+        // G-3：LLM 调用过台账（usage.jsonl 与 lit 系命令同一份，按项目累计）。
         const session = new CoExploreSession({
-          llm: deps.llm ?? new LLMRouter(),
+          llm: usageTrackingLlm({
+            llm: deps.llm ?? new LLMRouter(),
+            store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+            command: "idea-new",
+            budgetUsd: budget.value,
+            configOptions: { root: deps.root },
+          }),
           library,
           records,
           model,
@@ -271,8 +286,20 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
           return 1;
         }
 
+        const checkBudget = parseBudgetUsd(flags["budget-usd"], err);
+        if (!checkBudget.ok) {
+          library.close();
+          project.close();
+          return 1;
+        }
         const checker = new NoveltyChecker({
-          llm: deps.llm ?? new LLMRouter(),
+          llm: usageTrackingLlm({
+            llm: deps.llm ?? new LLMRouter(),
+            store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+            command: "novelty-check",
+            budgetUsd: checkBudget.value,
+            configOptions: { root: deps.root },
+          }),
           searcher: makeSearcher(),
           library,
           records,

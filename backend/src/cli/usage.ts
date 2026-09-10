@@ -1,0 +1,122 @@
+import { join } from "node:path";
+import { ProjectManager, ProjectError } from "../project/manager";
+import { UsageStore } from "../usage/ledger";
+
+// G-3（v0.6）：`spark-research usage`——用量台账的人类/机器出口。
+//
+// 这个 dispatcher 刻意独立成文件而不是塞进 index.ts 的 switch：
+// W6-1 lane α（connector 调用台账）要加 `usage api` 子命令，独立文件让它只动这里、
+// 不碰 index.ts 热点（v0.5 规划里三个共享文件热点的教训）。
+
+export interface UsageCliDeps {
+  manager?: ProjectManager;
+  root?: string;
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+}
+
+const HELP = `用法: spark-research usage [--project <slug>] [--json]
+
+  显示本项目的 LLM 用量台账（usage.jsonl）：调用数、tokens、已知花费（下界）、
+  按命令/模型的归因。成本未知的调用单独计数——**未知不等于免费**，
+  有未知就不报确定总数。
+
+  台账由 lit read / lit review / idea new / idea check 自动记录；
+  配合 --budget-usd 使用时，预算闸按「已知花费下界」判停。`;
+
+function flagString(value: string | true | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
+  const positional: string[] = [];
+  const flags: Record<string, string | true> = {};
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (!arg.startsWith("--")) {
+      positional.push(arg);
+      continue;
+    }
+    const name = arg.slice(2);
+    const next = args[i + 1];
+    if (next && !next.startsWith("--")) {
+      flags[name] = next;
+      i++;
+    } else {
+      flags[name] = true;
+    }
+  }
+  return { positional, flags };
+}
+
+function fmtUsd(v: number): string {
+  return `$${v.toFixed(4)}`;
+}
+
+export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): Promise<number> {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  const err = deps.err ?? ((line: string) => console.error(line));
+  const { positional, flags } = parseFlags(args);
+
+  if (flags.help === true || args.includes("-h") || positional[0] === "help") {
+    out(HELP);
+    return 0;
+  }
+  if (positional.length > 0) {
+    err(`❌ 未知子命令 'usage ${positional[0]}'。当前只有默认视图；用 spark-research usage --help 看用法。`);
+    return 1;
+  }
+
+  const manager = deps.manager ?? new ProjectManager(deps.root);
+  let project;
+  try {
+    const slug = flagString(flags.project);
+    project = slug ? manager.open(slug) : manager.defaultProject();
+  } catch (error) {
+    if (error instanceof ProjectError) {
+      err(`❌ ${error.message}`);
+      err("下一步：spark-research project new <名称> 建项目，或 --project <slug> 指定已有项目。");
+      return 1;
+    }
+    throw error;
+  }
+
+  try {
+    const store = new UsageStore(join(project.paths.root, "usage.jsonl"));
+    const totals = store.totals();
+    const corrupt = store.corruptLines();
+
+    if (flags.json === true) {
+      out(JSON.stringify({ project: project.slug, ...totals, corruptLines: corrupt }, null, 2));
+      return 0;
+    }
+
+    out(`📒 用量台账 · 项目 ${project.slug}`);
+    if (totals.calls === 0) {
+      out("  还没有 LLM 用量记录。lit read / lit review / idea new / idea check 的调用会自动入账。");
+      return 0;
+    }
+    out(`  LLM 调用 ${totals.calls} 次 · 输入 ${totals.inputTokens} tokens · 输出 ${totals.outputTokens} tokens`);
+    out(`  已知花费（下界）${fmtUsd(totals.knownCostUsd)}`);
+    if (totals.unknownCostCalls > 0) {
+      out(
+        `  ⚠️ 其中 ${totals.unknownCostCalls} 次调用成本未知（拿不到 usage 或查不到单价）——` +
+          `总花费无法确定报出，上面的数只是下界。`,
+      );
+    }
+    out("  按命令:");
+    for (const [cmd, t] of Object.entries(totals.byCommand)) {
+      out(`    ${cmd}: ${t.calls} 次 · ${fmtUsd(t.knownCostUsd)}${t.unknownCostCalls > 0 ? ` · ${t.unknownCostCalls} 次未知` : ""}`);
+    }
+    out("  按模型:");
+    for (const [mdl, t] of Object.entries(totals.byModel)) {
+      out(`    ${mdl}: ${t.calls} 次 · ${fmtUsd(t.knownCostUsd)}${t.unknownCostCalls > 0 ? ` · ${t.unknownCostCalls} 次未知` : ""}`);
+    }
+    if (corrupt > 0) {
+      out(`  ⚠️ 台账文件有 ${corrupt} 行无法解析（文件可能被手工改过），以上统计不含这些行。`);
+    }
+    return 0;
+  } finally {
+    project.close();
+  }
+}

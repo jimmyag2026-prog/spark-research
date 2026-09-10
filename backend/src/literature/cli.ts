@@ -1,5 +1,7 @@
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { configuredDefaultModel } from "../config";
+import { UsageStore, parseBudgetUsd, usageTrackingLlm } from "../usage/ledger";
 import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
@@ -77,16 +79,20 @@ export const LIT_SUBCOMMAND_HELP: Record<string, string> = {
   下载该论文的开放获取 PDF（只走 OA 渠道，不绕付费墙）。
   不可得时把原因记进库内 pdf_reason，不会重复重试。`,
 
-  read: `用法: spark-research lit read <paper-id> | --all [--tag 标签] [--json]
+  read: `用法: spark-research lit read <paper-id> | --all [--tag 标签] [--redo] [--budget-usd N] [--model M] [--json]
+
+  --all 默认跳过已有精读卡的论文（重跑接续不重复花钱），--redo 强制全部重读。
+  --budget-usd N：本项目累计已知花费达 $N 即停止新的 LLM 调用（已完成的卡保留）。
 
   生成结构化精读卡（研究问题/方法/核心结论/局限/与本项目关系）并落进证据图。
   --all 是长任务：会打印任务句柄与逐篇进度，断开后用 lit tasks <task-id> 查状态。
 
   下一步: lit review 由精读卡生成综述草稿`,
 
-  review: `用法: spark-research lit review [--topic 主题] [--out 文件] [--no-judge] [--session id]
+  review: `用法: spark-research lit review [--topic 主题] [--out 文件] [--no-judge] [--session id] [--budget-usd N] [--model M]
 
   由已有精读卡生成综述草稿，并逐条核验引用（citation-integrity）。
+  --budget-usd N：本项目累计已知花费达 $N 即停止新的 LLM 调用（判定失败降级为可见 soft finding）。
   --no-judge 关掉 LLM 判定，只做库内 key 的机械核对（快，但弱）。
   有 hard finding（伪造/库外引用）时退出码为 1，草稿不可用于交付。
   这是长任务：会打印任务句柄与阶段进度，断开后用 lit tasks <task-id> 查状态。
@@ -487,9 +493,24 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       case "read": {
         const { project, library } = openLibrary(manager);
         const records = project.records();
-        const targets: LibraryPaper[] = [];
+        let targets: LibraryPaper[] = [];
         if (flags.all === true) {
           targets.push(...library.list({ tag: flagString(flags.tag) }));
+          // G-3（v0.6）：--all 默认跳过已有精读卡的论文——预算闸「优雅停后重跑接续」
+          // 的另一半：不跳过的话，resume 等于把已完成的部分再花一遍钱。--redo 强制全读。
+          if (flags.redo !== true) {
+            const readIds = new Set(listReadingCards(records, library).map((c) => c.paperId));
+            const before = targets.length;
+            targets = targets.filter((p) => !readIds.has(p.id));
+            const skipped = before - targets.length;
+            if (skipped > 0) out(`⏭️  跳过 ${skipped} 篇已有精读卡的论文（--redo 强制重读）`);
+            if (targets.length === 0) {
+              out(`✅ 全部 ${before} 篇论文都已有精读卡，无事可做（--redo 强制重读）`);
+              library.close();
+              project.close();
+              return 0;
+            }
+          }
         } else {
           const paperId = positional[0];
           if (!paperId) {
@@ -514,8 +535,23 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           return 1;
         }
 
-        const generator = new ReadingCardGenerator({
+        const budget = parseBudgetUsd(flags["budget-usd"], err);
+        if (!budget.ok) {
+          library.close();
+          project.close();
+          return 1;
+        }
+        // G-3：所有 LLM 调用过台账（usage.jsonl 按项目落盘）；--budget-usd 设了闸，
+        // 达到即拒绝后续调用（已完成的卡都已保存，拒绝消息里有下一步）。
+        const usageLlm = usageTrackingLlm({
           llm: deps.llm ?? new LLMRouter(),
+          store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+          command: "lit-read",
+          budgetUsd: budget.value,
+          configOptions: { root: deps.root },
+        });
+        const generator = new ReadingCardGenerator({
+          llm: usageLlm,
           library,
           records,
           model,
@@ -583,7 +619,20 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           return 1;
         }
 
-        const llm = deps.llm ?? new LLMRouter();
+        const reviewBudget = parseBudgetUsd(flags["budget-usd"], err);
+        if (!reviewBudget.ok) {
+          library.close();
+          project.close();
+          return 1;
+        }
+        // G-3：草稿与逐条引用判定共用同一个带台账/预算闸的 llm（judge 的花费同样入账）。
+        const llm = usageTrackingLlm({
+          llm: deps.llm ?? new LLMRouter(),
+          store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+          command: "lit-review",
+          budgetUsd: reviewBudget.value,
+          configOptions: { root: deps.root },
+        });
         const generator = new ReviewDraftGenerator({
           llm,
           library,
