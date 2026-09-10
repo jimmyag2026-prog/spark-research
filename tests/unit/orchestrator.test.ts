@@ -15,6 +15,17 @@ import type { McpToolRunner } from "../../backend/src/mcp/server";
 import { ProjectManager } from "../../backend/src/project/manager";
 import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse, type ToolCall } from "../../backend/src/llm/router";
 import { llmExtras, llmFailure } from "../../backend/src/llm/types";
+// V32（W5-2 δ）：createExternalToolRunner() 接进 getToolRunner()。用真实 spawn 的
+// 外部 MCP server（与 tests/unit/mcp_client.test.ts 同一个假替身，见 tests/fixtures/mcp/
+// good_server.ts）而不是手搓假 session——mcp_client.test.ts 已经独立验证过
+// connectExternalMcp()/ExternalToolRegistry/createExternalToolRunner() 各自的行为，
+// 这里只验证"orchestrator 真的把它们接上了"这一件事。
+import { connectExternalMcp, ExternalToolRegistry } from "../../backend/src/extensions/mcp_client";
+import type { ExtensionManifest } from "../../backend/src/extensions/types";
+import type { ExtensionGrant } from "../../backend/src/extensions/grants";
+import { AgentToolBus } from "../../backend/src/agents/toolbus";
+import { BudgetLedger } from "../../backend/src/llm/budget";
+import { MCP_TOOLS } from "../../backend/src/mcp/tools";
 
 const mockLlm = {
   call: async (
@@ -618,5 +629,160 @@ describe("OrchestratorAgent F-5：未知 task kind 显式失败，planner prompt
     for (const k of TASK_KINDS) {
       expect(describedKinds).toContain(k);
     }
+  });
+});
+
+// ── V32（W5-2 δ）：createExternalToolRunner() 接进 getToolRunner() ───────────────
+//
+// getToolRunner() 是私有方法——没有别的公开入口能观察"惰性构造出来的 runner 到底
+// 是不是走了 createExternalToolRunner()"，所以这里用一个类型收窄的 cast 直接调它
+// （同一文件里 `(daemon.executionLog as unknown as {...}).entries` 已经是同一种
+// 白盒断言手法）。这不是在测试实现细节的随意性——getToolRunner() 的返回值就是
+// V32 唯一的交付物，绕开它反而测不到重点。
+
+type PrivateToolRunnerAccess = { getToolRunner: () => Promise<McpToolRunner | null> };
+
+function mcpFixtureManifest(name: string): ExtensionManifest {
+  return { kind: "mcp_client", name, version: "0.1.0", description: "V32 测试用外部 MCP 扩展", requires: { credentials: [], tools: [] } };
+}
+
+function emptyMcpGrant(): ExtensionGrant {
+  return { credentials: [], tools: [] };
+}
+
+const MCP_FIXTURES = join(import.meta.dir, "../fixtures/mcp");
+const MCP_GOOD_SERVER = join(MCP_FIXTURES, "good_server.ts");
+
+async function connectFixtureSession(extensionName: string) {
+  const manifest = mcpFixtureManifest(extensionName);
+  const config = {
+    command: process.execPath,
+    args: [MCP_GOOD_SERVER],
+    cwd: undefined,
+    env: [],
+    credentials: [],
+    startupTimeoutMs: 5_000,
+    callTimeoutMs: 3_000,
+  };
+  const result = await connectExternalMcp({ manifest, config, grant: emptyMcpGrant() });
+  if (!result.ok || !result.session) throw new Error(`fixture MCP server 连接失败：${result.reason}`);
+  return result.session;
+}
+
+describe("OrchestratorAgent · V32：getToolRunner() 惰性构造改用 createExternalToolRunner()", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "spark-orch-v32-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("注入 externalTools 且没注入 toolRunner：惰性构造出的 runner 能路由 mcp: 前缀名，内置工具与未知工具原样兜底", async () => {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v32-wiring", { name: "v32 wiring test", description: "" });
+    manager.bindSession("sess_v32_wiring", project.slug);
+
+    const session = await connectFixtureSession("v32-ext");
+    const registry = new ExternalToolRegistry();
+    registry.register(session);
+
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    // 注意：没有传 toolRunner——必须真的走 getToolRunner() 的惰性构造分支，
+    // 否则测的是"注入了假 toolRunner 之后 orchestrator 转发调用"，不是 V32 本身。
+    const orch = new OrchestratorAgent(daemon, { llm: mockLlm, projects: manager, externalTools: registry });
+
+    const runner = await (orch as unknown as PrivateToolRunnerAccess).getToolRunner();
+    expect(runner).not.toBeNull();
+
+    // 外部工具：走 registry。
+    const externalOutcome = await runner!.call("mcp:v32-ext:echo", { text: "via-orchestrator" });
+    expect(externalOutcome.ok).toBe(true);
+    expect(externalOutcome.payload).toEqual({ echoed: { text: "via-orchestrator" } });
+
+    // 内置工具：MCP_TOOLS 里随便挑一个只读、零依赖的，证明父类逻辑（子类化，不是替换）仍然生效。
+    expect(MCP_TOOLS.some((t) => t.name === "research_capabilities")).toBe(true);
+    const internalOutcome = await runner!.call("research_capabilities", {});
+    expect(internalOutcome.ok).toBe(true);
+
+    // 未知工具：既不在 registry 也不在 MCP_TOOLS——父类"未知工具"分支原样生效。
+    const unknownOutcome = await runner!.call("totally-unknown-tool", {});
+    expect(unknownOutcome.ok).toBe(false);
+
+    await session.close();
+  });
+
+  test("惰性构造只发生一次：两次 getToolRunner() 拿到同一个实例（跨调用复用不受 V32 影响）", async () => {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v32-cache", { name: "v32 cache test", description: "" });
+    manager.bindSession("sess_v32_cache", project.slug);
+
+    const session = await connectFixtureSession("v32-cache-ext");
+    const registry = new ExternalToolRegistry();
+    registry.register(session);
+
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, { llm: mockLlm, projects: manager, externalTools: registry });
+
+    const first = await (orch as unknown as PrivateToolRunnerAccess).getToolRunner();
+    const second = await (orch as unknown as PrivateToolRunnerAccess).getToolRunner();
+    expect(first).toBe(second);
+
+    await session.close();
+  });
+
+  test("【阴性对照④】不注入 externalTools：getToolRunner() 退回裸 McpToolRunner，认不出 mcp: 前缀名", async () => {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v32-no-registry", { name: "v32 no-registry test", description: "" });
+    manager.bindSession("sess_v32_no_registry", project.slug);
+
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    // 故意不传 externalTools——退回 v0.4 原样行为。
+    const orch = new OrchestratorAgent(daemon, { llm: mockLlm, projects: manager });
+
+    const runner = await (orch as unknown as PrivateToolRunnerAccess).getToolRunner();
+    expect(runner).not.toBeNull();
+    // "mcp:" 前缀名在没有 registry 的情况下，父类 McpToolRunner 只会把它当成一个
+    // 普通的、不认识的工具名——落到"未知工具"分支，ok=false。这是本组第一个用例
+    // 里"外部工具调用成功"那条断言的直接反面：同一个工具名，接没接 externalTools
+    // 决定了它能不能被认出来。
+    const outcome = await runner!.call("mcp:some-ext:echo", { text: "x" });
+    expect(outcome.ok).toBe(false);
+  });
+
+  test("经 AgentToolBus 调用（授权/预算/审计三层同样生效）：白名单放行时成功且审计记录落地，未授权时结构化拒绝", async () => {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v32-bus", { name: "v32 toolbus test", description: "" });
+    manager.bindSession("sess_v32_bus", project.slug);
+
+    const session = await connectFixtureSession("v32-bus-ext");
+    const registry = new ExternalToolRegistry();
+    registry.register(session);
+
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, { llm: mockLlm, projects: manager, externalTools: registry });
+    const runner = await (orch as unknown as PrivateToolRunnerAccess).getToolRunner();
+
+    const auditLog: unknown[] = [];
+    const bus = new AgentToolBus({
+      runner: runner!,
+      grants: ["mcp:v32-bus-ext:echo"], // 只授权这一个外部工具名
+      budget: new BudgetLedger({}),
+      audit: (entry) => auditLog.push(entry),
+      timeoutMs: 5_000,
+    });
+
+    // 授权清单内：真的执行了外部工具，且落了一条审计记录。
+    const granted = await bus.call("mcp:v32-bus-ext:echo", { text: "via-bus" });
+    expect(granted.ok).toBe(true);
+    expect(auditLog.length).toBe(1);
+
+    // 授权清单外：同一个 registry 里确实存在的工具（whoami），但没写进 grants——
+    // 结构性拒绝（not_granted），证明 V32 不会绕开 AD-2 的授权白名单自动放行。
+    const denied = await bus.call("mcp:v32-bus-ext:whoami", {});
+    expect(denied.ok).toBe(false);
+    expect((denied as { denied?: string }).denied).toBe("not_granted");
+
+    await session.close();
   });
 });

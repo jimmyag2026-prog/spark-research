@@ -135,7 +135,7 @@ export interface EvidenceQuery {
 type ReadableRecordStore = Pick<RecordStore, "list" | "get" | "edgesOf">;
 
 /**
- * **不计入「研究进展」的 record 类型。**
+ * **不计入「研究进展」的 record 类型 / kind 标记。**
  *
  * `agent_run`（W3-b 的帧级记账）是**记账**，不是**证据**：每个子代理跑一次就落一条，
  * 哪怕它什么都没查到、什么都没产出。
@@ -148,11 +148,49 @@ type ReadableRecordStore = Pick<RecordStore, "list" | "get" | "edgesOf">;
  *
  * 所以证据图的「进展」口径必须显式排除记账类型。将来再加类似的旁路 record
  * （审计、遥测…）也要加进这张表。
+ *
+ * `external_tool_call`（W5-2 δ，V31）是同一类旁路，但记法不同：`agent_run` 是独立的
+ * 顶层 record type（`RECORD_TYPES` 第 9 类），外部工具调用记录却复用 `observation`
+ * 这个既有 type——与 `CITATION_INTEGRITY_REVIEW_KIND`（见下方 literature-review 一节）
+ * 同一手法，靠 `metadata.kind` 区分"这条 observation 是审计痕迹还是真证据"，不是
+ * 另开第 10 类 record。`extensions/mcp_client.ts` 的 `ExternalMcpSession.call()` 每次
+ * 外部工具调用都会落这样一条 observation——成功/失败/超时/未知工具四个分支全都落，
+ * 与它本来就在落的 `.mcp_calls.jsonl` 审计记录同步（见该文件 V31 一节）。它是外部
+ * 工具确实被调用过的**审计**，不是研究**进展**：如果算进证据图，子代理每调一次外部
+ * 工具就等于"有进展"，`NoProgressGuard` 会被同样的方式静默废掉——这正是本注释开头
+ * 那次 `agent_run` 事故的翻版，教训不能只学一半。
+ *
+ * 所以下表既比对 `record.type`（`agent_run` 这类独立类型），也比对 `observation` 的
+ * `metadata.kind`（`external_tool_call` 这类共享类型）——见 `isEvidence()`。
  */
-const NON_EVIDENCE_RECORD_TYPES = new Set<RecordType>(["agent_run"]);
+export const EXTERNAL_TOOL_CALL_OBSERVATION_KIND = "external_tool_call";
+
+/** `extensions/mcp_client.ts` 落的 observation record 的 metadata 形状——两处共享同一个类型，不许漂移。 */
+export interface ExternalToolCallObservationMetadata {
+  kind: typeof EXTERNAL_TOOL_CALL_OBSERVATION_KIND;
+  extension: string;
+  tool: string;
+  ok: boolean;
+  durationMs: number;
+  argsSummary: string;
+  errorSummary?: string;
+}
+
+const NON_EVIDENCE_RECORD_TYPES = new Set<string>(["agent_run", EXTERNAL_TOOL_CALL_OBSERVATION_KIND]);
+
+function nonEvidenceMarkerOf(r: ResearchRecord): string | null {
+  if (r.type === "observation") {
+    const kind = (r.metadata as { kind?: unknown } | null | undefined)?.kind;
+    if (typeof kind === "string") return kind;
+  }
+  return null;
+}
 
 function isEvidence(r: ResearchRecord): boolean {
-  return !NON_EVIDENCE_RECORD_TYPES.has(r.type);
+  if (NON_EVIDENCE_RECORD_TYPES.has(r.type)) return false;
+  const marker = nonEvidenceMarkerOf(r);
+  if (marker !== null && NON_EVIDENCE_RECORD_TYPES.has(marker)) return false;
+  return true;
 }
 
 export class RecordStoreEvidenceQuery implements EvidenceQuery {
