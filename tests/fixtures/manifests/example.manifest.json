@@ -1,0 +1,45 @@
+{
+  "id": "example-manifest-demo",
+  "baseUrl": "https://api.example.org",
+  "description": "通用示例 manifest：覆盖 GET+path 参数 / GET+query 参数 / POST+body / defaults / mapTo 各条路径，供单测正向验证用（normalize 单独用一个内联 manifest 对象演示，见 connector_manifest.test.ts）",
+  "tools": [
+    {
+      "name": "search",
+      "description": "全文检索",
+      "endpoint": "/v1/search",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "query": { "type": "string", "required": true, "mapTo": "q" },
+        "limit": { "type": "number", "default": 10 }
+      },
+      "defaults": {
+        "format": "json"
+      }
+    },
+    {
+      "name": "getById",
+      "description": "按 ID 获取单条记录",
+      "endpoint": "/v1/records/{id}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "id": { "type": "string", "required": true }
+      }
+    },
+    {
+      "name": "createThing",
+      "description": "创建一条记录（POST body）",
+      "endpoint": "/v1/things",
+      "method": "POST",
+      "responseType": "json",
+      "params": {
+        "kind": { "type": "enum", "enum": ["a", "b", "c"], "default": "a" }
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "api.example.org",
+    "apiKeyRequired": false
+  }
+}

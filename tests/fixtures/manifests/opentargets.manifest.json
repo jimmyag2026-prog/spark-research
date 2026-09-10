@@ -1,0 +1,57 @@
+{
+  "id": "opentargets-manifest-demo",
+  "baseUrl": "https://api.platform.opentargets.org",
+  "description": "OpenTargets 平台（manifest 表达力硬约束 #3 的验收用例：一个接口横跨 target/disease/drug 三类实体，进 manifest 必须拆成多个 tool，而不是造一个万能 entityType 参数）",
+  "tools": [
+    {
+      "name": "getTarget",
+      "description": "按 Ensembl gene ID 获取 target 实体",
+      "endpoint": "/api/v4/graphql/target/{id}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "id": { "type": "string", "required": true }
+      },
+      "normalize": {
+        "symbol": "data.target.approvedSymbol",
+        "name": "data.target.approvedName",
+        "biotype": "data.target.biotype"
+      }
+    },
+    {
+      "name": "getDisease",
+      "description": "按 EFO ID 获取 disease 实体",
+      "endpoint": "/api/v4/graphql/disease/{id}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "id": { "type": "string", "required": true }
+      },
+      "normalize": {
+        "name": "data.disease.name",
+        "description": "data.disease.description",
+        "therapeuticAreas": "data.disease.therapeuticAreas[0].name"
+      }
+    },
+    {
+      "name": "getDrug",
+      "description": "按 ChEMBL ID 获取 drug 实体",
+      "endpoint": "/api/v4/graphql/drug/{id}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "id": { "type": "string", "required": true }
+      },
+      "normalize": {
+        "name": "data.drug.name",
+        "drugType": "data.drug.drugType",
+        "maxPhase": "data.drug.maximumClinicalTrialPhase"
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "opentargets.org",
+    "apiKeyRequired": false,
+    "caveat": "上游一个接口横跨三类实体；三个 tool 各自声明固定的 endpoint 与 normalize，不共用一个 entityType 参数——三类实体的响应形状不同，一份 normalize 表达不了按参数值切换映射（同一条边界见硬约束 #2）"
+  }
+}
