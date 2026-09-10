@@ -24,6 +24,11 @@ import { AMinerConnector, aminerConfig } from "./aminer";
 import { CNCBConnector, CNKIConnector, WanFangConnector, cncbConfig, cnkiConfig, wanfangConfig } from "./china";
 import { EnsemblConnector, NCBIConnector, ensemblConfig, ncbiConfig } from "./genomics";
 import { ChemBLConnector, PubChemConnector, chemblConfig, pubchemConfig } from "./chemistry";
+import { ClinVarConnector, clinvarConfig } from "./clinvar";
+import { BioRxivConnector, biorxivConfig } from "./biorxiv";
+import { ReactomeConnector, reactomeConfig } from "./reactome";
+import { StringDBConnector, stringDbConfig } from "./string-db";
+import { rateLimitedHttp } from "../http/ratelimit";
 
 const alphafoldConfig: HttpConnectorConfig = {
   baseUrl: "https://alphafold.ebi.ac.uk/api",
@@ -45,6 +50,7 @@ export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: Ht
     { name: "ensembl", config: ensemblConfig },
     { name: "ncbi", config: ncbiConfig },
     { name: "cncb", config: cncbConfig },
+    { name: "clinvar", config: clinvarConfig },
   ],
   chemistry: [
     { name: "chembl", config: chemblConfig },
@@ -60,6 +66,12 @@ export const BUILTIN_CONNECTORS: Record<string, Array<{ name: string; config: Ht
     { name: "aminer", config: aminerConfig },
     { name: "cnki", config: cnkiConfig },
     { name: "wanfang", config: wanfangConfig },
+    { name: "biorxiv", config: biorxivConfig },
+  ],
+  // 新域（W5-2 γ · V26 附带的 C2 第一批）：通路/组学数据源，此前仓库完全没有覆盖。
+  pathways: [
+    { name: "reactome", config: reactomeConfig },
+    { name: "string-db", config: stringDbConfig },
   ],
 };
 
@@ -80,6 +92,10 @@ const CONNECTOR_CLASSES: Record<string, new (options?: ConnectorOptions) => Http
   ncbi: NCBIConnector,
   chembl: ChemBLConnector,
   pubchem: PubChemConnector,
+  clinvar: ClinVarConnector,
+  biorxiv: BioRxivConnector,
+  reactome: ReactomeConnector,
+  "string-db": StringDBConnector,
 };
 
 export class ConnectorRegistry {
@@ -87,8 +103,14 @@ export class ConnectorRegistry {
   private options: ConnectorOptions;
 
   // options 在这里注入一次，之后所有内置 connector 共用同一个 http / 凭据提供方。
+  //
+  // V26：`options.http` 未显式传入时默认成 `rateLimitedHttp()`——这样生产路径
+  // （registry 不带 options 直接 new）天然带限速，测试/fixture 场景显式传入
+  // `http`（StubHttp/FixtureHttp）时原样使用，不会被多包一层限速器（测试确定性
+  // 不受影响）。阴性对照②：把这一行删掉/还原成 `options.http`（不给默认值），
+  // 同主机并发测试必须红——见 docs/devlog/W5-2-c.md。
   constructor(options: ConnectorOptions = {}) {
-    this.options = options;
+    this.options = { ...options, http: options.http ?? rateLimitedHttp() };
   }
 
   registerBuiltins(options?: ConnectorOptions): this {

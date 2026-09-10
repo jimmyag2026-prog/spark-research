@@ -1,0 +1,22 @@
+{
+  "cassette": "string-db-partners",
+  "note": "Recorded by FixtureHttp. Request headers are never persisted; credential-bearing query params are stripped from the match key.",
+  "entries": [
+    {
+      "key": "2e095c97061a814b3d4d2632",
+      "method": "GET",
+      "url": "https://string-db.org/api/json/interaction_partners?identifiers=9606.ENSP00000269305&limit=5",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/json; charset=utf-8"
+        },
+        "bodyLength": 1361,
+        "bodySha256": "377c9230c0664f9467aa4e91ea9a59adfd2c8013da978fd5371fa89a7566b2a5",
+        "truncated": false,
+        "body": "[{\"stringId_A\": \"9606.ENSP00000269305\", \"stringId_B\": \"9606.ENSP00000340989\", \"preferredName_A\": \"TP53\", \"preferredName_B\": \"SFN\", \"ncbiTaxonId\": 9606, \"score\": 0.999, \"nscore\": 0, \"fscore\": 0, \"pscore\": 0, \"ascore\": 0, \"escore\": 0.981, \"dscore\": 0.75, \"tscore\": 0.859}, {\"stringId_A\": \"9606.ENSP00000269305\", \"stringId_B\": \"9606.ENSP00000263253\", \"preferredName_A\": \"TP53\", \"preferredName_B\": \"EP300\", \"ncbiTaxonId\": 9606, \"score\": 0.999, \"nscore\": 0, \"fscore\": 0, \"pscore\": 0, \"ascore\": 0.049, \"escore\": 0.999, \"dscore\": 0.9, \"tscore\": 0.998}, {\"stringId_A\": \"9606.ENSP00000269305\", \"stringId_B\": \"9606.ENSP00000437955\", \"preferredName_A\": \"TP53\", \"preferredName_B\": \"HIF1A\", \"ncbiTaxonId\": 9606, \"score\": 0.999, \"nscore\": 0, \"fscore\": 0, \"pscore\": 0, \"ascore\": 0, \"escore\": 0.847, \"dscore\": 0, \"tscore\": 0.994}, {\"stringId_A\": \"9606.ENSP00000269305\", \"stringId_B\": \"9606.ENSP00000362649\", \"preferredName_A\": \"TP53\", \"preferredName_B\": \"HDAC1\", \"ncbiTaxonId\": 9606, \"score\": 0.999, \"nscore\": 0, \"fscore\": 0, \"pscore\": 0, \"ascore\": 0.109, \"escore\": 0.924, \"dscore\": 0.5, \"tscore\": 0.994}, {\"stringId_A\": \"9606.ENSP00000269305\", \"stringId_B\": \"9606.ENSP00000335153\", \"preferredName_A\": \"TP53\", \"preferredName_B\": \"HSP90AA1\", \"ncbiTaxonId\": 9606, \"score\": 0.999, \"nscore\": 0, \"fscore\": 0, \"pscore\": 0, \"ascore\": 0, \"escore\": 0.903, \"dscore\": 0, \"tscore\": 0.995}]"
+      },
+      "recordedAt": "2026-09-10T13:07:46.159Z"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "cassette": "string-db-search",
+  "note": "Recorded by FixtureHttp. Request headers are never persisted; credential-bearing query params are stripped from the match key.",
+  "entries": [
+    {
+      "key": "d184448fdc75cc538bba89e5",
+      "method": "GET",
+      "url": "https://string-db.org/api/json/get_string_ids?echo_query=1&identifiers=TP53&limit=10&species=9606",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/json; charset=utf-8"
+        },
+        "bodyLength": 768,
+        "bodySha256": "13943ce4f5d962f95ea8fe4789b1816084a2ac996f14c7c22b098fe4c07c6922",
+        "truncated": false,
+        "body": "[{\"queryIndex\": 0, \"queryItem\": \"TP53\", \"stringId\": \"9606.ENSP00000269305\", \"ncbiTaxonId\": 9606, \"taxonName\": \"Homo sapiens\", \"preferredName\": \"TP53\", \"annotation\": \"Cellular tumor antigen p53; Acts as a tumor suppressor in many tumor types; induces growth arrest or apoptosis depending on the physiological circumstances and cell type. Involved in cell cycle regulation as a trans-activator that acts to negatively regulate cell division by controlling a set of genes required for this process. One of the activated genes is an inhibitor of cyclin-dependent kinases. Apoptosis induction seems to be mediated either by stimulation of BAX and FAS antigen expression, or by repression of Bcl-2 expression. Its pro-apoptotic activity is activated via its intera [...] \"}]"
+      },
+      "recordedAt": "2026-09-10T13:07:45.773Z"
+    }
+  ]
+}

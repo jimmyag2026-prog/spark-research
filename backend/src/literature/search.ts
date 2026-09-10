@@ -115,8 +115,10 @@ export class LiteratureSearcher {
     id: string,
   ): Promise<{ status: SourceStatus; papers: Paper[] }> {
     // CrossRef / OpenAlex 只认 DOI 形态的 id；不是 DOI 就别去打无谓的 404。
+    // bioRxiv 的 getPaper 同样只认 DOI（连接器内部转发到 getByDoi，见
+    // connectors/biorxiv.ts），非 DOI id 一样跳过，不打一次注定失败的请求。
     const doi = normalizeDoi(id);
-    if ((source === "crossref" || source === "openalex") && !doi && !/^W\d+$/i.test(id)) {
+    if ((source === "crossref" || source === "openalex" || source === "biorxiv") && !doi && !/^W\d+$/i.test(id)) {
       return {
         status: {
           source,
