@@ -13,11 +13,11 @@
           "content-length": "783"
         },
         "bodyLength": 783,
-        "bodySha256": "b1f413d7e834e1043abbf4596b50a1b303ac019b19a3dc8df131553a13a95341",
+        "bodySha256": "8751535613125a2e499f0762364c17ea63f43df6fb7740806a4fd22de3000d60",
         "truncated": false,
-        "body": "{\"code\":200,\"success\":true,\"msg\":\"\",\"data\":[{\"doi\":\"10.1038/s41586-021-03819-2\",\"first_author\":\"John Jumper\",\"id\":\"60f2b1d05244ab9dcbbbdfe7\",\"n_citation_bucket\":\"5000+\",\"title\":\"Highly Accurate Protein Structure Prediction with AlphaFold.\",\"venue_name\":\"Nature\",\"year\":2021},{\"doi\":\"10.1101/2021.10.04.463034\",\"first_author\":\"Richard Evans\",\"id\":\"6198c7185244ab9dcb345bab\",\"n_citation_bucket\":\"1001-5000\",\"title\":\"Protein Complex Prediction with AlphaFold-Multimer\",\"year\":2021},{\"doi\":\"10.1038/s41586-024-07487-w\",\"first_author\":\"Josh Abramson\",\"id\":\"663bbdce01d2a3fbfc91c9e7\",\"n_citation_bucket\":\"1001-5000\",\"title\":\"Accurate Structure Prediction of Biomolecular Interactions with AlphaFold 3\",\"venue_name\":\"Nature\",\"year\":2024}],\"total\":995,\"log_id\":\"3J3TVzHMMXzyMePEmBOS4VRu7fI\"}"
+        "body": "{\"code\":200,\"success\":true,\"msg\":\"\",\"data\":[{\"doi\":\"10.1038/s41586-021-03819-2\",\"first_author\":\"John Jumper\",\"id\":\"60f2b1d05244ab9dcbbbdfe7\",\"n_citation_bucket\":\"5000+\",\"title\":\"Highly Accurate Protein Structure Prediction with AlphaFold.\",\"venue_name\":\"Nature\",\"year\":2021},{\"doi\":\"10.1101/2021.10.04.463034\",\"first_author\":\"Richard Evans\",\"id\":\"6198c7185244ab9dcb345bab\",\"n_citation_bucket\":\"1001-5000\",\"title\":\"Protein Complex Prediction with AlphaFold-Multimer\",\"year\":2021},{\"doi\":\"10.1038/s41586-024-07487-w\",\"first_author\":\"Josh Abramson\",\"id\":\"663bbdce01d2a3fbfc91c9e7\",\"n_citation_bucket\":\"1001-5000\",\"title\":\"Accurate Structure Prediction of Biomolecular Interactions with AlphaFold 3\",\"venue_name\":\"Nature\",\"year\":2024}],\"total\":996,\"log_id\":\"3J7be9Cc4XdslMpgekxhzza0jwS\"}"
       },
-      "recordedAt": "2026-09-08T17:32:59.231Z"
+      "recordedAt": "2026-09-10T04:39:06.413Z"
     }
   ]
 }

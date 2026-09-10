@@ -1,3 +1,4 @@
+import { credentialMissingResult } from "./aminer";
 import { HttpConnector, type ConnectorOptions, type HttpConnectorConfig } from "./base";
 import { politeHeaders } from "./politeness";
 
@@ -717,19 +718,37 @@ export class EuropePMCConnector extends HttpConnector {
 export const S2_FIELDS =
   "paperId,externalIds,title,abstract,year,venue,publicationVenue,authors,openAccessPdf,citationCount,referenceCount,url,isOpenAccess";
 
+// E-4：S2「无 key 自动降级」承诺未实现（BACKLOG D2 / DEVELOPMENT_PLAN_v0.3 E-4）。
+//
+// 旧状态：`apiKeyRequired: false` 但从没实现凭据路径——`headersFor()` 只发 User-Agent，
+// 即使 `~/.spark-research/credentials.json` 里配了 S2 key 也用不上；于是每次检索都
+// 匿名打一遍，P2 实测「7 次尝试全 429」，统一检索把它计成 `outcome:"failed"`，
+// 而失败与「压根没配置、跳过更诚实」是两件事——把它们混在一起，用户看不出该不该
+// 去申请 key。
+//
+// 现在补上与 AMiner 同款的 CredentialProvider 通路（connector id `semanticscholar`，
+// 字段 `api_key`，走官方 `x-api-key` 头），并把 `apiKeyRequired` 改成真值：没配置
+// 时 `search`/`getPaper` 不再发出注定 429 的请求，直接返回与 AMiner 一致的
+// `credentialMissingResult()`——统一检索（search.ts 的 `isCredentialMissing`
+// 判断是通用的，不认连接器 id）会把它识别成 `outcome:"skipped"` 而不是 `"failed"`。
+export const S2_CONNECTOR_ID = "semanticscholar";
+export const S2_CREDENTIAL_KEY = "api_key";
+
 export const semanticscholarConfig: HttpConnectorConfig = {
   baseUrl: "https://api.semanticscholar.org/graph/v1",
-  description: "Semantic Scholar 学术图谱（免 key；无 key 时共享公共限流额度）",
+  description: "Semantic Scholar 学术图谱（需 API Key；凭据只在 daemon 内取用）",
   tools: [
     { name: "search", description: "检索论文", endpoint: "/paper/search" },
     { name: "getPaper", description: "按 S2 ID / DOI / arXiv ID 获取单篇", endpoint: "/paper/{id}" },
   ],
   metadata: {
     domain: "api.semanticscholar.org",
-    apiKeyRequired: false,
+    apiKeyRequired: true,
     status: "available",
     // P2 实测：匿名请求持续 429（7 次尝试全挂）。接口是通的，配额不是。
-    caveat: "匿名调用共享公共限流额度，实测持续 429；实际使用建议申请免费 API key（凭据 id `semanticscholar`）",
+    caveat:
+      "匿名调用持续 429，实测已非「免 key」；需配置凭据（`spark-research lit sources` 看是否已配，" +
+      "connector id `semanticscholar`，字段 `api_key`）——未配置时统一检索把它标为 skipped，不再每次白撞 429",
   },
 };
 
@@ -750,11 +769,36 @@ export class SemanticScholarConnector extends HttpConnector {
     this.handle("getPaper", (p) => this.getPaper(p));
   }
 
+  // 是否已配置凭据。只看「有没有」，不把值带出这个方法之外（与 AMinerConnector 同款）。
+  isConfigured(): boolean {
+    return this.apiKey() !== null;
+  }
+
+  private apiKey(): string | null {
+    const provider = this.options.credentials;
+    if (!provider) return null;
+    try {
+      const values = provider.get(S2_CONNECTOR_ID);
+      const key = values?.[S2_CREDENTIAL_KEY];
+      return typeof key === "string" && key.trim().length > 0 ? key.trim() : null;
+    } catch {
+      // 凭据文件损坏等情况按「未配置」处理，绝不把底层错误消息（可能含路径/内容）外抛。
+      return null;
+    }
+  }
+
   protected override headersFor(): Record<string, string> {
-    return { "User-Agent": politeHeaders({ userAgent: this.options.userAgent })["User-Agent"]! };
+    const headers: Record<string, string> = {
+      "User-Agent": politeHeaders({ userAgent: this.options.userAgent })["User-Agent"]!,
+    };
+    const key = this.apiKey();
+    // 官方鉴权头是 `x-api-key`（与 Anthropic 同名但语义各自独立，两处实现互不引用）。
+    if (key) headers["x-api-key"] = key;
+    return headers;
   }
 
   async search(params: { query?: string; limit?: number } & Record<string, unknown>): Promise<unknown> {
+    if (!this.isConfigured()) return credentialMissingResult(S2_CONNECTOR_ID, [S2_CREDENTIAL_KEY]);
     const mapped: Record<string, unknown> = { ...params };
     mapped.limit = Math.min(Number(params.limit ?? 10) || 10, 100);
     mapped.fields ??= S2_FIELDS;
@@ -762,6 +806,7 @@ export class SemanticScholarConnector extends HttpConnector {
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {
+    if (!this.isConfigured()) return credentialMissingResult(S2_CONNECTOR_ID, [S2_CREDENTIAL_KEY]);
     const id = String(params.id ?? "");
     if (!id) throw new Error('Connector "semanticscholar" tool "getPaper" 需要参数 id');
     return this.requestRaw("getPaper", { ...params, id: semanticScholarPaperId(id), fields: params.fields ?? S2_FIELDS });

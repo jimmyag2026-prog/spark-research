@@ -17,7 +17,7 @@ import {
   type CitationBaseline,
 } from "../../backend/src/reviewer/rules";
 import { FakeJudge, FakeLlm } from "../helpers/review_scenario";
-import { llmExtras } from "../../backend/src/llm/types";
+import { llmExtras, type CallOptions, type ChatMessage, type LlmResponse } from "../../backend/src/llm/types";
 
 // citation-integrity 检查器单测（P3 交付物 3）。纯函数 + 注入 fake judge，零网络零 LLM。
 
@@ -298,6 +298,122 @@ describe("LlmCitationJudge", () => {
       new LlmCitationJudge(llm).judge({ key: "k", statement: "S", baseline: BASELINE }),
     ).rejects.toThrow(/调用失败/);
     expect(llm.calls).toHaveLength(1);
+  });
+});
+
+// E-2：citation judge 降本——去重 / 并发限流 / responseFormat（P11 根治 V12）。
+// 用自制的 tracking fake（而不是共享的 FakeLlm）：需要记录传给 `llm.call` 的
+// 第二个参数（CallOptions 对象，而不是 FakeLlm 只支持的裸 model 字符串），
+// 以及并发场景下"任意时刻在途调用数"这类共享 FakeLlm 没有的能力。
+describe("LlmCitationJudge · 降本（E-2：去重 / 并发限流 / responseFormat）", () => {
+  function trackingLlm(delayMs = 0) {
+    const calls: Array<{ messages: ChatMessage[]; options: CallOptions }> = [];
+    let active = 0;
+    let peakActive = 0;
+    return {
+      calls,
+      get peakActive() {
+        return peakActive;
+      },
+      call: async (messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> => {
+        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+        calls.push({ messages, options });
+        active++;
+        peakActive = Math.max(peakActive, active);
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+        active--;
+        return {
+          ok: true,
+          provider: "kimi",
+          model: options.model ?? "m",
+          content: '{"verdict":"consistent","reason":"一致"}',
+          ...llmExtras(),
+        };
+      },
+    };
+  }
+
+  test("同一个 (key, sentence) 重复判定只真正调用一次 LLM（去重）", async () => {
+    const llm = trackingLlm();
+    const judge = new LlmCitationJudge(llm);
+    const input = { key: "k1", statement: "同一句话，一字不差", baseline: BASELINE };
+
+    // 并发重复 + 串行重复都要命中缓存。
+    const [r1, r2, r3] = await Promise.all([judge.judge(input), judge.judge({ ...input }), judge.judge({ ...input })]);
+    expect(llm.calls.length).toBe(1);
+    expect(r1.verdict).toBe("consistent");
+    expect(r2).toEqual(r1);
+    expect(r3).toEqual(r1);
+
+    await judge.judge(input);
+    expect(llm.calls.length).toBe(1);
+  });
+
+  test("不同 key 或不同句子 → 各自真实调用一次（不误合并）", async () => {
+    const llm = trackingLlm();
+    const judge = new LlmCitationJudge(llm);
+    await judge.judge({ key: "k1", statement: "句子甲", baseline: BASELINE });
+    await judge.judge({ key: "k2", statement: "句子甲", baseline: BASELINE }); // key 不同
+    await judge.judge({ key: "k1", statement: "句子乙", baseline: BASELINE }); // 句子不同
+    expect(llm.calls.length).toBe(3);
+  });
+
+  test("判定失败不缓存：下一次相同输入会重新尝试，不是被卡死在失败态", async () => {
+    let attempt = 0;
+    const flaky = {
+      call: async (): Promise<LlmResponse> => {
+        attempt++;
+        if (attempt === 1) {
+          return {
+            ok: false,
+            provider: "kimi",
+            model: "m",
+            content: "",
+            error: { kind: "upstream", message: "上游 500", retryable: true },
+            ...llmExtras(),
+          };
+        }
+        return { ok: true, provider: "kimi", model: "m", content: '{"verdict":"consistent","reason":"ok"}', ...llmExtras() };
+      },
+    };
+    const judge = new LlmCitationJudge(flaky);
+    const input = { key: "k", statement: "S", baseline: BASELINE };
+    await expect(judge.judge(input)).rejects.toThrow(/调用失败/);
+    // 第一次失败没有留在缓存里；第二次是全新的一次尝试，能成功。
+    const result = await judge.judge(input);
+    expect(result.verdict).toBe("consistent");
+    expect(attempt).toBe(2);
+  });
+
+  test("并发限流：自定义 concurrency 下任意时刻在途调用数不超过上限", async () => {
+    const llm = trackingLlm(20);
+    const judge = new LlmCitationJudge(llm, undefined, { concurrency: 2 });
+    const inputs = Array.from({ length: 6 }, (_, i) => ({ key: `k${i}`, statement: `句子${i}`, baseline: BASELINE }));
+    const results = await Promise.all(inputs.map((i) => judge.judge(i)));
+    expect(results).toHaveLength(6);
+    expect(llm.calls.length).toBe(6);
+    expect(llm.peakActive).toBeLessThanOrEqual(2);
+  });
+
+  test("并发限流：不传 concurrency 时默认上限是 4", async () => {
+    const llm = trackingLlm(15);
+    const judge = new LlmCitationJudge(llm);
+    const inputs = Array.from({ length: 8 }, (_, i) => ({ key: `d${i}`, statement: `s${i}`, baseline: BASELINE }));
+    await Promise.all(inputs.map((i) => judge.judge(i)));
+    expect(llm.peakActive).toBeLessThanOrEqual(4);
+    expect(llm.peakActive).toBeGreaterThan(1); // 确实并发过，不是退化成串行
+  });
+
+  test("responseFormat: json_object 被传给 llm.call（P11 根治 BACKLOG V12）", async () => {
+    const llm = trackingLlm();
+    await new LlmCitationJudge(llm, "custom-model").judge({ key: "k", statement: "S", baseline: BASELINE });
+    expect(llm.calls[0]!.options.responseFormat).toBe("json_object");
+    expect(llm.calls[0]!.options.model).toBe("custom-model");
+
+    const llm2 = trackingLlm();
+    await new LlmCitationJudge(llm2).judge({ key: "k", statement: "S", baseline: BASELINE });
+    expect(llm2.calls[0]!.options.responseFormat).toBe("json_object");
+    expect(llm2.calls[0]!.options.model).toBeUndefined();
   });
 });
 

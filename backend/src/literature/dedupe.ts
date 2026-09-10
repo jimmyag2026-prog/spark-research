@@ -7,6 +7,46 @@ import {
   type PaperAuthor,
 } from "./models";
 
+// ── CJK 标题相似度（E-5）──────────────────────────────────────────────────────
+//
+// `titleSimilarity`（models.ts）按空白切分 token 算 Jaccard：中文标题本来就没有
+// 空格分词，`titleKey()` 折叠标点后整句变成一个大 token，两篇标题只要有一字之差
+// 就会被判 0 相似——中文标题的模糊匹配等于形同虚设。这里不改 models.ts（跨 lane
+// 共享文件），只在本文件内为「标题含汉字」的情况换一条相似度算法：按归一化后的
+// **字符 bigram** 算 Jaccard，对中文这种无空格语言是标准做法，且对英文标题的行为
+// 不变（含汉字才会走这条分支）。
+
+const HAN_PATTERN = /\p{Script=Han}/u;
+
+function hasHan(text: string): boolean {
+  return HAN_PATTERN.test(text);
+}
+
+function charBigrams(raw: string): Set<string> {
+  const chars = [...titleKey(raw)].filter((c) => c !== " ");
+  if (chars.length === 0) return new Set();
+  if (chars.length === 1) return new Set([chars[0]!]);
+  const grams = new Set<string>();
+  for (let i = 0; i < chars.length - 1; i++) grams.add(chars[i] + chars[i + 1]);
+  return grams;
+}
+
+function bigramSimilarity(a: string, b: string): number {
+  const setA = charBigrams(a);
+  const setB = charBigrams(b);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let shared = 0;
+  for (const gram of setA) if (setB.has(gram)) shared++;
+  return shared / (setA.size + setB.size - shared);
+}
+
+// canMerge 用的相似度：标题含汉字（任一方）就走字符 bigram，否则沿用原有的
+// 词级 Jaccard（titleSimilarity）——两条路径共用同一个阈值。
+export function effectiveTitleSimilarity(a: string, b: string): number {
+  if (hasHan(a) || hasHan(b)) return bigramSimilarity(a, b);
+  return titleSimilarity(a, b);
+}
+
 // 跨源去重（DESIGN 域 A1「DOI/标题模糊匹配」）。
 //
 // 判定顺序：
@@ -46,7 +86,7 @@ export function canMerge(a: Paper, b: Paper, options: DedupeOptions = {}): boole
   if (!keyA || !keyB) return false;
   if (keyA === keyB) return true;
 
-  if (titleSimilarity(a.title, b.title) < threshold) return false;
+  if (effectiveTitleSimilarity(a.title, b.title) < threshold) return false;
   // 标题只是「很像」时，年份与第一作者必须不冲突才敢合并。
   if (a.year !== null && b.year !== null && Math.abs(a.year - b.year) > 1) return false;
   const surnameA = firstAuthorSurname(a);
@@ -55,13 +95,56 @@ export function canMerge(a: Paper, b: Paper, options: DedupeOptions = {}): boole
   return true;
 }
 
-function mergeAuthors(a: PaperAuthor[], b: PaperAuthor[]): PaperAuthor[] {
-  // 作者列表取更完整的一方；等长时补齐缺失的 affiliation。
+// 归一化姓名：跨源大小写/空白差异折叠，供作者配对用（不是去重意义上的强 key，
+// 只用于「这是不是同一个人」的字符串比较）。
+function normalizeAuthorName(name: string): string {
+  return titleKey(name);
+}
+
+// E-3（已复现的 P1 bug）：旧实现按下标配对 affiliation——`longer.map((author, i) =>
+// ... shorter[i]?.affiliation)`。两源作者顺序一旦不同（很常见：一个源按贡献排序，
+// 另一个按姓氏字母序），第 i 位就对不上同一个人，导致张冠李戴（评审实测：
+// Alice→MIT 的 affiliation 被错配给了顺序里排在同一位的 Bob）。
+//
+// 改成按**归一化姓名**在两个列表间配对：只有名字匹配的那一位才继承对方的
+// affiliation。完全同名撞出多个候选时（同一作者列表里两个人恰好同名，理论上
+// 罕见但不可排除），姓名本身已经无法区分身份——不瞎猜，除非两篇论文的年份都
+// 已知且相同，否则宁可把 affiliation 留空也不猜（`年份闸`：同一次合并事件里
+// a/b 通常已经是同一篇论文，年份摆在这里是给「同名撞车」的场景一个明确、
+// 可解释的兜底判据，而不是悄悄按位置猜）。
+export function mergeAuthors(
+  a: PaperAuthor[],
+  b: PaperAuthor[],
+  aYear: number | null = null,
+  bYear: number | null = null,
+): PaperAuthor[] {
+  // 作者列表取更完整的一方；缺失的 affiliation 从另一方按姓名找回来。
   const [longer, shorter] = a.length >= b.length ? [a, b] : [b, a];
-  return longer.map((author, i) => ({
-    name: author.name,
-    affiliation: author.affiliation ?? shorter[i]?.affiliation ?? null,
-  }));
+  const yearsCompatible = aYear !== null && bYear !== null && aYear === bYear;
+
+  const byName = new Map<string, PaperAuthor[]>();
+  for (const author of shorter) {
+    const key = normalizeAuthorName(author.name);
+    if (!key) continue;
+    const bucket = byName.get(key) ?? [];
+    bucket.push(author);
+    byName.set(key, bucket);
+  }
+
+  return longer.map((author) => {
+    if (author.affiliation) return { name: author.name, affiliation: author.affiliation };
+    const key = normalizeAuthorName(author.name);
+    const candidates = key ? (byName.get(key) ?? []) : [];
+    if (candidates.length === 1) {
+      return { name: author.name, affiliation: candidates[0]!.affiliation ?? null };
+    }
+    if (candidates.length > 1 && yearsCompatible) {
+      // 同名撞车但年份对得上：取第一个候选，好过完全不补。
+      return { name: author.name, affiliation: candidates[0]!.affiliation ?? null };
+    }
+    // 没有唯一匹配（含「压根没这个名字」与「同名撞车且年份对不上/未知」两种）→ 不猜。
+    return { name: author.name, affiliation: null };
+  });
 }
 
 function preferString(a: string | null, b: string | null, aWins: boolean): string | null {
@@ -74,7 +157,7 @@ export function mergePapers(a: Paper, b: Paper): Paper {
   const [hi, lo] = aWins ? [a, b] : [b, a];
   return {
     title: preferString(hi.title, lo.title, true) ?? "",
-    authors: mergeAuthors(a.authors, b.authors),
+    authors: mergeAuthors(a.authors, b.authors, a.year, b.year),
     year: hi.year ?? lo.year,
     venue: preferString(hi.venue, lo.venue, true),
     doi: hi.doi ?? lo.doi,

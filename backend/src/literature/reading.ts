@@ -366,3 +366,67 @@ export function listReadingCards(records: RecordStore, library: LibraryStore): S
   }
   return [...latest.values()];
 }
+
+// ── E-6：删除论文留孤儿 record（证据图不撒谎）───────────────────────────────
+//
+// `library.remove()`（library.ts，本 lane 无编辑权）只删 `papers` 表那一行。
+// records.db 里同一篇论文的 `type:"paper"` record（library.ts 入库时创建，见
+// DESIGN 域 C1）、以及挂在它上面的精读卡 `type:"reading"` record（本文件
+// `persist()` 创建）都会变成孤儿——它们仍然留在 records.db 里，`records.list()`
+// / `records.graph()` 照常能读到，但指向的库内论文已经不存在了。
+// `listReadingCards()` 只在"列精读卡给综述用"这一条路径上过滤掉孤儿（上面的
+// `library.get(card.paperId)` 判断），证据图本身并不知道这件事——任何直接读
+// records.db 的消费方（报告导出、lineage、图可视化）看到的还是一条"健康"的
+// record，这与"证据图不撒谎"的项目主张相悖。
+//
+// RecordStore 没有 delete()（P10-d D-9 的乐观并发设计只支持 update；证据图的
+// 哲学本来就是"不删、标状态"）——这里走 `metadata.retracted` 标记而不是物理
+// 删除，对应验收口径里"或标 retracted"的那一支，也不需要给 RecordStore 新增
+// 任何方法。
+//
+// 这是一次**可重复调用的对账扫描**，不依赖挂进 `library.remove()`（那需要改
+// library.ts，不在本 lane 的文件所有权内）——按当前库存量状态做一次全量核对，
+// 天然幂等：已经标过 retracted 的不会重复处理。
+export interface OrphanRecordSummary {
+  // 本次新标记为 retracted 的 record id（paper + reading 两类都算）。
+  retracted: string[];
+  // 已经是 retracted、本次跳过的（用于观测，不代表有问题）。
+  alreadyRetracted: number;
+  // 扫描过的、声明了 libraryPaperId 的 paper/reading record 总数。
+  scanned: number;
+}
+
+function libraryPaperIdOf(record: ResearchRecord): string | null {
+  const id = (record.metadata as Record<string, unknown>).libraryPaperId;
+  return typeof id === "string" && id ? id : null;
+}
+
+// 扫描 records.db 里所有 `paper` / `reading` 类型的 record，把指向"库里已不存在
+// 的论文"的那些标 `metadata.retracted = true`（外加 retractedAt / retractedReason，
+// 便于报告与 lineage 展示时解释"这条证据为什么带删除线"）。
+export function retractOrphanRecords(records: RecordStore, library: LibraryStore): OrphanRecordSummary {
+  const retracted: string[] = [];
+  let alreadyRetracted = 0;
+  let scanned = 0;
+
+  for (const record of records.list({ type: ["paper", "reading"] })) {
+    const paperId = libraryPaperIdOf(record);
+    if (!paperId) continue; // 不是"锚在某篇库内论文"的 record，不归这次对账管
+    scanned++;
+    if ((record.metadata as Record<string, unknown>).retracted === true) {
+      alreadyRetracted++;
+      continue;
+    }
+    if (library.get(paperId) !== null) continue; // 论文还在库里，不是孤儿
+    records.update(record.id, {
+      metadata: {
+        retracted: true,
+        retractedAt: new Date().toISOString(),
+        retractedReason: "关联论文已从项目文献库删除",
+      },
+    });
+    retracted.push(record.id);
+  }
+
+  return { retracted, alreadyRetracted, scanned };
+}
