@@ -9,6 +9,11 @@ export const RECORD_TYPES = [
   "conclusion",
   "paper",
   "artifact",
+  // 第 9 类（v0.4 W3-b）：一次 agent / 子代理运行的帧级记账。
+  // 落图而不是另起一张表——于是 report / lineage / UI 时间线全部免费获得
+  // （它们本来就读图）。同时带 systemHash / promptHash，回答「这个产物是
+  // 哪个模型、哪版 prompt 产的」（OpenScience 的 harness 指纹等价物）。
+  "agent_run",
 ] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];
 

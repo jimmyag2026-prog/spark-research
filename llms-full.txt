@@ -129,7 +129,7 @@ spark-research mcp    # stdio 传输
 
 ## 证据图
 
-- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact
+- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact / agent_run
 - 边类型：supports / contradicts / derives_from / cites / supersedes
 - 证据标签：observed / sourced / computed / inferred
 - 边方向按语义读：`paper --supports--> idea`（查一条 idea 的支撑文献看它的 incoming 边）；`cites` 是新产物 → 被引论文；`derives_from` 是产物 → 来源。
