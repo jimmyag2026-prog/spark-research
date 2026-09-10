@@ -3,6 +3,7 @@ import {
   ComputeAdmissionError,
   ComputeBroker,
   ComputeDispatchConflictError,
+  ComputeEvidenceRecorder,
   NULL_PRICING,
   UnknownTargetError,
   ensureComputeRoot,
@@ -98,6 +99,9 @@ export const COMPUTE_HELP = `用法:
   spark-research compute list [--state <execution 状态>] [--json]
   spark-research compute collect <jobId> [--json]
                                  收割产物到 <job>/harvest/（delivery: pending → complete）
+  spark-research compute recover <jobId> [--json]
+                                 编排进程被杀之后接回这个任务（读 job.json + 问 adapter）。
+                                 接不回来的会**如实**标 failed 并说清产物在哪儿，不假装成功
   spark-research compute cancel <jobId> [--json]
   spark-research compute release <jobId> [--discard "<放弃产物的理由>"] [--json]
                                  释放远端资源。产物只剩远端那一份时（recoverable）会被拒——
@@ -381,6 +385,10 @@ export function openComputeScope(project: Project, deps: ComputeCliDeps = {}): C
     credentials,
     // 单价查不到就是 null（PRICING 纪律）。**绝不填 0**——0 会被读成「这次真的免费」。
     pricing: NULL_PRICING,
+    // S2（W5-3 α）：算力产出进证据图。**这一行是 CLI 与 HTTP 共同的接线点**——
+    // 两个入口都经过 openComputeScope()，所以证据不会只在其中一条路上出现。
+    // 没有它，一次成功的 execution 会在 `report stats` 里留下一整排零（W5-2 末验收实测）。
+    evidence: new ComputeEvidenceRecorder({ records: project.records(), artifacts: project.artifacts(), projectSlug: project.slug }),
   });
   return { broker, jobs, approval };
 }
@@ -639,10 +647,14 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
         project = manager.defaultProject();
         const scope = openComputeScope(project, deps);
         const job = await scope.broker.dispatch(ref, hooksFor(out, json));
+        // S2：执行进终态时 broker 已经落了这次运行的 observation。把 id 打出来——
+        // 「证据落在哪儿」不该只有翻数据库才知道（W5-2 末验收正是靠 sqlite3 才发现洞的）。
+        const observationId = scope.broker.observationIdFor(job.jobId);
         if (json) {
-          out(JSON.stringify({ job: jobJson(job), next: nextActionFor(job) }, null, 2));
+          out(JSON.stringify({ job: jobJson(job), observationId, next: nextActionFor(job) }, null, 2));
         } else {
           printJob(job, out);
+          if (observationId) out(`    observation: ${observationId}（证据图 · kind=compute_output）`);
           out(`下一步：${nextActionFor(job)}`);
         }
         return job.lifecycle.execution === "succeeded" ? 0 : 1;
@@ -693,16 +705,44 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
         }
         project = manager.defaultProject();
         const scope = openComputeScope(project, deps);
-        const { job, harvest } = await scope.broker.collect(ref);
+        const { job, harvest, evidence } = await scope.broker.collect(ref);
         if (json) {
-          out(JSON.stringify({ job: jobJson(job), harvest }, null, 2));
+          out(JSON.stringify({ job: jobJson(job), harvest, evidence }, null, 2));
         } else {
           out(`📦 收割 ${harvest.files.length} 个产物 → ${job.jobDir}/harvest/`);
           for (const f of harvest.files) out(`    ${f.path}（${f.bytes} 字节，sha256 ${f.sha256.slice(0, 12)}）`);
           if (harvest.reconcileError) out(`    ⚠️  对账失败：${harvest.reconcileError}`);
+          // S2：收割不等于进证据图。这两行是「进图了」的可见回执。
+          if (evidence.artifactRecordIds.length > 0) {
+            out(`🧾 已登记 ${evidence.artifactRecordIds.length} 条 artifact record 进证据图`);
+            for (const id of evidence.artifactRecordIds) out(`    ${id}`);
+          }
+          if (evidence.observationId) out(`    observation: ${evidence.observationId}`);
+          out("    用 spark-research report stats 复核证据图");
           printJob(job, out);
         }
         return harvest.reconcileError ? 1 : 0;
+      }
+
+      // `broker.recover()` 在 W5-2 交付时**零生产调用方**（grep 实核）：状态机里
+      // 「编排进程重启后接回」这条边建好了，但没有任何入口能触发它——于是编排进程一被杀，
+      // 任务就永远卡在 running，连人工都没有办法把它推进终态。这个子命令就是那个入口。
+      case "recover": {
+        const ref = positional[0];
+        if (!ref) {
+          err("用法: spark-research compute recover <jobId>");
+          return 1;
+        }
+        project = manager.defaultProject();
+        const scope = openComputeScope(project, deps);
+        const job = await scope.broker.recover(ref, hooksFor(out, json));
+        if (json) {
+          out(JSON.stringify({ job: jobJson(job), next: nextActionFor(job) }, null, 2));
+        } else {
+          printJob(job, out);
+          out(`下一步：${nextActionFor(job)}`);
+        }
+        return isExecutionTerminal(job.lifecycle.execution) && job.lifecycle.execution !== "succeeded" ? 1 : 0;
       }
 
       case "cancel": {

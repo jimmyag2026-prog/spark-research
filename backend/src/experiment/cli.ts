@@ -1,16 +1,26 @@
 import { configuredSimulationPlatform } from "../config";
 import { ProjectError, ProjectManager, type Project } from "../project/manager";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
+import { computeDriverFor, type ExperimentComputeDriver } from "./compute_driver";
 import { ExperimentLoop } from "./loop";
-import { EXPERIMENT_STATES, isExperimentState, type ExperimentState, type ExperimentView } from "./models";
+import {
+  COMPUTE_TARGETS,
+  EXPERIMENT_STATES,
+  isComputeTargetName,
+  isExperimentState,
+  type ExperimentState,
+  type ExperimentView,
+} from "./models";
 
 // `spark-research exp ...` 子命令。风格与 project/cli.ts、idea/cli.ts 一致：
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
 
 export const EXP_HELP = `用法:
   spark-research exp new <标题> [--platform ${SIMULATION_PLATFORM_IDS.join("|")}] [--kind K]
-                         [--param k=v ...] [--hypothesis "假设"] [--json]
+                         [--param k=v ...] [--hypothesis "假设"] [--target ${COMPUTE_TARGETS.join("|")}] [--json]
                                               设计一个干实验（建 experiment record，状态 design）
+                                              --target：算例送去算力层执行（要过审批门）；
+                                              省略 = 本机子进程直接跑（老路径，不变）
   spark-research exp run <id> [--resume] [--conclude "结论"] [--note "分析备注"]
                          [--timeout ms] [--json]
                                               推进闭环：dry_run → collect → analyze（可选 conclude）
@@ -30,6 +40,8 @@ export interface ExpCliDeps {
   platforms?: SimulationRegistry;
   loop?: (project: Project) => ExperimentLoop;
   pollIntervalMs?: number;
+  // CB-6 测试注入：换掉算力驱动（默认按项目真实构造，走完整审批链）。
+  computeDriver?: (project: Project) => ExperimentComputeDriver;
 }
 
 interface ParsedArgs {
@@ -82,6 +94,9 @@ function makeLoop(project: Project, deps: ExpCliDeps): ExperimentLoop {
     records: project.records(),
     artifacts: project.artifacts(),
     platforms: deps.platforms ?? new SimulationRegistry({ root: project.paths.experimentsDir }),
+    // CB-6：CLI 是算力路径的生产入口，所以驱动在这里接上。构造它零副作用
+    //（不建远端资源、不读凭据文件之外的任何东西），带不带 --target 都可以先接着。
+    compute: deps.computeDriver ? deps.computeDriver(project) : computeDriverFor(project, { root: deps.root }),
   });
 }
 
@@ -91,6 +106,17 @@ function printView(view: ExperimentView, out: (line: string) => void): void {
     `    ${view.state} · ${view.platform}/${view.simKind} · 第 ${view.iteration} 轮 · 提交 ${view.attempts} 次` +
       (view.runId ? ` · run ${view.runId}` : ""),
   );
+  if (view.computeTarget) {
+    out(
+      `    执行地 ${view.computeTarget}（算力层）` +
+        (view.computeJobId ? ` · job ${view.computeJobId}` : "") ,
+    );
+    if (view.computeJobId && view.state === "dry_run") {
+      // 这里**不**猜「要不要审批」：approvalRequired 是 plan 的派生值（L-3），
+      // 只有算力层知道。给一条永远正确的查询命令，具体动作由那边告诉人。
+      out(`    算力任务进度：spark-research compute status ${view.computeJobId}`);
+    }
+  }
   if (view.lastError) out(`    ⚠️  ${view.lastError}`);
 }
 
@@ -123,12 +149,18 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
         // --platform 显式 > 用户 config.json > 代码默认（P9 配置面收口）。
         const platform = flagString(flags.platform) ?? configuredSimulationPlatform(DEFAULT_SIMULATION_PLATFORM);
         const kind = flagString(flags.kind) ?? defaultKindFor(platform, deps, project);
+        const targetFlag = flagString(flags.target);
+        if (targetFlag !== undefined && !isComputeTargetName(targetFlag)) {
+          err(`❌ 未知执行地 '${targetFlag}'（可用：${COMPUTE_TARGETS.join(", ")}）`);
+          return 1;
+        }
         const view = await loop.design({
           title,
           platform,
           kind,
           params,
           hypothesis: flagString(flags.hypothesis),
+          target: targetFlag ?? null,
         });
         if (flags.json === true) {
           out(JSON.stringify(viewJson(view), null, 2));
@@ -136,6 +168,12 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
           out(`✅ 实验已建档（项目 ${project.slug}）`);
           printView(view, out);
           out(`下一步：spark-research exp run ${view.id.slice(0, 8)}`);
+          if (view.computeTarget) {
+            out(
+              `（执行地 ${view.computeTarget}：exp run 会先建一份算力计划并停下来等人审批，` +
+                `不会替你把钱花出去）`,
+            );
+          }
         }
         return 0;
       }
@@ -155,8 +193,42 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
           const resumed = await loop.resume(view.id);
           view = resumed.view;
           out(`恢复：${resumeMessage(resumed.action)}`);
+          if (resumed.action === "awaiting_compute") {
+            // 等的是人，不是机器：直接把命令给出来，不要让它掉进 run() 的轮询里空转。
+            // 这里退 1 而不是 0：**你明确要求接回来，而它接不回来**（人还没批/还没派发）。
+            err(`⏸  算力任务还没被派发：${resumed.computeAction ?? "spark-research compute list"}`);
+            if (flags.json === true) out(JSON.stringify(viewJson(view), null, 2));
+            return 1;
+          }
           if (resumed.action === "marked_failed") {
             err(`⚠️  ${view.lastError ?? "仿真失败"}——用 spark-research exp run ${view.id.slice(0, 8)} 重试`);
+            if (flags.json === true) out(JSON.stringify(viewJson(view), null, 2));
+            return 1;
+          }
+        }
+
+        // ── CB-6：算力路径在这里**停一次** ────────────────────────────────────
+        //
+        // design → dry_run 那一步（建算力计划）该做的做完，然后如实说「轮到人了」：
+        // 派发是计费动作，不能由 `exp run` 顺手替人做掉（与 lab_simulate / compute run
+        // 同构）。退 0 是因为**这一步没有失败**——它做完了它能做的那一步，
+        // 与 `compute plan` 在 awaiting_approval 上退 0 同一口径。
+        if (view.computeTarget && flags.resume !== true) {
+          if (view.state === "design" || view.state === "failed") view = await loop.dryRun(view.id);
+          const staged = await loop.resume(view.id);
+          view = staged.view;
+          if (staged.action === "awaiting_compute") {
+            if (flags.json === true) {
+              out(JSON.stringify({ ...viewJson(view), computeAction: staged.computeAction }, null, 2));
+            } else {
+              printView(view, out);
+              out(`⏸  算例已交给算力层，等人批准/派发：${staged.computeAction ?? "spark-research compute list"}`);
+              out(`   派发完成后：spark-research exp run ${view.id.slice(0, 8)} --resume`);
+            }
+            return 0;
+          }
+          if (staged.action === "marked_failed") {
+            err(`⚠️  ${view.lastError ?? "算力任务失败"}`);
             if (flags.json === true) out(JSON.stringify(viewJson(view), null, 2));
             return 1;
           }
@@ -288,10 +360,14 @@ function viewJson(view: ExperimentView): Record<string, unknown> {
   return rest;
 }
 
-function resumeMessage(action: "still_running" | "ready_to_collect" | "marked_failed" | "noop"): string {
+function resumeMessage(
+  action: "still_running" | "awaiting_compute" | "ready_to_collect" | "marked_failed" | "noop",
+): string {
   switch (action) {
     case "still_running":
       return "上一次提交的仿真仍在运行，继续等待";
+    case "awaiting_compute":
+      return "算力任务停在人工审批（批准并派发后再 --resume）";
     case "ready_to_collect":
       return "仿真已完成，直接回收产出";
     case "marked_failed":

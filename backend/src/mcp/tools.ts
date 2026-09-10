@@ -374,7 +374,8 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 【参数示例】{"title": "水盒子平衡 300K", "platform": "openmm", "kind": "water-box-md", "params": {"steps": 5000, "boxSizeNm": 2.0}, "hypothesis": "2 nm 盒子在 5 ps 内可达到温度平衡"}
 【何时不该用】不知道有哪些平台/kind/参数时——先 research_capabilities 看 simulationPlatforms（每个平台的 kinds 与 deterministic 位都在里面）。参数写错会在 design 阶段就被拒，不会让你跑完才发现。
 【典型链路】research_capabilities → exp_design → exp_run。
-【平台选择】pyref 零依赖、确定性（deterministic=true，结论可做逐位对账）；openmm 是真实 MD 但 CPU 上不逐位复现（deterministic=false，下游结论必须按「区间/趋势对账」措辞）。`,
+【平台选择】pyref 零依赖、确定性（deterministic=true，结论可做逐位对账）；openmm 是真实 MD 但 CPU 上不逐位复现（deterministic=false，下游结论必须按「区间/趋势对账」措辞）。
+【执行地（target）】省略 = 本机跑，exp_run 一路跑到底。给了 target（local/modal）= 算例走算力层：exp_run 会停在「等人审批」，**你批不了**——派发是计费动作，只能由人在终端批（AD-6 同构）。`,
     inputSchema: {
       type: "object",
       properties: {
@@ -383,6 +384,14 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
         kind: str("任务种类（见 capabilities 里该平台的 kinds）", "water-box-md"),
         params: { type: "object", description: "平台参数；写错会在 design 阶段被拒", additionalProperties: true },
         hypothesis: str("这个算例要验证的假设", "2 nm 盒子在 5 ps 内可达到温度平衡"),
+        target: {
+          type: "string",
+          enum: ["local", "modal"],
+          description:
+            "算例的执行地（省略 = 本机子进程直接跑）。给了 target 之后 exp_run 不会直接开跑：" +
+            "它先建一份算力计划并停在人工审批，要人用 `spark-research compute approve <jobId> --run` 批准并派发" +
+            "（花钱的动作一律不经 MCP）。",
+        },
         project: PROJECT_ARG,
       },
       required: ["title"],

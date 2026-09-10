@@ -372,6 +372,41 @@ describe("闭环状态机 · 全链路与证据图", () => {
     expect(text).toContain("能量单调衰减");
     expect(text).toContain("| dampingRatio |");
     expect(text).toContain("design → dry_run");
+    // 本机路径不该在正文里出现「执行地」那一行——没有的东西不写（CB-6）。
+    expect(text).not.toContain("执行地");
+    project.close();
+  }, 60_000);
+
+  test("CB-6 · 老 record 缺 computeTarget/computeJobId 时读成「本机跑」，不迁移", async () => {
+    const { project } = newWorkspace();
+    const loop = loopFor(project);
+    const view = await designed(loop);
+    // 模拟 v0.4 时代写下的 record：metadata 里根本没有这两个键。
+    const legacy = { ...(view.record.metadata as Record<string, unknown>) };
+    delete legacy.computeTarget;
+    delete legacy.computeJobId;
+    project.records().update(view.id, { metadata: legacy });
+    const reread = loop.get(view.id);
+    expect(reread.computeTarget).toBeNull();
+    expect(reread.computeJobId).toBeNull();
+    // 老 record 照常能跑完整条闭环（缺省 = 本机子进程）。
+    const done = await loop.run(reread.id, { pollIntervalMs: 40 });
+    expect(done.state).toBe("analyze");
+    project.close();
+  }, 60_000);
+
+  test("CB-6 · 带 computeTarget 的实验在正文里写明执行地", async () => {
+    const { project } = newWorkspace();
+    const loop = loopFor(project);
+    const view = await loop.design({
+      title: "算力上的振子",
+      platform: "pyref",
+      kind: "damped-oscillator",
+      params: FAST,
+      target: "local",
+    });
+    expect(view.computeTarget).toBe("local");
+    expect(renderExperiment(view)).toContain("执行地：**local**（算力层）");
     project.close();
   }, 60_000);
 });
