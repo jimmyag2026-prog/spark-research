@@ -7,6 +7,7 @@ import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/
 import { EXPERIMENT_STATES } from "../../backend/src/experiment/models";
 import { loadSkills } from "../../backend/src/skills/frontmatter";
 import { buildCapabilities } from "../../backend/src/capabilities";
+import { PACKAGE_VERSION } from "../../backend/src/version";
 
 // AD-12「对外声称的每一项能力必须机器可核」的门禁实现（D-12）。
 //
@@ -227,6 +228,17 @@ describe("叙事一致性门禁（AD-12）", () => {
     for (const claimed of claims) {
       expect(claimed, `docs/EXTENDING.md 声称 ${claimed} 个技能，实际 ${actual.length} 个`).toBe(actual.length);
     }
+  });
+
+  // v0.4 W1 收口实测：`./dist/spark-research --version` 报 0.3.1，
+  // 而同一个二进制的 `capabilities` 报 0.0.0——因为两处用了不同的读法，
+  // 其中一处（version.ts）靠 `import.meta.dir` 拼路径，在 `bun build --compile`
+  // 的产物里指向虚拟的 /$bunfs/root/，读不到就**静默落到兜底值**。
+  // 同一个二进制对外报两个版本号，正是 AD-12 要防的事。
+  test("版本号单一真源：PACKAGE_VERSION 必须等于 package.json 的 version", () => {
+    const raw = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { version: string };
+    expect(PACKAGE_VERSION, "version.ts 的读法与 package.json 对不上——多半又是靠运行期读文件").toBe(raw.version);
+    expect(PACKAGE_VERSION).not.toBe("0.0.0");
   });
 
   test("MCP 工具：每个工具名唯一，且 withheld 清单与暴露清单不重叠", () => {
