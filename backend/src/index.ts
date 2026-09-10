@@ -10,6 +10,7 @@ import { DEFAULT_FRONTEND_DIR } from "./server/app";
 import { ProjectManager } from "./project/manager";
 import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
+import { runUsageCommand } from "./cli/usage";
 import { runIdeaCommand } from "./ideation/cli";
 import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
@@ -62,6 +63,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research project     项目管理（new / list / open / archive）
   spark-research lit         文献域（search / add / list / pdf / read / review / export / sources）
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
+  spark-research usage       LLM 用量台账（按项目：调用/tokens/已知花费下界/按命令与模型归因）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
   spark-research chem       化学结构图（depict：SMILES → 2D SVG，落 artifact + record）
@@ -474,6 +476,12 @@ function main() {
     case "lit":
     case "literature": {
       runLitCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "usage": {
+      runUsageCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

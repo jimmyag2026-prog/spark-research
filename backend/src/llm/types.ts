@@ -33,7 +33,9 @@ export interface Usage {
   usageUnavailable?: boolean;
 }
 
-export type LlmErrorKind = "auth" | "rate_limit" | "timeout" | "parse" | "upstream" | "unsupported";
+// "budget"：G-3（v0.6）预算闸的拒绝——请求根本没发出、零花费，与上游错误性质不同
+// （既不该重试同一预算、也不该查网络/key；下一步在错误消息里）。
+export type LlmErrorKind = "auth" | "rate_limit" | "timeout" | "parse" | "upstream" | "unsupported" | "budget";
 
 export interface LlmError {
   kind: LlmErrorKind;

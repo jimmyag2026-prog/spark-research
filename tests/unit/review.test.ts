@@ -190,7 +190,14 @@ describe("CLI: lit read / lit review", () => {
     expect(out.join("\n")).toContain("✅ 生成 1 张精读卡");
 
     out.length = 0;
+    // G-3（v0.6）行为变更：--all 默认跳过已有精读卡的论文（重跑接续不重复花钱），
+    // 上面已读过 1 篇 → 这里只生成剩下 2 张并提示跳过；--redo 才是全量重读。
     expect(await runLitCommand(["read", "--all"], deps)).toBe(0);
+    expect(out.join("\n")).toContain("⏭️  跳过 1 篇已有精读卡的论文");
+    expect(out.join("\n")).toContain("✅ 生成 2 张精读卡");
+
+    out.length = 0;
+    expect(await runLitCommand(["read", "--all", "--redo"], deps)).toBe(0);
     expect(out.join("\n")).toContain("✅ 生成 3 张精读卡");
   });
 
