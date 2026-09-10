@@ -24,6 +24,15 @@ import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
 import { runDoctorCommand } from "./doctor/cli";
 import { runReviewCommand } from "./reviewer/cli";
+// V37 收口：provider → 鉴权环境变量名的**单一真源**是 `llm/router.ts` 的 `ADAPTERS`，
+// `providers/registry.ts` 的 `PROVIDER_API_KEY_ENV` 从它派生导出。`doctor` /
+// `capabilities` / `onboarding/providers.ts` 三处都消费这张表——此文件此前有一份
+// 手写的 `KEY_NAMES`（只列 kimi + openrouter 两个），是 P11 收口过的同一类手工副本
+// 漂移在这个消费方长出的第二现场（见 docs/BACKLOG.md V37 / docs/devlog/W5-1-g.md）。
+// 该副本已删除：`getApiKey()`/`auth()` 都直接从这张真源表派生，不许再在本文件里
+// 重新声明一份 "provider: \"XXX_API_KEY\"" 形状的字面量
+// （tests/unit/auth_key_source.test.ts 的门禁断言钉死这一点）。
+import { PROVIDER_API_KEY_ENV } from "./llm/providers/registry";
 // W2-d（B-b/B-c）：向导 + 离线 demo。所有权在 backend/src/onboarding/**；
 // 这里只加两个 case 分支接进去，不动零参数（welcome）行为（W1-d 所有权）。
 import { runInit } from "./onboarding/init";
@@ -100,22 +109,75 @@ function saveConfig(config: Config): void {
   chmodSync(CONFIG_FILE, CONFIG_FILE_MODE);
 }
 
-const KEY_NAMES = {
-  kimi: "KIMI_API_KEY",
-  openrouter: "OPENROUTER_API_KEY",
-} as const;
+// 只是展示用的友好标签——**不是**「provider → 鉴权环境变量名」的映射（那张表
+// 唯一真源是上面导入的 `PROVIDER_API_KEY_ENV`）。值不是 `*_API_KEY` 形状的字符串，
+// 门禁断言（tests/unit/auth_key_source.test.ts）不会把这张表误判成手写副本。
+// 缺条目时回退显示 provider id 本身（见 `providerLabel`），不会漏掉未来新增的 provider。
+const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+  kimi: "Kimi (api.moonshot.ai) - 国内访问快",
+  openrouter: "OpenRouter (openrouter.ai) - 支持多个模型",
+  anthropic: "Anthropic（Claude 原生 API）",
+  openai: "OpenAI（GPT）",
+  deepseek: "DeepSeek",
+  qwen: "Qwen / DashScope（阿里云）",
+};
+
+function providerLabel(provider: string): string {
+  return PROVIDER_LABELS[provider] ?? provider;
+}
 
 function getApiKey(): { provider: string; key: string } | null {
   const config = loadConfig();
-  const providers = ["kimi", "openrouter"] as const;
-
-  for (const provider of providers) {
-    const envKey = process.env[KEY_NAMES[provider]];
+  for (const [provider, envName] of Object.entries(PROVIDER_API_KEY_ENV)) {
+    const envKey = process.env[envName];
     if (envKey) return { provider, key: envKey };
-    const configKey = config[KEY_NAMES[provider]];
+    const configKey = config[envName];
     if (configKey) return { provider, key: configKey };
   }
   return null;
+}
+
+// V37：`getApiKey()` 是 env 优先的（上面），但 `auth()` 改之前显示配置时**只读
+// config 文件**——key 只在 env 里时，`getApiKey()` 其实能拿到，`auth` 却报「未设置」，
+// 与同一份 key 在 `config list`/`doctor` 下的正确显示矛盾。这个类型把「配没配」
+// 和「从哪配的」分开表达，`auth()` 用它来标明来源，不再让用户靠猜。
+export type AuthKeySource = "env" | "config" | "both" | null;
+
+export interface AuthStatusEntry {
+  provider: string;
+  envVar: string;
+  configured: boolean;
+  source: AuthKeySource;
+}
+
+/**
+ * 每个已实装 provider 的当前配置状态：env 与 config 文件都看，并标明来源。
+ * 导出供测试直接 DI（不依赖真实 stdin/交互终端），`auth()` 本身只是把这份结果打印出来。
+ */
+export function authStatus(
+  options: { env?: Record<string, string | undefined>; config?: Config } = {},
+): AuthStatusEntry[] {
+  const env = options.env ?? process.env;
+  const config = options.config ?? loadConfig();
+  return Object.entries(PROVIDER_API_KEY_ENV).map(([provider, envVar]) => {
+    const inEnv = Boolean(env[envVar]);
+    const inConfig = Boolean(config[envVar]);
+    const source: AuthKeySource = inEnv && inConfig ? "both" : inEnv ? "env" : inConfig ? "config" : null;
+    return { provider, envVar, configured: inEnv || inConfig, source };
+  });
+}
+
+function describeAuthSource(source: AuthKeySource): string {
+  switch (source) {
+    case "both":
+      return "已设置（环境变量优先；config 文件里也存了一份）";
+    case "env":
+      return "已设置（来源：环境变量）";
+    case "config":
+      return "已设置（来源：config 文件）";
+    default:
+      return "未设置";
+  }
 }
 
 async function auth() {
@@ -123,8 +185,8 @@ async function auth() {
 
   console.log("Spark Research API Key 配置\n");
   console.log("当前配置:");
-  for (const [name, envName] of Object.entries(KEY_NAMES)) {
-    console.log(`  ${envName}: ${config[envName] ? "已设置" : "未设置"}`);
+  for (const entry of authStatus({ config })) {
+    console.log(`  ${entry.envVar}: ${describeAuthSource(entry.source)}`);
   }
   console.log(`  默认 Provider: ${config.defaultProvider || "未设置"}`);
   console.log("");
@@ -141,18 +203,20 @@ async function auth() {
   };
 
   try {
+    const providerIds = Object.keys(PROVIDER_API_KEY_ENV);
     console.log("选择 Provider:");
-    console.log("  1. Kimi (api.moonshot.cn) - 推荐，国内访问快");
-    console.log("  2. OpenRouter (openrouter.ai) - 支持多个模型");
-    const choice = await question("选择 [1/2]: ");
+    providerIds.forEach((id, i) => {
+      console.log(`  ${i + 1}. ${providerLabel(id)}`);
+    });
+    const choice = await question(`选择 [1-${providerIds.length}]: `);
 
-    const provider = choice === "1" ? "kimi" : choice === "2" ? "openrouter" : null;
+    const provider = providerIds[Number(choice) - 1];
     if (!provider) {
       console.log("无效选择");
       return;
     }
 
-    const envName = KEY_NAMES[provider];
+    const envName = PROVIDER_API_KEY_ENV[provider]!;
     const key = await question(`输入 ${envName}: `);
     if (key) {
       config[envName] = key;
@@ -383,6 +447,9 @@ function main() {
       });
       break;
     }
+    // §三·补.3 收口点：lane γ 的 `case "chem"`（SMILES → SVG）与对应 import 插在这里——
+    // 紧跟同类单查询科学域命令 `protein` 之后。本 lane（η）只留这个插入点，不加分支本身
+    // （见 docs/devlog/W5-1-g.md）。
     case "conclusion":
     case "conclusions": {
       runConclusionCommand(process.argv.slice(3)).then((code) => {
