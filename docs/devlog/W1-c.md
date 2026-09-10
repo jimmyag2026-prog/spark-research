@@ -168,6 +168,18 @@ $ bun -e '... compileManifest(evilFile/evilInternal/evilPrivate) ...'
 [阴性对照①通过] 192.168.1.1 (私网) → 被拒绝: ManifestError: manifest 出站 URL 指向内网/保留地址段，已拒绝（SSRF 防护）：主机名是 "192.168.1.1"，URL 是 "http://192.168.1.1/admin"
 ```
 
+**主会话独立复验（交叉验证，独立于本 lane 的实现跑出）**：主会话额度恢复后合并本 lane 之前，
+自己另外喂了 8 个 URL 实测 `assertOutboundUrlAllowed`，结果与上面两组记录完全一致——
+一条公网 URL 放行，其余全部按预期规则拒绝：
+
+```
+放行 ✓  https://api.example.org/v1
+拒绝 ✗  file:///etc/passwd                      → 协议不在白名单
+拒绝 ✗  http://169.254.169.254/latest/meta-data/ → 内网/保留地址段
+拒绝 ✗  http://10.0.0.1/x · http://127.0.0.1:8080/x · http://192.168.1.1/x
+拒绝 ✗  http://[::1]/x · http://localhost/x
+```
+
 ### ② enum 参数给非法值 → 被拒，且从未发出任何 HTTP 请求
 
 测试套件：
