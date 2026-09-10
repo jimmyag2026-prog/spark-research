@@ -22,6 +22,7 @@ import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
+import { runChemCommand } from "./chem/cli";
 import { runDoctorCommand } from "./doctor/cli";
 import { runReviewCommand } from "./reviewer/cli";
 // V37 收口：provider → 鉴权环境变量名的**单一真源**是 `llm/router.ts` 的 `ADAPTERS`，
@@ -467,9 +468,14 @@ function main() {
       });
       break;
     }
-    // §三·补.3 收口点：lane γ 的 `case "chem"`（SMILES → SVG）与对应 import 插在这里——
-    // 紧跟同类单查询科学域命令 `protein` 之后。本 lane（η）只留这个插入点，不加分支本身
-    // （见 docs/devlog/W5-1-g.md）。
+    // §三·补.3：lane γ 的 chem 分支由收口接上（γ 持有 chem/**，η 持有本文件，
+    // 两条 lane 不许写同一个文件——这一行是分界处，接线是收口的活）。
+    case "chem": {
+      runChemCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
     case "conclusion":
     case "conclusions": {
       runConclusionCommand(process.argv.slice(3)).then((code) => {

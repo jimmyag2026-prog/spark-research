@@ -224,10 +224,14 @@ test("⑨b 未消费告警在批准弹窗里必须可见（V23）", async ({ pag
   await panel.getByRole("tab", { name: /湿实验/ }).click();
   await panel.getByRole("button", { name: "＋ 新建" }).click();
   await panel.getByPlaceholder("标题（可选）").fill("未消费告警协议");
-  // 「配制10%次氯酸钠溶液」：安全门四条规则全过（体积正常，浓度字段不在编译器的
-  // 解析范围内），但 10% 这个浓度描述本身应该被人看见——这正是 unconsumedWarnings
-  // 存在的理由，见 tests/unit/wet_loop.test.ts 的 D-8 用例（同一条协议文本）。
-  await panel.getByPlaceholder(/自然语言协议/).fill("配制10%次氯酸钠溶液200uL");
+  // V25（W5-1 δ）：「配制10%次氯酸钠溶液」这种「浓度 + 同句唯一试剂」的写法**现在会被
+  // 编译器消费**（挂到 ReagentSpec.concentration），不再产生未消费告警——这条 e2e 原先
+  // 用它当"永远看不见"的例子，V25 之后那个前提不成立了。
+  //
+  // 换成同句出现两种试剂的归属歧义场景：10% 到底是谁的浓度无法从句法上确定，编译器
+  // **拒绝瞎猜**（安全门上唯一正确的取向），所以仍然落 unconsumedWarnings。
+  // 与 tests/unit/wet_loop.test.ts 的 D-8 用例保持同一条协议文本。
+  await panel.getByPlaceholder(/自然语言协议/).fill("配制10%次氯酸钠和乙醇的混合液200uL");
   await panel.getByRole("button", { name: "编译 + 过安全门" }).click();
   await waitIdle(page);
 

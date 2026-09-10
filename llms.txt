@@ -52,13 +52,13 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 25 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 26 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
 - `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
 - `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
-- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。6 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 - `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
 - `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
 - `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
@@ -78,6 +78,7 @@ spark-research mcp    # stdio 传输
 - `conclusion_list`：要看项目里的结论卡及其评审状态时。只有 review=approved 的结论才会进研究报告的「结论」区，pending / vetoed 进「待验证」区。
 - `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
 - `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
+- `chem_depict`：要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
 - `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 
 **刻意不暴露的动作**（设计声明，不是未实现清单）：

@@ -25,6 +25,12 @@
 // 由 `server.ts` 用同一个 Hono app 在进程内 fetch。MCP 层不重实现任何业务逻辑——
 // 重实现意味着 CLI / HTTP / MCP 三套口径，迟早对不上。
 
+// 收口(W5-1)：源清单从 `DEFAULT_SEARCH_SOURCES` 派生，不再手写。
+// 这里原本写死「并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar」，
+// V34 修完默认集变成 6 个之后，这段给外部 agent 看的能力声明就低报了实际行为——
+// 手写副本本身就是 V34 的病根，所以改的不是数字，是取值方式。
+import { DEFAULT_SEARCH_SOURCES } from "../literature/models";
+
 export interface JsonSchema {
   type: "object";
   properties: Record<string, unknown>;
@@ -150,7 +156,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 
   {
     name: "lit_search",
-    description: `【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+    description: `【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。${DEFAULT_SEARCH_SOURCES.length} 个源并发检索（${DEFAULT_SEARCH_SOURCES.join(" / ")}；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 【参数示例】{"query": "allosteric site prediction molecular dynamics GPCR", "limit": 20, "add": true, "tags": ["background"]}
 【何时不该用】① 已经拿到确定的 DOI/arXiv id 只想入库 → 用 lit_add。② 不要把用户的一整句话直接当 query——先拆成 2-4 个核心概念，每个概念查一次。③ 不要 add: true 一次灌几百条，入库是显式动作。
 【典型链路】lit_search(add=false) 先看候选 → 挑选后 lit_search(add=true) 或 lit_add → lit_read_cards → lit_review_draft。
@@ -160,7 +166,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
       type: "object",
       properties: {
         query: str("检索式。用英文关键词组合，不要整句自然语言", "allosteric site prediction molecular dynamics"),
-        sources: strList("限定文献源；不给则用默认组合", ["openalex", "crossref", "europepmc"]),
+        sources: strList("限定文献源；不给则用全部默认源", [...DEFAULT_SEARCH_SOURCES].slice(0, 3)),
         limit: num("每源返回上限", 20),
         add: { type: "boolean", description: "是否直接把结果入项目文献库（默认 false，先看后入）" },
         tags: strList("入库时打的标签（仅 add=true 时生效）", ["background"]),

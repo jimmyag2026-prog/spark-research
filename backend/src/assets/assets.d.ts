@@ -25,3 +25,14 @@ declare module "*.py" {
   const content: string;
   export default content;
 }
+
+// 收口(W5-1)：技能索引同样是 V27 的受害者，但形状不同——`skillDirs()` 靠
+// `readdirSync` **枚举目录**，而编译产物里根本没有目录结构，于是
+// `capabilities --json` 在二进制里平静地报「技能 0 个」（源码模式 10 个）。
+// 目录枚举没法靠单个静态 import 覆盖，只能逐份内嵌 SKILL.md，见
+// ../skills/embedded.ts。没有这条声明时 tsc 会去把 SKILL.md 当 TS 解析，
+// 报的是文不对题的 "Unterminated template literal"（Markdown 里的代码围栏）。
+declare module "*.md" {
+  const content: string;
+  export default content;
+}

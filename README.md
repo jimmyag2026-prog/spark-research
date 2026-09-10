@@ -162,9 +162,13 @@ bun scripts/demo-research-thread.ts
 **文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
 AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
 
-> ⚠️ **默认只查其中四个**：`openalex` / `crossref` / `europepmc` / `semanticscholar`。
-> PubMed 与 arXiv 已实装但**不在默认集里**——要用得显式加 `--sources arxiv`（或 `pubmed`）。
-> 这意味着 `lit add <arxiv-id>` 目前会查不到。已登记为 BACKLOG **V34**，v0.5 修。
+> **默认集是六个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` / `arxiv`
+> ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用（V34，v0.5 修复）。
+> `aminer` 需自备 key、`cnki` / `wanfang` 是占位实现无公开 API，这三个默认不参与，
+> 但**排除必须带理由**：`tests/unit/literature_source_parity.test.ts` 以连接器注册表为真源，
+> 任何已实装且无需 key 的源不在默认集里就会让门禁变红。
+> 这条门禁是 V34 的教训——当时 `lit search --sources arxiv` 能用、`capabilities` 也报可用，
+> 只有默认值没跟上，而 AD-12 只核「在不在注册表」，核不了「在不在默认集」。
 **科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
 **仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
