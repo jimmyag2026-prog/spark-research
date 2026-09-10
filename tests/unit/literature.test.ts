@@ -13,6 +13,8 @@ import {
   CrossRefConnector,
   EuropePMCConnector,
   OpenAlexConnector,
+  S2_CONNECTOR_ID,
+  S2_CREDENTIAL_KEY,
   SemanticScholarConnector,
   europePmcIdQuery,
   openAlexEntityId,
@@ -39,6 +41,7 @@ import {
 } from "../../backend/src/literature/export";
 import { LibraryStore, paperFrom, toPaper } from "../../backend/src/literature/library";
 import { normalizeDoi, titleKey, titleSimilarity, type Paper } from "../../backend/src/literature/models";
+import { retractOrphanRecords } from "../../backend/src/literature/reading";
 import {
   fromCrossRef,
   fromEuropePMC,
@@ -385,6 +388,56 @@ describe("BibTeX / CSL-JSON 导出", () => {
     expect(toBibTeX([])).toBe("");
     expect(toCSLJSON([])).toEqual([]);
   });
+
+  // E-5：CJK 元数据——bibtex key 保留 Unicode（\p{Script=Han}）。
+  // 旧实现 `.replace(/[^a-z0-9]/g, "")` 把汉字整个砍掉：中文作者/标题的 key
+  // 全部退化成 "anon" + "untitled"，AMiner 收录的中文文献 key 与论文彻底脱钩。
+  describe("CJK bibtex key（E-5）", () => {
+    test("中文作者姓名 + 中文标题 → key 保留汉字，不再退化成 anon/untitled", () => {
+      const zh = paper({
+        title: "深度学习蛋白质结构预测综述",
+        authors: [{ name: "张伟" }],
+        year: 2022,
+      });
+      const key = bibtexBaseKey(zh);
+      expect(key).not.toContain("anon");
+      expect(key).not.toContain("untitled");
+      expect(key).toBe("张伟2022深度学习蛋白质结构预测综述");
+    });
+
+    test("中文标题首词提取整句（无空格分词），保留完整汉字序列", () => {
+      expect(titleFirstWord("深度学习蛋白质结构预测综述")).toBe("深度学习蛋白质结构预测综述");
+    });
+
+    test("中英混合作者名：ASCII 与汉字都保留，其余符号仍被砍掉", () => {
+      // authorSurname 取姓名最后一个空格分隔段作为「姓」（既有行为，不是本次修的范围）：
+      // "Wei 张#Zhang!" → 姓段 "张#Zhang!" → 归一化后 "张 zhang" → 本次修的 keepAsciiAndHan
+      // 再把符号与空格都砍掉，汉字与 ASCII 字母都保留。
+      const mixed = paper({ title: "Mixed Title", authors: [{ name: "Wei 张#Zhang!" }], year: 2020 });
+      expect(bibtexBaseKey(mixed)).toBe("张zhang2020mixed");
+    });
+
+    test("assignBibtexKeys 对中文文献同样能生成确定性、无冲突的 key 序列", () => {
+      const a = paper({ title: "深度学习综述", authors: [{ name: "张伟" }], year: 2021 });
+      const b = paper({ title: "深度学习综述", authors: [{ name: "张伟" }], year: 2021, doi: "10.1/b" });
+      const keys = assignBibtexKeys([a, b]);
+      expect(keys[0]).toBe("张伟2021深度学习综述");
+      expect(keys[1]).toBe("张伟2021深度学习综述a");
+    });
+
+    test("toBibTeX 对中文文献输出合法 BibTeX（key 与字段都保留汉字）", () => {
+      const zh = paper({
+        title: "深度学习蛋白质结构预测综述",
+        authors: [{ name: "张伟" }, { name: "李明" }],
+        year: 2022,
+        venue: "计算机学报",
+      });
+      const bib = toBibTeX([zh]);
+      expect(bib).toContain("@article{张伟2022深度学习蛋白质结构预测综述,");
+      expect(bib).toContain("author = {张伟 and 李明}");
+      expect(bib).toContain("journal = {计算机学报}");
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -559,6 +612,117 @@ describe("Project Library", () => {
     const plain = toPaper(entry);
     expect(Object.keys(plain)).not.toContain("tags");
     expect(toBibTeX([plain])).toContain("@article{ann2022export,");
+    library.close();
+    project.close();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E-6：删除论文留孤儿 record（证据图不撒谎）。
+//
+// `library.remove()`（library.ts）只删 papers 表那一行，records.db 里同一篇论文的
+// `type:"paper"` record（入库时创建）会变成孤儿——仍然出现在 `records.list()` /
+// `records.graph()` 里，但指向的库内论文已经不存在。`retractOrphanRecords()`
+// （reading.ts）是一次可重复调用的对账扫描：把这类孤儿标 `metadata.retracted`。
+describe("证据图孤儿 record 回收（E-6）", () => {
+  function makeLibrary() {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("orphan-test", { name: "孤儿回收测试" });
+    const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
+    return { manager, project, library };
+  }
+
+  test("删除论文后，paper record 仍在库里且未被标记——复现 bug 本身", () => {
+    const { library, project } = makeLibrary();
+    const added = library.add(paper({ title: "Will Be Deleted", doi: "10.1/del", sources: ["openalex"] })).paper;
+    const recordId = added.recordId!;
+    const records = project.records();
+
+    expect(library.remove(added.id)).toBe(true);
+    // bug 复现：record 原样还在，且没有任何「已失效」的标记——这就是「证据图撒了谎」。
+    const orphan = records.get(recordId)!;
+    expect(orphan).not.toBeNull();
+    expect((orphan.metadata as Record<string, unknown>).retracted).toBeUndefined();
+
+    library.close();
+    project.close();
+  });
+
+  test("retractOrphanRecords 把孤儿 paper record 标 retracted，健康 record 不受影响", () => {
+    const { library, project } = makeLibrary();
+    const alive = library.add(paper({ title: "Still Here", doi: "10.1/alive", sources: ["openalex"] })).paper;
+    const gone = library.add(paper({ title: "Will Be Deleted", doi: "10.1/del", sources: ["openalex"] })).paper;
+    const records = project.records();
+
+    library.remove(gone.id);
+    const summary = retractOrphanRecords(records, library);
+
+    expect(summary.retracted).toEqual([gone.recordId!]);
+    expect(summary.alreadyRetracted).toBe(0);
+    expect(summary.scanned).toBe(2); // alive + gone 两条 paper record 都被扫过
+
+    const goneRecord = records.get(gone.recordId!)!;
+    expect((goneRecord.metadata as Record<string, unknown>).retracted).toBe(true);
+    expect(typeof (goneRecord.metadata as Record<string, unknown>).retractedAt).toBe("string");
+
+    const aliveRecord = records.get(alive.recordId!)!;
+    expect((aliveRecord.metadata as Record<string, unknown>).retracted).toBeUndefined();
+    // 健康 record 的原有字段（libraryPaperId 等）没有被这次浅合并冲掉。
+    expect(aliveRecord.metadata.libraryPaperId).toBe(alive.id);
+
+    library.close();
+    project.close();
+  });
+
+  test("幂等：重复调用不会重复标记，也不会报错", () => {
+    const { library, project } = makeLibrary();
+    const gone = library.add(paper({ title: "X", doi: "10.1/x", sources: ["openalex"] })).paper;
+    const records = project.records();
+    library.remove(gone.id);
+
+    const first = retractOrphanRecords(records, library);
+    expect(first.retracted).toEqual([gone.recordId!]);
+
+    const second = retractOrphanRecords(records, library);
+    expect(second.retracted).toEqual([]);
+    expect(second.alreadyRetracted).toBe(1);
+
+    library.close();
+    project.close();
+  });
+
+  test("同时回收精读卡 record：删除的论文，其精读卡也被标 retracted", () => {
+    const { library, project } = makeLibrary();
+    const added = library.add(paper({ title: "Has A Card", doi: "10.1/card", sources: ["openalex"] })).paper;
+    const records = project.records();
+    const cardRecord = records.create({
+      type: "reading",
+      title: "精读卡：Has A Card",
+      content: "内容",
+      evidence: "sourced",
+      metadata: { kind: "reading_card", libraryPaperId: added.id, bibtexKey: "x2020hasacard" },
+    });
+
+    library.remove(added.id);
+    const summary = retractOrphanRecords(records, library);
+
+    expect(summary.retracted.sort()).toEqual([added.recordId!, cardRecord.id].sort());
+    expect((records.get(cardRecord.id)!.metadata as Record<string, unknown>).retracted).toBe(true);
+
+    library.close();
+    project.close();
+  });
+
+  test("与库无关的 record（不声明 libraryPaperId）不受影响", () => {
+    const { library, project } = makeLibrary();
+    const records = project.records();
+    const unrelated = records.create({ type: "idea", title: "无关的 idea", content: "x", evidence: "inferred" });
+
+    const summary = retractOrphanRecords(records, library);
+    expect(summary.scanned).toBe(0);
+    expect(summary.retracted).toEqual([]);
+    expect((records.get(unrelated.id)!.metadata as Record<string, unknown>).retracted).toBeUndefined();
+
     library.close();
     project.close();
   });
@@ -845,16 +1009,83 @@ describe("连接器请求构造", () => {
     expect(europePmcIdQuery("https://doi.org/10.1/x")).toBe('DOI:"10.1/x"');
   });
 
-  test("Semantic Scholar：fields 与 limit，id 带前缀", async () => {
+  test("Semantic Scholar：fields 与 limit，id 带前缀（有凭据时）", async () => {
     const http = capture();
-    const connector = new SemanticScholarConnector({ http });
+    const connector = new SemanticScholarConnector({
+      http,
+      credentials: { has: () => true, get: () => ({ api_key: "fake-s2-key" }) },
+    });
     await connector.search({ query: "attention", limit: 2 });
     expect(http.calls[0]!.url).toContain("/paper/search");
     expect(http.calls[0]!.url).toContain("limit=2");
     expect(http.calls[0]!.url).toContain("fields=");
+    expect(http.calls[0]!.init.headers!["x-api-key"]).toBe("fake-s2-key");
     expect(semanticScholarPaperId("10.1038/x")).toBe("DOI:10.1038/x");
     expect(semanticScholarPaperId("1706.03762")).toBe("arXiv:1706.03762");
     expect(semanticScholarPaperId("abc123")).toBe("abc123");
+  });
+
+  describe("Semantic Scholar connector · 凭据降级（E-4）", () => {
+    test("无凭据提供方 → search/getPaper 返回结构化降级结果，不发请求", async () => {
+      const http = capture();
+      const connector = new SemanticScholarConnector({ http });
+      expect(connector.isConfigured()).toBe(false);
+
+      const searchResult = await connector.search({ query: "attention" });
+      expect(isCredentialMissing(searchResult)).toBe(true);
+      const missing = searchResult as ReturnType<typeof credentialMissingResult>;
+      expect(missing.connector).toBe("semanticscholar");
+      expect(missing.requiredKeys).toEqual(["api_key"]);
+      expect(missing.results).toEqual([]);
+
+      expect(isCredentialMissing(await connector.getPaper({ id: "10.1/x" }))).toBe(true);
+      // 无 key 就不该白撞一遍 429：压根不发请求。
+      expect(http.calls.length).toBe(0);
+    });
+
+    test("凭据字段为空串 → 同样按未配置处理", async () => {
+      const connector = new SemanticScholarConnector({
+        http: capture(),
+        credentials: { has: () => true, get: () => ({ api_key: "   " }) },
+      });
+      expect(connector.isConfigured()).toBe(false);
+      expect(isCredentialMissing(await connector.search({ query: "x" }))).toBe(true);
+    });
+
+    test("凭据读取抛错时按未配置处理，不外泄底层错误", async () => {
+      const connector = new SemanticScholarConnector({
+        http: capture(),
+        credentials: {
+          has: () => true,
+          get: () => {
+            throw new Error("凭据文件解析失败（/home/u/.spark-research/credentials.json）");
+          },
+        },
+      });
+      const result = await connector.search({ query: "x" });
+      expect(isCredentialMissing(result)).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("解析失败");
+      expect(JSON.stringify(result)).not.toContain("/home/u/");
+    });
+
+    test("有凭据时按官方口径带 x-api-key 头，无凭据时不带该头", async () => {
+      const withKey = capture();
+      await new SemanticScholarConnector({
+        http: withKey,
+        credentials: { has: () => true, get: () => ({ api_key: "s2-secret" }) },
+      }).getPaper({ id: "10.1038/x" });
+      expect(withKey.calls[0]!.init.headers!["x-api-key"]).toBe("s2-secret");
+
+      // 无凭据时 getPaper 直接降级，不发请求——headersFor 根本没被调用到网络层。
+      const withoutKey = capture();
+      await new SemanticScholarConnector({ http: withoutKey }).getPaper({ id: "10.1038/x" });
+      expect(withoutKey.calls.length).toBe(0);
+    });
+
+    test("凭据 id / 字段名固定，供 CredentialStore 契约对齐", () => {
+      expect(S2_CONNECTOR_ID).toBe("semanticscholar");
+      expect(S2_CREDENTIAL_KEY).toBe("api_key");
+    });
   });
 
   test("礼貌头默认是占位符，不含任何个人信息", () => {
@@ -872,11 +1103,11 @@ describe("连接器请求构造", () => {
       expect(names).toContain(name);
     }
     expect(registry.listDomain("literature").map((c) => c.name)).toContain("openalex");
-    // aminer 是唯一标注需要 key 的文献源
+    // aminer 与 semanticscholar 标注需要 key（E-4：S2 匿名请求持续 429，凭据路径已补上）
     const needKey = registry
       .listAll()
       .filter((c) => c.domain === "literature" && c.metadata?.apiKeyRequired && c.metadata.status === "available");
-    expect(needKey.map((c) => c.name)).toEqual(["aminer"]);
+    expect(needKey.map((c) => c.name).sort()).toEqual(["aminer", "semanticscholar"]);
     for (const name of ["openalex", "crossref", "europepmc", "semanticscholar", "aminer"]) {
       const tools = registry.listTools(name).map((t) => t.name);
       expect(tools).toContain("search");
@@ -887,8 +1118,15 @@ describe("连接器请求构造", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 describe("跨源检索编排", () => {
+  // 默认给 S2 配一把假凭据：这个 describe 块测的是跨源编排/去重/失败传播，
+  // 不是 E-4 的凭据降级本身（那部分见上面「Semantic Scholar connector · 凭据降级」
+  // 与下面单独的「S2 无 key → skipped」用例）——不配的话 S2 会在这些用例里
+  // 提前被降级成 skipped，掩盖掉本来要测的「四源都真的打了请求」这件事。
   function registryWith(handler: (url: string) => BufferedResponse): ConnectorRegistry {
-    return new ConnectorRegistry({ http: new StubHttp((url) => handler(url)) }).registerBuiltins();
+    return new ConnectorRegistry({
+      http: new StubHttp((url) => handler(url)),
+      credentials: { has: (id) => id === S2_CONNECTOR_ID, get: (id) => (id === S2_CONNECTOR_ID ? { api_key: "test-s2-key" } : null) },
+    }).registerBuiltins();
   }
 
   const json = (payload: unknown, status = 200) =>
@@ -943,6 +1181,20 @@ describe("跨源检索编排", () => {
     const aminer = result.sources.find((s) => s.source === "aminer")!;
     expect(aminer.outcome).toBe("skipped");
     expect(aminer.note).toContain("未配置凭据");
+    expect(result.papers.length).toBe(1);
+  });
+
+  test("S2 无 key → skipped 而非 failed，不再每次白撞 429（E-4）", async () => {
+    // 这里不用 registryWith（它默认给 S2 塞了假 key）：单独造一个没有任何凭据的 registry。
+    const registry = new ConnectorRegistry({
+      http: new StubHttp(() => json({ results: [{ display_name: "P", doi: "10.1/p" }] })),
+    }).registerBuiltins();
+    const result = await new LiteratureSearcher(registry).search("x", {
+      sources: ["openalex", "semanticscholar"],
+    });
+    const s2 = result.sources.find((s) => s.source === "semanticscholar")!;
+    expect(s2.outcome).toBe("skipped");
+    expect(s2.note).toContain("未配置凭据");
     expect(result.papers.length).toBe(1);
   });
 

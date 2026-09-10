@@ -27,12 +27,24 @@ export function titleFirstWord(title: string): string {
   return titleKey(title).split(" ")[0] || "untitled";
 }
 
+// E-5：bibtex key 保留 Unicode（中文等 CJK 字符）。
+//
+// 旧实现用 `[^a-z0-9]` 砍掉一切非 ASCII 字符——对中文作者/标题，`titleKey()`
+// 归一化后本来是保留汉字的（models.ts 的 `\p{L}\p{N}` 本身就含 `\p{Script=Han}`），
+// 结果到这一步被整个砍空，author 变成 "anon"、word 变成 "untitled"：AMiner 收录的
+// 中文文献入库后 key 全部退化成 `anon2021untitled`、`anon2021untiteda`……冲突后缀
+// 疯狂递增，key 与论文彻底脱钩。改成保留 `\p{Script=Han}`（连同其余 ASCII 字母数字）
+// ——英文标题的行为完全不变，中文标题/作者姓名第一次能生成有辨识度的 key。
+function keepAsciiAndHan(raw: string): string {
+  return raw.replace(/[^a-z0-9\p{Script=Han}]/gu, "");
+}
+
 // 单篇的 base key（未处理冲突）。
 export function bibtexBaseKey(paper: Paper): string {
   const surname = paper.authors[0] ? authorSurname(paper.authors[0].name) : "";
-  const author = (surname || "anon").replace(/[^a-z0-9]/g, "");
+  const author = keepAsciiAndHan(surname) || "anon";
   const year = paper.year !== null ? String(paper.year) : "nd";
-  const word = titleFirstWord(paper.title).replace(/[^a-z0-9]/g, "");
+  const word = keepAsciiAndHan(titleFirstWord(paper.title)) || "untitled";
   return `${author}${year}${word}`;
 }
 
