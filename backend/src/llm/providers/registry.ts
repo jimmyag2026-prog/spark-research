@@ -150,6 +150,16 @@ export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPrici
       verifiedDate: "2026-09-10",
       note: "OpenRouter 自己挂牌价，与 Moonshot 直连 API 价不同（转发层通常有独立定价），按各自 provider+model 组合分别存放，不混用。",
     },
+    "z-ai/glm-5.3-flash": {
+      // 挂牌价 $0.075/$0.25 × 1.055：OpenRouter 充值收 5.5% 手续费，摊进单价作保守
+      // 估计（对齐 deepseek 条目「取峰值价作保守估计」的先例）。BudgetLedger 用这里的
+      // 数判 maxCostUsd，宁可略高估不可低估——预算闸的语义是「确定没超」。
+      inputPerMillionUsd: 0.0791,
+      outputPerMillionUsd: 0.2638,
+      source: "https://openrouter.ai/z-ai/glm-5.3-flash",
+      verifiedDate: "2026-09-11",
+      note: "挂牌价 $0.075/M 输入、$0.25/M 输出，另含 5.5% 充值手续费摊入（×1.055）。v0.6 B2 轮次的指定模型。",
+    },
   },
   // kimi/openrouter 之外的 provider（如未来的 anthropic）由各自的 lane 在合入时补充；
   // 本地端点（`local/<model>`）不进这张表——自建/本地服务器没有统一定价，价格是

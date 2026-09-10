@@ -45,7 +45,7 @@ import {
 // V27/V33：prompt 内嵌副本 + 数据目录解析。dataDir() 是仓库既有的单一真源
 // （env SPARK_RESEARCH_DATA_DIR > ~/.spark-research），不另起一套。
 import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
-import { dataDir } from "../config";
+import { configuredModel, dataDir } from "../config";
 import { BudgetLedger } from "../llm/budget";
 import {
   createLiteratureReviewContract,
@@ -594,7 +594,7 @@ export class OrchestratorAgent {
           `Request: ${userMessage}`,
       },
     ];
-    const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    const res = await this.llm.call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
     // D-4（战术版）：规划这一步的 LLM 调用失败时，`res.content` 是路由层拼出的错误
     // 文本（例如 "[error] No API key configured..."），不是模型产出的 JSON 计划——
     // 不检查 res.ok 就直接喂给 parsePlan 虽然「碰巧」解析不出方括号数组从而落到
@@ -819,7 +819,7 @@ export class OrchestratorAgent {
     // W3-a：这是唯一产出「用户最终会看到的正文」的 LLM 调用点，所以 onDelta 接在这里
     // ——根治 W2-d 留下的设计问题（session.ts 曾经不得不为"预览流"单独发一次裸调用，
     // 因为 processRequest 没有 onDelta 的口子；见 docs/devlog/W3-a.md）。
-    const options: CallOptions = { model: LLMRouter.DEFAULT_MODEL, ...(onDelta ? { onDelta } : {}) };
+    const options: CallOptions = { model: configuredModel(LLMRouter.DEFAULT_MODEL), ...(onDelta ? { onDelta } : {}) };
     const res = await this.llm.call(messages, options);
     // D-4（战术版）：这是三处委托里最要紧的一处——summarize() 的返回值**就是**
     // 用户最终看到的 `OrchestrationResult.summary`，也是 reviewer 读的正文。
@@ -1066,7 +1066,7 @@ export class OrchestratorAgent {
     const runLedger = ledger ? new AgentRunLedger({ records: ledger }) : null;
     const rootRun = runLedger?.record({
       agent: "orchestrator",
-      model: LLMRouter.DEFAULT_MODEL,
+      model: configuredModel(LLMRouter.DEFAULT_MODEL),
       provider: "orchestrator",
       systemPrompt: this.corePrompt,
       prompt: goal,
@@ -1219,7 +1219,7 @@ export class OrchestratorAgent {
           `拿到证据的动作。No markdown, no prose, only JSON.`,
       },
     ];
-    const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    const res = await this.llm.call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
     if (!res.ok) {
       this.record(sessionId, "research", "plan-llm-failed", `第 ${round + 1} 轮 planner 调用失败：${res.error.message}`);
       return this.defaultResearchPlan(report.incomplete, round);

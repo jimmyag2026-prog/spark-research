@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { configuredDefaultModel } from "../config";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import type { HttpClient } from "../http/client";
@@ -140,6 +141,10 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   const manager = deps.manager ?? new ProjectManager(deps.root);
   const [sub, ...rest] = args;
   const { positional, flags } = parseFlags(rest);
+  // G-1（v0.6）：与 literature/cli.ts 同一条模型解析链（--model > 注入 > defaultModel
+  // 配置 > 内部默认）。解析逻辑在 config 层的 configuredDefaultModel 单点实现，
+  // 两个 CLI 只是消费——不留第二份手写副本（V46 形状）。
+  const model = flagString(flags.model) ?? deps.model ?? configuredDefaultModel({ root: deps.root });
 
   const makeSearcher = (): LiteratureSearcher => {
     if (deps.searcher) return deps.searcher;
@@ -156,7 +161,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
           llm: deps.llm ?? new LLMRouter(),
           library,
           records,
-          model: deps.model,
+          model,
           projectContext: project.meta.description || undefined,
         });
         const sessionId = flagString(flags.session) ?? `idea_${Date.now()}`;
@@ -272,7 +277,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
           library,
           records,
           artifacts: project.artifacts(),
-          model: deps.model,
+          model,
           workDir: project.paths.artifactsDir,
           sources: parseSources(flagString(flags.sources)),
           perSource: Number(flagString(flags["per-source"]) ?? 5) || 5,

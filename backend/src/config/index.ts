@@ -526,6 +526,18 @@ export function configuredModel(fallback: string, options: ConfigOptions = {}): 
   return stringOr("defaultModel", fallback, options);
 }
 
+// G-1（v0.6）：`defaultModel` 的统一读法。返回用户配置值；未配置（含显式空串——
+// resolveSetting 把 "" 归一成未设）时返回设置项自己的 defaultValue（与 DEFAULT_MODEL
+// 同值，最终 wire model 与旧行为逐字节一致）。返回 undefined 的分支只在 defaultValue
+// 被改成 null 时才可达，留作防御。
+// 此前 HTTP 层（server/context.ts）用 resolveSetting 手写过一遍这个语义，而 CLI 层
+//（literature/cli.ts、ideation/cli.ts）干脆没读——用户设了 defaultModel，CLI 精读/综述
+// 照走代码默认（V40「只写不读」的形状，第 8 次）。单一 helper 收口，三处共用。
+export function configuredDefaultModel(options: ConfigOptions = {}): string | undefined {
+  const v = stringOr("defaultModel", "", options);
+  return v === "" ? undefined : v;
+}
+
 // V16：子代理独立模型——`fallback` 应传 `configuredModel(...)` 的结果（而不是裸的
 // LLMRouter.DEFAULT_MODEL），这样解析链是 subAgentModel_<type> > defaultModel > 代码常量，
 // 而不是让每类子代理各自跳过用户配置的全局默认模型。

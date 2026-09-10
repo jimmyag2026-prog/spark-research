@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { configuredDefaultModel } from "../config";
 import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
@@ -330,6 +331,11 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
   const manager = deps.manager ?? new ProjectManager(deps.root);
   const [sub, ...rest] = args;
   const { positional, flags } = parseFlags(rest);
+  // G-1（v0.6）：模型解析链 `--model` flag > 注入的 deps.model > config.json 的
+  // defaultModel > 各 pipeline 内部默认（undefined 透传）。此前 CLI 是三个入口里
+  // 唯一不读 defaultModel 的（HTTP 的 ctx.model() 与 agent 的 configuredSubAgentModel
+  // 都读）——用户设了默认模型，精读/综述照走代码默认，V40「只写不读」的形状。
+  const model = flagString(flags.model) ?? deps.model ?? configuredDefaultModel({ root: deps.root });
 
   // V39：`lit <sub> --help` 必须显示帮助、**不执行**。放在 switch 之前，
   // 因为它对每条子命令一视同仁——放进各 case 里就会漏掉新加的子命令（这正是
@@ -512,7 +518,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           llm: deps.llm ?? new LLMRouter(),
           library,
           records,
-          model: deps.model,
+          model,
           projectContext: project.meta.description || undefined,
         });
 
@@ -583,12 +589,12 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           library,
           records,
           artifacts: project.artifacts(),
-          model: deps.model,
+          model,
           workDir: project.paths.artifactsDir,
         });
         const topic = flagString(flags.topic);
         // 兜底核验：无论草稿是谁写的，引用一律逐条对照库内 key + 精读卡。
-        const judge = flags["no-judge"] === true ? undefined : (deps.judge ?? new LlmCitationJudge(llm, deps.model));
+        const judge = flags["no-judge"] === true ? undefined : (deps.judge ?? new LlmCitationJudge(llm, model));
 
         // V35：综述是两段长活（写草稿 + 逐条判引用），过去同样是零输出。
         // 两段合成一个任务，阶段用 note 报——粒度到「阶段」就够了，
