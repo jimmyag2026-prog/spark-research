@@ -4,6 +4,17 @@ export interface ReagentSpec {
   name: string;
   reagentId?: string;
   concentration?: number;
+  /**
+   * 浓度的单位（发布前外部验收补）。
+   *
+   * 原来 `extractConcentration()` **把单位丢了**——`%` 和 `mol/L` 都只返回一个裸数字，
+   * 于是 `concentration_limit` 在**比较自己不知道单位的数**。这比「阈值定错」更深一层：
+   * 101% 和 101 mol/L 在下游完全无法区分。
+   *
+   * 本字段先把单位如实带下来。**没有借此编造任何阈值**——单位口径本身是既有未决问题
+   * （见 BACKLOG）。当前只用它做一件无歧义的判断：**百分比 > 100 物理上不存在**。
+   */
+  concentrationUnit?: "percent" | "molar" | "unknown";
   volume?: number;
 }
 
@@ -285,11 +296,14 @@ const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosa
 // 天然抠不出值，属于「有信号、解析失败」的合法情形，不是 bug。
 const CHINESE_LEVEL_DIGIT: Readonly<Record<string, number>> = { 一: 1, 二: 2, 三: 3, 四: 4 };
 
-function extractConcentration(sentence: string): number | undefined {
-  const withUnit = /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z]))/i.exec(sentence);
-  if (withUnit) return Number(withUnit[1]);
+function extractConcentration(sentence: string): { value: number; unit: ReagentSpec["concentrationUnit"] } | undefined {
+  // 单位必须带下来：原实现返回裸数字，让下游规则在比较自己不知道单位的数（见 ReagentSpec）。
+  const pct = /(\d+(?:\.\d+)?)\s*%/.exec(sentence);
+  if (pct) return { value: Number(pct[1]), unit: "percent" };
+  const molar = /(\d+(?:\.\d+)?)\s*(?:mol\/l|mmol\/l|mM|M(?![a-z]))/i.exec(sentence);
+  if (molar) return { value: Number(molar[1]), unit: "molar" };
   const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)/.exec(sentence);
-  if (explicit) return Number(explicit[1]);
+  if (explicit) return { value: Number(explicit[1]), unit: "unknown" };
   return undefined;
 }
 
@@ -359,7 +373,8 @@ export class ProtocolCompiler {
       const concentrationValue = extractConcentration(clause);
       const concentrationAttachable = concentrationValue !== undefined && reagents.length === 1;
       if (concentrationAttachable) {
-        reagents[0]!.concentration = concentrationValue;
+        reagents[0]!.concentration = concentrationValue.value;
+        reagents[0]!.concentrationUnit = concentrationValue.unit;
       }
       const biosafetyValue = extractBiosafetyLevel(clause);
       const rule = ACTION_RULES.find(
@@ -435,12 +450,25 @@ export class ProtocolCompiler {
 
   private extractReagents(sentence: string): ReagentSpec[] {
     const lower = sentence.toLowerCase();
-    return REAGENT_PATTERNS.filter((r) => r.keywords.some((k) => lower.includes(k.toLowerCase()))).map(
-      (r) => ({
-        name: r.keywords[0],
-        reagentId: r.id,
-      }),
-    );
+    const out: ReagentSpec[] = [];
+    for (const pattern of REAGENT_PATTERNS) {
+      // **发布前外部验收（BLOCKER-1）**：这里原来是 `name: r.keywords[0]`——
+      // 于是同一分类下的任何试剂都被显示成组内第一个关键词：
+      //     写「硫酸」→ 编译产物是「盐酸」（strong_acid 组的 keywords[0]）
+      //
+      // 这不是显示瑕疵，是**改写试剂身份**，而且落在物理世界路径上：
+      //   · 人在 `lab approve` 时读的是「协议原文」（硫酸），批准的是编译产物的 hash（盐酸）
+      //     ——**他批的不是他读的那个东西**，AD-6 的署名审批在这里失去意义；
+      //   · 审计记录里会出现实验方案中根本不存在的化学品，证据链溯源到的是错的；
+      //   · 拦截报告也跟着错（验收者原话：「我从没写过盐酸」）。
+      //
+      // 修法：**`name` 用真正匹配上的那个关键词**（用户写什么就是什么），
+      // `reagentId` 仍是分类 id（规则匹配靠它，不受影响）。
+      const matched = pattern.keywords.find((k) => lower.includes(k.toLowerCase()));
+      if (matched === undefined) continue;
+      out.push({ name: matched, reagentId: pattern.id });
+    }
+    return out;
   }
 }
 

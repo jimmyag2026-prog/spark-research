@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import DEPICT_PY from "./depict.py" with { type: "text" };
+import { materializeAssetTree } from "../assets/embedded";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,7 +51,22 @@ export interface DepictDeps {
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
-const SCRIPT_PATH = join(import.meta.dir, "depict.py");
+// **发布前外部验收（HIGH-3）**：这里原来是 `join(import.meta.dir, "depict.py")`——
+// 在 `bun build --compile` 的产物里 `import.meta.dir` 是 `/$bunfs/root`，
+// 外部 python 打不开那个虚拟路径：
+//     ❌ [bad_output] depict.py 没有输出任何内容（exit=2）：
+//        python3: can't open file '/$bunfs/root/depict.py': [Errno 2] No such file or directory
+//
+// 这是 V27 家族的**遗漏**：W5-1 ε 修了 10 处资产，但 chem 是 W5-1 γ 在同一波并行交付的，
+// 两条 lane 谁也没覆盖到对方的新文件。后果比一般 ENOENT 更糟——
+// `--help` / `capabilities` / MCP `tools/list` / `llms.txt` **四处都声称它可用**，
+// 按本项目的价值观「声称有、实际用不了，比没有更糟」。
+//
+// 修法与 ε 的四处 `.py` 一致：静态 import 文本 → 运行期解包到真实临时文件 → spawn 真实路径。
+// `depict.py` 只 import 标准库与 rdkit，没有同包依赖，所以是单文件树的退化情形。
+function scriptPath(): string {
+  return join(materializeAssetTree("chem-depict", { "depict.py": DEPICT_PY }), "depict.py");
+}
 
 // 安全校验（第二道防线）：depict.py 已经在生成端保证了这些性质（§1.3.1），这里保证
 // 「即便某天 depict.py 被改坏，也不让不安全的 SVG 流进 artifact store / 前端 <img>」。
@@ -102,7 +119,7 @@ async function runDepictScript(
   python: string,
   timeoutMs: number,
 ): Promise<DepictFailure["error"] | RawDepictOutput> {
-  const proc = Bun.spawn([python, SCRIPT_PATH], {
+  const proc = Bun.spawn([python, scriptPath()], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
