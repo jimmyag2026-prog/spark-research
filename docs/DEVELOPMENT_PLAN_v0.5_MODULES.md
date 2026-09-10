@@ -1057,3 +1057,75 @@ export interface EmbeddingCapability { configured: boolean; model: string | null
 - W5-2 收口：删 α 登记（β 已做，核对称）；`narrative_parity` 新增「target 数」「NCBI host 限速」两断言在位；**W5-2 末外部验收**（local target 审批链）；核 `MCP_WITHHELD` 三条进了 `MCP_INSTRUCTIONS`（`mcp/server.ts:204-214` 自动）。
 - W5-3 收口：`EXTENDING.md` 技能数；`skills/README.md`；真实 Modal 冒烟结果单列（回放不算）；BACKLOG 38 条逐条「吸收/不做」；CHANGELOG breaking 段（F-3、V21）。
 - 发布前：干净机器完整链路；若 F-4 定「修」，V28 二进制冒烟含 `chem depict` 与 `compute targets`。
+
+---
+
+## 三·补：W5-1 按闸门 F 的产出重排（主会话，2026-09-10）
+
+> 本节由主会话在闸门 F 收口后追加。§3.1 原表写于闸门 F **之前**，那时 F-1 的外部验收
+> 还没跑。方案 §1 明文「**F-1 的产出直接影响 §2 的选择**」，产出回来了，这里兑现它。
+
+### 补.1 F-4 裁定：修，不永久降级
+
+方案给 F-4 的两条路是「修」或「把不发单二进制写成永久承诺」，并规定**不许再挂一版**。
+
+选「修」的理由不是偏好，是**降级这条路走不通**：代码用 `bun:sqlite` 撑持久层，
+node 跑不起来，所以 **npm 包也要求预装 Bun**。砍掉单二进制不会让安装变简单，
+只会让三条安装路径**全都**要求预装 Bun——上手性反而更差。降级付出了能力却换不到简化。
+
+F-c 已经把机制验证到底并给出最小可行集（`docs/devlog/F-c.md`）：
+`.sql`/`.txt` 走静态 `import ... with { type: "text" }`；`.py` 因为要被**外部子进程**
+按路径 spawn，必须「静态 import 文本 → 运行期解包到临时文件 → spawn 真实路径」，
+**单靠 `type: "file"` 不行**（它给的是 `/$bunfs/` 虚拟路径，外部 python 打不开）。
+`project/records.ts` 这一处 F-c 已实机打补丁 + 编译 + 跑通，是修法可行的实证。
+
+### 补.2 新增三条 lane（ε / ζ / η），全部由 F-1 拉动
+
+| lane | 内容 | 为什么值得占一条 lane |
+|---|---|---|
+| **ε** V27/V33 资产内嵌 | F-4 的执行面：3 处 `schema.sql` · 4 处 `.py` · 3 处 prompt `.txt` · 3 处危险默认路径（含 V33 的 `/workspaces`） | 闸门 F 唯一没做完的一件。它决定「单二进制」这条安装路径是真的还是假的 |
+| **ζ** 文献域可用性 | V34 默认源 · V35 长任务 CLI 可见性 · V36 失败消息 · V38 BibTeX 作者名 · V39 `lit review --help` | 外部验收的头两号卡点都在这里。**按文件归属合并成一条**：五项全落在 `literature/` 下，拆开必抢 `literature/cli.ts` |
+| **η** 能力口径收口 | V37 `auth` 与 `config list`/`doctor` 对同一把 key 报不同状态 + `idea new` 失败消息 | 真因已定位到行，比报告说的更具体（见下） |
+
+**V37 的真因**（主会话核实）：`index.ts:103` 有一份**手写的 `KEY_NAMES` 副本，只列
+kimi + openrouter**，而 `doctor` / `capabilities` / `onboarding` 三处都从
+`providerApiKeyEnv()` 派生。更直接的是 `auth()` 显示配置时**只读 config 文件、不看环境变量**
+（`index.ts:126`），所以 key 在 env 里时它报「未设置」。**这与 P11 收口过的
+`PROVIDER_API_KEY_ENV` 手工副本是同一个 bug 的第二现场**——真源统一了，但漏了这个消费方。
+
+### 补.3 `backend/src/index.ts` 归属重排
+
+原表把 `index.ts` 的「只许加 `case "chem"`」给了 γ。现在 η 要重写该文件的
+`KEY_NAMES` / `getApiKey()` / `auth()` 三处，**两条 lane 写同一个文件必冲突**。
+
+处置沿用本文 §3.1 对 `app.ts` 已有的先例（「`app.ts` 一行由收口接」）：
+
+- **`backend/src/index.ts` 整个归 η**
+- **γ 的 `case "chem"` 一行与 import 由收口接**——γ 在报告里写明该写哪一行
+
+### 补.4 W5-1 足迹增量核验（只列新增三条与原四条的交叉面）
+
+| 文件 | 争用 | 处置 |
+|---|---|---|
+| `backend/src/index.ts` | γ（原）· η（新） | **归 η**；γ 那一行下放收口（补.3） |
+| `backend/src/literature/library.ts` | ε（`schema.sql`） | ζ 只拿 `{models,cli,export}.ts`，不含 `library.ts` → 不冲突 |
+| `backend/src/lab/wet_backend.ts` | ε（`.py` spawn） | δ 只拿 `{protocol,safety}.ts` → 不冲突 |
+| `backend/src/simulation/{openmm,pyref}/index.ts` | ε（`runner.py`） | α 只拿 `platform.ts` 的 `canonicalJson` 导出；W5-3 β 拿的是 registry + 三个新平台 → 不冲突 |
+| `backend/src/agents/orchestrator.ts` | ε（V33 的 `/workspaces`，`:223`） | W5-2 δ 才动它，**跨波不同时** → 不冲突 |
+| `backend/src/ideation/cli.ts` | η（失败消息） | β 拿的是 `{novelty,affinity}.ts` → 不冲突 |
+| `tests/unit/narrative_parity.test.ts` | α（登记「等接线」） | ζ 的新门禁断言**另开** `tests/unit/literature_source_parity.test.ts`，不碰枢纽文件 |
+
+### 补.5 ζ 要顺带补的一条门禁（V34 的结构性教训）
+
+V34 不是普通 bug：`lit search --sources arxiv` 能用、`capabilities --json` 报 arxiv 可用、
+`lit add <arxiv-id>` 却查不到。**能力做好了，默认值没跟着改**，而 **AD-12 门禁抓不到**——
+它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。
+
+所以 ζ 除了改那一行，必须加一条断言：**已实装的源必须在 `DEFAULT_SEARCH_SOURCES` 里，
+或在一张显式排除表里带理由**（CNKI/万方是占位实现，属于合法排除）。
+阴性对照：把 arxiv 从默认集里拿掉 → 该断言必须变红。
+
+### 补.6 剩余两次外部验收的落点不变
+
+方案 §6.3 要求三次。闸门 F 已跑第一次（基线）。**W5-2 末**第二次（含审批链，用 local
+target 即可，不必等 Modal），**发布前**第三次（干净机器）。两次都必须由未参与开发的会话执行。
