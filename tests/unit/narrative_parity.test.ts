@@ -112,9 +112,10 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // W2 收口已接（buildCapabilities() 里加了 extensions 字段），本条按对称检查删除。
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
-  "backend/src/agents/swarm.ts":
-    "**已知缺口**：v0.1 遗留，生产代码零调用方、dependsOn 未实现、decompose 是三条正则。" +
-    "README 的「100 并发 swarm」宣传语即出自此处。方案 v0.3 P12 决定删除（BACKLOG V7）",
+  // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
+  // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
+  // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
+  // 文件已不存在，不再是「孤儿」（孤儿的前提是文件存在但无调用方），按对称检查删除本条。
   // v0.4 P11 收口前，backend/src/llm/providers/anthropic.ts 在这里登记过一条「等接线」：
   // R-b 交付了适配器，但 router.ts 的 ADAPTERS 注册权被主会话刻意扣下（R-b/R-c 都不持有
   // 该文件，避免两条 lane 撞车），于是新模块在自己分支上必然是孤儿。

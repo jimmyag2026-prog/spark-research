@@ -71,7 +71,17 @@ describe("UI ↔ CLI 行为对照", () => {
   test("湿实验 compile → approve → simulate：两边落同一张证据图", async () => {
     // ── CLI 侧 ──
     const cli = cliWorkspace("parity-wet");
-    const deps = { manager: cli.manager, backend: new MockDeviceBackend(), actor: "张三", ...cli.sink };
+    // V19：approve 要求可交互终端或 CI 旁路令牌（见 lab/cli.ts）——这里模拟「真人在
+    // 交互终端里确认了」，因为这条测试验的是 UI↔CLI 的证据图对照，不是 V19 终端门本身
+    // （终端门的正负路径测试在 tests/unit/lab_cli.test.ts）。
+    const deps = {
+      manager: cli.manager,
+      backend: new MockDeviceBackend(),
+      actor: "张三",
+      approvalIsInteractiveTty: () => true,
+      approvalConfirm: async () => "yes",
+      ...cli.sink,
+    };
     expect(await runLabCommand(["compile", "取样品50µL加入96孔板，37°C孵育1小时，600nm读取OD", "--title", "OD 测定", "--json"], deps)).toBe(0);
     const cliProject = cli.manager.open("parity-wet");
     const wetId = cliProject

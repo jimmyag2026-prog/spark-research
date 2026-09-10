@@ -2,6 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LLMRouter, type CallOptions, type ChatMessage, type ToolCall, type Usage } from "../llm/router";
 import { BudgetLedger } from "../llm/budget";
+import {
+  configuredModel,
+  configuredSubAgentModel,
+  type ConfigOptions,
+  type SubAgentModelConfigType,
+} from "../config";
 import { MCP_WITHHELD } from "../mcp/tools";
 import type { McpToolRunner } from "../mcp/server";
 import { AgentToolBus, isDenied, type ToolAuditEntry, type ToolOutcome } from "./toolbus";
@@ -87,6 +93,14 @@ export interface SubAgentSpecOverrides {
   /** 给了就整体替换默认 grants（不是合并）——调用方要给出完整期望清单。 */
   grants?: string[];
   budget?: Partial<SubAgentBudget>;
+  /**
+   * V16：仅在没有显式传 `model` 时才会被用来解析 config 层的 per-type 模型覆盖
+   * （`subAgentModel_<type>` → `defaultModel` → 代码常量）。测试注入 `{root, env}`
+   * 走隔离配置；生产不传时读真实 `process.env` / `~/.spark-research/config.json`
+   * ——与 `backend/src/lab/cli.ts` 的 `configuredWetBackend(DEFAULT_WET_BACKEND)`
+   * 同一套约定：调用方给了显式值就不会走到这条读取路径。
+   */
+  configOptions?: ConfigOptions;
 }
 
 // ── 只读工具分类（review 的硬约束用它）───────────────────────────────────────
@@ -212,7 +226,32 @@ const SUB_AGENT_DEFAULTS: Record<SubAgentType, SubAgentDefaults> = {
   },
 };
 
+// V16：SUB_AGENT_DEFAULTS 的 key 集合是 `SubAgentType` 唯一的运行时体现（类型本身在
+// 编译期就被擦除，config/index.ts 没法反向 import 这个文件去读它）。导出这份名字清单，
+// 供 tests/unit/sub_agent.test.ts 与 config/index.ts 的 `SUB_AGENT_MODEL_CONFIG_TYPES`
+// 做一次显式的集合相等断言——两张手写清单谁漏改另一边，测试立刻红（见 config/index.ts
+// 里 V16 那段注释：这是「provider 那次没法做成派生」同一类问题的翻版）。
+export const SUB_AGENT_TYPE_NAMES: readonly SubAgentType[] = Object.keys(
+  SUB_AGENT_DEFAULTS,
+) as SubAgentType[];
+
 const DEFAULT_PROMPT_DIR = join(import.meta.dir, "prompt");
+
+// V16：单一真源——`buildSubAgentSpec()` 与 legacy 的 `SubAgentFactory.create()` 都
+// 通过这一处解析「这个 type 该用哪个模型」，不各自手写一份解析链。
+// 解析顺序：显式 override（调用方最清楚自己要什么）> config 的 per-type 覆盖
+// （`subAgentModel_<type>`）> config 的全局默认模型（`defaultModel`）> 代码常量
+// （defaults.model，目前恒为 LLMRouter.DEFAULT_MODEL）。
+function resolveSubAgentModel(
+  type: SubAgentType,
+  overrideModel: string | undefined,
+  configOptions: ConfigOptions | undefined,
+): string {
+  if (overrideModel) return overrideModel;
+  const codeDefault = SUB_AGENT_DEFAULTS[type].model;
+  const globalDefault = configuredModel(codeDefault, configOptions);
+  return configuredSubAgentModel(type as SubAgentModelConfigType, globalDefault, configOptions);
+}
 
 /** 构造一个 SubAgentSpec。校验在这里就跑一遍——非法配置不该等到 runSubAgent() 才炸。 */
 export function buildSubAgentSpec(
@@ -225,7 +264,7 @@ export function buildSubAgentSpec(
   const spec: SubAgentSpec = {
     name,
     type,
-    model: overrides.model ?? defaults.model,
+    model: resolveSubAgentModel(type, overrides.model, overrides.configOptions),
     promptFile: overrides.promptFile ?? defaults.promptFile,
     grants,
     budget: { ...defaults.budget, ...overrides.budget },
@@ -565,7 +604,14 @@ export class SubAgentFactory {
     this.promptDir = promptDir;
   }
 
-  create(type: SubAgentType, overrides: Partial<Omit<SubAgentConfig, "type">> = {}): SubAgent {
+  // `configOptions` 仅在 `overrides.model` 没给时用来解析 config 层的 per-type 覆盖
+  // （见 resolveSubAgentModel）——加在第三个参数位置而不是塞进 SubAgentConfig，
+  // 因为它不是 agent 的一个字段，只是"这次解析用哪个 env/config 源"的旁路开关。
+  create(
+    type: SubAgentType,
+    overrides: Partial<Omit<SubAgentConfig, "type">> = {},
+    configOptions?: ConfigOptions,
+  ): SubAgent {
     const defaults = SUB_AGENT_DEFAULTS[type];
     const promptFile = defaults.promptFile;
     const loaded = loadPromptFile(this.promptDir, promptFile);
@@ -575,7 +621,7 @@ export class SubAgentFactory {
     return new SubAgent({
       name: overrides.name ?? type,
       type,
-      model: overrides.model ?? defaults.model,
+      model: resolveSubAgentModel(type, overrides.model, configOptions),
       prompt: overrides.prompt ?? loaded ?? "",
       permission: overrides.permission ?? [...defaults.grants],
     });
