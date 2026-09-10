@@ -7,9 +7,21 @@
   "bin": {
     "spark-research": "backend/src/index.ts"
   },
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "files": [
+    "backend/src",
+    "frontend/workspace/dist",
+    "llms.txt",
+    "docs/INSTALL.md",
+    "README.md"
+  ],
   "scripts": {
     "dev": "bun --watch backend/src/index.ts",
-    "build": "bun run build:web && bun build backend/src/index.ts --compile --outfile dist/spark-research",
+    "build": "bun scripts/build-binary.ts",
+    "prepublishOnly": "bun run build:web && bun test tests/unit",
+    "smoke": "bash scripts/smoke-binary.sh",
     "build:web": "vite build --config frontend/workspace/vite.config.ts",
     "dev:web": "vite --config frontend/workspace/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p frontend/workspace/tsconfig.json",

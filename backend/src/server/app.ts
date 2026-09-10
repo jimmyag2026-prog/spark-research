@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { file } from "bun";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
+import { materializeAssetTree } from "../assets/embedded";
+import { FRONTEND_DIST } from "../assets/frontend_dist.generated";
 import { buildCapabilities } from "../capabilities";
 import { ProtocolCompiler, validateProtocol } from "../lab/protocol";
 import type { Protocol } from "../lab/protocol";
@@ -27,6 +29,14 @@ export type { ServerDeps } from "./context";
 // SolidJS 工作台的构建产物目录。构建产物不入 git（纪律），所以运行时可能不存在——
 // 那种情况下 API 照常工作，UI 路径返回一页带构建指引的 503，而不是一个空白 200。
 export const DEFAULT_FRONTEND_DIR = join(import.meta.dir, "../../../frontend/workspace/dist");
+
+// G-2（v0.6，V43①）：前端目录解析。单二进制里 FRONTEND_DIST 非 null（构建时由
+// scripts/gen-frontend-embed.ts 写入），解包到磁盘后托管；源码模式为 null，
+// 走 dist 目录。两种模式共享 materialize 之后的同一条托管代码路径。
+export function resolveFrontendDir(): string {
+  if (FRONTEND_DIST) return materializeAssetTree("frontend-dist", FRONTEND_DIST);
+  return DEFAULT_FRONTEND_DIR;
+}
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -138,7 +148,7 @@ function loadOriginAllowlist(deps: ServerDeps): string[] {
 export function createApp(deps: ServerDeps = {}): Hono {
   const app = new Hono();
   const ctx = new ServerContext(deps);
-  const frontendDir = deps.frontendDir ?? DEFAULT_FRONTEND_DIR;
+  const frontendDir = deps.frontendDir ?? resolveFrontendDir();
   const compiler = new ProtocolCompiler();
   const safetyGate = new LabSafetyGate();
 

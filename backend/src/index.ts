@@ -6,7 +6,7 @@ import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
 import { OrchestratorAgent } from "./agents/orchestrator";
 import { startServer } from "./server/server";
-import { DEFAULT_FRONTEND_DIR } from "./server/app";
+import { resolveFrontendDir } from "./server/app";
 import { ProjectManager } from "./project/manager";
 import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
@@ -285,7 +285,7 @@ export interface WelcomeOptions {
 export function welcome(options: WelcomeOptions = {}): void {
   const out = options.out ?? ((line: string) => console.log(line));
   const auth = options.auth !== undefined ? options.auth : getApiKey();
-  const frontendBuilt = options.frontendBuilt ?? existsSync(join(DEFAULT_FRONTEND_DIR, "index.html"));
+  const frontendBuilt = options.frontendBuilt ?? existsSync(join(resolveFrontendDir(), "index.html"));
   const configDir = options.configDir ?? CONFIG_DIR;
   const version = options.version ?? pkg.version;
 
@@ -639,7 +639,7 @@ function main() {
       const port = Number(process.argv[3]) || 4321;
       // 工作台前端是构建产物，不入 git。缺了就明说该跑什么，而不是让用户
       // 打开一个 503 页面自己猜（API 这时是好的，只有 UI 没有）。
-      if (!existsSync(join(DEFAULT_FRONTEND_DIR, "index.html"))) {
+      if (!existsSync(join(resolveFrontendDir(), "index.html"))) {
         console.log("⚠️  工作台前端尚未构建，Web UI 不可用（API 正常）。先跑一次：bun run build:web");
       }
       const server = startServer(port);

@@ -1,0 +1,22 @@
+# G-2（v0.6，V28）：CI = 单测 + 二进制冒烟。
+# 二进制是另一个运行时，只跑 bun test 抓不到 V27 家族的问题——冒烟必须真构建真执行。
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: 单元测试
+        run: bun test tests/unit
+      - name: 二进制冒烟（构建 + 版本一致 + capabilities + server/UI）
+        run: bash scripts/smoke-binary.sh
