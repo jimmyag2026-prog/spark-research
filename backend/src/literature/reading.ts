@@ -193,6 +193,12 @@ export interface GenerateCardOptions {
   sessionId?: string | null;
   // 生成后把库内阅读状态推进到 read（默认 true）。
   markRead?: boolean;
+  // V35：批量精读的逐篇进度回调。只有 generateMany() 会调它。
+  //
+  // 为什么回调在这里、而不是让调用方自己拆开循环逐篇调 generate()：
+  // 「一篇失败不影响其余」的结算语义（下面 generateMany 的注释）是这个类的职责，
+  // 搬到调用方就会有第二份实现，早晚和这里漂移。回调只报告、不改变结算语义。
+  onProgress?: (progress: { done: number; total: number; paperId: string; ok: boolean; title: string | null }) => void;
 }
 
 export interface GenerateCardResult {
@@ -277,12 +283,22 @@ export class ReadingCardGenerator {
   ): Promise<{ cards: StoredReadingCard[]; failures: Array<{ paperId: string; error: string }> }> {
     const cards: StoredReadingCard[] = [];
     const failures: Array<{ paperId: string; error: string }> = [];
+    let done = 0;
     for (const id of paperIds) {
+      let ok = true;
+      let title: string | null = this.deps.library.get(id)?.title ?? null;
       try {
-        cards.push((await this.generate(id, options)).card);
+        const card = (await this.generate(id, options)).card;
+        cards.push(card);
+        title = card.title;
       } catch (error) {
+        ok = false;
         failures.push({ paperId: id, error: error instanceof Error ? error.message : String(error) });
       }
+      done++;
+      // 进度**在成功和失败两条路径上都发**——只在成功时发进度，等于让一串失败在
+      // 终端上看起来和「卡住了」一模一样，那正是 V35 要修的症状。
+      options.onProgress?.({ done, total: paperIds.length, paperId: id, ok, title });
     }
     return { cards, failures };
   }

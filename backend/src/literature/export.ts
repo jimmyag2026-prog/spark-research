@@ -1,4 +1,4 @@
-import { authorSurname, titleKey, type Paper, type PaperAuthor } from "./models";
+import { authorSurname, isInitialsToken, titleKey, type Paper, type PaperAuthor } from "./models";
 import type { LibraryPaper } from "./library";
 
 // 导出（DESIGN 域 A2）：BibTeX + CSL-JSON。
@@ -162,6 +162,12 @@ export function toCSLName(name: string): CSLName {
   }
   const parts = cleaned.split(" ");
   if (parts.length === 1) return { literal: cleaned };
+  // V38：「Last F」形态（Europe PMC / PubMed：`"Jumper J"`、`"Varadi MG"`）——
+  // 最后一段是名缩写时，姓在前面，不是最后一段。判据与 models.ts 的 authorSurname 共用
+  // 同一个 `isInitialsToken`，避免两处各写一份正则、改一处漏一处。
+  if (isInitialsToken(parts[parts.length - 1]!)) {
+    return { family: parts.slice(0, -1).join(" "), given: parts[parts.length - 1]! };
+  }
   return { family: parts[parts.length - 1]!, given: parts.slice(0, -1).join(" ") };
 }
 
