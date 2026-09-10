@@ -2375,6 +2375,31 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ---
 
+## [未发布]
+
+### 💥 破坏性变更
+
+- **删除 `connectors/base.ts` 的三个 deprecated 别名** `MCPConnector` / `MCPConnectorConfig` /
+  `MCPTool`（BACKLOG V15）。P9 引入、v0.4 §2.2 的废弃周期已随 v0.4.0 发布走完，全仓库确认零
+  活引用后直接删除，不留过渡层。**外部扩展若引用了这三个名字，请改用 `Connector` /
+  `ConnectorConfig` / `ConnectorTool`**——只是改名，形状完全一致。新增 grep 断言测试防止
+  别名再长回来。
+- **删除 `compute` 技能**。它从 v0.1 起就是假的：`ComputeService` / `DefaultCompute` 返回
+  写死的成功结果，从不真的提交任何计算作业。同批清掉的还有两个同族假实现——
+  `query_frames`（永远返回空 frames）与 `analytic_libraries`（在 kernel 权限表里声明、
+  零调用方）。真正的远端算力是 v0.5 主线 C1，**在它落地前，声称能力比没有能力更糟**。
+  `TASK_KINDS` 与 CLI banner 同步去掉 `compute`。
+
+### 修复
+
+- **未知 task kind 不再被静默吞掉**。`normalizeTask()` 原先会把不在 `TASK_KINDS` 白名单里的
+  任务直接过滤掉——计划里凭空少一个任务、执行日志不留痕迹，而 `executeTask()` 的 `default`
+  失败分支因此永远走不到，是**看起来存在、实际不可达的守卫**。现在未知 kind 会留在计划里、
+  命中 `default`、显式返回 `ok:false` 并写执行记录。
+- `doctor` 对单二进制打包限制的误报（F-c）。
+
+---
+
 ## [0.4.0] — 2026-09-10
 
 **把「agent」这两个字变成真的。** v0.3 还清了并发与超时的债，v0.4 补运行时与生态这条最短的板：
