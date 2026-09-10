@@ -50,7 +50,10 @@ import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 import { AgentRunLedger } from "./ledger";
 
-const TASK_KINDS = ["analysis", "code", "connector", "compute", "subagent", "skill"] as const;
+// export：F-a 新增的 planner-prompt/TASK_KINDS 同源测试要从外部读这张表，
+// 与 plan() 里手写的逐 kind 说明文字做双向比对（防止未来再出现「表里删了，
+// prompt 里的说明文字忘了删」——v0.4 的 compute 就是这么活了四个版本）。
+export const TASK_KINDS = ["analysis", "code", "connector", "subagent", "skill"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
 // 会话模式（P4）：chat = P1-P3 的规划/执行/review 循环；coexplore = 思路共探。
@@ -69,14 +72,17 @@ export interface CoExploreSessionResult {
 
 export interface PlannedTask {
   id: string;
-  kind: TaskKind;
+  // F-a：故意不是 TaskKind——见 normalizeTask() 的注释，一个 planner 计划出的、
+  // TASK_KINDS 里已经没有的 kind（比如已删掉的 "compute"）必须能流到 executeTask()
+  // 的 switch 默认分支显式报错，而不是在这里被悄悄过滤掉、计划里凭空少一个任务。
+  kind: string;
   description: string;
   params?: Record<string, unknown>;
 }
 
 export interface ExecutionOutcome {
   taskId: string;
-  kind: TaskKind;
+  kind: string;
   ok: boolean;
   output: string;
 }
@@ -151,12 +157,6 @@ const SKILL_CATALOG: SkillDef[] = [
     keywords: ["compound", "molecule", "chembl", "pubchem", "分子", "化学", "药物"],
   },
   {
-    name: "compute",
-    context:
-      "Run numerical analysis in the python kernel or via the compute service. Report computed evidence traceable to a cell.",
-    keywords: ["compute", "simulate", "fit", "统计", "计算", "模拟", "拟合", "数值", "分析数据"],
-  },
-  {
     name: "lab",
     context:
       "Drive lab devices through the lab protocol layer with the safety gate enabled. Record observed device readings.",
@@ -180,11 +180,19 @@ function loadPrompt(filename: string): string {
   }
 }
 
+// F-a（F-5 的顺手修）：这里曾经用 `if (!TASK_KINDS.includes(kind)) return null`
+// 把 kind 不在白名单里的任务直接过滤掉——静默丢弃，计划里少了一个任务，执行日志
+// 里没有任何痕迹，跟被清掉的假 compute 服务是同一类问题（LLM 计划出的东西悄悄
+// 变成"什么都没发生"，而不是一个看得见的失败）。现在只做「这是不是个像样的任务
+// 描述」的形状校验（kind 是非空字符串），真正「这个 kind 认不认」交给 executeTask()
+// 的 switch——命中不了任何 case 就落到 default，显式返回 `ok:false` 并写执行日志，
+// 计划里也仍然看得见这个任务。见 tests/unit/orchestrator.test.ts 的
+// 「未知 task kind 显式失败」用例与其阴性对照。
 function normalizeTask(raw: unknown, index: number): PlannedTask | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
-  const kind = obj.kind as TaskKind;
-  if (!TASK_KINDS.includes(kind)) return null;
+  const kind = typeof obj.kind === "string" && obj.kind.length > 0 ? obj.kind : null;
+  if (!kind) return null;
   const description = typeof obj.description === "string" ? obj.description : `task ${index + 1}`;
   const params = obj.params && typeof obj.params === "object" ? (obj.params as Record<string, unknown>) : {};
   return { id: typeof obj.id === "string" ? obj.id : `t_${index + 1}`, kind, description, params };
@@ -383,7 +391,7 @@ export class OrchestratorAgent {
           `"kind" MUST be one of: ${TASK_KINDS.join(",")}. ` +
           `"analysis"=reasoning, "code"=run python (params.code), ` +
           `"connector"=query a database (params.server, params.tool, params.args), ` +
-          `"compute"=submit compute job, "subagent"=delegate (params.subagent), ` +
+          `"subagent"=delegate (params.subagent), ` +
           `"skill"=load skill context (params.skill). No markdown, no prose, only JSON. ` +
           `Request: ${userMessage}`,
       },
@@ -487,17 +495,6 @@ export class OrchestratorAgent {
             return { taskId: task.id, kind: task.kind, ok: false, output: `[connector error: ${msg}]` };
           }
         }
-        case "compute": {
-          try {
-            const job = await this.daemon.compute.submit(task.params ?? {});
-            this.record(sessionId, "compute", "submit", job.id);
-            return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(job) };
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.record(sessionId, "compute", "error", msg);
-            return { taskId: task.id, kind: task.kind, ok: false, output: `[compute error: ${msg}]` };
-          }
-        }
         case "subagent": {
           const type = (task.params?.subagent ?? "execute") as SubAgentType;
           const runner = this.getToolRunner();
@@ -561,7 +558,11 @@ export class OrchestratorAgent {
           return { taskId: task.id, kind: task.kind, ok: true, output: this.skillContextFor(name) };
         }
         default: {
-          const kind = String(task.kind) as string;
+          const kind = String(task.kind);
+          // 与其他分支一样把这次失败写进执行日志（可见），不只是塞进返回值里——
+          // 否则「计划里有一个任务，没人在执行日志里看到它被拒绝」本身又是一种
+          // 静默：调用方不读 execution 数组细节的话，这个任务就像没发生过一样。
+          this.record(sessionId, "orchestrator", "unknown-kind", `task ${task.id} kind='${kind}' not in TASK_KINDS`);
           return { taskId: task.id, kind: task.kind, ok: false, output: `unknown task kind: ${kind}` };
         }
       }

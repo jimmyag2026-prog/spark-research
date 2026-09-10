@@ -13,11 +13,6 @@ export interface LineageStore {
 export interface ExecutionLog {
   record(entry: any): void;
 }
-export interface ComputeService {
-  submit(args: any): any;
-  getFrames(args: any): any;
-  libraries(args: any): any;
-}
 export interface Connectors {
   mcp: { call(args: any): any };
 }
@@ -34,7 +29,6 @@ export interface DaemonDeps {
   artifacts?: ArtifactStore;
   lineage?: LineageStore;
   executionLog?: ExecutionLog;
-  compute?: ComputeService;
   connectors?: Connectors;
   skills?: SkillsService;
   llm?: LlmService;
@@ -66,26 +60,6 @@ class DefaultExecutionLog implements ExecutionLog {
 
   record(entry: any) {
     this.entries.push(entry);
-  }
-}
-
-class DefaultCompute implements ComputeService {
-  private seq = 0;
-  private jobs = new Map<string, any>();
-
-  submit(args: any) {
-    const id = `job_${++this.seq}`;
-    const job = { id, status: "queued", spec: args ?? {}, createdAt: new Date().toISOString() };
-    this.jobs.set(id, job);
-    return job;
-  }
-
-  getFrames(args: any) {
-    return { frames: [], filter: args ?? {} };
-  }
-
-  libraries() {
-    return { libraries: ["numpy", "pandas", "matplotlib", "scipy", "rdkit"] };
   }
 }
 
@@ -147,7 +121,6 @@ export class SparkResearchDaemon {
   readonly artifacts: ArtifactStore;
   readonly lineage: LineageStore;
   readonly executionLog: ExecutionLog;
-  readonly compute: ComputeService;
   readonly connectors: Connectors;
   readonly skills: SkillsService;
   readonly llm: LlmService;
@@ -163,7 +136,6 @@ export class SparkResearchDaemon {
     this.artifacts = deps.artifacts ?? new DefaultArtifacts();
     this.lineage = deps.lineage ?? new DefaultLineage();
     this.executionLog = deps.executionLog ?? new DefaultExecutionLog();
-    this.compute = deps.compute ?? new DefaultCompute();
     this.connectors = deps.connectors ?? { mcp: new RealHttpConnector() };
     this.skills = deps.skills ?? new DefaultSkills();
     this.llm = deps.llm ?? new DefaultLLM();
@@ -189,15 +161,12 @@ export class SparkResearchDaemon {
       case "mcp_call": return this.connectors.mcp.call(a);
       case "create_agent": return this.handleCreateAgent(a);
       case "delegate_task": return this.handleDelegateTask(a);
-      case "query_frames": return this.compute.getFrames(a);
       case "manage_skills": return this.skills.manage(a);
-      case "compute_submit": return this.compute.submit(a);
       case "artifact_lookup": return this.artifacts.lookup(a);
       case "lineage_query": return this.lineage.query(a);
       case "model_call": return this.llm.call(a);
       // AD-2：只回「是否已配置 + 字段名」，凭据本体永远不出 daemon。
       case "credentials": return credentialStatus(this.credentials, a);
-      case "analytic_libraries": return this.compute.libraries(a);
       default: throw new Error(`Daemon: unknown method '${method}'`);
     }
   }
