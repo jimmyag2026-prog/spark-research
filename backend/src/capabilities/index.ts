@@ -1,12 +1,22 @@
 import { listExtensionCapabilities, type ExtensionCapability } from "../extensions/capabilities";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
-import { CONFIG_SETTINGS, resolveAll, resolveSetting, type ConfigOptions } from "../config";
+import {
+  CONFIG_SETTINGS,
+  configuredComputeTarget,
+  resolveAll,
+  resolveSetting,
+  type ConfigOptions,
+} from "../config";
 import { SAFETY_RULES } from "../lab/safety";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS, wetBackend } from "../lab/wet_backend";
 import { CITATION_RULE } from "../reviewer/rules";
 import { CONCLUSION_RULES } from "../reviewer/conclusion_rules";
 import { RATING_VIOLATION_CODES } from "../ideation/novelty";
+// v0.5 C1（W5-2 β 接线）：执行地的可用性口径**只有一份**，在 compute/cli.ts 里。
+// CLI 的 `compute targets`、HTTP 的 /api/compute/targets 与这里读的是同一个函数——
+// 三个面各自手写一遍判定，就是 V34「默认源」与二进制「技能 0 个」那类漂移的成因。
+import { computeTargetViews, defaultComputeAdapters, type ComputeTargetView } from "../compute/cli";
 import { EDGE_TYPES, EVIDENCE_LABELS, RECORD_TYPES } from "../project/models";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
 import { resolvePython } from "../simulation/platform";
@@ -168,6 +178,29 @@ export interface EmbeddingCapability {
   threshold: number | null;
 }
 
+/**
+ * 远端算力的一个执行地（v0.5 C1，设计 §2.11）。
+ *
+ * **`availability` 的三档口径要分清**（§三·补.7 约束二，这是 AD-12 的具体形态）：
+ *   · `needs_credential` = **未配置**：能力在，只是没凭据（和 openmm 没装是两回事）；
+ *   · `unavailable`      = 装载不了：注册表里根本没有这个 adapter；
+ *   · `available`        = adapter 在册**且**凭据齐全，真的能派发。
+ * 报「可用」而实际派发不了，是 AD-12 明令禁止的形状——v0.5 W5-1 刚因此修了两处
+ * （V34 默认源、单二进制里的「技能 0 个」）。`credentialConfigured` 只回「配没配」，
+ * 凭据值本体永远不出 daemon（AD-2）。
+ */
+export interface ComputeTargetCapability extends Omit<ComputeTargetView, "availability"> {
+  availability: Availability;
+}
+
+export interface ComputeCapability {
+  /** `compute plan` 不给 --target 时用哪个（env > config.json > 代码默认 local）。 */
+  defaultTarget: string;
+  targets: ComputeTargetCapability[];
+  /** 刻意不暴露给 MCP 的算力动作名（AD-14）。真源是 mcp/tools.ts 的 MCP_WITHHELD。 */
+  withheld: string[];
+}
+
 export interface CapabilityManifest {
   service: "spark-research";
   version: string;
@@ -196,6 +229,7 @@ export interface CapabilityManifest {
   providers: ProviderCapabilityInfo[];
   localEndpoint: LocalEndpointCapability;
   embedding: EmbeddingCapability;
+  compute: ComputeCapability;
 }
 
 export interface CapabilityOptions extends ConfigOptions {
@@ -517,6 +551,18 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     threshold: semanticHighAffinity(embeddingModel),
   };
 
+  // v0.5 C1：算力执行地。零 IO——只问注册表与凭据库「有没有」，不做任何连通性探测
+  // （那是 adapter.check()，属 --probe 档，本波不接）。
+  const compute: ComputeCapability = {
+    defaultTarget: configuredComputeTarget("local", options),
+    targets: computeTargetViews({
+      adapters: defaultComputeAdapters(),
+      credentials,
+      defaultTarget: configuredComputeTarget("local", options),
+    }),
+    withheld: MCP_WITHHELD.filter((w) => w.name.startsWith("compute_")).map((w) => w.name),
+  };
+
   // W2-c 交付、W2 收口接线：只读 manifest / 授权记录 / verify 缓存，不执行扩展代码。
   const extensions = await listExtensionCapabilities({ root: options.root });
 
@@ -545,6 +591,7 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     providers,
     localEndpoint,
     embedding,
+    compute,
   };
 }
 

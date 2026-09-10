@@ -18,6 +18,7 @@ import { sessionRoutes, taskRoutes } from "./routes/session";
 import { projectRoutes } from "./routes/projects";
 import { proteinRoutes } from "./routes/proteins";
 import { chemRoutes } from "./routes/chem";
+import { computeRoutes } from "./routes/compute";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
 
@@ -234,6 +235,9 @@ export function createApp(deps: ServerDeps = {}): Hono {
   // docs/devlog/P11-d.md 的「文件边界」一节。
   app.route("/api/proteins", proteinRoutes(ctx));
   app.route("/api/chem", chemRoutes(ctx));
+  // W5-2 β（CB-5 接线）：远端算力。注意这一层刻意没有 dispatch/release 端点，
+  // 理由见 routes/compute.ts 顶部（MCP 是 HTTP 的投影，HTTP 开的口子就是 agent 的路）。
+  app.route("/api/compute", computeRoutes(ctx));
   app.route("/api/records", recordRoutes(ctx));
   app.route("/api/conclusions", conclusionRoutes(ctx));
   app.route("/api/report", reportRoutes(ctx));

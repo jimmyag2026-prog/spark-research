@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
 import type { McpToolRunner, ToolOutcome as McpToolOutcome } from "../../backend/src/mcp/server";
 import { BudgetLedger } from "../../backend/src/llm/budget";
-import { AgentToolBus, isDenied, type ToolAuditEntry } from "../../backend/src/agents/toolbus";
+import {
+  AgentToolBus,
+  isDenied,
+  type ToolAuditEntry,
+  type ToolCallCost,
+} from "../../backend/src/agents/toolbus";
 import { makeMcp } from "../helpers/mcp_scenario";
 
 // P12 · `AgentToolBus`（v0.4 方案 §4.2，波次 W1-a）。
@@ -337,5 +342,63 @@ describe("AgentToolBus · 端到端：真实 P9 McpToolRunner 走通一次正常
     expect(viaBus.ok).toBe(true);
     if (isDenied(viaBus)) throw new Error("unreachable");
     expect(viaBus.payload).toEqual(direct.payload);
+  });
+});
+
+// ── v0.5 W5-2 β（CB-5 接线）：计价维度 + 算力扣留 ─────────────────────────────
+
+describe("AgentToolBus · ToolCostUnit 与算力工具的计价口径", () => {
+  test("ToolCostUnit 扩成 call | computeSeconds（类型口子留着，broker 侧记的是计算秒）", () => {
+    // 编译期就够了：能把 "computeSeconds" 赋进来，说明 union 真的扩了。
+    const call: ToolCallCost = { unit: "call", costUsd: null };
+    const seconds: ToolCallCost = { unit: "computeSeconds", costUsd: 1.5 };
+    expect(call.unit).toBe("call");
+    expect(seconds.unit).toBe("computeSeconds");
+  });
+
+  test("暴露出去的 compute_* 工具**恒不计价**（costUsd=null，且 unknownCostCalls 被记上）", async () => {
+    const fx = makeMcp({ slug: "toolbus-compute" });
+    const budget = new BudgetLedger();
+    const bus = new AgentToolBus({
+      runner: fx.runner,
+      grants: ["compute_list"],
+      budget,
+      audit: () => {},
+      timeoutMs: 10_000,
+    });
+
+    const outcome = await bus.call("compute_list", {});
+    expect(isDenied(outcome)).toBe(false);
+
+    const snapshot = budget.snapshot();
+    // 关键：**不是 0**。0 会被读成「这次真的免费」；null + unknownCostCalls 才是
+    // 「我们确实不知道这一次值多少钱」。真实花费在 ComputeBroker.collect() 里记账。
+    expect(snapshot.costUsd).toBeNull();
+    expect(snapshot.unknownCostCalls).toBeGreaterThan(0);
+  });
+
+  test("三条算力扣留动作即便被塞进 grants 也拿不到（denied=withheld，runner 一次没碰）", async () => {
+    const fx = makeMcp({ slug: "toolbus-compute-withheld" });
+    const { entries, audit } = collectAudit();
+    const bus = new AgentToolBus({
+      runner: fx.runner,
+      grants: ["compute_approve", "compute_run", "compute_release"],
+      budget: new BudgetLedger(),
+      audit,
+      timeoutMs: 10_000,
+    });
+
+    // specs() 里一个都不该出现——模型连"有这么个工具"都看不到。
+    expect(bus.specs()).toEqual([]);
+
+    for (const name of ["compute_approve", "compute_run", "compute_release"]) {
+      const outcome = await bus.call(name, { jobId: "cj-fake", actor: "agent 自己" });
+      expect(isDenied(outcome)).toBe(true);
+      if (!isDenied(outcome)) throw new Error("unreachable");
+      // "withheld" 而不是 "not_granted"：这不是"你没被授权"，是"谁都不许"。
+      expect(outcome.denied).toBe("withheld");
+    }
+    expect(entries.map((e) => e.denied)).toEqual(["withheld", "withheld", "withheld"]);
+    expect(entries.every((e) => e.resultSize === 0)).toBe(true);
   });
 });

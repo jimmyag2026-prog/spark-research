@@ -82,14 +82,40 @@ export interface ToolAuditEntry {
  * 签名、`BudgetLedger` 的记账路径都不需要改。**本 lane 只留接口，不写 v0.5 的实现**——
  * 所以 `costOf()` 目前对所有工具都返回同一个「未知/不计费」的值。
  */
+export type ToolCostUnit = "call" | "computeSeconds";
+
 export interface ToolCallCost {
-  unit: "call";
+  unit: ToolCostUnit;
   costUsd: number | null;
 }
 
-// 唯一实现：所有工具调用暂时都不计费。v0.5 要接算力成本时，在这里按 `name` 分支
-// 返回真实 `costUsd`（例如查一张「工具名 → 单价」表），不需要改这个函数的签名。
-function costOf(_name: string, _args: Record<string, unknown>): ToolCallCost {
+/** compute_* 工具的前缀。见下面 `costOf()` 的注释：它们在这一层**恒不计价**。 */
+export const COMPUTE_TOOL_PREFIX = "compute_";
+
+// 唯一实现：所有工具调用都不在这一层计价，`costUsd` 恒为 null。
+//
+// ── v0.5 W5-2 β：为什么算力工具**也**返回 null（这是设计，不是没做完）──────────
+//
+// v0.4 留下这个口子时写的是「v0.5 要接算力成本时，在这里按 name 分支返回真实 costUsd」。
+// 真接的时候结论反过来了：**agent 经 MCP 拿不到任何一个会花钱的算力动作**——
+// `compute_approve` / `compute_run` / `compute_release` 全在 MCP_WITHHELD 里（AD-14），
+// 暴露出去的四个（plan / status / list / collect）没有一个会产生账单。
+// 所以在 ToolBus 这一层给 compute_* 编一个 costUsd 出来，编的一定是个假数字：
+// 计划的 `estimate.upperBoundUsd` 是**上界**不是花费，而真实花费要等 harvest 之后才知道。
+//
+// 真实花费的记账位置是 `ComputeBroker.collect()`：拿到 harvest 的 wallSeconds 之后
+// `deps.budget.record({ inputTokens:0, outputTokens:0, costUsd: 实际值|null })`——
+// 那里才有「跑了多少秒 × 单价」这两个数，查不到单价就是 null（**绝不当 0**）。
+//
+// `unit` 仍然扩成了 `"call" | "computeSeconds"`：类型口子留着，因为 broker 侧记的
+// 确实是计算秒这一维；将来若有「agent 直接触发的计费工具」（今天一个都没有），
+// 在这里按 name 分支返回 `{ unit: "computeSeconds", costUsd }` 即可，签名不用动。
+function costOf(name: string, _args: Record<string, unknown>): ToolCallCost {
+  if (name.startsWith(COMPUTE_TOOL_PREFIX)) {
+    // 显式写出来而不是靠 fallthrough：这一条是**被断言钉住的设计决定**
+    // （tests/unit/toolbus.test.ts），不是「还没实现」。
+    return { unit: "call", costUsd: null };
+  }
   return { unit: "call", costUsd: null };
 }
 
