@@ -9,6 +9,7 @@ import {
 } from "../config";
 import { MCP_WITHHELD } from "../mcp/tools";
 import type { McpToolRunner } from "../mcp/server";
+import type { ToolSpec } from "../llm/types";
 import { AgentToolBus, isDenied, type ToolAuditEntry, type ToolOutcome } from "./toolbus";
 // V27：prompt 的编译期内嵌副本（见 ./prompts.ts）。
 import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
@@ -308,6 +309,15 @@ export interface SubAgentDeps {
   parentBudget?: BudgetLedger;
   /** 单次工具调用的硬超时，转发给 AgentToolBus。默认 30s。 */
   toolTimeoutMs?: number;
+  /**
+   * 收口(W5-3)：外部 MCP 工具的 spec，转发给 `AgentToolBus.externalSpecs`。
+   *
+   * V45 把执行链路接通了（runner 能路由 `mcp:` 名字、grants 里也加了这些名字），
+   * 但**模型从没被告知这些工具存在**——`AgentToolBus.specs()` 原本只返回
+   * `MCP_TOOLS` 的子集。不补这一环，「agent 能自主使用外部 MCP 工具」就是谎话。
+   * 不给 = 与接线前逐字节同行为。
+   */
+  externalSpecs?: ToolSpec[];
   /** 墙钟时钟注入，默认 Date.now——测试用，不依赖真实时间流逝。 */
   now?: () => number;
   /** 安全阀轮数，默认 DEFAULT_MAX_ROUNDS。测试用小值来在合理时间内命中它。 */
@@ -455,6 +465,7 @@ export async function runSubAgent(
       deps.auditSink?.(entry);
     },
     timeoutMs: deps.toolTimeoutMs ?? 30_000,
+    externalSpecs: deps.externalSpecs,
   });
 
   const messages: ChatMessage[] = [

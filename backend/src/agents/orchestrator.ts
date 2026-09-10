@@ -714,7 +714,16 @@ export class OrchestratorAgent {
               externalGrants.length > 0 && !base.readOnly
                 ? buildSubAgentSpec(type, { grants: [...base.grants, ...externalGrants] })
                 : base;
-            const result = await runSubAgent(spec, task.description, { llm: this.subAgentLlm(), runner });
+            // 收口(W5-3)：**把外部工具的 spec 也喂给模型**。
+            // γ 已经把执行链路接通（runner 能路由、grants 里也有这些名字），
+            // 但 `AgentToolBus.specs()` 原本只返回 MCP_TOOLS 的子集——
+            // **模型从没被告知这些工具存在，自然永远不会调它们**。
+            // 这一行是「调用链路已打通」与「agent 能自主使用外部工具」之间的差距。
+            const result = await runSubAgent(spec, task.description, {
+              llm: this.subAgentLlm(),
+              runner,
+              externalSpecs: external?.registry?.specs(),
+            });
             this.record(
               sessionId,
               spec.type,
