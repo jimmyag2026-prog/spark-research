@@ -548,7 +548,7 @@ describe("叙事一致性门禁（AD-12）", () => {
   // 执行地、每个能不能用，如果是手写的，加一个 adapter 就会错，而且不报警。
   // 额外钉住 AD-12 在算力上的具体形态（§三·补.7 约束二）：**注册表里没有 adapter 的
   // 执行地，永远不许报 available**——没配 Modal 凭据时它必须是「未配置」
-  // （needs_credential），既不是「不可用」也不是「可用」。
+  // 收口(W5-2) 后：真实 gateway 未实现 → `unavailable`（见下面 S8 那段注释）。
   test("算力执行地：capabilities 声称的 target 数 = TARGET_KINDS，且无 adapter 者一律不报 available", async () => {
     const manifest = await buildCapabilities();
     expect(manifest.compute.targets.map((t) => t.kind)).toEqual([...TARGET_KINDS]);
@@ -571,7 +571,14 @@ describe("叙事一致性门禁（AD-12）", () => {
     // modal 的口径：本仓库的测试环境不配 Modal 凭据，所以它必须是「未配置」。
     const modal = manifest.compute.targets.find((t) => t.kind === "modal")!;
     expect(modal.credentialConfigured).toBe(false);
-    expect(modal.availability).toBe("needs_credential");
+    // S8（W5-2 末外部验收）：本仓库把 Modal adapter 接上之后，modal 的口径从
+    // `needs_credential` 变成了 `unavailable`——**不是退步，是更准确**。
+    // 验收者原话：`needs_credential` + 🔑 + 「只差一把钥匙」三者共同告诉用户
+    // 「去拿 token 就行」，而真相是**拿了也没用**（真实 gateway 还没实现），
+    // 那句真相排在长指引第三条的末尾。状态名必须自己承担这个信息。
+    // 不变的是这条断言真正要守的东西：**modal 绝不许报 available**。
+    expect(modal.availability).toBe("unavailable");
+    expect(modal.availability).not.toBe("available");
     expect(modal.setupHint, "报「未配置」就必须同时给出配置指引（V36）").toBeTruthy();
 
     // 默认执行地是 local，且 withheld 清单从 MCP_WITHHELD 派生（不是又抄一份）。

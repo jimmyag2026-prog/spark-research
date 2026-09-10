@@ -76,6 +76,14 @@ export const COMPUTE_HELP = `用法:
       --workspace <目录>          上传的根目录（默认当前目录）
   spark-research compute approve <jobId> [--actor 谁] [--note 备注] [--run] [--json]
                                  人工批准（AD-6 同构）。落 decision record，记 plan digest。
+
+  什么时候需要审批（S4：外部验收反映这条到处都没写）：
+    审批门**按后果开**，不是无条件开。以下三者任一成立就停在 awaiting_approval：
+      · 计费（billable，如 target=modal）
+      · 联网（--network 不是 none）
+      · 用到密钥（--secret）
+    三者都不成立（典型是 target=local + network=none + 无 secret）→ 直接 planned，
+    可以直接 compute run。plan 的输出会明说走哪条，不用自己推。
                                  **必须来自真实交互终端**（会现场要求输入 'yes'）；
                                  非交互环境（脚本/CI/Bash 工具）默认拒绝，除非同时给出
                                  --ci-bypass-token <与 SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN 一致>
@@ -235,7 +243,7 @@ export function computeTargetViews(options: {
           credentialConfigured: modalReport.credentialConfigured,
           availability: modalReport.availability,
           reason: modalReport.reason,
-          setupHint: modalReport.howToConfigure.length > 0 ? modalReport.howToConfigure.join(" ") : MODAL_SETUP_HINT,
+          setupHint: modalReport.howToConfigure.length > 0 ? modalReport.howToConfigure.join("\n") : MODAL_SETUP_HINT,
         };
       }
       if (base.credentialConfigured !== true) {
@@ -543,10 +551,26 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
         if (json) {
           out(JSON.stringify({ job: jobJson(job), skippedUploads: scan.skipped, next: nextActionFor(job) }, null, 2));
         } else {
-          out("📋 已生成算力计划（零副作用：没有建任何远端资源，也没有解析任何凭据）");
+          // S3（W5-2 末外部验收）：**人类输出必须打印目标项目**。
+          // 验收者建完新项目后直接 plan，任务静默落进了一个他从没打开过的既有项目——
+          // 因为 `project new` 不切当前项目、`compute plan` 又不说自己写到哪儿去了。
+          // 对照：同一个 CLI 的 `lit add` 就打印「✅ 已入库（项目 xxx）」。
+          // 一个把「可审计证据链」当核心卖点的产品，**证据静默落进错误项目而用户收不到任何信号**
+          // 是直接的信任损伤。
+          out(`📋 已生成算力计划（项目 ${job.projectSlug}）（零副作用：没有建任何远端资源，也没有解析任何凭据）`);
           printJob(job, out);
           for (const s of scan.skipped) out(`    ↷ 跳过 ${s.path}（${s.reason}）`);
           out(`下一步：${nextActionFor(job)}`);
+          // S4：把「为什么这次不用审批」直接印出来。验收者读 llms.txt 以为审批门无条件在，
+          // 结果 local 任务直接 planned，摸索了一阵才发现触发条件是 --network。
+          // 判据本身是合理的（不计费/不联网/无密钥 = 没有需要人担责的后果），
+          // **缺的只是把判据说出来**。
+          if (!job.plan.approvalRequired) {
+            out(
+              `      （本次免审批：执行地 ${job.plan.target.kind} 不计费 · network=${job.plan.network} · 无 secret——` +
+                "三者任一成立才需要人点头)",
+            );
+          }
         }
         return 0;
       }

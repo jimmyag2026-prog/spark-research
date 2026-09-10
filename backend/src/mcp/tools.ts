@@ -703,7 +703,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   // agent 经 MCP 只能 plan 与查状态，**从不派发**（AD-14）。
   {
     name: "compute_plan",
-    description: `【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后停在 awaiting_approval 等人点头。
+    description: `【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
 【参数示例】{"purpose": "在 GPU 上跑 100ns MD 采样", "command": ["python", "run.py", "--steps", "50000000"], "upload": ["run.py", "system.pdb"], "outputs": ["traj.dcd", "log.txt"], "target": "local", "timeoutMinutes": 120}
 【command 必须是 argv 数组】不接受 shell 字符串——被审批的命令不该再经过一次 shell 展开。写 ["bash","-c","..."] 会被直接拒。
 【何时不该用】① 几秒钟就能算完的东西——本地 exp_run 更快，不必绕远端。② 你想「顺便把它跑起来」——做不到：派发必须由人在真实终端里执行 \`spark-research compute approve <jobId> --run\`，这个工具面上没有派发入口，试也调不到。

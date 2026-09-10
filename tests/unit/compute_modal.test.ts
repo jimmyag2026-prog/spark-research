@@ -340,7 +340,14 @@ describe("CB-4 约束一 · 「Modal 能不能用」只由运行期配置决定"
   });
 
   test("GPU 清单不参与可用性判定（它只收窄能选什么，别和被禁的 build-time 开关混为一谈）", () => {
-    const adapter = new ModalComputeAdapter({ credentials: creds(null), gpus: [] });
+    // 收口(W5-2)：接上 gatewayFactory，把「传输层接没接上」这个混杂变量去掉——
+    // 本条要隔离的自变量是 **GPU 清单**，不是 transport。
+    // （S8 之后 transport=not_wired 会一律压成 unavailable，不接 gateway 就测不出 GPU 的影响。）
+    const adapter = new ModalComputeAdapter({
+      credentials: creds(null),
+      gpus: [],
+      gatewayFactory: () => new FakeModalCloud(CLOUD_ROOT),
+    });
     expect(adapter.capabilities().gpus).toEqual([]);
     // 没凭据 → 仍然是「未配置」，与 GPU 清单是否为空无关。
     expect(adapter.status().availability).toBe("needs_credential");

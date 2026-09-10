@@ -61,6 +61,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
+  spark-research chem       化学结构图（depict：SMILES → 2D SVG，落 artifact + record）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
   spark-research compute     远端算力（plan / approve / reject / run / status / list / collect / cancel / release / targets）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）

@@ -77,6 +77,13 @@ export function runProjectCommand(args: string[], deps: ProjectCliDeps = {}): nu
         });
         out(`✅ 已创建项目 '${project.slug}'`);
         describe(project, out);
+        // S3（W5-2 末外部验收）：**建完不切当前项目，而且不说**。
+        // 验收者建完新项目直接 `compute plan`，任务静默落进了一个他从没打开过的既有项目。
+        // 这里补上最关键的一句下一步——`project new` 刻意不自动切换（切换是显式动作），
+        // 但「不自动切换」这件事必须让用户知道，否则它就是个陷阱。
+        out("");
+        out(`下一步：spark-research project open ${project.slug}`);
+        out("      （`project new` 不会自动切换当前项目——不 open 的话，后续命令仍然写进原来那个项目）");
         return 0;
       }
       case "list":

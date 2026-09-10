@@ -82,7 +82,7 @@ describe("HTTP · /api/compute/machine", () => {
 });
 
 describe("HTTP · /api/compute/targets", () => {
-  test("没配 Modal 凭据 → 「未配置」（needs_credential）+ 配置指引；local 可用且是默认", async () => {
+  test("Modal 不可用（真实 gateway 未实现）+ 配置指引；local 可用且是默认", async () => {
     const fx = makeServer({ slug: "compute-http" });
     const { status, body } = await fx.get<{
       targets: Array<{
@@ -95,7 +95,14 @@ describe("HTTP · /api/compute/targets", () => {
     }>("/api/compute/targets");
     expect(status).toBe(200);
     const byKind = Object.fromEntries(body.targets.map((t) => [t.kind, t]));
-    expect(byKind.modal!.availability).toBe("needs_credential");
+    // S8（W5-2 末外部验收）：本仓库把 Modal adapter 接上之后，modal 的口径从
+    // `needs_credential` 变成了 `unavailable`——**不是退步，是更准确**。
+    // 验收者原话：`needs_credential` + 🔑 + 「只差一把钥匙」三者共同告诉用户
+    // 「去拿 token 就行」，而真相是**拿了也没用**（真实 gateway 还没实现），
+    // 那句真相排在长指引第三条的末尾。状态名必须自己承担这个信息。
+    // 不变的是这条断言真正要守的东西：**modal 绝不许报 available**。
+    expect(byKind.modal!.availability).toBe("unavailable");
+    expect(byKind.modal!.availability).not.toBe("available");
     expect(byKind.modal!.credentialConfigured).toBe(false);
     expect(byKind.modal!.setupHint).toBeTruthy();
     expect(byKind.local!.availability).toBe("available");

@@ -152,9 +152,11 @@ function guidanceFor(missingKeys: string[], transport: ModalStatusReport["transp
   }
   if (transport === "not_wired") {
     lines.push(
-      `  · **注意（如实告知）**：本版本只交付了 Modal 的契约与录制层，` +
-        `真实 gateway（Modal SDK 客户端）尚未实现——所以**只填 token 还跑不起来**。` +
-        `进度见 docs/devlog/W5-2-a.md 的「有 token 之后还需要做什么」。`,
+      // S7（外部验收）：这是**纯文本终端输出**，不要留 Markdown 粗体标记；
+      // 也不要把最终用户指向 docs/devlog/**——那是内部开发日志，用户不该读它。
+      `  · 注意（如实告知）：本版本只交付了 Modal 的契约与录制层，` +
+        `真实 gateway（Modal SDK 客户端）尚未实现——所以只填 token 还跑不起来。` +
+        `进度见 CHANGELOG 与 docs/BACKLOG.md 的 Modal 相关条目。`,
     );
   }
   return lines;
@@ -207,8 +209,34 @@ export class ModalComputeAdapter implements ComputeAdapter {
     const environment = this.readConfig().environment;
     const transport: ModalStatusReport["transport"] = this.gatewayFactory ? "ready" : "not_wired";
 
+    // S8（W5-2 末外部验收）：**传输层没写时，缺不缺凭据都不许报 needs_credential**。
+    //
+    // 原来的分支顺序是「先看凭据」，于是没配 token 的用户看到的是
+    // `needs_credential` + 🔑 + 「只差一把钥匙」——三者共同告诉他「去拿 token 就行」，
+    // 而真相是**拿了也没用**（真实 gateway 还没实现）。那句真相排在指引第三条、
+    // 一坨长文本的末尾。验收者原话：「一个新用户很可能会去注册、生成 token、chmod 600、
+    // 然后才撞墙。」**状态名必须自己承担这个信息**，不能指望用户读完长指引。
+    //
+    // 所以把 transport 判定提到最前面：只要 gateway 没接上，一律 `unavailable`，
+    // 缺哪些凭据仍然如实带在 `missingKeys` 与指引里（将来要用），但**不再用状态名暗示
+    // 「补上就能用」**。
+    if (transport === "not_wired") {
+      return {
+        availability: "unavailable",
+        credentialConfigured: missingKeys.length === 0,
+        missingKeys,
+        environment,
+        transport,
+        reason:
+          "modal 本版本只交付了契约与录制层，真实 gateway 尚未实现（Modal SDK 客户端还没写）——" +
+          "所以现在配好 token 也跑不起来。派发会当场失败，不会产生任何远端资源、也不会产生账单。" +
+          (missingKeys.length > 0 ? `（另：凭据也还缺 ${missingKeys.join(" / ")}，将来 gateway 落地后要补。）` : ""),
+        howToConfigure: guidanceFor(missingKeys, transport),
+      };
+    }
     if (missingKeys.length > 0) {
       // 约束二：缺凭据的口径是**未配置**，不是「不可用」。能力在，只是没钥匙。
+      // 走到这里说明 gateway 已经接上了——此时「只差一把钥匙」才是真的。
       return {
         availability: "needs_credential",
         credentialConfigured: false,
@@ -219,20 +247,6 @@ export class ModalComputeAdapter implements ComputeAdapter {
           `modal 未配置凭据：~/.spark-research/credentials.json 的 connectors.${MODAL_CONNECTOR_ID} ` +
           `缺字段 ${missingKeys.join(" / ")}。这不是「Modal 不可用」——能力在、审批链在，只差一把钥匙。`,
         howToConfigure: guidanceFor(missingKeys, transport),
-      };
-    }
-    if (transport === "not_wired") {
-      // 凭据齐了但传输层根本没写——这时候报「可用」就是 AD-12 明令禁止的形状。
-      return {
-        availability: "unavailable",
-        credentialConfigured: true,
-        missingKeys: [],
-        environment,
-        transport,
-        reason:
-          "modal 凭据已配置，但**真实 gateway 尚未实现**（本版本只交付契约与录制层）——" +
-          "现在派发会当场失败，不会产生任何远端资源、也不会产生账单。",
-        howToConfigure: guidanceFor([], transport),
       };
     }
     return {

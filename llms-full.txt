@@ -79,7 +79,7 @@ spark-research mcp    # stdio 传输
 - `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
 - `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
 - `chem_depict`：要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
-- `compute_plan`：任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后停在 awaiting_approval 等人点头。
+- `compute_plan`：任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
 - `compute_status`：plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
 - `compute_list`：想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
 - `compute_collect`：**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
@@ -244,7 +244,7 @@ spark-research mcp    # stdio 传输
 
 ---
 
-## 五大功能域
+## 六大功能域
 
 | 域 | 做什么 | 主要入口 |
 |----|-------|---------|
@@ -253,6 +253,14 @@ spark-research mcp    # stdio 传输
 | **C 全流程数据记录** | 8 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
+| **F 远端算力**（v0.5 新增） | `plan → approve → run → collect` 的作业生命周期；plan 摘要审批（计费/联网/用密钥三者任一成立就要人点头）、逐文件上传清单与 sha256、产物收割与释放。**执行地目前只有 `local` 可用** | `spark-research compute` |
+
+> ⚠️ **算力域的真实状态（如实说明）**：`local`（本机子进程）完整可用。
+> **Modal 只交付了契约与录制层，真实 gateway 尚未实现——填了 token 也跑不起来**，
+> `doctor` 会如实报 `unavailable` 并说明原因。SSH 是明确的占位槽位。
+> 另外**算力产出目前不进证据图**（`compute collect` 收回的文件不注册成 artifact，
+> 也不落 execution record），所以还无法基于一次算力运行写出能通过评审的结论。
+> 两件都登记在 `docs/BACKLOG.md`，v0.5 的 W5-3 处理。
 
 外部 agent 可以经 **MCP** 把整个工作台当工具箱接入（`spark-research mcp`），见下方「扩展与接入」。
 
@@ -5166,7 +5174,7 @@ conclusion               --derives_from--> observation / experiment
 
 ## compute_plan
 
-【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后停在 awaiting_approval 等人点头。
+【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
 【参数示例】{"purpose": "在 GPU 上跑 100ns MD 采样", "command": ["python", "run.py", "--steps", "50000000"], "upload": ["run.py", "system.pdb"], "outputs": ["traj.dcd", "log.txt"], "target": "local", "timeoutMinutes": 120}
 【command 必须是 argv 数组】不接受 shell 字符串——被审批的命令不该再经过一次 shell 展开。写 ["bash","-c","..."] 会被直接拒。
 【何时不该用】① 几秒钟就能算完的东西——本地 exp_run 更快，不必绕远端。② 你想「顺便把它跑起来」——做不到：派发必须由人在真实终端里执行 `spark-research compute approve <jobId> --run`，这个工具面上没有派发入口，试也调不到。

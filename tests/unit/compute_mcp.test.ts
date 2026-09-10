@@ -62,7 +62,14 @@ describe("MCP · 算力工具面的分界", () => {
     expect([...payload.compute.withheld].sort()).toEqual([...WITHHELD].sort());
     // 「未配置」口径也要经 MCP 如实广播（AD-12）。
     const modal = payload.compute.targets.find((t) => t.kind === "modal")!;
-    expect(modal.availability).toBe("needs_credential");
+    // S8（W5-2 末外部验收）：本仓库把 Modal adapter 接上之后，modal 的口径从
+    // `needs_credential` 变成了 `unavailable`——**不是退步，是更准确**。
+    // 验收者原话：`needs_credential` + 🔑 + 「只差一把钥匙」三者共同告诉用户
+    // 「去拿 token 就行」，而真相是**拿了也没用**（真实 gateway 还没实现），
+    // 那句真相排在长指引第三条的末尾。状态名必须自己承担这个信息。
+    // 不变的是这条断言真正要守的东西：**modal 绝不许报 available**。
+    expect(modal.availability).toBe("unavailable");
+    expect(modal.availability).not.toBe("available");
     fx.dispose();
   });
 });

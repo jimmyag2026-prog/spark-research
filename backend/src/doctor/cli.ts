@@ -68,7 +68,9 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
     const mark = t.availability === "available" ? "✅" : t.availability === "needs_credential" ? "🔑" : "·";
     out(`  ${mark} ${pad(t.kind, 12)}${t.availability}${t.isDefault ? "（默认）" : ""}`);
     if (t.reason) out(`      ${t.reason}`);
-    if (t.setupHint) out(`      ${t.setupHint}`);
+    // S7（外部验收）：setupHint 是多行的（「为什么 → 是什么机制 → 该做什么」三段），
+    // 原来整段拼成一行输出，把 doctor 里最重要的那几句话变成了全屏最难读的一坨。
+    if (t.setupHint) for (const line of t.setupHint.split("\n")) out(`      ${line}`);
   }
   out("");
 
