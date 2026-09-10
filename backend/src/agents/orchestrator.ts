@@ -48,6 +48,7 @@ import type { Project, ProjectManager } from "../project/manager";
 import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
+import { AgentRunLedger } from "./ledger";
 
 const TASK_KINDS = ["analysis", "code", "connector", "compute", "subagent", "skill"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
@@ -626,7 +627,18 @@ export class OrchestratorAgent {
       return { approved: true, findings: [] };
     }
     const execs = this.executionLog.length > 0 ? this.executionLog : store.listExecutionsByFrame(sessionId);
-    const reviewer = new ReviewerAgent(store, execs, this.graph);
+    // v0.4 W3 收口：接上 findings 持久化（W1-b 的状态机 + W3-c 的 fingerprint 与写入逻辑）。
+    // 此前 ReviewerAgent 从不传 options.findings——能力做好了、测试覆盖了，
+    // 但真实 chat() 会话里 findings 永远不落库（W3-c devlog §7 如实报告过）。
+    // ReviewerAgent 本身不知道自己跑在哪个 project 下（构造参数不带 project 身份），
+    // 这层身份必须由调用方补上，所以接线点只能在这里。
+    const project = this.projectForSession(sessionId);
+    const reviewer = new ReviewerAgent(
+      store,
+      execs,
+      this.graph,
+      project ? { findings: { store: project.findings(), project: project.slug, session: sessionId } } : {},
+    );
     const result = await reviewer.review(sessionId);
     this.record(
       sessionId,
@@ -796,11 +808,44 @@ export class OrchestratorAgent {
     const planner: Planner = async ({ report, lastObservations, round }) =>
       this.planResearchRound(sessionId, goal, report, lastObservations, round);
 
+    // v0.4 W3 收口：帧级记账（W3-b 的 AgentRunLedger）。W3-a 与 W3-b 并行开发，
+    // W3-a 不知道 ledger.ts 存在，于是它落地后没有生产调用方——本版第三个
+    // 「建好但没人喂」。这里接上：每个子代理运行落一条 agent_run record，
+    // 父子关系用 derives_from 边（本轮所有子代理挂在同一个 session 根 run 下）。
+    // 拿不到 project 时静默跳过记账，不影响研究循环本身。
+    const ledger = this.projectForSession(sessionId)?.records();
+    const runLedger = ledger ? new AgentRunLedger({ records: ledger }) : null;
+    const rootRun = runLedger?.record({
+      agent: "orchestrator",
+      model: LLMRouter.DEFAULT_MODEL,
+      provider: "orchestrator",
+      systemPrompt: this.corePrompt,
+      prompt: goal,
+      toolCalls: 0,
+      stopReason: "done",
+    });
+
     const execute: RoundExecutor = async (plan) => {
       const outcomes: RoundOutcome[] = [];
       for (const item of plan) {
         const deps: SubAgentDeps = { llm: this.subAgentLlm(), runner, parentBudget: sessionBudget };
         const result = await runSubAgentOfType(item.subagentType, item.task, deps);
+        // usage 直接透传子代理的实测值——AgentRunLedger 不重算 token/价格，只记账落图。
+        // 拿不到 usage 时传 undefined，落成 UNKNOWN_USAGE（costUsd:null），**不是 0**。
+        runLedger?.record({
+          agent: item.subagentType,
+          // SubAgentResult 不带 model/provider（W2-a 的形状）——用该类子代理的配置模型，
+          // provider 留 "subagent"：真实 provider 在 LlmResponse 里，但子代理没把它透出来。
+          // 这是已知的精度损失，比编造一个具体 provider 名诚实。
+          model: buildSubAgentSpec(item.subagentType).model,
+          provider: "subagent",
+          systemPrompt: item.subagentType,
+          prompt: item.task,
+          usage: result.usage,
+          toolCalls: result.toolCalls.length,
+          stopReason: result.stopReason,
+          parentRunId: rootRun?.id,
+        });
         outcomes.push({ item, result });
       }
       return outcomes;

@@ -102,13 +102,9 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // 门禁会显示绿而契约系统其实仍是死代码。**这是本门禁已知的表达力上限**——
   // 补它的正是下面新增的「存储层生产写入方」断言那种**按能力**（而非按文件）的判据。
 
-  "backend/src/agents/ledger.ts":
-    "**等接线**：v0.4 P13 波次 W3-b 交付的 `AgentRunLedger`（第 9 类 record `agent_run`，" +
-    "帧级记账：systemHash/promptHash 指纹 + usage/toolCalls/stopReason + integrityHash，" +
-    "见 DEVELOPMENT_PLAN_v0.4.md §4.3 与 docs/devlog/W3-b.md）。消费方是 W3-a 的 replan " +
-    "循环 / orchestrator（并行进行中），那条 lane 还没落地，所以现在没有生产调用方——" +
-    "只有 tests/unit/ledger.test.ts 引用它。**W3-a 或收口接上后必须删除本条**" +
-    "（门禁的『多余登记必须删除』对称检查会强制这件事，做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  // backend/src/agents/ledger.ts 曾在此登记「等接线：W3-a 或收口接上后删除」——
+  // W3 收口已接：orchestrator 的 runResearchLoop() 里每个子代理运行落一条 agent_run
+  // record，父子用 derives_from 边挂在 session 根 run 下。按对称检查删除本条。
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 

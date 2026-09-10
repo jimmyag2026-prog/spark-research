@@ -134,16 +134,37 @@ export interface EvidenceQuery {
 // 假对象也完全合法。
 type ReadableRecordStore = Pick<RecordStore, "list" | "get" | "edgesOf">;
 
+/**
+ * **不计入「研究进展」的 record 类型。**
+ *
+ * `agent_run`（W3-b 的帧级记账）是**记账**，不是**证据**：每个子代理跑一次就落一条，
+ * 哪怕它什么都没查到、什么都没产出。
+ *
+ * 这件事在 W3 收口接线 ledger 时真实咬了一口：`NoProgressGuard` 比较的是 record 快照，
+ * `distill` 数的是 `newSince` 的条数——把记账算进去之后，**每一轮都必然「有新增」**，
+ * 于是「连续 N 轮无进展就停」这条停机条件永远不会触发。
+ * AD-10 三条并行停机条件里防烧钱空转的那条会被静默废掉，而所有测试仍然是绿的
+ * （orchestrator 那条端到端用例只是数字从 1 变 2）。
+ *
+ * 所以证据图的「进展」口径必须显式排除记账类型。将来再加类似的旁路 record
+ * （审计、遥测…）也要加进这张表。
+ */
+const NON_EVIDENCE_RECORD_TYPES = new Set<RecordType>(["agent_run"]);
+
+function isEvidence(r: ResearchRecord): boolean {
+  return !NON_EVIDENCE_RECORD_TYPES.has(r.type);
+}
+
 export class RecordStoreEvidenceQuery implements EvidenceQuery {
   constructor(private readonly store: ReadableRecordStore) {}
 
   snapshot(): EvidenceSnapshot {
-    return { recordIds: new Set(this.store.list().map((r) => r.id)) };
+    return { recordIds: new Set(this.store.list().filter(isEvidence).map((r) => r.id)) };
   }
 
   newSince(baseline: EvidenceSnapshot, type?: RecordType | RecordType[]): ResearchRecord[] {
     const records = type ? this.store.list({ type }) : this.store.list();
-    return records.filter((r) => !baseline.recordIds.has(r.id));
+    return records.filter((r) => isEvidence(r) && !baseline.recordIds.has(r.id));
   }
 
   listByType(type: RecordType | RecordType[], predicate?: (r: ResearchRecord) => boolean): ResearchRecord[] {

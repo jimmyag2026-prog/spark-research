@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { SESSION_MODES, type SessionMode } from "../../agents/orchestrator";
 import { CoExploreError } from "../../ideation/coexplore";
-import type { CallOptions } from "../../llm/types";
 import { HttpError, type ServerContext } from "../context";
 import { sseResponse } from "../sse";
 import type { TaskEvent } from "../tasks";
@@ -18,20 +17,9 @@ import { jsonBody, optionalString, queryNumber, queryString, requireString } fro
 // 那条既有断言继续成立的原因（下面新加的 `delta` 事件只在真的发生流式调用时才会出现，
 // 现有的 fake LLM 从不触发 onDelta，序列不受影响）。
 //
-// **W2-d（P14）新增的是一层「预览流」**：`mode === "chat"` 且请求没有显式关掉
-// （`preview !== false`）时，在权威调用之前，先用同一个 router 依赖发**一次独立的、
-// 真正流式的**模型调用（P11 的 `CallOptions.onDelta`，backend/src/llm/providers/*
-// 已经实现），逐块把 `delta` 事件吐给前端做「实时预览」——不是把权威结果切成假
-// token 回放（上面吐槽过这是自欺），是一次真实的、被前端明确标成"预览"的模型输出，
-// 权威 `result` 到达后前端会用它覆盖预览文本。
-//
-// 代价要如实说：这意味着 `mode === "chat"` 的一次 `/stream` 请求在配置了真实 provider
-// 时会发生**两次**模型调用（一次流式预览 + 一次权威 orchestrator 调用，后者内部可能
-// 还不止一次）。真正的根治是让 `processRequest` 自己支持 `onDelta` 并把预览与权威
-// 合而为一——那需要改 agents/orchestrator.ts，不在本 lane 所有权内，已经写进
-// docs/devlog/W2-d.md 交给主会话或 agents/** 的 owner。预览调用失败（没配 provider /
-// 网络问题 / 用于测试的 fake LLM 根本不支持 onDelta）一律安静地不发 delta，不影响
-// 权威流程——预览是锦上添花，不是必需品。
+// **W3 收口**：`chat()` 接受可选 `onDelta`（W3-a 交付），接到 `summarize()`——
+// 唯一产出用户可见 `summary` 的 LLM 调用点。于是 `delta` 事件吐的就是**权威答案本身**
+// 的增量。W2-d 当初那次「另发一次裸模型调用做预览」的绕道已删除（见下方 POST 处理器）。
 
 function parseMode(raw: string | undefined): SessionMode | undefined {
   if (raw === undefined) return undefined;
@@ -83,41 +71,36 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     // （CoExploreSession，见 agents/orchestrator.ts），本 lane 不重新拼一份。
     // **W2 收口裁定：预览流默认关闭（`preview: true` 才开）。**
     //
-    // W2-d 把它做成默认开，理由是「一次真实的模型输出，比把权威结果切成假 token 回放诚实」
-    // ——前半句对，后半句的对比选错了参照物。真正的问题是**预览的内容和权威答案无关**：
-    // 预览发的是 `[{role:"user", content: message}]`（裸消息，无 system prompt、无技能上下文、
-    // 无 plan），而权威答案走完整 orchestrator 管线（plan → execute → review）。
-    // 两者是**两个不同的回答**，不是同一个回答的两个阶段。
+    // **W3 收口：预览流已删除，改用 orchestrator 自己的 onDelta。**
     //
-    // 用户不会把先出现的那段文字读成「占位」，会读成「答案」——然后它被换掉。
-    // 展示一段与最终产出无关、却读起来像答案的文字，比不做流式更糟。
-    // 附带代价：每次 chat 多一次模型调用。
+    // W2-d 当初为了做 SSE，在权威调用之外**另发一次裸模型调用**做「预览流」——
+    // 那次调用发的是 `[{role:"user", content: message}]`（无 system prompt、无技能上下文、
+    // 无 plan），跟走完整 orchestrator 管线（plan → execute → review）的权威答案
+    // **是两个不同的回答**，不是同一个回答的两个阶段。用户会把先出现的那段读成答案，
+    // 然后它被换掉；附带每次 chat 多花一次模型调用。W2 收口先把它默认关闭，
+    // 根治留给 W3-a——现在 W3-a 已经让 `chat()` 接受可选的 `onDelta`，
+    // 接到 `summarize()` 那一个 LLM 调用点（唯一产出用户可见 `summary` 的地方）。
     //
-    // 根治是让 orchestrator 支持 `onDelta`，把预览与权威合而为一——那是 W3-a 的活
-    // （它本来就要重构 orchestrator 做 replan 循环）。在那之前保留能力、默认关闭。
-    const wantsPreview = body["preview"] === true && mode === "chat";
+    // 于是这里吐出去的 `delta` **就是权威答案本身**在生成过程中的增量，
+    // 不再需要「先给一段别的、再整体替换」。前端相应地改成累加即最终文本。
 
     return sseResponse(
       (sender) => {
         sender.send("start", { sessionId, mode, at: new Date().toISOString() });
         void (async () => {
           try {
-            if (wantsPreview) {
-              try {
-                await ctx.llm().call([{ role: "user", content: message }], {
-                  model,
-                  onDelta: (chunk) => {
-                    if (!sender.closed) sender.send("delta", { chunk });
-                  },
-                } satisfies CallOptions);
-              } catch {
-                // 预览失败不影响权威流程：没配 provider / 网络问题 / 注入的测试用
-                // fake LLM 根本不支持 onDelta（那种情况下 onDelta 从不会被调用，
-                // 这里的 catch 只兜真正抛出的异常，例如适配器内部错误）。
-              }
-            }
             sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" });
-            const result = await ctx.agent.chat({ sessionId, message, model, mode });
+            const result = await ctx.agent.chat({
+              sessionId,
+              message,
+              model,
+              mode,
+              // 权威答案的流式增量。provider 不支持流式、或注入的 fake LLM 不调 onDelta 时，
+              // 这里就是从不触发——SSE 退化成「只有 result」，与接线前行为一致，不报错。
+              onDelta: (chunk: string) => {
+                if (!sender.closed) sender.send("delta", { chunk });
+              },
+            });
             sender.send("result", {
               sessionId,
               mode,

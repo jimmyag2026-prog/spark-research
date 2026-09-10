@@ -27,23 +27,25 @@ function SessionStream(): JSX.Element {
     const placeholder = ws.pushMessage({ role: "agent", mode: mode(), text: "", pending: true });
     scrollToEnd();
 
-    // P14 预览流（W2-d）：`delta` 事件逐块到达就是"模型正在生成"的实时预览，
-    // 不是权威回答——`result` 到达后用权威正文整体替换掉这段预览文字，不是拼接。
+    // SSE 流式（W2-d 起，W3 收口改为权威流）：`delta` 逐块到达的是**权威答案本身**
+    // 在生成中的增量——不再是「另一次裸模型调用的预览、稍后被整体替换」。
+    // 所以这里累加即可，`result` 到达时文本通常已经完整（仍以 result 为准做最终定稿，
+    // 因为 review 修正轮可能改写 summary）。
     // 没有任何 delta 到达也完全正常（没配 provider / fake LLM 不支持流式），
-    // 界面退化回原来的「思考中…」占位，行为不变。
-    let preview = "";
+    // 界面退化回「思考中…」占位，行为不变。
+    let streamed = "";
     try {
       await streamChat(
         { sessionId: SESSION_ID, message: text, mode: mode() },
         {
           onDelta: (data) => {
-            preview += data.chunk;
-            ws.updateMessage(placeholder, { text: preview, pending: true });
+            streamed += data.chunk;
+            ws.updateMessage(placeholder, { text: streamed, pending: true });
             scrollToEnd();
           },
           onProgress: (data) => {
-            // 只有还没收到任何预览片段时才用生命周期文案占位，避免覆盖正在流入的预览文字。
-            if (!preview) ws.updateMessage(placeholder, { text: data.message, pending: true });
+            // 只有还没收到任何增量时才用生命周期文案占位，避免覆盖正在流入的正文。
+            if (!streamed) ws.updateMessage(placeholder, { text: data.message, pending: true });
           },
           onResult: (data) => {
             ws.updateMessage(placeholder, { text: data.response, pending: false });
