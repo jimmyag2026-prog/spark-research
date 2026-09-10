@@ -22,6 +22,7 @@ import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
+import { runReviewCommand } from "./reviewer/cli";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -38,6 +39,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
+  spark-research review      findings 状态机（findings [--open] / mark-addressed <id>）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
   spark-research capabilities 能力自描述（--json 给 agent，不带则给人看的表格）
   spark-research config      用户配置（list / get / set / unset / path）
@@ -346,6 +348,12 @@ function main() {
     }
     case "report": {
       runReportCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "review": {
+      runReviewCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;
