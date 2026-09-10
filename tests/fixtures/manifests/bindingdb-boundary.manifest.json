@@ -1,0 +1,25 @@
+{
+  "id": "bindingdb-boundary-demo",
+  "baseUrl": "https://bindingdb.org",
+  "description": "BindingDB（manifest 表达力硬约束 #2 的边界文档：无匹配时上游返回 HTTP 200 + 空 body，而不是 404 或某个可判断字段——manifest 的 normalize 语法结构上无法表达『按响应内容切换取法』，这类源应该写 TS 扩展，不要在这里硬塞 if/else）",
+  "tools": [
+    {
+      "name": "getLigandBindingByUniprot",
+      "description": "按 UniProt accession 查配体结合数据（**仅作为边界演示，不建议在生产 registry 里注册**：见上面 description 与配套测试 'BindingDB 类响应体分支不该塞进 manifest'）",
+      "endpoint": "/axis2/services/BDBService/getLigandsByUniprots",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "uniprot": { "type": "string", "required": true }
+      },
+      "normalize": {
+        "affinity": "getLindsByUniprotsResponse.affinity"
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "bindingdb.org",
+    "apiKeyRequired": false,
+    "caveat": "已知边界：无匹配返回 200 + 空 body（非 404），manifest normalize 只会按声明路径取值，取不到就是 undefined——不会、也不该试图区分『真的没数据』和『上游出错』。需要这种判别的场景请用 TS 扩展装载强度。"
+  }
+}

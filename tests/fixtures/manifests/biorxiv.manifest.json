@@ -1,0 +1,30 @@
+{
+  "id": "biorxiv-manifest-demo",
+  "baseUrl": "https://api.biorxiv.org",
+  "description": "bioRxiv/medRxiv 预印本详情接口（manifest 表达力硬约束 #1 的验收用例：server 参数必须是受限枚举）",
+  "tools": [
+    {
+      "name": "getDetails",
+      "description": "按 server + DOI 获取预印本详情",
+      "endpoint": "/details/{server}/{doi}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "server": {
+          "type": "enum",
+          "enum": ["biorxiv", "medrxiv"],
+          "required": true
+        },
+        "doi": {
+          "type": "string",
+          "required": true
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "biorxiv.org",
+    "apiKeyRequired": false,
+    "caveat": "server 参数只认 biorxiv|medrxiv，声明为 manifest 的 enum 类型——脏值在编译出的 handler 里直接被拒，请求根本不会发出"
+  }
+}
