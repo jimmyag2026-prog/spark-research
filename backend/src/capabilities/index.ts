@@ -13,6 +13,8 @@ import { resolvePython } from "../simulation/platform";
 import { loadSkills, type SkillEntry } from "../skills/frontmatter";
 import { MCP_TOOLS, MCP_WITHHELD } from "../mcp/tools";
 import { LLMRouter, PROVIDER_MODELS, implementedProviders, type ProviderCapabilities } from "../llm/router";
+import { EmbeddingRouter } from "../llm/embeddings/router";
+import { isCalibrated, semanticHighAffinity } from "../llm/embeddings/calibration";
 import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { PACKAGE_VERSION } from "../version";
 import { mkdtempSync, readdirSync, statSync } from "node:fs";
@@ -151,6 +153,21 @@ export interface ConfigCapability {
   effect: string;
 }
 
+/**
+ * v0.5 C4（AD-12）：外部 agent 在**调 novelty 之前**就该知道本机的相似度口径是词面还是语义。
+ * 之前它只能跑完一次再从报告里读——那时候已经花掉了一整轮检索与两次模型调用。
+ *
+ * 四个字段刻意分开：`configured` 是「配了模型」，`calibrated` 是「这个模型有标定过的阈值」。
+ * 配了但没标定 = 语义相似度只作参考列、评级约束仍走词面（K-4），此时 `threshold` 是 null——
+ * **不拿词面的 0.75 去冒充语义阈值**。
+ */
+export interface EmbeddingCapability {
+  configured: boolean;
+  model: string | null;
+  calibrated: boolean;
+  threshold: number | null;
+}
+
 export interface CapabilityManifest {
   service: "spark-research";
   version: string;
@@ -178,6 +195,7 @@ export interface CapabilityManifest {
   config: ConfigCapability[];
   providers: ProviderCapabilityInfo[];
   localEndpoint: LocalEndpointCapability;
+  embedding: EmbeddingCapability;
 }
 
 export interface CapabilityOptions extends ConfigOptions {
@@ -489,6 +507,16 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     capabilities: localProbeRouter.capabilitiesFor("local/probe-model") ?? FALLBACK_CAPABILITIES,
   };
 
+  // v0.5 C4：embedding 口径。零 IO——只解析 config，不发任何请求。
+  const embeddingRouter = new EmbeddingRouter(options);
+  const embeddingModel = embeddingRouter.modelId();
+  const embedding: EmbeddingCapability = {
+    configured: embeddingRouter.configured(),
+    model: embeddingModel,
+    calibrated: isCalibrated(embeddingModel),
+    threshold: semanticHighAffinity(embeddingModel),
+  };
+
   // W2-c 交付、W2 收口接线：只读 manifest / 授权记录 / verify 缓存，不执行扩展代码。
   const extensions = await listExtensionCapabilities({ root: options.root });
 
@@ -516,6 +544,7 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     config,
     providers,
     localEndpoint,
+    embedding,
   };
 }
 

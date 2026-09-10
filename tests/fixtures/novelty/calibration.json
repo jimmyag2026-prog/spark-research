@@ -1,0 +1,972 @@
+{
+  "note": "novelty 语义阈值的标定样本（v0.5 C4 / DEVELOPMENT_PLAN_v0.5_MODULES.md §1.2.3）。papers 全部来自 tests/fixtures/literature/ 下 P2/P4 真实录制的检索响应（cassette 字段标明来自哪一盘），由 tests/fixtures/novelty/README 描述的抽取脚本按 replay 模式播出来，不是手写的假论文。claim 为人工撰写：existing 类是对某篇 papers 里真实工作的**改述**（换措辞、换语序、允许中文，不抄标题），novel 类是把两个互不相干的方法/对象硬拼出来的杜撰组合。语料**刻意包含没有摘要的条目**（嵌入文本退化成只有标题）——管线在真实检索里就会遇到它们，把它们排除在标定之外会让阈值在一个比生产更干净的分布上标出来（本 lane 第一版就踩了这个坑，见 devlog）。positives = 该 claim 的原始工作；negatives = 同领域的邻近工作（最难的负样本）。expected=novel 的条目 positives/negatives 均为空数组，约定为**整个 papers 语料都是负样本**（§1.2.3「最近邻从全部磁带候选里取」）。h01/h02 是 P4 标定表原有的两条，原样保留作历史对照。",
+  "textRule": "嵌入文本 = paperEmbedText(paper)：标题 + 换行 + 摘要（去连续空白、截断到 1000 字符）；摘要为空时只用标题。与 backend/src/ideation/affinity.ts 的实现是同一条规则，改了那边就必须重新标定。",
+  "papers": [
+    {
+      "key": "alphafold2",
+      "identity": "doi:10.1038/s41586-021-03819-2",
+      "cassette": "search-alphafold",
+      "title": "Highly accurate protein structure prediction with AlphaFold",
+      "year": 2021,
+      "abstract": "Abstract Proteins are essential to life, and understanding their structure can facilitate a mechanistic understanding of their function. Through an enormous experimental effort 1–4 , the structures of around 100,000 unique proteins have been determined 5 , but this represents a small fraction of the billions of known protein sequences 6,7 . Structural coverage is bottlenecked by the months to years of painstaking effort required to determine a single protein structure. Accurate computational approaches are needed to address this gap and to enable large-scale structural bioinformatics. Predicting the three-dimensional structure that a protein will adopt based solely on its amino acid sequence—the structure prediction component of the ‘protein folding problem’ 8 —has been an important open research problem for more than 50 years 9 . Despite recent progress 10–14 , existing methods fall far short of atomic accuracy, especially when no homologous structure is available. Here we provide the first computational method that can regularly predict protein structures with atomic accuracy even in cases in which no similar structure is known. We validated an entirely redesigned version of our neural network-based model, AlphaFold, in the challenging 14th Critical Assessment of protein Structure Prediction (CASP14) 15 , demonstrating accuracy competitive with experimental structures in a majority of cases and greatly outperforming other methods. Underpinning the latest version of AlphaFold is a novel machine learning approach that incorporates physical and biological knowledge about protein structure, leveraging multi-sequence alignments, into the design of the deep learning algorithm."
+    },
+    {
+      "key": "alphafold3",
+      "identity": "doi:10.1038/s41586-024-07487-w",
+      "cassette": "search-alphafold",
+      "title": "Accurate structure prediction of biomolecular interactions with AlphaFold 3",
+      "year": 2024,
+      "abstract": "Abstract The introduction of AlphaFold 2 1 has spurred a revolution in modelling the structure of proteins and their interactions, enabling a huge range of applications in protein modelling and design 2–6 . Here we describe our AlphaFold 3 model with a substantially updated diffusion-based architecture that is capable of predicting the joint structure of complexes including proteins, nucleic acids, small molecules, ions and modified residues. The new AlphaFold model demonstrates substantially improved accuracy over many previous specialized tools: far greater accuracy for protein–ligand interactions compared with state-of-the-art docking tools, much higher accuracy for protein–nucleic acid interactions compared with nucleic-acid-specific predictors and substantially higher antibody–antigen prediction accuracy compared with AlphaFold-Multimer v.2.3 7,8 . Together, these results show that high-accuracy modelling across biomolecular space is possible within a single unified deep-learning framework."
+    },
+    {
+      "key": "colabfold",
+      "identity": "doi:10.1038/s41592-022-01488-1",
+      "cassette": "search-alphafold",
+      "title": "ColabFold: making protein folding accessible to all",
+      "year": 2022,
+      "abstract": "ColabFold offers accelerated prediction of protein structures and complexes by combining the fast homology search of MMseqs2 with AlphaFold2 or RoseTTAFold. ColabFold's 40-60-fold faster search and optimized model utilization enables prediction of close to 1,000 structures per day on a server with one graphics processing unit. Coupled with Google Colaboratory, ColabFold becomes a free and accessible platform for protein folding. ColabFold is open-source software available at https://github.com/sokrypton/ColabFold and its novel environmental databases are available at https://colabfold.mmseqs.com ."
+    },
+    {
+      "key": "alphafold-db-2021",
+      "identity": "doi:10.1093/nar/gkab1061",
+      "cassette": "search-alphafold",
+      "title": "AlphaFold Protein Structure Database: massively expanding the structural coverage of protein-sequence space with high-accuracy models",
+      "year": 2021,
+      "abstract": "The AlphaFold Protein Structure Database (AlphaFold DB, https://alphafold.ebi.ac.uk) is an openly accessible, extensive database of high-accuracy protein-structure predictions. Powered by AlphaFold v2.0 of DeepMind, it has enabled an unprecedented expansion of the structural coverage of the known protein-sequence space. AlphaFold DB provides programmatic access to and interactive visualization of predicted atomic coordinates, per-residue and pairwise model-confidence estimates and predicted aligned errors. The initial release of AlphaFold DB contains over 360,000 predicted structures across 21 model-organism proteomes, which will soon be expanded to cover most of the (over 100 million) representative sequences from the UniRef90 data set."
+    },
+    {
+      "key": "rosettafold",
+      "identity": "doi:10.1126/science.abj8754",
+      "cassette": "search-alphafold",
+      "title": "Accurate prediction of protein structures and interactions using a three-track neural network",
+      "year": 2021,
+      "abstract": "DeepMind presented notably accurate predictions at the recent 14th Critical Assessment of Structure Prediction (CASP14) conference. We explored network architectures that incorporate related ideas and obtained the best performance with a three-track network in which information at the one-dimensional (1D) sequence level, the 2D distance map level, and the 3D coordinate level is successively transformed and integrated. The three-track network produces structure predictions with accuracies approaching those of DeepMind in CASP14, enables the rapid solution of challenging x-ray crystallography and cryo-electron microscopy structure modeling problems, and provides insights into the functions of proteins of currently unknown structure. The network also enables rapid generation of accurate protein-protein complex models from sequence information alone, short-circuiting traditional approaches that require modeling of individual subunits followed by docking. We make the method available to the scientific community to speed biological research."
+    },
+    {
+      "key": "alphafold-multimer",
+      "identity": "doi:10.1101/2021.10.04.463034",
+      "cassette": "search-alphafold",
+      "title": "Protein complex prediction with AlphaFold-Multimer",
+      "year": 2021,
+      "abstract": "While the vast majority of well-structured single protein chains can now be predicted to high accuracy due to the recent AlphaFold [1] model, the prediction of multi-chain protein complexes remains a challenge in many cases. In this work, we demonstrate that an AlphaFold model trained specifically for multimeric inputs of known stoichiometry, which we call AlphaFold-Multimer, significantly increases accuracy of predicted multimeric interfaces over input-adapted single-chain AlphaFold while maintaining high intra-chain accuracy. On a benchmark dataset of 17 heterodimer proteins without templates (introduced in [2]) we achieve at least medium accuracy (DockQ [3] ≥ 0.49) on 13 targets and high accuracy (DockQ ≥ 0.8) on 7 targets, compared to 9 targets of at least medium accuracy and 4 of high accuracy for the previous state of the art system (an AlphaFold-based system from [2]). We also predict structures for a large dataset of 4,446 recent protein complexes, from which we score all non-redundant interfaces with low template identity. For heteromeric interfaces we successfully predict the interface (DockQ ≥ 0.23) in 70% of cases, and produce high accuracy predictions (DockQ ≥ 0.8) in 26% of cases, an improvement of +27 and +14 percentage points over the flexible linker modification of AlphaFold [4] respectively. For homomeric inter-faces we successfully predict the interface in 72% of cases, and produce high accuracy predictions in 36% of cases, an improvement of +8 and +7 percentage points respectively."
+    },
+    {
+      "key": "human-proteome",
+      "identity": "doi:10.1038/s41586-021-03828-1",
+      "cassette": "search-alphafold",
+      "title": "Highly accurate protein structure prediction for the human proteome",
+      "year": 2021,
+      "abstract": "Abstract Protein structures can provide invaluable information, both for reasoning about biological processes and for enabling interventions such as structure-based drug development or targeted mutagenesis. After decades of effort, 17% of the total residues in human protein sequences are covered by an experimentally determined structure 1 . Here we markedly expand the structural coverage of the proteome by applying the state-of-the-art machine learning method, AlphaFold 2 , at a scale that covers almost the entire human proteome (98.5% of human proteins). The resulting dataset covers 58% of residues with a confident prediction, of which a subset (36% of all residues) have very high confidence. We introduce several metrics developed by building on the AlphaFold model and use them to interpret the dataset, identifying strong multi-domain predictions as well as regions that are likely to be disordered. Finally, we provide some case studies to illustrate how high-quality predictions could be used to generate biological hypotheses. We are making our predictions freely available to the community and anticipate that routine large-scale and high-accuracy structure prediction will become an important tool that will allow new questions to be addressed from a structural perspective."
+    },
+    {
+      "key": "alphafold-db-2024",
+      "identity": "doi:10.1093/nar/gkad1011",
+      "cassette": "search-alphafold",
+      "title": "AlphaFold Protein Structure Database in 2024: providing structure coverage for over 214 million protein sequences",
+      "year": 2023,
+      "abstract": "The AlphaFold Database Protein Structure Database (AlphaFold DB, https://alphafold.ebi.ac.uk) has significantly impacted structural biology by amassing over 214 million predicted protein structures, expanding from the initial 300k structures released in 2021. Enabled by the groundbreaking AlphaFold2 artificial intelligence (AI) system, the predictions archived in AlphaFold DB have been integrated into primary data resources such as PDB, UniProt, Ensembl, InterPro and MobiDB. Our manuscript details subsequent enhancements in data archiving, covering successive releases encompassing model organisms, global health proteomes, Swiss-Prot integration, and a host of curated protein datasets. We detail the data access mechanisms of AlphaFold DB, from direct file access via FTP to advanced queries using Google Cloud Public Datasets and the programmatic access endpoints of the database. We also discuss the improvements and services added since its initial release, including enhancements to the Predicted Aligned Error viewer, customisation options for the 3D viewer, and improvements in the search engine of AlphaFold DB."
+    },
+    {
+      "key": "alphafold-beyond",
+      "identity": "doi:10.1101/2021.11.03.467194",
+      "cassette": "search-alphafold",
+      "title": "Applications of AlphaFold beyond Protein Structure Prediction",
+      "year": 2021,
+      "abstract": "Abstract Predicting structures accurately for natural protein sequences by DeepMind’s AlphaFold is certainly one of the greatest breakthroughs in biology in the twenty-first century. For designed or engineered sequences, which can be unstable, predicting the stabilities together with their structures is essential since unstable structures will not function properly. We found that experimentally measured stability changes of point mutations correlate poorly with the confidence scores produced by AlphaFold. However, the stability changes can be accurately predicted using features extracted from the representations learned by AlphaFold, indicating greater generalizability of AlphaFold to designed or engineered sequences than previously thought. We then used AlphaFold to validate our previously developed protein design method, ProDCoNN, that designs sequences to fold to target protein structures given only the backbone structure information of the target proteins. We showed that ProDCoNN was able to design sequences that fold to structures very close to target structures. By combining a modified ProDCoNN, AlphaFold, and sequential Monte Carlo, we designed a novel framework to estimate the designability of protein structures. The designability of a protein structure is defined as the number of sequences, which encode the protein structure, and is an indicator of the functional robustness of proteins. For the first time, we estimated the designability of a real protein structure, chain A of FLT3 ligand (PDB ID: 1ETE) with 134 residues, as 3.12±2.14E85."
+    },
+    {
+      "key": "assembly-symmetric-docking",
+      "identity": "doi:10.1101/2023.06.22.546069",
+      "cassette": "search-alphafold",
+      "title": "Accurate prediction of protein assembly structure by combining AlphaFold and symmetrical docking",
+      "year": 2023,
+      "abstract": "Abstract AlphaFold can predict the structures of monomeric and multimeric proteins with high accuracy but has a limit on the number of chains and residues it can fold. Here we show that a combination of AlphaFold and all-atom symmetric docking simulations enables highly accurate prediction of the structure of complex symmetrical assemblies. We present a method to predict the structure of complexes with cubic – tetrahedral, octahedral and icosahedral – symmetry from sequence. Focusing on proteins where AlphaFold can make confident predictions on the subunit structure, 21 cubic systems were assembled with a median TM-score of 0.99 and a DockQ score of 0.71. 15 had TM-scores of above 0.8 and were categorized as high-quality according to DockQ. The resulting models are energetically optimized and can be used for detailed studies of intermolecular interactions in higher-order symmetrical assemblies. The results demonstrate how explicit treatment of structural symmetry can significantly expand the size and complexity of AlphaFold predictions."
+    },
+    {
+      "key": "alphainterp",
+      "identity": "doi:10.64898/2026.04.22.720175",
+      "cassette": "search-alphafold",
+      "title": "AlphaInterp: Mechanistic Interpretability of AlphaFold 3 Reveals How Evolutionary Information Shapes Protein Structure Prediction",
+      "year": 2026,
+      "abstract": "Abstract AlphaFold 3 predicts biomolecular structures with unprecedented accuracy, yet the computations transforming sequence and evolutionary data into structural coordinates remain poorly understood. Here, we present a systematic mechanistic interpretability analysis of AlphaFold 3, tracking its internal representations across the forward pass. Probing four critical network checkpoints reveals that the Pairformer compresses diffuse co-evolutionary inputs into a compact latent geometry where complex biophysical features become linearly decodable. Using causal activation patching, we demonstrate that predicted confidence is directly manipulable within this latent space, allowing geometric certainty to be transferred across entirely unrelated proteins. Furthermore, across adversarial-mutation, fold-switching, and generalization benchmarks, we show that AlphaFold 3’s representational coherence strictly requires comparative evolutionary context. The latent space collapses when multiple sequence alignments are removed, regardless of sequence familiarity or training-set membership. This stability requires phylogenetic diversity rather than alignment depth, and a minimal set of highly divergent homologs is sufficient to anchor the latent space and activate the model’s structural priors. These findings indicate that AlphaFold 3’s representational coherence is deeply tied to evolutionary scaffolding, suggesting it functions similarly to an advanced fold-recognition system and highlighting that protein structure prediction from sequence alone is not yet fully solved."
+    },
+    {
+      "key": "adversarial-mutations",
+      "identity": "doi:10.34133/csbj.0142",
+      "cassette": "search-alphafold",
+      "title": "Adversarial Sequence Mutations in AlphaFold and ESMFold Reveal Nonphysical Structural Invariance, Confidence Failures, and Concerns for Protein Design",
+      "year": 2026,
+      "abstract": "AlphaFold has transformed structural biology and spawned an ecosystem of derivative tools for protein design, binding prediction, and drug discovery. However, whether AlphaFold has learned generalizable biophysical principles as opposed to template-based pattern matching remains unclear-a distinction critical for applications beyond its training context. Here, we perform a systematic adversarial evaluation of AlphaFold 3 using point and deletion mutations across 200 proteins. Remarkably, predicted structures remain invariant to mutations of up to 40% of residues-including deliberately destabilizing substitutions-and to deletions of 10%. Notably, this invariance holds even for experimentally validated fold-switching proteins that are known to adopt alternative conformations in response to such mutations, despite the fact that these proteins are small and monomeric-precisely the category where AlphaFold is expected to perform best. Confidence metrics prove unreliable, as they select the most accurate structure at most 35% of the time and consistently correlate with the structural quality of the best available training-set template. ESMFold exhibits greater, though still imperfect, mutational sensitivity, suggesting a tighter coupling between sequence identity and predicted structure that may reflect differences in training objective rather than overall model quality. These findings indicate that AlphaFold may rely heavily on memorized templates rather than biophysical reasoning, with direct implications for mutation-effect interpretation, confidence-guided model selection, and sequence optimization workflows."
+    },
+    {
+      "key": "plant-immunity",
+      "identity": "doi:10.1101/2024.06.12.598632",
+      "cassette": "search-alphafold",
+      "title": "Receptor- ligand interactions in plant inmate immunity revealed by AlphaFold protein structure prediction",
+      "year": 2024,
+      "abstract": "One of the common mechanisms to trigger plant innate immunity is recognition of pathogen avirulence gene products directly by products of major resistance ( R ) genes in a gene for gene manner. In the USA, the R genes, Pik-s, PiKh/m , and Pi-ta, Pi-39(t) , and Ptr genes have been effectively deployed to prevent the infections of M. oryzae races, IB49, and IC17 for some time. Pi-9 is only recently being deployed to provide overlapped and complimentary resistance to Magnaporthe oryzae races IB49, IC17 and IE1k in the USA. Pi-ta, Pi-39(t), Pi9 are major nuclear binding site-leucine rich (NLR) proteins, and Ptr is an atypical R protein with 4 armadillo repeats. AlphaFold is an artificial intelligence system that predicts a protein 3D structure from its amino acid sequence. Here we report genome sequence analyses of the effectors and avirulence ( AVR ) genes, AVR-Pita and AVR-Pik , and AVR-Pi9 , in 3 differential M. oryzae races. Using AlphaFold 2 and 3 we find strong evidence of direct interactions of products of resistance genes Pi-ta and Pik with M. oryzae avirulence ( AVR ) genes, AVR-Pita and AVR-Pik respectively. We also found that AVR-Pita interacts with Pi-39(t) and Ptr, and Pi9 interacts with both AVR-Pi9 and AVR-Pik. Validation of direct interactions of two pairs of R and AVR proteins supported a direct interaction mechanism of plant innate immunity. Detecting interaction of both Ptr and Pi39(t) with AVR-Pita, and Pi-9 with both AVR-Pi9 and AVR-Pik, revealed a new insight into recognition of pathogen signaling molecules by these host R genes in triggering plant innate immunity."
+    },
+    {
+      "key": "multimer-protocol",
+      "identity": "doi:10.17504/protocols.io.81wgbz25qgpk/v1",
+      "cassette": "search-alphafold",
+      "title": "Protein structure prediction with AlphaFold-Multimer v1",
+      "year": 2024,
+      "abstract": "This protocol describes the protein structure prediction with AlphaFold-Multimer."
+    },
+    {
+      "key": "interaction-score",
+      "identity": "doi:10.1002/pro.70760",
+      "cassette": "search-alphafold",
+      "title": "A simple probabilistic AlphaFold interaction score",
+      "year": 2026,
+      "abstract": "AlphaFold has enabled large-scale prediction of protein-protein and protein-nucleic acid complexes, but ranking and assessing the quality of predicted models remain challenging. Existing confidence scores are often highly parametrized and provide limited interpretability. We introduce a simple geometric framework that converts AlphaFold-predicted aligned error (PAE) into conditional contact probability. We show that these probabilities are well calibrated to the fraction of native contacts observed across experimentally determined structures. Motivated by this, we define the Pinc score (Probability of interface native contacts) as the mean contact probability between interacting chains. Because the probabilistic interpretation extends to individual residues, Pinc captures local structural constraint beyond interfacial burial, enabling residue-level prioritization of hotspot positions for mutational studies. Depending solely on a single empirically fixed contact radius, Pinc offers an interpretable path from PAE to interface confidence, matching or exceeding the classification performance of more complex methods across five independent benchmark sets. We provide a portable, dependency-free C program and a Google Colab notebook for calculating Pinc scores for AlphaFold models at https://git.mpi-cbg.de/tothpetroczylab/Pinc."
+    },
+    {
+      "key": "abag-rank",
+      "identity": "doi:10.1093/bioinformatics/btag663",
+      "cassette": "search-alphafold",
+      "title": "ABAG-Rank: Improving Model Selection of AlphaFold Antibody-Antigen Complexes by Learning to Rank",
+      "year": 2026,
+      "abstract": "<h4>Motivation</h4>AlphaFold has transformed structural biology with an unprecedented accuracy in modelling protein structures and their interactions with biomolecules, with AlphaFold3 (AF3) achieving state-of-the-art performance. However, AF3 and other methods often struggle to accurately predict the structure of protein complexes that lack strong co-evolutionary information, such as antibody-antigen (Ab-Ag) complexes. One of the fundamental issues is that AF3 often generates accurate predictions, but fails to reliably distinguish them from the much larger set of incorrect ones.<h4>Results</h4>To address this, we propose ABAG-Rank, a deep neural network that provides an efficient and robust solution for model selection of Ab-Ag interactions from a pool of structural ensembles predicted with AlphaFold. Built on the permutation-invariant DeepSets architecture, ABAG-Rank can process variable-sized ensembles of structural decoys and is directly applicable to prediction settings in which the number of candidates may vary. We train a model on a redundancy-reduced set of all known antibody-antigen complexes and find that simple geometric descriptors, along with confidence scores from AlphaFold, provide rich information about interface quality without requiring intensive physics-based calculations. Our experiments demonstrate that ABAG-Rank significantly outperforms AF3 internal scoring and the ranking performance of existing deep learning baselines.<h4>Availability and implementation</h4>Source code can be found at: https://github.com/tadteo/ABAG-Rank or on Zenodo at https://doi.org/10.5281/zenodo.21132090.<h4>Supplementary material</h4>Supplementary data are available at Bioinformatics online."
+    },
+    {
+      "key": "peptide-prediction",
+      "identity": "doi:10.1016/j.biotechadv.2026.108977",
+      "cassette": "search-alphafold",
+      "title": "AlphaFold-based peptide structure prediction: Opportunities, limitations, and future directions",
+      "year": 2026,
+      "abstract": "Accurate prediction of peptide structures and peptide-receptor complexes is essential for rational peptide drug development. However, the inherent conformational flexibility of short and disordered peptides presents a fundamental challenge. The AlphaFold model series, which has progressed from AlphaFold2 through AlphaFold-Multimer to AlphaFold3, has substantially advanced computational peptide structure prediction through innovations in geometric reasoning (invariant point attention) and interface-focused confidence metrics (ipTM score), achieving high accuracy for both monomeric peptide structures and multi-chain complexes. However, these models output static conformations, whereas many bioactive peptides adopt their functional conformations only upon binding-often corresponding to low-probability states that static predictions may overlook, leading to failures in virtual screening. This review synthesizes recent advances in the AlphaFold series for peptide studies and applications, discusses their current strengths in structure prediction and receptor-binding analysis, and examines the limitations in capturing conformational dynamics, transient interactions, and chemical modifications. Recent studies have suggested that integrated computational strategies that combine AlphaFold predictions with molecular dynamics simulations, free energy calculations, and ensemble sampling to enhance predictive accuracy and better represent the dynamic nature of peptide-drug interactions. These complementary approaches position AlphaFold as a central computational platform in structure-guided peptide drug design, enabling more efficient lead identification and optimization while bridging the gap between static computational predictions and the complex biophysical reality of peptide therapeutics."
+    },
+    {
+      "key": "cross-docking",
+      "identity": "doi:10.1039/d6ra05440d",
+      "cassette": "search-alphafold",
+      "title": "Cross-docking and redocking reveal distinct determinants of success in physics-based and AI-driven binding pose prediction in protein-ligand complexes",
+      "year": 2026,
+      "abstract": "Protein-ligand pose prediction is central to structure-based drug discovery, yet the relative performance of physics-based and AI-driven methods under realistic cross-docking conditions remains insufficiently characterized. Here, we compare physics-based docking methods (AutoDock4, AutoDock Vina, and DOCK 6) with data-driven approaches, including the deep-learning model GNINA 1.3 and the diffusion-based frameworks AlphaFold 3, Boltz-2, and DiffDock. Performance was evaluated using standardised redocking and cross-docking protocols across three Alzheimer's disease targets representing distinct binding-site architectures: acetylcholinesterase (AChE; deep gorge), β-secretase 1 (BACE1; flexible flap-controlled site), and glycogen synthase kinase-3β (GSK-3β; open, solvent-exposed pocket). Physics-based methods were competitive during redocking but showed substantial performance reductions under cross-docking, whereas diffusion-based approaches generally maintained higher cross-docking accuracy. GNINA 1.3 rigid achieved an 87.7% minimum heavy-atom RMSD success rate during redocking, which decreased to 13.5% during cross-docking, whereas AlphaFold 3, Boltz-2, and DiffDock achieved cross-docking success rates of 93.1%, 89.6%, and 85.7%, respectively. AlphaFold 3 consistently outperformed Boltz-2 despite its smaller training set, suggesting that predictive performance is influenced not only by training-data volume but also by factors such as model architecture and confidence calibration. Training-overlap analysis further showed that AI-based methods retained substantial failure rates even for complexes represented in their training data, indicating that training-data overlap alone does not ensure reliable pose prediction. Under the current protocol conditions, rigid docking outperformed flexible protocols, while flexible-docking pocket volumes showed more restricted sampling relative to experimental holo structures. Among the GNINA 1.3 configurations, CNN rescoring with refinement produced the highest pose-recovery success rates, followed by CNN rescoring alone and the default Vina/empirical scoring approach in cross-docking. Receptor conformational preference was target-dependent: holo structures provided higher docking accuracy for AChE and BACE1, whose ligand-bound cavities exhibited greater structural complexity and geometric confinement that favoured pose discrimination, whereas the apo GSK-3β structure contained a larger, more solvent-exposed cavity that impr"
+    },
+    {
+      "key": "foldify",
+      "identity": "doi:10.1021/acs.jcim.6c01154",
+      "cassette": "search-alphafold",
+      "title": "Foldify: Web Application for Protein Structure Prediction",
+      "year": 2026,
+      "abstract": "Protein structure prediction models released in recent years have presented tectonic changes in the field of structural biology. However, their potential has not yet been harnessed to its fullest due to their demands on hardware and technical expertise required for their usage. In this paper, we present Foldify, which makes prediction models accessible, integrating AlphaFold 3, AlphaFold 2, ColabFold, OmegaFold, and ESMFold into a single user-friendly, easy-to-use graphical interface, and ensures their stable operation within a scalable high-performance computing environment. Foldify accepts protein sequences, submitted through a web-based graphical interface as input, and allows executing multiple prediction models on the same protein sequence. The predicted protein structures can be directly visualized online through Mol* Viewer or can be downloaded from the website. Furthermore, the multiresult comparison mode allows visualization of multiple predicted structures in a single Mol* window, accompanied by qualitative metrics of the models' prediction similarity. The Foldify application is freely available at https://foldify-open.cloud.e-infra.cz/ with no login required."
+    },
+    {
+      "key": "kubefold",
+      "identity": "doi:10.2139/ssrn.6614765",
+      "cassette": "search-alphafold",
+      "title": "KubeFold: Kubernetes-native automation of AlphaFold protein structure prediction workflows",
+      "year": 2026,
+      "abstract": "KubeFold is a Kubernetes-native software platform for automating AlphaFold-based protein structure prediction workflows in cloud and cluster environments.The system introduces a declarative model for managing reference databases and prediction jobs through custom Kubernetes resources.It automates database preparation, workflow orchestration, storage integration, and artifact handling, reducing the operational complexity of large-scale prediction workloads. \\emph{KubeFold} is intended for research institutions, bioinformatics centers, and enterprise environments that require scalable and reproducible execution of protein structure prediction pipelines.The software is intended to bridge the gap between state-of-the-art prediction methods and practical cloud-native deployment."
+    },
+    {
+      "key": "pocket-restraints",
+      "identity": "doi:10.1002/pro.70730",
+      "cassette": "search-alphafold",
+      "title": "Pocket restraints guided by B-cell epitope prediction improve Chai-1 antibody-antigen structure modeling",
+      "year": 2026,
+      "abstract": "The accurate prediction of antibody-antigen (AbAg) complexes is a key challenge for computational immunology, with applications in therapeutic antibody design and diagnostics. Current deep learning methods have the potential to generate high-confidence AbAg structures. However, these methods often fail to predict the correct AbAg structure, placing the antibody incorrectly on the antigen and converge on repeatedly predicting the same redundant binding mode. Here, we present BepiPocket and DiscoPocket, two simple approaches that integrate B-cell epitope prediction tools to guide antibody-epitope restraints during Chai-1 structure prediction. On a dataset of 1628 AbAg complexes, we demonstrate that using the sequence-based predictor BepiPred-3.0 (BepiPocket) and the structure-based predictor DiscoTope-3.0 (DiscoPocket) substantially improved both the accuracy and diversity of predicted AbAg complexes compared to standard Chai-1 modeling with random seed variation. The software for both BepiPocket and DiscoPocket algorithms is freely available at https://github.com/mnielLab/BepiPocket."
+    },
+    {
+      "key": "ppigfinder",
+      "identity": "doi:10.64898/2026.08.23.746524",
+      "cassette": "search-alphafold",
+      "title": "ppigFinder: an integrated desktop application for bacterial genome annotation and AlphaFold 3-based protein–protein interaction screening",
+      "year": 2026,
+      "abstract": "<h4>Motivation</h4> AlphaFold-based structure prediction has transformed structural biology by enabling accurate protein modelling and providing a powerful framework for inferring protein-protein interactions (PPIs). However, discovering candidate PPIs directly from genome sequences remains a fragmented and largely trial-and-error process, typically requiring separate tools for open reading frame (ORF) prediction, functional annotation, candidate selection, iterative testing of potential partners, manual preparation of individual structural-prediction jobs, and downstream interpretation of confidence metrics. <h4>Results</h4> We present Protein-Protein Interaction Genomic Finder (ppigFinder), a standalone, cross-platform desktop application that integrates these steps into a project-oriented graphical workflow for genome-based PPI discovery from nucleotide sequence data. ppigFinder combines ORF prediction, functional annotation, genomic-neighbourhood inspection, AlphaFold 3 job generation, remote job submission, and structural-confidence analysis within a single environment. As a proof of concept, we performed a VirD4-centered AlphaFold 3 interactome screen in Xanthomonas citri pv. citri strain 306, modelling VirD4 (ORF2601) against all 4,303 predicted chromosomal ORFs. Ranking by the minimum interchain predicted aligned error (PAE_min) placed all 14 XVIPCD-containing effector candidates within the top 1% of predictions, with the six top-ranked models corresponding to XVIP candidates. The screen also recovered an XVIPCD-containing protein absent from the reference genome annotation and identified high-confidence candidates predicted to bind VirD4 at a surface opposite to the XVIPCD-binding site. <h4>Availability and implementation</h4> ppigFinder is implemented in Python 3.11 and is freely available under the MIT licence at https://github.com/leepusp/ppigfinder , with documentation and installation instructions for Linux, macOS and Windows. The version described here is archived at [DOI Zenodo — XXXX]."
+    },
+    {
+      "key": "structural-bioinformatics-next",
+      "identity": "doi:10.1371/journal.pbio.3003903",
+      "cassette": "search-alphafold",
+      "title": "Where next for structural bioinformatics?",
+      "year": 2026,
+      "abstract": "Structural bioinformatics aims to answer biological questions by considering biomolecular structures at scale. We now have accurate predictions and need to ask what we can learn from them."
+    },
+    {
+      "key": "attention-is-all-you-need",
+      "identity": "doi:10.65215/2q58a426",
+      "cassette": "novelty-check",
+      "title": "Attention Is All You Need",
+      "year": 2025,
+      "abstract": "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks in an encoder-decoder configuration. The best performing models also connect the encoder and decoder through an attention mechanism. We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely. Experiments on two machine translation tasks show these models to be superior in quality while being more parallelizable and requiring significantly less time to train. Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles by over 2 BLEU. On the WMT 2014 English-to-French translation task, our model establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs, a small fraction of the training costs of the best models from the literature. We show that the Transformer generalizes well to other tasks by applying it successfully to English constituency parsing both with large and limited training data."
+    },
+    {
+      "key": "attend-and-diagnose",
+      "identity": "doi:10.1609/aaai.v32i1.11635",
+      "cassette": "novelty-check",
+      "title": "Attend and Diagnose: Clinical Time Series Analysis Using Attention Models",
+      "year": 2018,
+      "abstract": "With widespread adoption of electronic health records, there is an increased emphasis for predictive models that can effectively deal with clinical time-series data. Powered by Recurrent Neural Network (RNN) architectures with Long Short-Term Memory (LSTM) units, deep neural networks have achieved state-of-the-art results in several clinical prediction tasks. Despite the success of RNN, its sequential nature prohibits parallelized computing, thus making it inefficient particularly when processing long sequences. Recently, architectures which are based solely on attention mechanisms have shown remarkable success in transduction tasks in NLP, while being computationally superior. In this paper, for the first time, we utilize attention models for clinical time-series modeling, thereby dispensing recurrence entirely. We develop the SAnD (Simply Attend and Diagnose) architecture, which employs a masked, self-attention mechanism, and uses positional encoding and dense interpolation strategies for incorporating temporal order. Furthermore, we develop a multi-task variant of SAnD to jointly infer models with multiple diagnosis tasks. Using the recent MIMIC-III benchmark datasets, we demonstrate that the proposed approach achieves state-of-the-art performance in all tasks, outperforming LSTM models and classical baselines with hand-engineered features."
+    },
+    {
+      "key": "occluded-reid",
+      "identity": "doi:10.1109/tip.2022.3186759",
+      "cassette": "novelty-check",
+      "title": "Learning Feature Recovery Transformer for Occluded Person Re-Identification",
+      "year": 2022,
+      "abstract": "One major issue that challenges person re-identification (Re-ID) is the ubiquitous occlusion over the captured persons. There are two main challenges for the occluded person Re-ID problem, i.e. , the interference of noise during feature matching and the loss of pedestrian information brought by the occlusions. In this paper, we propose a new approach called Feature Recovery Transformer (FRT) to address the two challenges simultaneously, which mainly consists of visibility graph matching and feature recovery transformer. To reduce the interference of the noise during feature matching, we mainly focus on visible regions that appear in both images and develop a visibility graph to calculate the similarity. In terms of the second challenge, based on the developed graph similarity, for each query image, we propose a recovery transformer that exploits the feature sets of its k -nearest neighbors in the gallery to recover the complete features. Extensive experiments across different person Re-ID datasets, including occluded, partial and holistic datasets, demonstrate the effectiveness of FRT. Specifically, FRT significantly outperforms state-of-the-art results by at least 6.2% Rank- 1 accuracy and 7.2% mAP scores on the challenging Occluded-Duke dataset."
+    },
+    {
+      "key": "transformers-medical-imaging",
+      "identity": "doi:10.1002/mef2.38",
+      "cassette": "novelty-check",
+      "title": "Recent advances of Transformers in medical image analysis: A comprehensive review",
+      "year": 2023,
+      "abstract": "Abstract Recent works have shown that Transformer's excellent performances on natural language processing tasks can be maintained on natural image analysis tasks. However, the complicated clinical settings in medical image analysis and varied disease properties bring new challenges for the use of Transformer. The computer vision and medical engineering communities have devoted significant effort to medical image analysis research based on Transformer with especial focus on scenario‐specific architectural variations. In this paper, we comprehensively review this rapidly developing area by covering the latest advances of Transformer‐based methods in medical image analysis of different settings. We first give introduction of basic mechanisms of Transformer including implementations of selfattention and typical architectures. The important research problems in various medical image data modalities, clinical visual tasks, organs and diseases are then reviewed systemically. We carefully collect 276 very recent works and 76 public medical image analysis datasets in an organized structure. Finally, discussions on open problems and future research directions are also provided. We expect this review to be an up‐to‐date roadmap and serve as a reference source in pursuit of boosting the development of medical image analysis field."
+    },
+    {
+      "key": "multiresolution-transformer",
+      "identity": "doi:10.48550/arxiv.1908.10408",
+      "cassette": "novelty-check",
+      "title": "Multiresolution Transformer Networks: Recurrence is Not Essential for Modeling Hierarchical Structure",
+      "year": 2019,
+      "abstract": "The architecture of Transformer is based entirely on self-attention, and has been shown to outperform models that employ recurrence on sequence transduction tasks such as machine translation. The superior performance of Transformer has been attributed to propagating signals over shorter distances, between positions in the input and the output, compared to the recurrent architectures. We establish connections between the dynamics in Transformer and recurrent networks to argue that several factors including gradient flow along an ensemble of multiple weakly dependent paths play a paramount role in the success of Transformer. We then leverage the dynamics to introduce {\\em Multiresolution Transformer Networks} as the first architecture that exploits hierarchical structure in data via self-attention. Our models significantly outperform state-of-the-art recurrent and hierarchical recurrent models on two real-world datasets for query suggestion, namely, \\aol and \\amazon. In particular, on AOL data, our model registers at least 20\\% improvement on each precision score, and over 25\\% improvement on the BLEU score with respect to the best performing recurrent model. We thus provide strong evidence that recurrence is not essential for modeling hierarchical structure."
+    },
+    {
+      "key": "lenet-document-recognition",
+      "identity": "doi:10.1109/5.726791",
+      "cassette": "novelty-check",
+      "title": "Gradient-based learning applied to document recognition",
+      "year": 1998,
+      "abstract": "Multilayer neural networks trained with the back-propagation algorithm constitute the best example of a successful gradient based learning technique. Given an appropriate network architecture, gradient-based learning algorithms can be used to synthesize a complex decision surface that can classify high-dimensional patterns, such as handwritten characters, with minimal preprocessing. This paper reviews various methods applied to handwritten character recognition and compares them on a standard handwritten digit recognition task. Convolutional neural networks, which are specifically designed to deal with the variability of 2D shapes, are shown to outperform all other techniques. Real-life document recognition systems are composed of multiple modules including field extraction, segmentation recognition, and language modeling. A new learning paradigm, called graph transformer networks (GTN), allows such multimodule systems to be trained globally using gradient-based methods so as to minimize an overall performance measure. Two systems for online handwriting recognition are described. Experiments demonstrate the advantage of global training, and the flexibility of graph transformer networks. A graph transformer network for reading a bank cheque is also described. It uses convolutional neural network character recognizers combined with global training techniques to provide record accuracy on business and personal cheques. It is deployed commercially and reads several million cheques per day."
+    },
+    {
+      "key": "spiking-nn-training",
+      "identity": "doi:10.1109/jproc.2023.3308088",
+      "cassette": "novelty-check",
+      "title": "Training Spiking Neural Networks Using Lessons From Deep Learning",
+      "year": 2023,
+      "abstract": "The brain is the perfect place to look for inspiration to develop more efficient neural networks. The inner workings of our synapses and neurons provide a glimpse at what the future of deep learning might look like. This article serves as a tutorial and perspective showing how to apply the lessons learned from several decades of research in deep learning, gradient descent, backpropagation, and neuroscience to biologically plausible spiking neural networks (SNNs). We also explore the delicate interplay between encoding data as spikes and the learning process; the challenges and solutions of applying gradient-based learning to SNNs; the subtle link between temporal backpropagation and spike timing-dependent plasticity; and how deep learning might move toward biologically plausible online learning. Some ideas are well accepted and commonly used among the neuromorphic engineering community, while others are presented or justified for the first time here. A series of companion interactive tutorials complementary to this article using our Python package,snnTorch, are also made available: https://snntorch.readthedocs.io/en/latest/tutorials/index.html."
+    },
+    {
+      "key": "attention-summarization",
+      "identity": "doi:10.18653/v1/d15-1044",
+      "cassette": "novelty-check",
+      "title": "A Neural Attention Model for Abstractive Sentence Summarization",
+      "year": 2015,
+      "abstract": "Summarization based on text extraction is inherently limited, but generation-style abstractive methods have proven challenging to build.In this work, we propose a fully data-driven approach to abstractive sentence summarization.Our method utilizes a local attention-based model that generates each word of the summary conditioned on the input sentence.While the model is structurally simple, it can easily be trained end-to-end and scales to a large amount of training data.The model shows significant performance gains on the DUC-2004 shared task compared with several strong baselines."
+    },
+    {
+      "key": "amr-seq2graph",
+      "identity": "doi:10.18653/v1/p19-1009",
+      "cassette": "novelty-check",
+      "title": "AMR Parsing as Sequence-to-Graph Transduction",
+      "year": 2019,
+      "abstract": "We propose an attention-based model that treats AMR parsing as sequence-to-graph transduction.Unlike most AMR parsers that rely on pre-trained aligners, external semantic resources, or data augmentation, our proposed parser is aligner-free, and it can be effectively trained with limited amounts of labeled AMR data.Our experimental results outperform all previously reported SMATCH scores, on both AMR 2.0 (76.3% F1 on LDC2017T10) and AMR 1.0 (70.2% F1 on LDC2014T12)."
+    },
+    {
+      "key": "ml-guided-protein-engineering",
+      "identity": "doi:10.1021/acscatal.3c02743",
+      "cassette": "novelty-check",
+      "title": "Machine Learning-Guided Protein Engineering",
+      "year": 2023,
+      "abstract": "Recent progress in engineering highly promising biocatalysts has increasingly involved machine learning methods. These methods leverage existing experimental and simulation data to aid in the discovery and annotation of promising enzymes, as well as in suggesting beneficial mutations for improving known targets. The field of machine learning for protein engineering is gathering steam, driven by recent success stories and notable progress in other areas. It already encompasses ambitious tasks such as understanding and predicting protein structure and function, catalytic efficiency, enantioselectivity, protein dynamics, stability, solubility, aggregation, and more. Nonetheless, the field is still evolving, with many challenges to overcome and questions to address. In this Perspective, we provide an overview of ongoing trends in this domain, highlight recent case studies, and examine the current limitations of machine learning-based methods. We emphasize the crucial importance of thorough experimental validation of emerging models before their use for rational protein design. We present our opinions on the fundamental problems and outline the potential directions for future research."
+    },
+    {
+      "key": "boltzmann-ensembles",
+      "identity": "doi:10.1016/j.sbi.2025.103000",
+      "cassette": "novelty-check",
+      "title": "Modeling Boltzmann-weighted structural ensembles of proteins using artificial intelligence–based methods",
+      "year": 2025,
+      "abstract": "This review highlights recent advances in AI-driven methods for generating Boltzmann-weighted structural ensembles, which are crucial for understanding biomolecular dynamics and drug discovery. With the rise of deep learning models such as AlphaFold2, there has been a shift toward more accurate and efficient sampling of structural ensembles. The review discusses the integration of AI with traditional molecular dynamics techniques as well as experiments, the challenges of conformational sampling, and future directions for AI-driven research in structural biology, particularly in drug discovery and protein dynamics."
+    },
+    {
+      "key": "chroma-generative-protein",
+      "identity": "doi:10.1101/2022.12.01.518682",
+      "cassette": "novelty-check",
+      "title": "Illuminating protein space with a programmable generative model",
+      "year": 2022,
+      "abstract": "Abstract Three billion years of evolution have produced a tremendous diversity of protein molecules, and yet the full potential of this molecular class is likely far greater. Accessing this potential has been challenging for computation and experiments because the space of possible protein molecules is much larger than the space of those likely to host function. Here we introduce Chroma, a generative model for proteins and protein complexes that can directly sample novel protein structures and sequences and that can be conditioned to steer the generative process towards desired properties and functions. To enable this, we introduce a diffusion process that respects the conformational statistics of polymer ensembles, an efficient neural architecture for molecular systems based on random graph neural networks that enables long-range reasoning with sub-quadratic scaling, equivariant layers for efficiently synthesizing 3D structures of proteins from predicted inter-residue geometries, and a general low-temperature sampling algorithm for diffusion models. We suggest that Chroma can effectively realize protein design as Bayesian inference under external constraints, which can involve symmetries, substructure, shape, semantics, and even natural language prompts. With this unified approach, we hope to accelerate the prospect of programming protein matter for human health, materials science, and synthetic biology."
+    },
+    {
+      "key": "geometric-gnn-survey",
+      "identity": "doi:10.1007/s11704-025-41426-w",
+      "cassette": "novelty-check",
+      "title": "A survey of geometric graph neural networks: data structures, models and applications",
+      "year": 2025,
+      "abstract": "Abstract Geometric graphs are a special kind of graph with geometric features, which are vital to model many scientific problems. Unlike generic graphs, geometric graphs often exhibit physical symmetries of translations, rotations, and reflections, making them ineffectively processed by current Graph Neural Networks (GNNs). To address this issue, researchers proposed a variety of geometric GNNs equipped with invariant/equivariant properties to better characterize the geometry and topology of geometric graphs. Given the current progress in this field, it is imperative to conduct a comprehensive survey of data structures, models, and applications related to geometric GNNs. In this paper, based on the necessary but concise mathematical preliminaries, we formalize geometric graph as the data structure, on top of which we provide a unified view of existing models from the geometric message passing perspective. Additionally, we summarize the applications as well as the related datasets to facilitate later research for methodology development and experimental evaluation. We also discuss the challenges and future potential directions of geometric GNNs at the end of this survey."
+    },
+    {
+      "key": "metl-biophysics-plm",
+      "identity": "doi:10.1101/2024.03.15.585128",
+      "cassette": "novelty-check",
+      "title": "Biophysics-based protein language models for protein engineering",
+      "year": 2024,
+      "abstract": "Protein language models trained on evolutionary data have emerged as powerful tools for predictive problems involving protein sequence, structure, and function. However, these models overlook decades of research into biophysical factors governing protein function. We propose Mutational Effect Transfer Learning (METL), a protein language model framework that unites advanced machine learning and biophysical modeling. Using the METL framework, we pretrain transformer-based neural networks on biophysical simulation data to capture fundamental relationships between protein sequence, structure, and energetics. We finetune METL on experimental sequence-function data to harness these biophysical signals and apply them when predicting protein properties like thermostability, catalytic activity, and fluorescence. METL excels in challenging protein engineering tasks like generalizing from small training sets and position extrapolation, although existing methods that train on evolutionary signals remain powerful for many types of experimental assays. We demonstrate METL's ability to design functional green fluorescent protein variants when trained on only 64 examples, showcasing the potential of biophysics-based protein language models for protein engineering."
+    },
+    {
+      "key": "de-novo-protein-design",
+      "identity": "doi:10.3390/biology14091268",
+      "cassette": "novelty-check",
+      "title": "The Role of AI-Driven De Novo Protein Design in the Exploration of the Protein Functional Universe",
+      "year": 2025,
+      "abstract": "The extraordinary diversity of protein sequences and structures gives rise to a vast protein functional universe with extensive biotechnological potential. Nevertheless, this universe remains largely unexplored, constrained by the limitations of natural evolution and conventional protein engineering. Substantial evidence further indicates that the known natural fold space is approaching saturation, with novel folds rarely emerging. AI-driven de novo protein design is overcoming these constraints by enabling the computational creation of proteins with customized folds and functions. This review systematically surveys the rapidly advancing field of AI-based de novo protein design, reviewing current methodologies and examining how cutting-edge computational frameworks accelerate discovery through three complementary vectors: (1) exploring novel folds and topologies; (2) designing functional sites de novo; (3) exploring sequence-structure-function landscapes. We highlight key applications across therapeutic, catalytic, and synthetic biology and discuss the persistent challenges. By fusing recent progress and the existing limitations, this review outlines how AI is not only accelerating the exploration of the protein functional universe but also fundamentally expanding the possibilities within protein engineering, paving the way for bespoke biomolecules with tailored functionalities."
+    },
+    {
+      "key": "ai-molecular-design",
+      "identity": "doi:10.1021/acs.chemrev.5c00689",
+      "cassette": "novelty-check",
+      "title": "Molecular Design with Artificial Intelligence: Progress and Perspectives for Small Molecules",
+      "year": 2026,
+      "abstract": "Progress in chemistry has been driven by the streamlining of inverse problem-solving methods. In the history of chemistry, several revolutionary technologies have led to leaps forward: the establishment of atomistic theory in the 19th century, structural analysis by spectroscopy in the 20th century, and the development of simulation by theoretical chemistry. Currently, chemistry is about to make a significant leap forward by integrating generative artificial intelligence (AI). In 2016, deep learning techniques were introduced in this domain, leading to explosive development. This paper reviews the development path, including traditional models such as variational autoencoders and more up-to-date models such as large language models and diffusion models. We also discuss how AI can have a real impact on chemistry, including the possibilities and problems associated with synthesizing AI-generated molecules."
+    },
+    {
+      "key": "phase-separation-interpretable",
+      "identity": "doi:10.1101/2022.07.06.499043",
+      "cassette": "novelty-check",
+      "title": "An interpretable machine learning algorithm to predict disordered protein phase separation based on biophysical interactions",
+      "year": 2022,
+      "abstract": "Abstract Protein phase separation is increasingly understood to be an important mechanism of biological organization and biomaterial formation. Intrinsically disordered protein regions (IDRs) are often significant drivers of protein phase separation. A number of protein phase separation prediction algorithms are available, with many specific for particular classes of proteins and others providing results that are not amenable to interpretation of contributing biophysical interactions. Here we describe LLPhyScore, a new predictor of IDR-driven phase separation, based on a broad set of physical interactions or features. LLPhyScore uses sequence-based statistics from the RCSB PDB database of folded structures for these interactions, and is trained on a manually curated set of phase separation driver proteins with different negative training sets including the PDB and human proteome. Competitive training for a variety of physical chemical interactions shows the greatest importance of solvent contacts, disorder, hydrogen bonds, pi-pi contacts, and kinked-beta structure, with electrostatics, cation-pi, and absence of helical secondary structure also contributing. LLPhyScore has strong phase separation prediction recall statistics and enables a quantitative breakdown of the contribution from each physical feature to a sequence’s phase separation propensity. The tool should be a valuable resource for guiding experiment and providing hypotheses for protein function in normal and pathological states, as well as for understanding how specificity emerges in defining individual biomolecular condensates. Graphical Abstract"
+    },
+    {
+      "key": "improved-protein-structure-prediction-using",
+      "identity": "doi:10.1038/s41586-019-1923-7",
+      "cassette": "search-alphafold",
+      "title": "Improved protein structure prediction using potentials from deep learning",
+      "year": 2020,
+      "abstract": ""
+    },
+    {
+      "key": "protein-structure-predictions-to-atomic",
+      "identity": "doi:10.1038/s41592-021-01362-6",
+      "cassette": "search-alphafold",
+      "title": "Protein structure predictions to atomic accuracy with AlphaFold",
+      "year": 2022,
+      "abstract": ""
+    },
+    {
+      "key": "revolutionizing-structural-biology-ai-driven",
+      "identity": "doi:10.1016/bs.apcsb.2025.04.002",
+      "cassette": "search-alphafold",
+      "title": "Revolutionizing structural biology: AI-driven protein structure prediction from AlphaFold to next-generation innovations",
+      "year": 2025,
+      "abstract": ""
+    },
+    {
+      "key": "kubefold-kubernetes-native-automation-of",
+      "identity": "doi:10.1016/j.softx.2026.102805",
+      "cassette": "search-alphafold",
+      "title": "KubeFold: Kubernetes-native automation of AlphaFold protein structure prediction workflows",
+      "year": 2026,
+      "abstract": ""
+    },
+    {
+      "key": "faculty-opinions-recommendation-of-highly",
+      "identity": "doi:10.3410/f.740477161.793596551",
+      "cassette": "search-alphafold",
+      "title": "Faculty Opinions recommendation of Highly accurate protein structure prediction with AlphaFold.",
+      "year": 2022,
+      "abstract": ""
+    },
+    {
+      "key": "faculty-opinions-recommendation-of-highly-2",
+      "identity": "doi:10.3410/f.740477161.793588722",
+      "cassette": "search-alphafold",
+      "title": "Faculty Opinions recommendation of Highly accurate protein structure prediction with AlphaFold.",
+      "year": 2021,
+      "abstract": ""
+    },
+    {
+      "key": "faculty-opinions-recommendation-of-highly-3",
+      "identity": "doi:10.3410/f.740477161.793588825",
+      "cassette": "search-alphafold",
+      "title": "Faculty Opinions recommendation of Highly accurate protein structure prediction with AlphaFold.",
+      "year": 2021,
+      "abstract": ""
+    },
+    {
+      "key": "speech-transformer-a-no-recurrence",
+      "identity": "doi:10.1109/icassp.2018.8462506",
+      "cassette": "novelty-check",
+      "title": "Speech-Transformer: A No-Recurrence Sequence-to-Sequence Model for Speech Recognition",
+      "year": 2018,
+      "abstract": ""
+    },
+    {
+      "key": "approximation-rate-of-the-transformer",
+      "identity": "doi:10.52202/079017-2202",
+      "cassette": "novelty-check",
+      "title": "Approximation Rate of the Transformer Architecture for Sequence Modeling",
+      "year": 2024,
+      "abstract": ""
+    },
+    {
+      "key": "should-we-hard-code-the",
+      "identity": "doi:10.21437/interspeech.2020-2480",
+      "cassette": "novelty-check",
+      "title": "Should we Hard-Code the Recurrence Concept or Learn it Instead ? Exploring the Transformer Architecture for Audio-Visual Speech Recognition",
+      "year": 2020,
+      "abstract": ""
+    },
+    {
+      "key": "deep-learning-for-load-forecasting",
+      "identity": "doi:10.1109/access.2020.2975738",
+      "cassette": "novelty-check",
+      "title": "Deep Learning for Load Forecasting: Sequence to Sequence Recurrent Neural Networks With Attention",
+      "year": 2020,
+      "abstract": ""
+    },
+    {
+      "key": "continual-learning-for-recurrent-neural",
+      "identity": "doi:10.1016/j.neunet.2021.07.021",
+      "cassette": "novelty-check",
+      "title": "Continual learning for recurrent neural networks: An empirical evaluation",
+      "year": 2021,
+      "abstract": ""
+    },
+    {
+      "key": "motor-primitive-and-sequence-self",
+      "identity": "doi:10.1016/j.neunet.2004.08.005",
+      "cassette": "novelty-check",
+      "title": "Motor primitive and sequence self-organization in a hierarchical recurrent neural network",
+      "year": 2004,
+      "abstract": ""
+    },
+    {
+      "key": "self-attention-enhanced-recurrent-neural",
+      "identity": "doi:10.1109/ssci.2018.8628865",
+      "cassette": "novelty-check",
+      "title": "Self-Attention Enhanced Recurrent Neural Networks for Sentence Classification",
+      "year": 2018,
+      "abstract": ""
+    },
+    {
+      "key": "understanding-protein-dynamics-using-conformational",
+      "identity": "doi:10.1007/978-3-319-02970-2_3",
+      "cassette": "novelty-check",
+      "title": "Understanding Protein Dynamics Using Conformational Ensembles",
+      "year": 2013,
+      "abstract": ""
+    },
+    {
+      "key": "moltiverse-molecular-conformer-generation-using",
+      "identity": "doi:10.1021/acs.jcim.5c00871.s001",
+      "cassette": "novelty-check",
+      "title": "Moltiverse: Molecular Conformer Generation Using Enhanced Sampling Methods",
+      "year": null,
+      "abstract": ""
+    },
+    {
+      "key": "pressure-and-temperature-phase-diagram",
+      "identity": "doi:10.1021/acs.jpcb.1c01451.s001",
+      "cassette": "novelty-check",
+      "title": "Pressure and Temperature Phase Diagram for LiquidLiquid Phase Separation of the RNA-Binding Protein Fused in Sarcoma",
+      "year": null,
+      "abstract": ""
+    },
+    {
+      "key": "pressure-and-temperature-phase-diagram-2",
+      "identity": "doi:10.1021/acs.jpcb.1c01451.s002",
+      "cassette": "novelty-check",
+      "title": "Pressure and Temperature Phase Diagram for LiquidLiquid Phase Separation of the RNA-Binding Protein Fused in Sarcoma",
+      "year": null,
+      "abstract": ""
+    },
+    {
+      "key": "pressure-and-temperature-phase-diagram-3",
+      "identity": "doi:10.1021/acs.jpcb.1c01451.s003",
+      "cassette": "novelty-check",
+      "title": "Pressure and Temperature Phase Diagram for LiquidLiquid Phase Separation of the RNA-Binding Protein Fused in Sarcoma",
+      "year": null,
+      "abstract": ""
+    }
+  ],
+  "claims": [
+    {
+      "id": "e01",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "在 CASP14 上，一个用注意力同时处理多序列比对与残基对表征、并把中间预测反复回灌自身的端到端网络，第一次让计算预测的主链精度达到与实验测定可比的水平。",
+      "positives": [
+        "alphafold2"
+      ],
+      "negatives": [
+        "colabfold",
+        "alphafold-db-2021",
+        "alphafold-beyond"
+      ],
+      "queries": [
+        "end-to-end attention network predicting protein structure at near experimental accuracy CASP14",
+        "deep learning protein folding from sequence without homologous templates"
+      ]
+    },
+    {
+      "id": "e02",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "把结构预测网络换成扩散式生成架构之后，同一个模型可以联合预测蛋白质与核酸、小分子配体、离子之间的复合物结构，而不再局限于单链蛋白。",
+      "positives": [
+        "alphafold3"
+      ],
+      "negatives": [
+        "assembly-symmetric-docking",
+        "interaction-score",
+        "ai-molecular-design"
+      ],
+      "queries": [
+        "diffusion based architecture predicting protein nucleic acid ligand complex structures",
+        "joint structure prediction of biomolecular interactions"
+      ]
+    },
+    {
+      "id": "e03",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "Replacing the slow multiple-sequence-alignment construction step with a fast homology search engine speeds up end-to-end folding by more than an order of magnitude, letting a single GPU server fold on the order of a thousand proteins per day.",
+      "positives": [
+        "colabfold"
+      ],
+      "negatives": [
+        "foldify",
+        "kubefold",
+        "alphafold-db-2021"
+      ],
+      "queries": [
+        "fast homology search accelerating MSA generation for protein folding",
+        "GPU server folding a thousand proteins per day pipeline"
+      ]
+    },
+    {
+      "id": "e04",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "把一维序列、二维残基距离图和三维坐标三条信息通道放进同一个网络里互相传递，能够逼近 CASP14 上最好的那套结构预测精度。",
+      "positives": [
+        "rosettafold"
+      ],
+      "negatives": [
+        "colabfold",
+        "alphafold-db-2021",
+        "foldify"
+      ],
+      "queries": [
+        "three track neural network coupling sequence distance map and coordinates",
+        "protein structure and interaction prediction with CASP14 level accuracy"
+      ]
+    },
+    {
+      "id": "e05",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "在已知化学计量比的多链输入上专门训练折叠模型，可以显著提高蛋白质复合物界面的预测准确率，而不只是擅长单链。",
+      "positives": [
+        "alphafold-multimer"
+      ],
+      "negatives": [
+        "alphafold-db-2024",
+        "interaction-score",
+        "pocket-restraints"
+      ],
+      "queries": [
+        "folding model trained on multimeric inputs with known stoichiometry",
+        "protein complex interface prediction accuracy multimer"
+      ]
+    },
+    {
+      "id": "e06",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "Combining a learned folding model with all-atom symmetry-constrained docking simulations extends accurate structure prediction to large symmetric assemblies that exceed the chain and residue limits of the folding model alone.",
+      "positives": [
+        "assembly-symmetric-docking"
+      ],
+      "negatives": [
+        "alphafold-multimer",
+        "ppigfinder",
+        "cross-docking"
+      ],
+      "queries": [
+        "combining folding model with all atom symmetric docking for large assemblies",
+        "symmetrical assembly structure prediction beyond chain and residue limits"
+      ]
+    },
+    {
+      "id": "e07",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "Small adversarial edits to an input sequence leave the predicted fold essentially unchanged while confidence scores stay high, which indicates the predictor relies on template-like pattern matching rather than on generalizable biophysical principles.",
+      "positives": [
+        "adversarial-mutations"
+      ],
+      "negatives": [
+        "alphainterp",
+        "structural-bioinformatics-next",
+        "peptide-prediction"
+      ],
+      "queries": [
+        "adversarial sequence mutations leave predicted fold unchanged with high confidence",
+        "structure predictor pattern matching rather than generalizable biophysics"
+      ]
+    },
+    {
+      "id": "e08",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "逐层追踪结构预测网络内部的表征，可以机械式地解释进化信息（多序列比对）究竟在前向传播的哪一步被转换成了结构坐标。",
+      "positives": [
+        "alphainterp"
+      ],
+      "negatives": [
+        "adversarial-mutations",
+        "interaction-score",
+        "alphafold3"
+      ],
+      "queries": [
+        "mechanistic interpretability of structure prediction network internal representations",
+        "how evolutionary information from multiple sequence alignment becomes coordinates"
+      ]
+    },
+    {
+      "id": "e09",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "Framing model selection for predicted antibody-antigen complexes as a learning-to-rank problem picks better decoys than the structure predictor's own built-in confidence score.",
+      "positives": [
+        "abag-rank"
+      ],
+      "negatives": [
+        "pocket-restraints",
+        "interaction-score",
+        "alphafold-multimer"
+      ],
+      "queries": [
+        "learning to rank model selection for antibody antigen complex decoys",
+        "ranking predicted immune complexes better than built in confidence score"
+      ]
+    },
+    {
+      "id": "e10",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "search-alphafold",
+      "claim": "Under realistic cross-docking conditions, physics-based docking programs and data-driven pose predictors succeed for different reasons, so their determinants of success must be characterized separately instead of being compared through a single accuracy number.",
+      "positives": [
+        "cross-docking"
+      ],
+      "negatives": [
+        "peptide-prediction",
+        "pocket-restraints",
+        "ai-molecular-design"
+      ],
+      "queries": [
+        "cross docking comparison of physics based versus AI driven pose prediction",
+        "determinants of success in protein ligand binding pose prediction"
+      ]
+    },
+    {
+      "id": "e11",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "完全丢掉循环与卷积、只靠注意力堆出来的编码器-解码器网络，可以在序列转导任务上比带循环结构的模型训练得更快、翻译质量更高。",
+      "positives": [
+        "attention-is-all-you-need"
+      ],
+      "negatives": [
+        "attend-and-diagnose",
+        "attention-summarization",
+        "amr-seq2graph"
+      ],
+      "queries": [
+        "encoder decoder based solely on attention for sequence transduction machine translation",
+        "dispensing with recurrence and convolution self attention translation quality"
+      ]
+    },
+    {
+      "id": "e12",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "Adding an explicit multi-scale hierarchy on top of a purely self-attentive network shows that recurrence is not essential for capturing hierarchical structure in sequences.",
+      "positives": [
+        "multiresolution-transformer"
+      ],
+      "negatives": [
+        "attention-is-all-you-need",
+        "transformers-medical-imaging",
+        "occluded-reid"
+      ],
+      "queries": [
+        "multi scale hierarchy over self attention network recurrence not essential",
+        "modeling hierarchical structure in sequences without recurrence"
+      ]
+    },
+    {
+      "id": "e13",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "把 AMR（抽象语义表示）解析建模成序列到图的转导，不依赖预训练词对齐器、外部语义资源或数据增强，在标注有限时也能训练出可用的解析器。",
+      "positives": [
+        "amr-seq2graph"
+      ],
+      "negatives": [
+        "attention-summarization",
+        "attend-and-diagnose",
+        "transformers-medical-imaging"
+      ],
+      "queries": [
+        "abstract meaning representation parsing as sequence to graph transduction",
+        "aligner free AMR parser trained with limited labeled data"
+      ]
+    },
+    {
+      "id": "e14",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "Pretraining a sequence model on simulated biophysical quantities instead of on evolutionary data alone lets it transfer to mutational-effect prediction in regimes where the evolutionary signal is weak.",
+      "positives": [
+        "metl-biophysics-plm"
+      ],
+      "negatives": [
+        "ml-guided-protein-engineering",
+        "chroma-generative-protein",
+        "de-novo-protein-design"
+      ],
+      "queries": [
+        "protein language model pretrained on simulated biophysical quantities",
+        "mutational effect prediction transfer learning weak evolutionary signal"
+      ]
+    },
+    {
+      "id": "e15",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "用可解释的生物物理相互作用特征训练出来的算法，可以在不依赖黑箱表征的前提下预测内在无序区驱动的蛋白质相分离倾向。",
+      "positives": [
+        "phase-separation-interpretable"
+      ],
+      "negatives": [
+        "boltzmann-ensembles",
+        "metl-biophysics-plm",
+        "de-novo-protein-design"
+      ],
+      "queries": [
+        "interpretable biophysical interaction features predicting disordered protein phase separation",
+        "intrinsically disordered region phase separation propensity prediction"
+      ]
+    },
+    {
+      "id": "e16",
+      "lang": "en",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "Techniques developed for training conventional deep networks, such as surrogate gradients and backpropagation through time, can be carried over to train networks whose neurons communicate with discrete spike events.",
+      "positives": [
+        "spiking-nn-training"
+      ],
+      "negatives": [
+        "lenet-document-recognition",
+        "attention-is-all-you-need",
+        "transformers-medical-imaging"
+      ],
+      "queries": [
+        "training spiking neural networks with surrogate gradients and backpropagation through time",
+        "lessons from deep learning applied to spiking neural networks"
+      ]
+    },
+    {
+      "id": "n01",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "把脉冲神经元的事件驱动稀疏计算搬到分子对接打分上，只在构象发生显著变化时才触发一次打分，从而把打分能耗降低一个数量级。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "event driven spiking computation for molecular docking scoring energy efficiency",
+        "sparse spike triggered rescoring of docking poses"
+      ]
+    },
+    {
+      "id": "n02",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "Encode enzyme reaction mechanisms as abstract-meaning-representation graphs and rank designed biocatalysts by the resulting graph parse score.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "semantic dependency graph parsing of enzymatic reaction mechanisms",
+        "ranking designed biocatalysts by graph parse score"
+      ]
+    },
+    {
+      "id": "n03",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "用手写字符识别里的梯度学习卷积网络直接从质谱图像预测内在无序区的相分离临界温度。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "convolutional handwriting recognition network predicting phase separation temperature from mass spectra",
+        "gradient based document recognition applied to disordered protein critical temperature"
+      ]
+    },
+    {
+      "id": "n04",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "search-alphafold",
+      "claim": "Use the compression codebook of a document-image recognition pipeline as the tokenizer for a geometric graph network over molecular conformers.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "document image compression codebook as tokenizer for geometric graph network",
+        "molecular conformer tokenization from optical character recognition codebook"
+      ]
+    },
+    {
+      "id": "n05",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "search-alphafold",
+      "claim": "把医学影像 Transformer 里的注意力可视化方法搬到 Kubernetes 集群的调度日志上，用来预测折叠任务的失败率。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "attention heatmap visualization applied to cluster scheduling logs",
+        "predicting batch compute job failure rate with medical imaging attention methods"
+      ]
+    },
+    {
+      "id": "n06",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "Initialize an inverse molecular design model from weights pretrained on hospital bedside monitor waveforms.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "inverse molecular design initialized from bedside monitor waveform pretraining",
+        "clinical vital sign pretraining for small molecule generation"
+      ]
+    },
+    {
+      "id": "n07",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "search-alphafold",
+      "claim": "用逐词生成句子的注意力模型把冷冻电镜密度图翻译成一句自然语言的结构描述，并把这句话的生成概率当作复合物的质量分数。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "generating a one sentence natural language description of an electron density map",
+        "using generated caption likelihood as a complex quality score"
+      ]
+    },
+    {
+      "id": "n08",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "Sample Boltzmann-weighted conformational ensembles with a no-recurrence speech recognition encoder and use the spread of the ensemble as a peptide drug developability score.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "streaming speech recognition encoder generating thermodynamic conformer ensembles",
+        "ensemble spread as peptide drug manufacturability score"
+      ]
+    },
+    {
+      "id": "n09",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "把可编程蛋白生成模型的潜空间当作机器翻译的中间语言，用来在两套细菌基因组注释体系之间做转写。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "protein generative model latent space as interlingua for genome annotation transcoding",
+        "translating between bacterial annotation schemes via protein latent space"
+      ]
+    },
+    {
+      "id": "n10",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "search-alphafold",
+      "claim": "Use recurrent power-grid load forecasting networks to decide the order in which a folding pipeline should schedule its prediction jobs.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "power grid load forecasting recurrent network scheduling folding prediction jobs",
+        "job ordering for a structure prediction pipeline from demand forecasting"
+      ]
+    },
+    {
+      "id": "n11",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "search-alphafold",
+      "claim": "把持续学习里衡量灾难性遗忘的指标当作蛋白质结构数据库的版本漂移检测判据。",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "catastrophic forgetting metric as version drift detector for a structure database",
+        "continual learning forgetting measure applied to database releases"
+      ]
+    },
+    {
+      "id": "n12",
+      "lang": "en",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "Encode per-residue confidence scores as spike trains and let a neuromorphic chip decide when to stop a folding run early.",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "per residue confidence encoded as spike trains for neuromorphic early stopping",
+        "neuromorphic chip deciding when to stop a folding run"
+      ]
+    },
+    {
+      "id": "h01",
+      "lang": "zh",
+      "expected": "existing",
+      "cassette": "novelty-check",
+      "claim": "用 Transformer 的自注意力机制完全替代循环结构来做序列转导建模，并在机器翻译上取得更好效果",
+      "positives": [
+        "attention-is-all-you-need"
+      ],
+      "negatives": [
+        "attend-and-diagnose",
+        "attention-summarization",
+        "amr-seq2graph"
+      ],
+      "queries": [
+        "transformer architecture dispensing with recurrence for sequence transduction",
+        "self-attention replaces recurrent networks for sequence transduction"
+      ]
+    },
+    {
+      "id": "h02",
+      "lang": "zh",
+      "expected": "novel",
+      "cassette": "novelty-check",
+      "claim": "用超导量子退火器采样得到的构象系综来预训练蛋白质语言模型，从而预测嗜盐菌蛋白的液液相分离温度",
+      "positives": [],
+      "negatives": [],
+      "queries": [
+        "quantum annealing sampled conformational ensembles for protein language model pretraining",
+        "superconducting annealer conformer sampling to predict halophilic protein phase separation temperature"
+      ]
+    }
+  ]
+}
