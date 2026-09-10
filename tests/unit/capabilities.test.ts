@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { buildCapabilities } from "../../backend/src/capabilities";
 import { runCapabilitiesCommand } from "../../backend/src/capabilities/cli";
 import { CONFIG_SETTINGS, saveConfig } from "../../backend/src/config";
+import { implementedProviders, LLMRouter, PROVIDER_MODELS } from "../../backend/src/llm/router";
+import { PROVIDER_API_KEY_ENV } from "../../backend/src/llm/providers/registry";
 import { BUILTIN_CONNECTORS, ConnectorRegistry } from "../../backend/src/connectors/registry";
 import { CredentialStore } from "../../backend/src/daemon/credentials";
 import { SAFETY_RULES } from "../../backend/src/lab/safety";
@@ -174,6 +176,92 @@ describe("capabilities · MCP 与证据图与配置", () => {
     const withSecret = await buildCapabilities({ root, env: {} });
     expect(JSON.stringify(withSecret)).not.toContain("sk-should-never-appear");
     expect(withSecret.config.find((c) => c.key === "KIMI_API_KEY")!.value).toBeNull();
+  });
+});
+
+describe("capabilities · provider 能力位（R-c-2，AD-12）", () => {
+  test("正向：provider 集合与真实实现的 implementedProviders() 一致", () => {
+    expect(manifest.providers.map((p) => p.id).sort()).toEqual([...implementedProviders()].sort());
+  });
+
+  test("每个 provider 都带非空模型列表、configured 布尔值、四个能力位", () => {
+    for (const p of manifest.providers) {
+      expect(p.models.length).toBeGreaterThan(0);
+      expect([...p.models].sort()).toEqual([...PROVIDER_MODELS[p.id as keyof typeof PROVIDER_MODELS]].sort());
+      expect(typeof p.configured).toBe("boolean");
+      expect(typeof p.capabilities.toolCalling).toBe("boolean");
+      expect(typeof p.capabilities.jsonMode).toBe("boolean");
+      expect(typeof p.capabilities.streaming).toBe("boolean");
+      expect(typeof p.capabilities.usageReported).toBe("boolean");
+    }
+  });
+
+  test("configured 如实反映真实 env：没配 key 就是 false，配了就是 true", async () => {
+    const root = tmpRoot();
+    const noKey = await buildCapabilities({ root, env: {} });
+    for (const p of noKey.providers) expect(p.configured).toBe(false);
+
+    const withKey = await buildCapabilities({ root, env: { OPENAI_API_KEY: "sk-test" } });
+    const openai = withKey.providers.find((p) => p.id === "openai")!;
+    expect(openai.configured).toBe(true);
+    // 没配的 provider 依然如实报 false，不会因为别的 provider 配了就被带偏。
+    const kimi = withKey.providers.find((p) => p.id === "kimi")!;
+    expect(kimi.configured).toBe(false);
+  });
+
+  test("每个 provider 的能力位与直接探测该 provider（env 只给它自己的 key）一致——不会因为隐式回退串味", () => {
+    for (const provider of implementedProviders()) {
+      const envVar = PROVIDER_API_KEY_ENV[provider]!;
+      const probeModel = PROVIDER_MODELS[provider][0]!;
+      const direct = new LLMRouter({ [envVar]: "probe-key" }).capabilitiesFor(probeModel);
+      expect(direct).not.toBeNull();
+      const fromManifest = manifest.providers.find((p) => p.id === provider)!.capabilities;
+      expect(fromManifest).toEqual(direct!);
+    }
+  });
+
+  test("本地端点单独一段可见，不混进 providers 数组（local 不是 Provider 联合类型成员）", () => {
+    expect(manifest.providers.some((p) => p.id === "local")).toBe(false);
+    expect(manifest.localEndpoint).toBeDefined();
+    expect(manifest.localEndpoint.baseUrlEnvVar).toBe("SPARK_LOCAL_LLM_BASE_URL");
+    expect(manifest.localEndpoint.apiKeyEnvVar).toBe("SPARK_LOCAL_LLM_API_KEY");
+    expect(typeof manifest.localEndpoint.configured).toBe("boolean");
+    // 保守能力位：本地模型是否支持 tool calling/json 模式因模型而异，不能一刀切报 true。
+    expect(manifest.localEndpoint.capabilities.toolCalling).toBe(false);
+    expect(manifest.localEndpoint.capabilities.jsonMode).toBe(false);
+    expect(manifest.localEndpoint.capabilities.usageReported).toBe(false);
+  });
+
+  test("本地端点 configured 如实反映 SPARK_LOCAL_LLM_BASE_URL 是否设置", async () => {
+    const root = tmpRoot();
+    const unset = await buildCapabilities({ root, env: {} });
+    expect(unset.localEndpoint.configured).toBe(false);
+    const set = await buildCapabilities({ root, env: { SPARK_LOCAL_LLM_BASE_URL: "http://localhost:11434" } });
+    expect(set.localEndpoint.configured).toBe(true);
+  });
+
+  test("--json 输出里 providers/localEndpoint 与 buildCapabilities 同构", async () => {
+    const lines: string[] = [];
+    const code = await runCapabilitiesCommand(["--json"], {
+      root: tmpRoot(),
+      env: {},
+      out: (l) => lines.push(l),
+      err: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(lines.join("\n"));
+    expect(parsed.providers.map((p: { id: string }) => p.id).sort()).toEqual(
+      manifest.providers.map((p) => p.id).sort(),
+    );
+    expect(parsed.localEndpoint.modelPrefix).toBe(manifest.localEndpoint.modelPrefix);
+  });
+
+  test("不带 --json 的人看表格包含 LLM Provider 段", async () => {
+    const lines: string[] = [];
+    await runCapabilitiesCommand([], { root: tmpRoot(), env: {}, out: (l) => lines.push(l), err: (l) => lines.push(l) });
+    const text = lines.join("\n");
+    expect(text).toContain("LLM Provider");
+    expect(text).toContain("本地端点");
   });
 });
 
