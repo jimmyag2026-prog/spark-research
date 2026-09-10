@@ -87,7 +87,7 @@ const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const CONFIG_FILE_MODE = 0o600;
 const CONFIG_DIR_MODE = 0o700;
 
-interface Config {
+export interface Config {
   [key: string]: string | undefined;
   defaultProvider?: string;
 }
@@ -126,10 +126,30 @@ function providerLabel(provider: string): string {
   return PROVIDER_LABELS[provider] ?? provider;
 }
 
-function getApiKey(): { provider: string; key: string } | null {
-  const config = loadConfig();
-  for (const [provider, envName] of Object.entries(PROVIDER_API_KEY_ENV)) {
-    const envKey = process.env[envName];
+export function getApiKey(
+  options: { env?: Record<string, string | undefined>; config?: Config } = {},
+): { provider: string; key: string } | null {
+  const env = options.env ?? process.env;
+  const config = options.config ?? loadConfig();
+
+  // 收口补（W5-1 η 之后）：**先认用户显式选的 `defaultProvider`**。
+  //
+  // 在这之前它是一个「只写不读」的设置——`auth()` 让用户挑（`:223` 写盘）、
+  // `config set defaultProvider` 能设、`auth` 还回显它，但**没有任何代码用它来选
+  // provider**：这里只是按声明顺序取第一个有 key 的。用户明明选了 kimi，只要
+  // `OPENROUTER_API_KEY` 也在，走的就是 openrouter，而且不留任何痕迹。
+  //
+  // 本项目栽过 6 次「建好了但没有生产调用方」，这是第 7 次，只不过藏在配置项里
+  // 而不是模块里。η 把优先级从写死的 `[kimi, openrouter]` 换成 ADAPTERS 声明顺序
+  // 之后，这个潜伏的 bug 才真的会咬人——所以在收口一并修掉，而不是记进 BACKLOG。
+  const preferred = config.defaultProvider;
+  const order = preferred && preferred in PROVIDER_API_KEY_ENV
+    ? [preferred, ...Object.keys(PROVIDER_API_KEY_ENV).filter((p) => p !== preferred)]
+    : Object.keys(PROVIDER_API_KEY_ENV);
+
+  for (const provider of order) {
+    const envName = PROVIDER_API_KEY_ENV[provider]!;
+    const envKey = env[envName];
     if (envKey) return { provider, key: envKey };
     const configKey = config[envName];
     if (configKey) return { provider, key: configKey };

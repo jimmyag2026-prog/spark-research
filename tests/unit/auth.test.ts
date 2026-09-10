@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { authStatus, type AuthStatusEntry } from "../../backend/src/index";
+import { authStatus, getApiKey, type AuthStatusEntry, type Config } from "../../backend/src/index";
 import { buildDoctorReport } from "../../backend/src/doctor";
 import { PROVIDER_API_KEY_ENV } from "../../backend/src/llm/providers/registry";
 import { implementedProviders } from "../../backend/src/llm/router";
@@ -148,5 +148,49 @@ describe("V37 门禁：index.ts 不许再手写 provider→env 名映射", () =>
     const handRolledKeyMap =
       /\b(?:kimi|openrouter|openai|anthropic|deepseek|qwen)\s*:\s*["'][A-Z][A-Z0-9_]*_API_KEY["']/;
     expect(src).not.toMatch(handRolledKeyMap);
+  });
+});
+
+// ── 收口补（W5-1 η 之后，主会话）────────────────────────────────────────────
+//
+// 追 η 自报的行为变更（provider 优先级从写死的 [kimi, openrouter] 变成 ADAPTERS
+// 声明顺序）时挖出来的：`defaultProvider` 是一个**只写不读**的设置。
+//   写：`auth()` 让用户挑并落盘（index.ts:223）· `config set defaultProvider`
+//   显示：`auth` 回显「默认 Provider: xxx」
+//   读：**没有**。`getApiKey()` 只按声明顺序取第一个有 key 的。
+//
+// 后果：用户明明选了 kimi，只要 OPENROUTER_API_KEY 也在，走的就是 openrouter，
+// 且不留任何痕迹——「用户的显式选择被静默忽略」。这是本项目第 7 次
+// 「建好了但没有生产调用方」，只不过这次藏在配置项里而不是模块里。
+describe("getApiKey() 必须认 defaultProvider（收口补）", () => {
+  const twoKeys = { KIMI_API_KEY: "sk-test-kimi", OPENROUTER_API_KEY: "sk-test-or" };
+
+  test("用户显式选了 kimi，两把 key 都在时必须走 kimi", () => {
+    const picked = getApiKey({ env: twoKeys, config: { defaultProvider: "kimi" } as Config });
+    expect(picked?.provider).toBe("kimi");
+    expect(picked?.key).toBe("sk-test-kimi");
+  });
+
+  test("用户显式选了 openrouter，必须走 openrouter", () => {
+    const picked = getApiKey({ env: twoKeys, config: { defaultProvider: "openrouter" } as Config });
+    expect(picked?.provider).toBe("openrouter");
+  });
+
+  test("没设 defaultProvider 时退回声明顺序（不是报错，也不是不选）", () => {
+    const picked = getApiKey({ env: twoKeys, config: {} as Config });
+    expect(picked?.provider).toBe(Object.keys(PROVIDER_API_KEY_ENV)[0]);
+  });
+
+  test("defaultProvider 指向一个没配 key 的 provider 时，退回下一个有 key 的", () => {
+    const picked = getApiKey({
+      env: { OPENROUTER_API_KEY: "sk-test-or" },
+      config: { defaultProvider: "kimi" } as Config,
+    });
+    expect(picked?.provider).toBe("openrouter");
+  });
+
+  test("defaultProvider 是个不存在的 provider 名时不许崩，退回声明顺序", () => {
+    const picked = getApiKey({ env: twoKeys, config: { defaultProvider: "nope" } as Config });
+    expect(picked?.provider).toBe(Object.keys(PROVIDER_API_KEY_ENV)[0]);
   });
 });
