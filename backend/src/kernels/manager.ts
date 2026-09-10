@@ -1,5 +1,10 @@
 import { existsSync } from "fs";
 import { join } from "path";
+// V27：`python_kernel.py` 要被外部 python 进程按路径打开，只把内容 import 进来不够；
+// 静态 import 文本 → materializeAsset 解包到真实临时文件 → spawn 那个真实路径。
+// （F-c §3.2 实测：`with { type: "file" }` 给的是 `/$bunfs/` 虚拟路径，外部 python 打不开。）
+import PYTHON_KERNEL_PY from "./python_kernel.py" with { type: "text" };
+import { materializeAsset } from "../assets/embedded";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import { ControlRepl } from "./control_repl";
 import { configuredKernelTimeoutMs } from "../config";
@@ -71,7 +76,7 @@ export class PythonKernel {
 
   private ensureProc() {
     if (this.proc) return;
-    const script = join(import.meta.dir, "python_kernel.py");
+    const script = materializeAsset("kernels", "python_kernel.py", PYTHON_KERNEL_PY);
     const proc = Bun.spawn([this.python, script], {
       stdin: "pipe",
       stdout: "pipe",

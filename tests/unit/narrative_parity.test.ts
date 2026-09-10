@@ -108,6 +108,13 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
+  // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
+  // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，
+  // tsc 靠 tsconfig 的 include 自动收进程序，不靠任何人 import 它。
+  // 孤儿检测查的是「运行期有没有调用方」，对声明文件这个判据在语义上不适用。
+  "backend/src/assets/assets.d.ts":
+    "TypeScript ambient 声明（*.sql / *.txt / *.py 的静态 import 类型），按语言规则由 tsconfig include 收录，不存在也不该存在 import 边",
+
   // backend/src/extensions/capabilities.ts 曾在此登记「等接线：capabilities 接上后删除」——
   // W2 收口已接（buildCapabilities() 里加了 extensions 字段），本条按对称检查删除。
   "backend/src/http/fixture.ts":

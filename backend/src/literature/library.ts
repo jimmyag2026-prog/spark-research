@@ -1,7 +1,8 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// V27：同 project/records.ts —— schema 走静态 import，编译期进二进制。
+// 这一处坏掉的表现是 `lit search --add` 网络检索全跑完、最后落库时才 ENOENT。
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 import type { RecordStore } from "../project/records";
 import { canMerge, mergePapers } from "./dedupe";
 import { emptyPaper, titleKey, type LiteratureSource, type Paper, type PaperAuthor, type PaperSourceIds } from "./models";
@@ -159,7 +160,7 @@ export class LibraryStore {
   }
 
   initSchema(): void {
-    this.db.exec(readFileSync(join(import.meta.dir, "schema.sql"), "utf8"));
+    this.db.exec(SCHEMA_SQL);
   }
 
   // 入库。已存在同一篇（DOI 相同或标题模糊匹配）时合并字段而不是插重复行。

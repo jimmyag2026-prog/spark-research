@@ -1,4 +1,11 @@
 import { join } from "node:path";
+// V27：同 pyref —— `runner.py` 也做 `sys.path.insert(..., parents[2])` +
+// `from simulation.sim_runtime import ...`，解包单位是整棵包树。
+import SIM_PACKAGE_INIT_PY from "../__init__.py" with { type: "text" };
+import SIM_RUNTIME_PY from "../sim_runtime.py" with { type: "text" };
+import OPENMM_PACKAGE_INIT_PY from "./__init__.py" with { type: "text" };
+import RUNNER_PY from "./runner.py" with { type: "text" };
+import { materializeAssetTree } from "../../assets/embedded";
 import {
   SubprocessSimulationPlatform,
   boolParam,
@@ -7,6 +14,13 @@ import {
   type NormalizedSpec,
   type SubprocessPlatformOptions,
 } from "../platform";
+
+const OPENMM_RUNNER_TREE = {
+  "simulation/__init__.py": SIM_PACKAGE_INIT_PY,
+  "simulation/sim_runtime.py": SIM_RUNTIME_PY,
+  "simulation/openmm/__init__.py": OPENMM_PACKAGE_INIT_PY,
+  "simulation/openmm/runner.py": RUNNER_PY,
+} as const;
 
 export const OPENMM_KINDS = ["water-box-md"] as const;
 export type OpenMMKind = (typeof OPENMM_KINDS)[number];
@@ -31,7 +45,7 @@ export class OpenMMPlatform extends SubprocessSimulationPlatform {
   }
 
   protected entryPointFor(): string {
-    return join(import.meta.dir, "runner.py");
+    return join(materializeAssetTree("sim-openmm", OPENMM_RUNNER_TREE), "simulation", "openmm", "runner.py");
   }
 
   protected probeCode(): string {

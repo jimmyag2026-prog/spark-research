@@ -21,9 +21,18 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { VerifyCheck } from "./connector_verify";
+import { RUNNING_IN_COMPILED_BINARY } from "../assets/embedded";
 
-const REPO_ROOT = resolve(import.meta.dir, "../../..");
-const CONTRACT_HELPER = join(REPO_ROOT, "tests/helpers/simulation_contract.ts");
+// V27/V33 同类：`resolve(import.meta.dir, "../../..")` 在编译产物里归一化成 **`/`**，
+// 于是 CONTRACT_HELPER 变成 `/tests/helpers/simulation_contract.ts`，
+// 而 `cwd: REPO_ROOT` 会把 `bun test` 子进程的工作目录设成文件系统根。
+//
+// 与 scaffold 同一裁定：`ext verify --kind platform` 复用的是仓库 `tests/` 目录下的契约
+// 测试套件，这个依赖在单二进制发行版里本来就不成立（本文件头部"已知限制"早已写明）。
+// 所以不给它编一个假的 repoRoot——在编译产物里把 REPO_ROOT 置为 null，让下面
+// `existsSync(CONTRACT_HELPER)` 那道既有的门直接如实报错，且**永远不会**拿 `/` 当 cwd 去 spawn。
+const REPO_ROOT: string | null = RUNNING_IN_COMPILED_BINARY ? null : resolve(import.meta.dir, "../../..");
+const CONTRACT_HELPER = REPO_ROOT === null ? null : join(REPO_ROOT, "tests/helpers/simulation_contract.ts");
 
 export interface PlatformContractFixture {
   okSpec: unknown;
@@ -73,14 +82,15 @@ function readContractFixture(extensionDir: string): { fixture: PlatformContractF
 export async function verifyPlatformExtension(extensionDir: string, entryPath: string, name: string): Promise<PlatformVerifyResult> {
   const checks: VerifyCheck[] = [];
 
-  if (!existsSync(CONTRACT_HELPER)) {
+  if (REPO_ROOT === null || CONTRACT_HELPER === null || !existsSync(CONTRACT_HELPER)) {
+    const where = CONTRACT_HELPER ?? "tests/helpers/simulation_contract.ts（单二进制发行版里没有 tests/ 目录）";
     return {
       ok: false,
       checks: [
         {
           name: "P5 契约测试套件可用",
           ok: false,
-          detail: `找不到 ${CONTRACT_HELPER}——这条 verify 只在源码 checkout 里可用（见本文件头部"已知限制"），编译产物里会如实报错而不是假装通过`,
+          detail: `找不到 ${where}——这条 verify 只在源码 checkout 里可用（见本文件头部"已知限制"），编译产物里会如实报错而不是假装通过`,
         },
       ],
     };
