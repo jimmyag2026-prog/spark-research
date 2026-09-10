@@ -67,7 +67,7 @@ OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限�
 | Artifact + lineage（SQLite） | `backend/src/artifacts/` | 扩展为 Research Record 存储 |
 | Reviewer veto（trace-don't-recompute） | `backend/src/reviewer/` | 结论评审 + 引用核验的载体 |
 | 11 个 connector + registry | `backend/src/connectors/` | 扩展凭据层 + 文献域增强 |
-| Orchestrator + swarm | `backend/src/agents/` | 保留，接入新子代理配置 |
+| Orchestrator（+ swarm） | `backend/src/agents/` | 保留 orchestrator；**swarm 已于 v0.4（W4-a）删除**——v0.1 遗留、生产零调用方、`dependsOn` 未实现、`decompose` 是三条正则，评审判定为虚标（BACKLOG V7）。并发与委派现由 ToolBus + 真子代理提供 |
 | Lab protocol compiler + safety gate | `backend/src/lab/` | 湿实验域，mock → 模拟器 |
 | 84 个单元测试 | `tests/unit/` | 测试基线，只增不减（P8 收口时 706） |
 | v0.1 的 `compute/` 任务抽象 | `backend/src/compute/` | **P8 删除**（内存态阻塞契约，被 `SimulationPlatform` 取代） |

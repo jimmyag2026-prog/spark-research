@@ -525,7 +525,7 @@ tests/unit/lab_safety.test.ts      对抗矩阵
 
 `backend/src/llm/router.ts` 的 `LLMRouter` 是模型无关的：支持 kimi / openai / anthropic / deepseek / qwen / openrouter，provider 由模型名推断，BYOK。
 
-每个子代理可以配独立模型（`SubAgentConfig.model`，默认全部落到 `LLMRouter.DEFAULT_MODEL`）：重任务用强模型、检索摘要用快模型。**这一层目前是代码内配置**，暴露成用户配置项已登记为 BACKLOG（与 V7 Agent Swarm 一起评估）。
+每个子代理可以配独立模型：重任务用强模型、检索摘要用快模型。**v0.4（W4-a）起已是用户配置项**——`spark-research config set subAgentModel_explore <model>`（五类各一条，也可用环境变量 `SPARK_SUBAGENT_MODEL_<TYPE>`）。解析顺序：显式 override > 按类配置 > 全局 `defaultModel` > 代码常量。
 
 ### 用户配置面
 

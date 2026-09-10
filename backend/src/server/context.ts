@@ -23,6 +23,7 @@ import { DEFAULT_WET_BACKEND, wetBackend, type WetLabBackend } from "../lab/wet_
 import { WetLabLoop } from "../lab/wet_loop";
 import type { ArtifactStore } from "../artifacts/store";
 import { TaskRegistry } from "./tasks";
+import { dataDir } from "../config";
 
 // HTTP 层的依赖容器（P7）。
 //
@@ -97,7 +98,14 @@ export class ServerContext {
   constructor(deps: ServerDeps = {}) {
     this.deps = deps;
     this.projects = deps.projects ?? new ProjectManager(deps.root);
-    this.tasks = deps.tasks ?? new TaskRegistry();
+    // v0.4 W4 收口：给 TaskRegistry 传数据目录，长任务句柄落盘（V11）。
+    // 没有它，任务列表只在进程内存里——v0.2.1 的零上下文外部验收就撞上过：
+    // 外部 agent 拿到句柄、连接一断句柄即失效，它不知道该重跑还是该等。
+    //
+    // 目录来源：显式 deps.root（测试助手用 mkdtemp 传的临时目录）> 配置的 dataDir()。
+    // **这个顺序很重要**——反过来会让所有用 server_scenario / mcp_scenario 的测试
+    // 写进用户真实的 ~/.spark-research（W4-c 在 devlog 里专门警告过这个陷阱）。
+    this.tasks = deps.tasks ?? new TaskRegistry({ root: deps.root ?? dataDir() });
     this.connectors =
       deps.connectors ??
       new ConnectorRegistry({ http: deps.http, credentials: this.credentials() }).registerBuiltins();
