@@ -31,7 +31,7 @@ export function resolvePython(): string {
 }
 
 // 归一化后按 key 排序再序列化：specHash 不能受 JS 对象字面量书写顺序影响。
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   const entries = Object.entries(value as Record<string, unknown>)
