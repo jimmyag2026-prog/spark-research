@@ -117,6 +117,24 @@ export function renderCapabilities(manifest: CapabilityManifest, out: (line: str
     const shown = c.secret ? (c.source === "unset" ? "（未设置）" : "（已设置）") : (c.value ?? "—");
     out(`  · ${pad(c.key, 22)}${pad(String(shown), 34)}${c.source}`);
   }
+  out("");
+
+  out(`▎LLM Provider（${manifest.providers.length}，选模型前可 introspect 能力位）`);
+  for (const p of manifest.providers) {
+    const caps = p.capabilities;
+    const capsStr =
+      `tool=${caps.toolCalling ? "✓" : "✗"} json=${caps.jsonMode ? "✓" : "✗"} ` +
+      `stream=${caps.streaming ? "✓" : "✗"} usage=${caps.usageReported ? "✓" : "✗"}`;
+    out(`  ${p.configured ? "🔑" : "·"} ${pad(p.id, 12)}${pad(capsStr, 40)}${p.models.length} 个已知模型名`);
+  }
+  const le = manifest.localEndpoint;
+  const leCaps =
+    `tool=${le.capabilities.toolCalling ? "✓" : "✗"} json=${le.capabilities.jsonMode ? "✓" : "✗"} ` +
+    `stream=${le.capabilities.streaming ? "✓" : "✗"} usage=${le.capabilities.usageReported ? "✓" : "✗"}`;
+  out(
+    `  ${le.configured ? "🔑" : "·"} ${pad(`本地端点(${le.modelPrefix})`, 12)}${pad(leCaps, 40)}` +
+      `baseUrl 见 ${le.baseUrlEnvVar}`,
+  );
 }
 
 export async function runCapabilitiesCommand(args: string[], deps: CapabilitiesCliDeps = {}): Promise<number> {

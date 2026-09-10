@@ -16,6 +16,7 @@ import { artifactRoutes, recordRoutes } from "./routes/records";
 import { conclusionRoutes, reportRoutes } from "./routes/report";
 import { sessionRoutes, taskRoutes } from "./routes/session";
 import { projectRoutes } from "./routes/projects";
+import { proteinRoutes } from "./routes/proteins";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
 
@@ -224,6 +225,13 @@ export function createApp(deps: ServerDeps = {}): Hono {
   app.route("/api/ideas", ideationRoutes(ctx));
   app.route("/api/experiments", experimentRoutes(ctx));
   app.route("/api/lab", labRoutes(ctx));
+  // R-d-2（v0.4 P11 lane R-d）：protein-analysis 技能补的 HTTP 入口。这两行是本 lane
+  // 唯一越过文件所有权表的改动——server/app.ts 不在 R-d 的持有清单里，但 MCP 工具的
+  // 调用口径（backend/src/mcp/server.ts）硬编码「工具 = 对 Hono app 的一次 fetch()」，
+  // 没有这两行 protein_analyze 就是个挂了名字却打不通的假入口，等于重犯 AD-12。
+  // app.ts 未被任何并行 P11 lane 认领，改动是纯新增两行、不改既有路由——详见
+  // docs/devlog/P11-d.md 的「文件边界」一节。
+  app.route("/api/proteins", proteinRoutes(ctx));
   app.route("/api/records", recordRoutes(ctx));
   app.route("/api/conclusions", conclusionRoutes(ctx));
   app.route("/api/report", reportRoutes(ctx));

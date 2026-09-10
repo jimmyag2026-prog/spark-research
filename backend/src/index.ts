@@ -2,7 +2,6 @@
 import { join } from "path";
 import { createInterface } from "readline";
 import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { SparkResearchDaemon } from "./daemon/daemon";
 import { PERMIT_SETS } from "./daemon/permissions";
 import { OrchestratorAgent } from "./agents/orchestrator";
@@ -17,11 +16,12 @@ import { runLabCommand } from "./lab/cli";
 import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
 import { runConfigCommand } from "./config/cli";
-import { applyConfigEnvDefaults, enforceConfigPermissions } from "./config";
+import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
 import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
+import { runProteinCommand } from "./proteins/cli";
 
 const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
 
@@ -35,6 +35,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research lit         文献域（search / add / list / pdf / read / review / export / sources）
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
+  spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
@@ -49,7 +50,12 @@ const HELP = `Spark Research v${pkg.version}
   spark-research help        显示本帮助
 `;
 
-const CONFIG_DIR = join(homedir(), ".spark-research");
+// R-d-4（v0.4 P11 lane R-d）：CONFIG_DIR 曾经硬编码 `~/.spark-research`，不认
+// `SPARK_RESEARCH_DATA_DIR`——同一个工作区根目录，CLI 的 auth/config.json 走一套解析
+// （硬编码），其余一切（projects/、credentials.json、日志）走 `config/index.ts` 的
+// `dataDir()`（env > 默认值）。改了 SPARK_RESEARCH_DATA_DIR 之后，`auth` 存的 key
+// 与其余数据会落进两个不同目录——这里改成同一套解析，消掉这个漂移面。
+const CONFIG_DIR = dataDir();
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 // D-6：这里落盘的是 LLM API key（KIMI_API_KEY / OPENROUTER_API_KEY）——与
 // daemon/credentials.ts 里的 connector 凭据同等敏感，理应同等保护（0600）。
@@ -139,7 +145,7 @@ async function auth() {
     }
 
     saveConfig(config);
-    console.log("\n✅ 配置已保存到 ~/.spark-research/config.json");
+    console.log(`\n✅ 配置已保存到 ${CONFIG_FILE}`);
   } finally {
     rl.close();
   }
@@ -321,6 +327,12 @@ function main() {
     }
     case "lab": {
       runLabCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "protein": {
+      runProteinCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

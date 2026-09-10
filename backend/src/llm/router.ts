@@ -1,25 +1,13 @@
 import { configuredLlmTimeoutMs } from "../config";
+import { anthropicAdapter } from "./providers/anthropic";
+import { OpenAiCompatAdapter } from "./providers/openai_compat";
+import { failure, type ProviderAdapter } from "./providers/types";
+import type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities } from "./types";
+
+export type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, ToolSpec, Usage } from "./types";
+
 export const SUPPORTED_PROVIDERS = ["kimi", "openai", "anthropic", "deepseek", "qwen", "openrouter"] as const;
 export type Provider = (typeof SUPPORTED_PROVIDERS)[number];
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant";
-  content: string;
-}
-
-export interface LlmResponse {
-  ok: boolean;
-  provider: Provider;
-  model: string;
-  content: string;
-  mock: boolean;
-  // 上游给的结束原因（"stop" / "length" / …）。拿不到就是 undefined。
-  //
-  // 为什么要它（P8-G5 实测）：判定器解析失败时，「模型没按格式输出」与「输出被截断」
-  // 是两回事——前者该重试并把格式要求说重，后者重试多少次都一样。没有这个字段，
-  // 两种失败在日志里长得完全一样，只能靠猜。
-  finishReason?: string;
-}
 
 export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
   kimi: ["kimi-k2", "moonshot-v1-32k", "moonshot-v1-8k"],
@@ -32,41 +20,102 @@ export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
 
 export const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
 
-const KIMI_ENDPOINT = "https://api.moonshot.ai/v1/chat/completions";
-const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+// **已实装的 provider**。`SUPPORTED_PROVIDERS` 是「模型名能被识别成哪一家」的字典，
+// 这张表才是「真的能发出请求」的清单——v0.3.1 的实测缺口正是两者被混为一谈
+// （声明 6 个、实现 2 个，其余静默落到 OpenRouter）。
+//
+// R-a（P11-a）补上 openai / deepseek / qwen：三家都是 OpenAI 兼容端点，baseUrl 与官方文档
+// 已用 WebSearch 核实（见 docs/devlog/P11-a.md）——三家都支持 tools / response_format:json_object /
+// 流式，所以用 `OpenAiCompatAdapter` 的默认云端 capabilities（不传 `capabilities` 覆盖）。
+// R-b 接入 anthropic 时加的也是这张表。
+const ADAPTERS: Partial<Record<Provider, { adapter: ProviderAdapter; envKey: string }>> = {
+  openrouter: {
+    adapter: new OpenAiCompatAdapter({
+      id: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      extraHeaders: { "HTTP-Referer": "https://spark-research.local", "X-Title": "Spark Research" },
+    }),
+    envKey: "OPENROUTER_API_KEY",
+  },
+  kimi: {
+    adapter: new OpenAiCompatAdapter({ id: "kimi", baseUrl: "https://api.moonshot.ai/v1" }),
+    envKey: "KIMI_API_KEY",
+  },
+  // P11 lane R-b：Anthropic 原生（Messages API，与 OpenAI 形状差七处，见 providers/anthropic.ts）。
+  // 接线由主会话统一做——R-b 与 R-c 都不持有 router.ts，避免两条 lane 在同一文件上撞车。
+  anthropic: {
+    adapter: anthropicAdapter,
+    envKey: "ANTHROPIC_API_KEY",
+  },
+  openai: {
+    adapter: new OpenAiCompatAdapter({ id: "openai", baseUrl: "https://api.openai.com/v1" }),
+    envKey: "OPENAI_API_KEY",
+  },
+  deepseek: {
+    // DeepSeek 官方文档的规范 baseUrl 是不带 /v1 的 https://api.deepseek.com
+    // （/v1 是给「照抄 OpenAI SDK 代码」用户准备的兼容别名，两者等价，这里用规范形式）。
+    adapter: new OpenAiCompatAdapter({ id: "deepseek", baseUrl: "https://api.deepseek.com" }),
+    envKey: "DEEPSEEK_API_KEY",
+  },
+  qwen: {
+    // 阿里云 DashScope 的 OpenAI 兼容模式。这里用中国大陆网关；国际网关是
+    // dashscope-intl.aliyuncs.com，两者 baseUrl 不同——本 lane 没有真实账号可验证
+    // 网络可达性（测试全部走注入的 fetchImpl），如实记在 devlog，需要国际网关时
+    // 交给 R-c 把它收进 CONFIG_SETTINGS 做成可配置项，而不是在这里猜。
+    adapter: new OpenAiCompatAdapter({
+      id: "qwen",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }),
+    envKey: "QWEN_API_KEY",
+  },
+};
 
-// D-2（P10-b）：无超时的裸 fetch 会让任何一次卡住的模型调用把整条 orchestrator
-// 流程挂死。config/ 面板（P9）没有对应设置项（只读不改，见 docs/devlog/P10-b.md），
-// 走 env + 常量默认。120s：对照 backend/src/lab/wet_backend.ts 的湿实验后端超时
-// 惯例（同为「一次外部调用整体等多久算挂」的量级），也留够长文本生成的余量。
-// P10 收口：默认值收进 config 注册表（`CONFIG_SETTINGS.llmTimeoutMs`），优先级仍是
-// env > config.json > 常量默认，与仓库其余配置项走同一套解析（P9「配置面收口」）。
-// 做成函数而不是模块级常量：改了 config.json 不必重启进程。
-function defaultLlmTimeoutMs(): number {
-  return configuredLlmTimeoutMs(120_000);
-}
-
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-  fetchImpl: typeof fetch,
-): Promise<Response> {
-  if (timeoutMs <= 0) return fetchImpl(url, init);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
+/**
+ * provider → 它需要的环境变量名。**这里是单一真源**（就是 ADAPTERS 本身）。
+ *
+ * 为什么要导出：P11 收口时踩过——`providers/registry.ts` 曾手工抄了一份同样的映射，
+ * 我接线 anthropic 时只改了 ADAPTERS，那份副本没跟上，于是 capabilities 的
+ * 「能力位与直接探测一致」断言当场变红。lane R-c 在 devlog 里已经点名这个脆弱性，
+ * 它在同一个 PR 里就兑现了。**副本删掉，改成从这里派生。**
+ */
+export function providerApiKeyEnv(): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [id, entry] of Object.entries(ADAPTERS)) {
+    if (entry) out[id] = entry.envKey;
   }
+  return out;
 }
 
-// 超时是否命中：AbortController 触发的失败一律是 DOMException("AbortError")
-// （或等价的 name === "AbortError"）。用它把「超时」与「网络层其它失败」
-// （DNS 解析失败、连接被拒等，同样是 fetch() 抛错）分开报出去。
-function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === "AbortError";
+export function implementedProviders(): Provider[] {
+  return Object.keys(ADAPTERS) as Provider[];
+}
+
+/**
+ * 本地端点（ollama / vLLM / 任意自建 OpenAI 兼容服务）。
+ *
+ * 不进 `SUPPORTED_PROVIDERS`/`Provider` 联合类型——那张表是「模型名 → provider」的
+ * 静态字典，本地服务器上的模型名是用户自己起的（"llama3.1" / "qwen2.5:7b" / ...），
+ * 硬塞一个空的 `PROVIDER_MODELS.local: []` 会踩中 `orchestrator.test.ts` 里
+ * 「每个 provider 的模型列表非空」的既有断言（那个文件不属于本 lane 的所有权，
+ * 不能为了本地端点去改它的期望）。
+ *
+ * 改用显式前缀路由：模型名形如 `local/<真实模型名>` 或 `local:<真实模型名>` 时命中，
+ * 前缀剥掉后才是发给本地服务器的 `model` 字段。baseUrl 从环境变量
+ * `SPARK_LOCAL_LLM_BASE_URL` 读（config/index.ts 是 R-c 的所有权，本 lane 不加新
+ * 配置项——需要收进 `CONFIG_SETTINGS` 交给 R-c 或后续处理，这里先用环境变量落地）。
+ * key 允许为空：`SPARK_LOCAL_LLM_API_KEY` 未设时以空字符串调用，adapter 会省略
+ * Authorization 头（很多本地服务不校验）。
+ *
+ * capabilities 保守上报（toolCalling/jsonMode: false，streaming: true，
+ * usageReported: false）——本地模型是否支持 function calling / json 模式因模型而异，
+ * 我们没有能力在不打真实网络的前提下探测，AD-12 不允许一刀切报 true。
+ */
+const LOCAL_MODEL_PREFIX = /^local[/:]/;
+const LOCAL_BASE_URL_ENV = "SPARK_LOCAL_LLM_BASE_URL";
+const LOCAL_API_KEY_ENV = "SPARK_LOCAL_LLM_API_KEY";
+
+function localCapabilities(): ProviderCapabilities {
+  return { toolCalling: false, jsonMode: false, streaming: true, usageReported: false };
 }
 
 function providerForModel(model: string): Provider {
@@ -82,6 +131,10 @@ function providerForModel(model: string): Provider {
   return "kimi";
 }
 
+function defaultLlmTimeoutMs(): number {
+  return configuredLlmTimeoutMs(120_000);
+}
+
 export class LLMRouter {
   static readonly SUPPORTED_PROVIDERS = SUPPORTED_PROVIDERS;
   static readonly PROVIDER_MODELS = PROVIDER_MODELS;
@@ -91,9 +144,6 @@ export class LLMRouter {
   private fetchImpl: typeof fetch;
   private timeoutMs: number;
 
-  // 第二个参数是新增的可选项（D-2）：fetchImpl 供测试注入「永不响应」的假实现而不必
-  // monkey-patch 全局 fetch；timeoutMs 覆盖模块级默认，同样只为测试用短超时跑得快。
-  // 两者都可选，所有既有调用点（`new LLMRouter()` / `new LLMRouter(env)`）不用改。
   constructor(
     env: Record<string, string | undefined> = process.env,
     opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
@@ -103,145 +153,71 @@ export class LLMRouter {
     this.timeoutMs = opts.timeoutMs ?? defaultLlmTimeoutMs();
   }
 
-  private keys(): { kimi?: string; openrouter?: string } {
-    return {
-      kimi: this.env.KIMI_API_KEY ?? undefined,
-      openrouter: this.env.OPENROUTER_API_KEY ?? undefined,
-    };
+  /**
+   * 第二个参数向后兼容：既可以像 v1 那样传模型名字符串，也可以传 CallOptions。
+   * 9 个生产消费方与 12 个测试文件都用 `call(messages, model?)`，不改它们。
+   */
+  async call(messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> {
+    const options: CallOptions =
+      typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+    const model = options.model ?? DEFAULT_MODEL;
+
+    const entry = this.resolve(model);
+    if (!entry) {
+      const configured = implementedProviders()
+        .filter((p) => this.env[ADAPTERS[p]!.envKey])
+        .join(" / ");
+      const isLocal = LOCAL_MODEL_PREFIX.test(model);
+      return failure(isLocal ? "local" : providerForModel(model), model, {
+        kind: "auth",
+        message: isLocal
+          ? `模型 '${model}' 以 local/ 开头，但没设置 ${LOCAL_BASE_URL_ENV}——本地端点（ollama / vLLM / 任意自建 OpenAI 兼容服务）需要先设这个环境变量指向其 baseUrl。`
+          : configured
+            ? `模型 '${model}' 没有可用的 provider（已配置：${configured}）`
+            : "没有配置任何 API key。设置 KIMI_API_KEY 或 OPENROUTER_API_KEY，或运行 `spark-research auth`",
+        retryable: false,
+      });
+    }
+
+    return entry.adapter.call({
+      model: entry.wireModel(model),
+      messages,
+      options,
+      // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
+      // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
+      apiKey: this.env[entry.envKey] ?? "",
+      baseUrl: "",
+      timeoutMs: options.timeoutMs ?? this.timeoutMs,
+      fetchImpl: this.fetchImpl,
+    });
   }
 
-  async call(messages: ChatMessage[], model = DEFAULT_MODEL): Promise<LlmResponse> {
-    const provider = providerForModel(model);
-    const { kimi, openrouter } = this.keys();
-    if (provider === "openrouter" && openrouter) {
-      return this.callOpenRouter(messages, model, openrouter);
+  /**
+   * 选 adapter：`local/<model>` / `local:<model>` 前缀显式路由到本地端点
+   * （baseUrl 来自 `SPARK_LOCAL_LLM_BASE_URL`）；否则优先模型所属的 provider，
+   * 它没配 key 时退到任一已配置的兼容 provider（本地端点不参与这条隐式回退——
+   * 它是显式 opt-in，不应该在用户没提到 "local/" 时悄悄替对方发请求）。
+   */
+  private resolve(model: string): { adapter: ProviderAdapter; envKey: string; wireModel: (m: string) => string } | null {
+    if (LOCAL_MODEL_PREFIX.test(model)) {
+      const baseUrl = this.env[LOCAL_BASE_URL_ENV];
+      if (!baseUrl) return null;
+      const adapter = new OpenAiCompatAdapter({ id: "local", baseUrl, capabilities: localCapabilities });
+      return { adapter, envKey: LOCAL_API_KEY_ENV, wireModel: (m) => m.replace(LOCAL_MODEL_PREFIX, "") };
     }
-    if (provider === "kimi" && kimi) {
-      return this.callKimi(messages, model, kimi);
+    const identity = (m: string) => m;
+    const preferred = ADAPTERS[providerForModel(model)];
+    if (preferred && this.env[preferred.envKey]) return { ...preferred, wireModel: identity };
+    for (const provider of implementedProviders()) {
+      const entry = ADAPTERS[provider]!;
+      if (this.env[entry.envKey]) return { ...entry, wireModel: identity };
     }
-    if (openrouter) {
-      return this.callOpenRouter(messages, model, openrouter);
-    }
-    return {
-      ok: false,
-      provider,
-      model,
-      content: `[error] No API key configured. Set KIMI_API_KEY or OPENROUTER_API_KEY, or use 'spark-research auth' to configure.`,
-      mock: false,
-    };
+    return null;
   }
 
-  private async callOpenRouter(
-    messages: ChatMessage[],
-    model: string,
-    key: string,
-  ): Promise<LlmResponse> {
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        OPENROUTER_ENDPOINT,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${key}`,
-            "HTTP-Referer": "https://spark-research.local",
-            "X-Title": "Spark Research",
-          },
-          body: JSON.stringify({ model, messages, temperature: 0.2 }),
-        },
-        this.timeoutMs,
-        this.fetchImpl,
-      );
-    } catch (error) {
-      // 「超时」与「上游报错」在这里就分岔：超时是请求根本没落地（无 HTTP 状态码可言），
-      // 上游报错是拿到了响应但 status 不在 2xx——下面 !response.ok 分支处理的是后者。
-      const timedOut = isAbortError(error);
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        provider: "openrouter",
-        model,
-        content: timedOut
-          ? `[error] timeout: openrouter request exceeded ${this.timeoutMs}ms`
-          : `[error] network: ${message}`,
-        mock: false,
-      };
-    }
-    if (!response.ok) {
-      const text = await response.text();
-      return {
-        ok: false,
-        provider: "openrouter",
-        model,
-        content: `[error] HTTP ${response.status}: ${text.slice(0, 200)}`,
-        mock: false,
-      };
-    }
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
-    };
-    const choice = data.choices?.[0];
-    const content = choice?.message?.content ?? "";
-    return {
-      ok: true,
-      provider: "openrouter",
-      model,
-      content: String(content),
-      mock: false,
-      ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
-    };
-  }
-
-  private async callKimi(
-    messages: ChatMessage[],
-    model: string,
-    key: string,
-  ): Promise<LlmResponse> {
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        KIMI_ENDPOINT,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${key}`,
-          },
-          body: JSON.stringify({ model, messages, temperature: 0.2 }),
-        },
-        this.timeoutMs,
-        this.fetchImpl,
-      );
-    } catch (error) {
-      const timedOut = isAbortError(error);
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        ok: false,
-        provider: "kimi",
-        model,
-        content: timedOut
-          ? `[error] timeout: kimi request exceeded ${this.timeoutMs}ms`
-          : `[error] network: ${message}`,
-        mock: false,
-      };
-    }
-    if (!response.ok) {
-      return { ok: false, provider: "kimi", model, content: `[error] HTTP ${response.status}`, mock: false };
-    }
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
-    };
-    const choice = data.choices?.[0];
-    const content = choice?.message?.content ?? "";
-    return {
-      ok: true,
-      provider: "kimi",
-      model,
-      content: String(content),
-      mock: false,
-      ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
-    };
+  /** 某个模型实际可用的能力位。**随 capabilities --json 透出**，供调用方选模型前 introspect。 */
+  capabilitiesFor(model = DEFAULT_MODEL): ProviderCapabilities | null {
+    return this.resolve(model)?.adapter.capabilities(model) ?? null;
   }
 
   listModels(): Record<Provider, readonly string[]> {

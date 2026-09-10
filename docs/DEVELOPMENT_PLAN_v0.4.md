@@ -312,6 +312,38 @@ ClinVar / GEO 都打 NCBI eutils 的**同一主机预算**——将来限速器�
 integration 分支在开 PR 前必须 `git fetch` 并确认 `origin/main` 是自己的祖先，
 且复验全部既有 tag 仍在 `origin/main` 历史里。
 
+### 5.3·补 · 新建模块但无权接线时怎么办（P11 实战补充）
+
+**P11 撞上的真实冲突**：lane R-b 交付 `llm/providers/anthropic.ts`，但 `router.ts` 的
+`ADAPTERS` 注册被主会话**刻意扣下**（R-b 与 R-c 都可能要动 router，扣下是为了避免
+P10 那种「四条 lane 各自绿、合起来红」）。结果是 R-b 的新模块**在自己分支上没有任何
+生产调用方**——直接踩中 D-12 的孤儿模块门禁（那条断言当初就是用来抓 `swarm.ts` 的）。
+
+**门禁是对的，扣接线也是对的，冲突在于两者没协调。** 这不是个例：任何
+「lane 新建模块 + 接线权在别处」的组合都会踩到，而 v0.4 剩下的阶段里这种组合很多
+（P12 的 ToolBus、P13 的 ledger、P15 的扩展装载器都是新模块）。
+
+**处置（此后照做）**：
+
+1. 创建模块的 lane **自己**往 `ALLOWED_ORPHANS` 加一条登记，理由写成
+   「**等接线**：<谁> 在 <哪个阶段> 接线，接完必须删本条」
+2. 主会话接线时**删掉那条登记**
+3. 门禁的「多余登记必须删除」对称检查会强制这件事：
+   - 接了线 → 条目变多余 → 不删就红
+   - 忘了接线 → 模块还是孤儿 → 也红
+
+   **两个方向都被钉住，忘不掉。**
+
+> 顺带一提，这让门禁从「防止叙事漂移」多长出一个用途：**它同时是一张接线清单**。
+> 这是 AD-12 没预料到的正收益——把「声称与实现必须对账」推到极致，
+> 连「模块建好了但没接上」这种半成品状态也被自动追踪了。
+
+**给 lane 任务书的模板句**：
+> 你新建的模块如果暂时没有生产调用方（接线权不在你这里），
+> 在 `ALLOWED_ORPHANS` 里登记一条并写清「等谁接线」——**只许加登记，不许改断言逻辑**。
+
+---
+
 ### 5.4 消费方清扫清单（纪律 13 的可执行形式）
 
 改了后端的对外词汇表 / 响应形状后，逐项确认：
@@ -326,6 +358,91 @@ integration 分支在开 PR 前必须 `git fetch` 并确认 `origin/main` 是自
 | 文档 | README / DESIGN / EXTENDING |
 
 **能自动化的都进 `narrative_parity.test.ts`**——清单是给人看的兜底，门禁才是防线。
+
+---
+
+## 五·补 · P12–P16 的波次调度（P11 后重排）
+
+> **为什么要重排**：§三的依赖图是**阶段级**的（P12→P13→P15→P16 串行），
+> 但真实依赖是**任务级**的，比阶段级松得多。按阶段排会让大量互不依赖的任务白等。
+> 本节把 P12–P16 的任务拆开重新打包，阶段编号保留为**交付分组标签**（CHANGELOG /
+> 里程碑仍按 P12–P16 讲），**执行按波次**。
+
+### 5·补.1 任务级依赖图（重画）
+
+```
+R-c(budget.ts) ──► T-a ToolBus ──┬─► T-b 子代理 tool loop ──┐
+                                 │                          ├─► C-b replan 循环
+                                 └─► X-c 外部 MCP client    │
+                                                            │
+C-a contract stages（只依赖证据图，**不依赖 ToolBus**）──────┘
+
+X-b 声明式 connector manifest（只依赖 v0.3.0 的 connector 契约）──► E-1 arXiv/PubMed
+X-a 扩展装载 + ext verify（只依赖已有的契约测试套件）
+
+以下**零跨依赖**，随时可开：
+  C-c agent_run 帧级记账 · C-d findings 状态机 · B-a 打包分发 ·
+  B-b 向导+demo · B-c SSE 流（依赖 P11 流式，已就绪）· B-d 长任务句柄落盘 ·
+  E-2…E-6 文献域修复 · 真实网络录制 · 老库迁移演练 · 删 swarm · V17/V18/V19
+```
+
+**真正的关键路径只有一条**：`R-c → T-a → T-b → C-b`。其余全部可以绕开它并行。
+
+### 5·补.2 四个波次（每波 4 条 lane，上限仍是审查带宽）
+
+| 波次 | lane | 任务 | 依赖 | 模型 |
+|---|---|---|---|---|
+| **W1** | `W1-a` | **T-a ToolBus**（授权 / 预算 / 审计三层，套在 P9 的 `McpToolRunner` 外） | R-c 的 `BudgetLedger` | Opus |
+| | `W1-b` | **C-d findings 状态机**（open→addressed→resolved→reflagged + CLI） | 无 | Sonnet |
+| | `W1-c` | **X-b 声明式 connector manifest**（受限映射 DSL + SSRF 白名单） | 无 | Opus |
+| | `W1-d` | **B-a 打包分发**（`bun build --compile` 单二进制 / npm meta 包 / brew） | 无 | Sonnet |
+| **W2** | `W2-a` | **T-b 子代理 tool loop**（`SubAgentSpec` + 预算 + stopReason 回流） | W1-a | Opus |
+| | `W2-b` | **C-a contract stages**（AD-10：完成判定问图不问模型） | 无 | Opus |
+| | `W2-c` | **X-a 扩展装载 + `ext verify`**（三种强度 + 契约化验收） | 无（与 W1-c 配对） | Opus |
+| | `W2-d` | **B-b/B-c 向导 + demo + SSE 流** | P11 流式 ✓ | Sonnet |
+| **W3** | `W3-a` | **C-b replan 循环**（观察回流 + 三条停机条件） | W2-a + W2-b | Opus |
+| | `W3-b` | **C-c agent_run 帧级记账**（第 9 类 record，走 rev + integrityHash） | R-c | Opus |
+| | `W3-c` | **X-c 外部 MCP client**（外部工具进 ToolBus 与 capabilities，调用落执行记录） | W1-a | Opus |
+| | `W3-d` | **E-1 arXiv/PubMed 走 manifest**（**兼作扩展机制的真实验收**） | W1-c | Sonnet |
+| **W4** | `W4-a` | **删 swarm** + README 宣传语撤下 + V16 子代理模型配置 + V19 审批要 TTY | W2-a | Sonnet |
+| | `W4-b` | **E-2…E-6 文献域修复** + 真实网络录制 + **真实 v0.2.x 老库迁移演练** | 无 | Sonnet |
+| | `W4-c` | **B-d 长任务句柄落盘（V11）** + V17 MCP 进度回传 + V18 probe 缓存 | 无 | Sonnet |
+| | `W4-d` | 机动位：吸收前三波溢出的未完成项 | — | — |
+
+**波次间的串行尾巴**（主会话，不可省，P10/P11 实测占相当比例）：
+合 integration → 跨 lane 语义冲突收口 → 接线（含删 `ALLOWED_ORPHANS` 的「等接线」登记）
+→ 六套件全量 → devlog/CHANGELOG。
+
+### 5·补.3 三次零上下文外部验收的插入点
+
+| 时点 | 任务 | 看什么 |
+|---|---|---|
+| **W2 末** | 检索入库 → 建 idea → novelty check → 发起干实验并读回结论 | 子代理做实之后，外部 agent 的摩擦是否真的少了 |
+| **W3 末** | 按 `EXTENDING.md` 用 manifest 加一个全新数据源并过 `ext verify`，**全程不改仓库源码** | 扩展机制是否真的可自助 |
+| **W4 末** | 干净机器 `npx spark-research` 走通完整研究线索 | 发布判据 |
+
+**第二次必须由未参与开发的人/会话执行**——自己验自己的扩展机制没有意义。
+
+### 5·补.4 相对阶段串行的收益与代价
+
+**收益**：关键路径从「P12→P13→P15→P16 四阶段」压缩成「W1→W2→W3 三波」，
+P14 全部与 P15 的一半提前到 W1/W2，E-2…E-6 这类零依赖修复不再压在最后。
+
+**代价（必须正视）**：一个波次会同时触及多个阶段的文件，**跨 lane 冲突面比阶段内更大**。
+对策是文件所有权表按**波次**而非阶段维护，且沿用 P11 已验证的两条：
+① 多方争用的文件（如 `router.ts`、`mcp/tools.ts`、`server/app.ts`）**一律从所有 lane 摘出，收口时统一接线**；
+② 新建但无权接线的模块，lane 自己登记 `ALLOWED_ORPHANS` 并写清「等谁接线」（§5.3·补）。
+
+**已知的争用热点**（提前登记，收口时统一接）：
+
+| 文件 | 谁想动 | 处置 |
+|---|---|---|
+| `backend/src/llm/router.ts` | 无（P11 已收口） | — |
+| `backend/src/mcp/tools.ts` | W1-a（ToolBus 读 MCP_TOOLS）· W3-c（外部工具注册）· W4-c（V17 进度） | 只读者不动它；需要写的收口统一接 |
+| `backend/src/server/app.ts` | W2-c（扩展路由）· W2-d（SSE 端点） | 收口统一接 |
+| `backend/src/capabilities/index.ts` | W1-c/W2-c（扩展）· W3-c（外部工具） | 收口统一接 |
+| `tests/unit/narrative_parity.test.ts` | 多个 lane 要加/删登记 | **只许改 `ALLOWED_ORPHANS` / `SKILL_ENTRYPOINTS` 的条目，不许动断言逻辑** |
+| `docs/BACKLOG.md` `CHANGELOG.md` `README.md` | — | **禁止 lane 触碰**，收口统一写 |
 
 ---
 

@@ -6,11 +6,12 @@ import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { llmExtras } from "../../backend/src/llm/types";
 
 const mockLlm = {
   call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
-    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, mock: false };
+    return { ok: true, provider: "kimi", model, content: `[test:${model}] ${lastUser.slice(0, 120)}`, ...llmExtras() };
   },
   listModels: () => ({
     kimi: [LLMRouter.DEFAULT_MODEL],

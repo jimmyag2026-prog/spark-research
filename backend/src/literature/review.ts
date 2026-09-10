@@ -146,7 +146,7 @@ export class ReviewDraftGenerator {
         ? await this.deps.llm.call(messages, this.deps.model)
         : await this.deps.llm.call(messages);
       if (!response.ok) {
-        lastError = `模型调用失败: ${response.content}`;
+        lastError = `模型调用失败: ${response.error?.message ?? "未知原因"}`;
         lastUnknown = [];
         continue;
       }

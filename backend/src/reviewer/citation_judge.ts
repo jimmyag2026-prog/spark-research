@@ -86,7 +86,7 @@ export class LlmCitationJudge implements CitationJudge {
     const response = await this.call(messages);
     // 调用本身失败（没 key / 网络 / 上游报错）**不重试**：重试解决不了没有凭据这件事，
     // 只会把一次失败变成两次。只有「调通了但输出不合形状」才值得再问一次。
-    if (!response.ok) throw new Error(`引用一致性判定调用失败: ${response.content}`);
+    if (!response.ok) throw new Error(`引用一致性判定调用失败: ${response.error?.message ?? "未知原因"}`);
     try {
       return parseJudgement(response.content, response.finishReason);
     } catch (firstError) {

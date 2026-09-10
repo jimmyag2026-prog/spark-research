@@ -127,6 +127,11 @@ export interface WetExperiment {
   deck: Array<{ slot: string; load: string; label?: string }>;
   compiledSteps: Array<{ stepId: string; action: string; detail?: string; execution?: string }>;
   compileWarnings: string[];
+  // R-d-3（v0.4 P11 lane R-d / V23）：编译器看到了量纲/试剂/浓度/生物安全等级之类的信号，
+  // 但没有任何安全门规则消费它——「用户写了但安全门没看见」。concentration_limit /
+  // biosafety 两条规则在自然语言主管线上恒空转（BACKLOG V25），这是唯一的兜底告警，
+  // 批准弹窗必须显眼展示，不能只是 JSON 字段里悄悄带着。
+  unconsumedWarnings: string[];
   safetyChecks: Array<{ check: string; passed: boolean; detail: string | null }>;
   safetyPassed: boolean | null;
   approval: { actor: string; at: string; protocolHash: string; note: string | null; decisionRecordId: string } | null;

@@ -182,6 +182,26 @@ function ApprovalDialog(props: {
         </p>
       </div>
 
+      {/* R-d-3（V23）：unconsumedWarnings 是「你写了但安全门没看见」的唯一兜底告警——
+          concentration_limit / biosafety 两条规则在自然语言主管线上恒空转（BACKLOG V25），
+          批准的人如果看不到这段，就等于兜底在最关键的入口失效。视觉上必须显眼（安全告警，
+          不是提示），所以复用 .error-box（红底），且放在安全门结论之后、署名输入之前——
+          批的人在落笔署名前必须先看到它。 */}
+      <Show when={props.experiment.unconsumedWarnings.length > 0}>
+        <div class="error-box" data-testid="unconsumed-warnings">
+          <h3 class="section-title" style={{ margin: "0 0 6px", color: "inherit" }}>
+            🚨 未被安全门消费的信号（{props.experiment.unconsumedWarnings.length}）
+          </h3>
+          <p style={{ margin: "0 0 6px", "font-size": "11.5px" }}>
+            协议原文里出现了下列信号，但没有任何安全规则解析并检查它们——上面「安全门结论」
+            的通过 <strong>不覆盖</strong> 这些内容，批准前请自己读一遍原文确认它们是安全的。
+          </p>
+          <ul style={{ margin: 0, "padding-left": "18px", "font-size": "12px" }}>
+            <For each={props.experiment.unconsumedWarnings}>{(warning) => <li>{warning}</li>}</For>
+          </ul>
+        </div>
+      </Show>
+
       <label class="col" style={{ gap: "4px" }}>
         <span class="faint">
           审批人（必填）—— 会记进 decision record，用于审计

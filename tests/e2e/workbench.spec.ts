@@ -208,6 +208,40 @@ test("⑨ 执行湿实验 → observed observation + 证据子图连得上", asy
   await expect.poll(async () => graph.locator("g.graph-node").count()).toBeGreaterThan(1);
 });
 
+// R-d-3（V23）：unconsumedWarnings 是安全门看不见的兜底告警——concentration_limit /
+// biosafety 两条规则在自然语言主管线上恒空转（BACKLOG V25），这是经 Web 批准的人
+// **唯一**能看到「你写了但安全门没看见」的地方。新建一条独立的湿实验（不影响 ⑧/⑨
+// 已经在用的 "OD 测定" 实验），用 .filter({hasText}) 定位，不依赖 exp-list 的排列顺序。
+test("⑨b 未消费告警在批准弹窗里必须可见（V23）", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.locator(".bottom");
+  await panel.getByRole("tab", { name: /湿实验/ }).click();
+  await panel.getByRole("button", { name: "＋ 新建" }).click();
+  await panel.getByPlaceholder("标题（可选）").fill("未消费告警协议");
+  // 「配制10%次氯酸钠溶液」：安全门四条规则全过（体积正常，浓度字段不在编译器的
+  // 解析范围内），但 10% 这个浓度描述本身应该被人看见——这正是 unconsumedWarnings
+  // 存在的理由，见 tests/unit/wet_loop.test.ts 的 D-8 用例（同一条协议文本）。
+  await panel.getByPlaceholder(/自然语言协议/).fill("配制10%次氯酸钠溶液200uL");
+  await panel.getByRole("button", { name: "编译 + 过安全门" }).click();
+  await waitIdle(page);
+
+  await panel
+    .locator(".exp-list .nav-item")
+    .filter({ hasText: "未消费告警协议" })
+    .first()
+    .click();
+  await panel.getByRole("button", { name: "批准执行…" }).click();
+
+  const dialog = page.getByRole("dialog", { name: /批准执行湿实验/ });
+  await expect(dialog).toBeVisible();
+  // 显眼展示：告警小节标题 + 具体内容（提到"浓度"）都必须在弹窗里看得到。
+  const warnings = dialog.locator('[data-testid="unconsumed-warnings"]');
+  await expect(warnings).toBeVisible();
+  await expect(warnings).toContainText("未被安全门消费的信号");
+  await expect(warnings).toContainText("浓度");
+  await dialog.getByRole("button", { name: "取消" }).click();
+});
+
 test("⑩ 时间线呈现完整研究线索，且明暗主题都能用", async ({ page }) => {
   await page.goto("/");
 

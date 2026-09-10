@@ -20,6 +20,7 @@ interface WetView {
   summary: Record<string, unknown> | null;
   compiledSteps: Array<{ stepId: string }>;
   safetyChecks: Array<{ check: string; passed: boolean }>;
+  unconsumedWarnings: string[];
   record?: unknown;
 }
 
@@ -123,6 +124,33 @@ describe("HTTP · lab compile", () => {
       // 被拦的实验已标 failed，仍能在列表里看到（审计留痕，不是消失）。
       const list = await fx.get<{ experiments: WetView[] }>("/api/lab/experiments?state=failed");
       expect(list.body.experiments).toHaveLength(1);
+    } finally {
+      await fx.stop();
+    }
+  });
+
+  // R-d-3（v0.4 P11 lane R-d / V23）：unconsumedWarnings 曾经只在 CLI 的编译与审批输出
+  // 里强制显示，HTTP 响应没接——经 Web 批准的人看不到「你写了但安全门没看见」的部分。
+  // viewJson() 把整个 WetExperimentView（除 record）原样转发，unconsumedWarnings 是
+  // view 的字段之一，所以这里断言的是它**确实**出现在 compile 的 HTTP 响应体里，
+  // 不是只存在于 CLI 的正文渲染里。
+  test("浓度描述编译进去后：HTTP 响应体的 unconsumedWarnings 非空（不是只有 CLI 才看得到）", async () => {
+    const fx = makeServer();
+    try {
+      const body = await compile(fx, "配制10%次氯酸钠溶液200uL");
+      expect(body.safetyReport.passed).toBe(true); // 安全门四条全过——正是「看不见」的那种危险
+      expect(body.experiment.unconsumedWarnings.length).toBeGreaterThan(0);
+      expect(body.experiment.unconsumedWarnings.join(" ")).toContain("浓度");
+    } finally {
+      await fx.stop();
+    }
+  });
+
+  test("干净协议：HTTP 响应体的 unconsumedWarnings 为空数组", async () => {
+    const fx = makeServer();
+    try {
+      const body = await compile(fx, PROTOCOL);
+      expect(body.experiment.unconsumedWarnings).toEqual([]);
     } finally {
       await fx.stop();
     }

@@ -6,6 +6,7 @@ import { LibraryStore, paperFrom } from "../../backend/src/literature/library";
 import { libraryKeyIndex } from "../../backend/src/literature/export";
 import { ProjectManager, type Project } from "../../backend/src/project/manager";
 import type { CitationJudge, CitationJudgeInput, CitationJudgement } from "../../backend/src/reviewer/rules";
+import { llmExtras, llmFailure } from "../../backend/src/llm/types";
 
 // P3 测试共用脚手架。
 // 纪律：**所有** LLM 调用都走这里的 fake，单测与 e2e 都不打真实模型 API。
@@ -35,9 +36,9 @@ export class FakeLlm {
     this.calls.push({ messages, model });
     const next = this.queue.length > 1 ? this.queue.shift()! : (this.queue[0] ?? "");
     if (typeof next !== "string") {
-      return { ok: false, provider: "kimi", model, content: next.content, mock: false };
+      return llmFailure({ provider: "kimi", model, kind: "upstream", message: next.content });
     }
-    return { ok: true, provider: "kimi", model, content: next, mock: false };
+    return { ok: true, provider: "kimi", model, content: next, ...llmExtras() };
   };
 
   listModels = () => ({

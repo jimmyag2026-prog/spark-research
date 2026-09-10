@@ -26,6 +26,8 @@ spark-research idea new|list|check
     思路库：Co-explore 产出 Idea 卡 + novelty check
 spark-research exp new|run|status|list|platforms
     干实验闭环：设计 → 提交 → 回收 → 分析（断点可续跑）
+spark-research protein <query> [--json] [--no-persist]
+    蛋白结构调研：UniProt 身份 → RCSB PDB 实验结构 → AlphaFold 预测模型
 spark-research lab compile|approve|reject|simulate|status|backends
     湿实验：编译 → 安全门 → **人工批准** → 模拟器执行
 spark-research conclusion list|show|review
@@ -50,7 +52,7 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 24 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 25 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
@@ -68,6 +70,7 @@ spark-research mcp    # stdio 传输
 - `exp_design`：要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
 - `exp_run`（长任务，同步等待）：exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
 - `exp_list`：要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
+- `protein_analyze`：要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
 - `lab_compile`：要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
 - `lab_status`：要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
 - `records_timeline`：要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
@@ -150,6 +153,13 @@ spark-research mcp    # stdio 传输
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
+- `OPENAI_API_KEY`（默认 （凭据），env `OPENAI_API_KEY`）：OpenAI API key
+- `ANTHROPIC_API_KEY`（默认 （凭据），env `ANTHROPIC_API_KEY`）：Anthropic API key
+- `DEEPSEEK_API_KEY`（默认 （凭据），env `DEEPSEEK_API_KEY`）：DeepSeek API key
+- `QWEN_API_KEY`（默认 （凭据），env `QWEN_API_KEY`）：Qwen（阿里云 DashScope / Model Studio）API key
+- `SPARK_LOCAL_LLM_BASE_URL`（默认 —，env `SPARK_LOCAL_LLM_BASE_URL`）：本地/自建 OpenAI 兼容 LLM 端点的 baseUrl（ollama / vLLM / 任意自建服务）
+- `SPARK_LOCAL_LLM_API_KEY`（默认 （凭据），env `SPARK_LOCAL_LLM_API_KEY`）：本地/自建 LLM 端点的 API key（很多本地服务不校验，允许留空）
+- `llmPricingOverridesJson`（默认 —，env `SPARK_LLM_PRICING_JSON`）：覆盖 llm/providers/registry.ts 内置单价表的 JSON（`{"<provider>:<model>": {inputPerMillionUsd, outputPerMillionUsd}}`）
 
 ## 用这个工作台时必须知道的几条
 
@@ -2075,10 +2085,10 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估 |
 | V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等 |
 | V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎 |
-| V20 | `backend/src/index.ts` 的 `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR` | P10 lane D-c 发现：`config/index.ts` 的 `dataDir()` 认这个环境变量，`index.ts` 里的 `CONFIG_DIR` 是硬编码 `~/.spark-research`。默认设置下无害，但意味着测试注入的临时工作区对 `auth` 命令无效，两条路径对同一份 config.json 有两种解析 |
+| V20 | `backend/src/index.ts` 的 `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR` | P10 lane D-c 发现：`config/index.ts` 的 `dataDir()` 认这个环境变量，`index.ts` 里的 `CONFIG_DIR` 是硬编码 `~/.spark-research`。默认设置下无害，但意味着测试注入的临时工作区对 `auth` 命令无效，两条路径对同一份 config.json 有两种解析<br>✅ **v0.4 P11 lane R-d 已消化**：`index.ts` 的 `CONFIG_DIR` 改为调用 `config/index.ts` 的 `dataDir()`，两条路径对同一份 config.json 归一解析；顺带清掉已死的 `homedir` import 与 `auth` 成功提示里的硬编码路径。 |
 | V21 | 超时类环境变量前缀不统一 | P10 收口时新登记的四个超时用了 `SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS`，而仓库既有约定是 `SPARK_RESEARCH_*`（如 `SPARK_RESEARCH_MCP_TIMEOUT_MS`）。**没有在 P10 一并改齐是刻意的**：v0.2.1 的 MCP 工具描述里已经把 `SPARK_TASK_TIMEOUT_MS` 写给外部 agent 看了，改名是 breaking change，要走废弃周期 |
-| V22 | **`capabilities` 对外广播了一个无法调用的技能（自描述面撒谎）** | P10 的 D-12 门禁发现 `backend/src/proteins/analysis.ts` 只被测试引用；v0.4 方案制订时进一步核实，**比「少个入口」严重**：`capabilities --json` 把 `protein-analysis` 当**可用能力**完整广播——带描述、`triggers`（「这个蛋白长什么样」「有没有可用的结构」）、connector 清单、`validation` 文件列表，而 CLI / HTTP / MCP **三个入口全无**（实测 10 个技能里唯一一个；它的 SKILL.md 里也是唯一没有 CLI 示例的）。外部 agent 读了 triggers 会确信自己能调用它。**这不是完整性缺口，是自描述面在对外撒谎**——AD-12「能力声称必须机器可核」的直接违反，而现有门禁只查孤儿模块、没查技能可达性。另注：它列的 `validation` 第二项 `tests/integration/protein_record.test.ts` 属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。处置见 v0.4 的 P11 lane R-d：补入口或从技能目录撤下，二选一不许悬着 |
-| V23 | 湿实验 `unconsumedWarnings` 尚未在 HTTP / Web 审批面强制展示 | P10 lane D-d 交付：CLI 的编译与审批输出已强制显示，HTTP/UI 侧还没接。**接物理设备前必须补**——否则经 Web 批准的人看不到「你写了但安全门没看见」的部分 |
+| V22 | **`capabilities` 对外广播了一个无法调用的技能（自描述面撒谎）** | P10 的 D-12 门禁发现 `backend/src/proteins/analysis.ts` 只被测试引用；v0.4 方案制订时进一步核实，**比「少个入口」严重**：`capabilities --json` 把 `protein-analysis` 当**可用能力**完整广播——带描述、`triggers`（「这个蛋白长什么样」「有没有可用的结构」）、connector 清单、`validation` 文件列表，而 CLI / HTTP / MCP **三个入口全无**（实测 10 个技能里唯一一个；它的 SKILL.md 里也是唯一没有 CLI 示例的）。外部 agent 读了 triggers 会确信自己能调用它。**这不是完整性缺口，是自描述面在对外撒谎**——AD-12「能力声称必须机器可核」的直接违反，而现有门禁只查孤儿模块、没查技能可达性。另注：它列的 `validation` 第二项 `tests/integration/protein_record.test.ts` 属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。处置见 v0.4 的 P11 lane R-d：补入口或从技能目录撤下，二选一不许悬着<br>✅ **v0.4 P11 lane R-d 已消化**：`protein-analysis` 补齐三个真实入口——CLI `spark-research protein <query>`、HTTP `POST /api/proteins/analyze`、MCP 工具 `protein_analyze`（MCP 工具数 29 → 30），SKILL.md 补上此前唯一缺失的 CLI 示例。**并把判据做成门禁**：`narrative_parity.test.ts` 第 7 条断言每个技能至少有一条可达入口，登记表的每一条都去 `index.ts` 的 `switch(cmd)` case 字面量 / `MCP_TOOLS` 数组 / `capabilities` skills 列表三处对账（不靠散文正则）。阴性对照已由主会话独立复跑：拆掉 `case "protein":` → 门禁立刻红。 |
+| V23 | 湿实验 `unconsumedWarnings` 尚未在 HTTP / Web 审批面强制展示 | P10 lane D-d 交付：CLI 的编译与审批输出已强制显示，HTTP/UI 侧还没接。**接物理设备前必须补**——否则经 Web 批准的人看不到「你写了但安全门没看见」的部分<br>✅ **v0.4 P11 lane R-d 已消化**：HTTP 层原本已结构性透传（`viewJson()` 整体 spread `WetExperimentView`）只是没测试；真实缺口在前端——`WetExperiment` 类型缺 `unconsumedWarnings` 字段、审批弹窗从不渲染它。已补类型 + 显眼的告警块（`data-testid="unconsumed-warnings"`）+ HTTP 断言 + e2e ⑨b。阴性对照：强制隐藏告警块 → e2e ⑨b 红。 |
 | V24 | `RecordIntegrityError` 没有恢复路径 | P10 lane D-d 新增的 record 完整性哈希校验，检测到被篡改的记录只能拒绝信任，没有「人工确认后修复」的入口，只能用 `RecordStore` 原始接口手工处理 |
 | V25 | `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」
 | V26 | connector 限速按 host 合池 | **2026-09-10 新登记**（来源：v0.5 connector 扩展调研）。现状：connector 层只有礼貌头（`politeness.ts`），**没有任何限速器**。pubmed 与 ncbi 已共享 NCBI eutils 的主机级预算，v0.5 计划新增的 ClinVar / GEO 也打同一主机——四个 connector 各自为政会集体被 429。限速器若做必须按 host 键控合池，不按 connector。去向：v0.5 集成 eutils 系新 connector 时同批做 |
@@ -2101,6 +2111,67 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 
 本文件记录面向用户可见的变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
+
+---
+
+## [未发布] — v0.4.0 开发中
+
+### P11 · LLM Runtime v2 + 可达性闸门
+
+**模型中立从声称变成事实。** v0.3.1 实测：`SUPPORTED_PROVIDERS` 声明 6 个 provider，
+`call()` 里只有 kimi / openrouter 两个能真发请求，其余静默落到 OpenRouter 或失败。
+
+#### 新增
+
+- **provider 适配层**：`ProviderAdapter` 契约 + 两个实现——
+  `openai_compat`（一套代码覆盖 openai / kimi / deepseek / qwen / openrouter /
+  ollama / vLLM / 任意自建 baseUrl）与 `anthropic`（原生 Messages API，与 OpenAI 形状差七处）。
+  **实装 provider 由 2 个增至 6 个 + 任意本地端点。**
+- **tool calling**（P12 真子代理的前提）· **流式**（`onDelta`，P14 的 SSE 流接它）·
+  **JSON 模式**（`response_format`，根治 BACKLOG V12）· **token 用量与成本核算**
+- **`BudgetLedger`**：调用数 / token / 成本上限，供 P12 子代理与 P13 帧级账本使用
+- **单价表**（`providers/registry.ts`）：各 provider/model 输入输出单价，**每条附来源与核实日期**，
+  可用 `SPARK_LLM_PRICING_JSON` 覆盖。查不到单价时 `costUsd` 保持 `null`，**绝不填 0 冒充免费**
+- **provider 能力位进 `capabilities --json`**：`{id, models, configured, capabilities:{toolCalling,
+  jsonMode, streaming, usageReported}}` + 独立的 `localEndpoint` 段。
+  外部 agent 与 ToolBus 在**选模型之前**就能知道能不能跑 tool loop
+- **`protein-analysis` 补齐三个生产入口**：CLI `spark-research protein <query>` ·
+  `POST /api/proteins/analyze` · MCP 工具 `protein_analyze`（MCP 工具 29 → 30）。
+  此前它有 SKILL.md、12 个 e2e、被 DESIGN 列为 10 技能之一，**却没有任何调用路径**，
+  而 `capabilities` 照常带 `triggers` 对外广播它
+- **技能可达性断言进门禁**（`narrative_parity.test.ts` 第 7 条）：每个技能必须至少有一条
+  可达入口，登记表的每条都去 `index.ts` 的 `switch(cmd)` case 字面量 / `MCP_TOOLS` /
+  `capabilities` 三处对账（不靠散文正则）
+- 湿实验 `unconsumedWarnings` **接进 Web 审批弹窗**（此前只有 CLI 强制显示），配套 e2e ⑨b
+- 配置项：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` /
+  `SPARK_LOCAL_LLM_BASE_URL` / `SPARK_LOCAL_LLM_API_KEY` / `llmPricingOverridesJson`
+- `CallOptions.maxTokens`：Anthropic 的 `max_tokens` 是必填参数，此前硬编码 4096
+  会让综述草稿这类长文本**静默截断**（只能从 `finishReason:"length"` 看出来）
+
+#### 变更
+
+- **`LlmResponse` 改为可辨识联合（AD-13）**：`ok:false` 分支的 `content` 是**字面量 `""`**、
+  `error` **必填**。于是「失败但带内容」（内容被误当产出）与「失败但没说为什么」
+  在编译期都不可能。调用方读失败原因请用 `error.message`，不要读 `content`
+- 失败类型改为**机器可读**（`error.kind`：`auth` / `rate_limit` / `timeout` / `parse` /
+  `upstream` / `unsupported`），调用方区分失败不再需要读文案
+- `SUPPORTED_PROVIDERS`（模型名字典）与 `ADAPTERS`（真能发请求的清单）**显式分开**——
+  v0.3.1 那个缺口的根因就是两者被混为一谈
+- `providers/registry.ts` 的 `PROVIDER_API_KEY_ENV` 改为**从 router 的 ADAPTERS 派生**。
+  它原本是手工副本，接线 anthropic 时立刻失同步、当场把一致性断言打红
+- `index.ts` 的 `CONFIG_DIR` 改走 `dataDir()`，与 `config/index.ts` 归一解析（V20）
+- 移除 `LlmResponse.mock`（v0.1 移除 mock 模式后的残留，零消费方）
+
+#### 修复
+
+- 五个域消费方（citation_judge / novelty / review / reading / coexplore）此前把
+  `content` 当错误信息读。AD-13 清空 content 后，若不迁移它们的排障信息会**变成一片空白**
+  ——测试全绿但诊断没了。已全部迁到 `error?.message`
+
+#### 测试
+
+单元 905 → **1018**（0 fail / 0 skip）· e2e 12 → **13** · concurrency + timeout 12 ·
+pytest 48 · `test:lab` 26。
 
 ---
 
@@ -3147,7 +3218,7 @@ category: experiment
 domain: B
 triggers: [这个蛋白长什么样, 有没有可用的结构, AlphaFold 模型信得过吗, 查一下这个 UniProt]
 connectors: [uniprot, pdb, alphafold]
-validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts]
+validation: [tests/unit/protein_e2e.test.ts, tests/integration/protein_record.test.ts, tests/unit/protein_cli.test.ts, tests/unit/protein_http.test.ts, tests/unit/protein_mcp.test.ts]
 allowed-tools: [Bash, Read, Write]
 ---
 
@@ -3186,6 +3257,18 @@ alphafold.getModel → 模型 URL（pdb/cif）、PAE 图、全局 pLDDT、残基
 
 代码入口：`backend/src/proteins/analysis.ts` 的 `ProteinAnalysis.analyze(query)`。
 `persist` 默认开：结果会落一条 `observation` record（`evidence=sourced`）。
+
+三个生产入口（CLI / HTTP / MCP，R-d-2）都只是对这同一个 `analyze()` 的一层薄封装，
+不重实现逻辑：
+
+```bash
+spark-research protein "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"
+spark-research protein "P68871" --json          # 机器可读输出（含 recordId），脚本消费用
+spark-research protein "P68871" --no-persist    # 只看报告，不落 observation record
+```
+
+HTTP：`POST /api/proteins/analyze {"query": "..."}` → `{project, result}`。
+MCP：`protein_analyze` 工具（同一份 schema，见 `backend/src/mcp/tools.ts`）。
 
 ## 为什么不走 UniProt 的 PDB 交叉引用
 
@@ -4241,6 +4324,46 @@ conclusion               --derives_from--> observation / experiment
       ]
     }
   },
+  "additionalProperties": false
+}
+```
+
+## protein_analyze
+
+【何时调】要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
+【参数示例】{"query": "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"} —— UniProt 检索语法；查询越收敛越好，见下面「常见错误」。
+【何时不该用】① 已经知道要用哪个 PDB id、只是想跑仿真——直接 exp_design，不必先过这个工具。② 想找论文/背景调研——那是 lit_search，这个工具只查结构数据库，不查文献。
+【典型链路】protein_analyze → 看返回体最后一段「拿哪个结构去跑干实验」的判断 → 若判断是「该停下」就不要往下走；否则把选定的 PDB id / AlphaFold 模型带进 exp_design。
+【常见错误】query 只写基因名或俗名（比如只写 "hemoglobin"）会撞到多个物种/多个同源基因的条目，UniProt 只回第一条未必是你要的那个——务必加 organism_id 与 reviewed:true 收敛到唯一条目；查不到唯一匹配会返回 422，不是故障，是查询不够收敛。
+【读法】experimentalStructureCount 是 RCSB 的真实总数（服务端全量统计，不是截断后的数组长度）；structures 数组只展示前几条（默认 3 条）。alphafold.available=false 且 note 有内容是正常结论（未收录/取不到，不代表调用出错）——不要把 available=false 当失败重试。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "description": "UniProt 检索查询。建议带 organism_id 与 reviewed:true 收敛到唯一条目，否则容易撞车到同名基因/跨物种同源",
+      "examples": [
+        "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"
+      ]
+    },
+    "persist": {
+      "type": "boolean",
+      "description": "是否把结果落一条 observation record（evidence=sourced），默认 true"
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "query"
+  ],
   "additionalProperties": false
 }
 ```

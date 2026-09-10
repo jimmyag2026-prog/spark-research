@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { KernelManager } from "../../backend/src/kernels/manager";
 import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import { OrchestratorAgent, type OrchestratorDeps } from "../../backend/src/agents/orchestrator";
-import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { llmExtras } from "../../backend/src/llm/types";
 
 // D-5（P10-b）：`agents/orchestrator.ts` 里 code task 的 finally 块此前调用的是
 // `KernelManager.dispose()`（无参、全量销毁）——并发会话里先跑完 code task 的那个
@@ -53,7 +54,15 @@ describe("OrchestratorAgent：并发 session 的 code task 不互相摧毁内核
   // 编码进 python 代码里，让两个 session 的 code task 在时间上交错执行。
   function codePlanLlm(): Pick<LLMRouter, "call" | "listModels"> {
     return {
-      call: async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+      call: async (
+        messages: ChatMessage[],
+        modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL,
+      ): Promise<LlmResponse> => {
+        // P11 起 call() 的第二参可以是模型名或 CallOptions，假实现跟着归一化一次。
+        const model =
+          typeof modelOrOptions === "string"
+            ? modelOrOptions
+            : (modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL);
         // plan() 发的 user 消息是把 userMessage 包在一段更长的规划提示词里
         // （"...Request: ${userMessage}"），不是原样传入，所以用 includes + 正则
         // 提取，而不是 startsWith。summarize() 的提示词里同样会带上原始
@@ -64,9 +73,9 @@ describe("OrchestratorAgent：并发 session 的 code task 不互相摧毁内核
         if (match) {
           const code = match[1];
           const plan = JSON.stringify([{ id: "t1", kind: "code", description: "run", params: { code } }]);
-          return { ok: true, provider: "kimi", model, content: plan, mock: false };
+          return { ok: true, provider: "kimi", model, content: plan, ...llmExtras() };
         }
-        return { ok: true, provider: "kimi", model, content: "ok", mock: false };
+        return { ok: true, provider: "kimi", model, content: "ok", ...llmExtras() };
       },
       listModels: () => new LLMRouter().listModels(),
     };

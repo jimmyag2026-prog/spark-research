@@ -22,3 +22,4 @@ playwright-report/
 
 # P9: 脚手架测试用的仓库内临时目录（生成物当场跑一遍后删除）
 .tmp-scaffold-*/
+uv.lock

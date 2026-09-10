@@ -446,6 +446,30 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   },
 
   {
+    name: "protein_analyze",
+    description: `【何时调】要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
+【参数示例】{"query": "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"} —— UniProt 检索语法；查询越收敛越好，见下面「常见错误」。
+【何时不该用】① 已经知道要用哪个 PDB id、只是想跑仿真——直接 exp_design，不必先过这个工具。② 想找论文/背景调研——那是 lit_search，这个工具只查结构数据库，不查文献。
+【典型链路】protein_analyze → 看返回体最后一段「拿哪个结构去跑干实验」的判断 → 若判断是「该停下」就不要往下走；否则把选定的 PDB id / AlphaFold 模型带进 exp_design。
+【常见错误】query 只写基因名或俗名（比如只写 "hemoglobin"）会撞到多个物种/多个同源基因的条目，UniProt 只回第一条未必是你要的那个——务必加 organism_id 与 reviewed:true 收敛到唯一条目；查不到唯一匹配会返回 422，不是故障，是查询不够收敛。
+【读法】experimentalStructureCount 是 RCSB 的真实总数（服务端全量统计，不是截断后的数组长度）；structures 数组只展示前几条（默认 3 条）。alphafold.available=false 且 note 有内容是正常结论（未收录/取不到，不代表调用出错）——不要把 available=false 当失败重试。`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: str(
+          "UniProt 检索查询。建议带 organism_id 与 reviewed:true 收敛到唯一条目，否则容易撞车到同名基因/跨物种同源",
+          "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true",
+        ),
+        persist: { type: "boolean", description: "是否把结果落一条 observation record（evidence=sourced），默认 true" },
+        project: PROJECT_ARG,
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    request: (args) => ({ method: "POST", path: withProject("/api/proteins/analyze", args), body: args }),
+  },
+
+  {
     name: "lab_compile",
     description: `【何时调】要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
 【参数示例】{"naturalLanguage": "取样品 50 µL 加入 96 孔板 A1-A6，加入 100 µL 缓冲液，37°C 孵育 30 分钟，600 nm 读 OD", "title": "OD 时序"}

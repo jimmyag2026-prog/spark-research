@@ -1,6 +1,6 @@
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
-import { CONFIG_SETTINGS, resolveAll, type ConfigOptions } from "../config";
+import { CONFIG_SETTINGS, resolveAll, resolveSetting, type ConfigOptions } from "../config";
 import { SAFETY_RULES } from "../lab/safety";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS, wetBackend } from "../lab/wet_backend";
 import { CITATION_RULE } from "../reviewer/rules";
@@ -10,6 +10,8 @@ import { EDGE_TYPES, EVIDENCE_LABELS, RECORD_TYPES } from "../project/models";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
 import { loadSkills, type SkillEntry } from "../skills/frontmatter";
 import { MCP_TOOLS, MCP_WITHHELD } from "../mcp/tools";
+import { LLMRouter, PROVIDER_MODELS, implementedProviders, type ProviderCapabilities } from "../llm/router";
+import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { PACKAGE_VERSION } from "../version";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,6 +97,43 @@ export interface McpToolCapability {
   longRunning: boolean;
 }
 
+// R-c-2：provider 能力位（AD-12）。外部 agent 与 P12 的 ToolBus 要在**选模型之前**
+// 就知道能不能跑 tool loop——`router.capabilitiesFor(model)` 已经有这个信息
+// （R-a 填实），这里把它接进 `capabilities --json`。
+//
+// **一个坑：不能直接 `capabilitiesFor(model)` 拿每个 provider 的能力位。**
+// `LLMRouter.resolve()` 在 preferred provider 没配 key 时会**隐式回退**到任何一个
+// 已配置的 provider——如果我们用真实的 `process.env` 探测某个没配 key 的 provider，
+// 拿到的可能是别的 provider 的能力位（配对错了）。解法：给每个 provider 探测一次时，
+// 构造一个**只把这一个 provider 的 key 设成占位值**的临时 env 传给 `new LLMRouter(env)`
+// ——`capabilities()` 是纯本地计算（不发网络请求），用占位 key 拿到的能力位是真实的，
+// 只是"是否已配置"这件事单独用 CONFIG_SETTINGS 的 `resolveSetting` 查（真实 env/config），
+// 两件事分开查，就不会互相污染。
+export interface ProviderCapabilityInfo {
+  id: string;
+  models: readonly string[];
+  /** 真实环境里这个 provider 的 API key 是否已配置——**如实**，没配就是 false。 */
+  configured: boolean;
+  capabilities: ProviderCapabilities;
+}
+
+// 本地端点（`local/<model>` / `local:<model>`，见 docs/devlog/P11-a.md）不进
+// `Provider` 联合类型，所以不出现在上面的 `providers` 数组里（那个数组的一致性测试
+// 断言 id 集合恒等于 `implementedProviders()`，硬塞会破坏这条不变式）。但它是一条
+// 真实可用的路径，`capabilities --json` 完全不提它，外部 agent 就没法自描述地发现
+// "可以接本地模型"这件事——所以单独开一段 `localEndpoint`。capabilities 的取法与
+// 上面同一招：给 `SPARK_LOCAL_LLM_BASE_URL` 塞一个占位值构造临时 router，探测
+// `local/probe` 这个模型名，拿到的是 router.ts 里 `localCapabilities()` 的真实返回值
+// （不是本文件手写重复一份，避免两处漂移）。
+export interface LocalEndpointCapability {
+  modelPrefix: string;
+  baseUrlEnvVar: string;
+  apiKeyEnvVar: string;
+  /** baseUrl 是否已配置；key 允许为空，不计入这个判定。 */
+  configured: boolean;
+  capabilities: ProviderCapabilities;
+}
+
 export interface ConfigCapability {
   key: string;
   value: string | number | null;
@@ -125,6 +164,8 @@ export interface CapabilityManifest {
   edgeTypes: readonly string[];
   evidenceLabels: readonly string[];
   config: ConfigCapability[];
+  providers: ProviderCapabilityInfo[];
+  localEndpoint: LocalEndpointCapability;
 }
 
 export interface CapabilityOptions extends ConfigOptions {
@@ -284,6 +325,35 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     effect: r.spec.effect,
   }));
 
+  // R-c-2：provider 能力位 + 本地端点，见上面两个接口的大注释。
+  const FALLBACK_CAPABILITIES: ProviderCapabilities = {
+    toolCalling: false,
+    jsonMode: false,
+    streaming: false,
+    usageReported: false,
+  };
+
+  const providers: ProviderCapabilityInfo[] = implementedProviders().map((provider) => {
+    const models = PROVIDER_MODELS[provider];
+    const probeModel = models[0]!; // orchestrator.test.ts 已钉住「每个 provider 模型列表非空」
+    const envVar = PROVIDER_API_KEY_ENV[provider];
+    const probeRouter = new LLMRouter(envVar ? { [envVar]: "probe-placeholder-key" } : {});
+    const capabilities = probeRouter.capabilitiesFor(probeModel) ?? FALLBACK_CAPABILITIES;
+    const configured = envVar ? resolveSetting(envVar, options).configured : false;
+    return { id: provider, models, configured, capabilities };
+  });
+
+  const LOCAL_BASE_URL_ENV = "SPARK_LOCAL_LLM_BASE_URL";
+  const LOCAL_API_KEY_ENV = "SPARK_LOCAL_LLM_API_KEY";
+  const localProbeRouter = new LLMRouter({ [LOCAL_BASE_URL_ENV]: "http://localhost:0/probe-placeholder" });
+  const localEndpoint: LocalEndpointCapability = {
+    modelPrefix: "local/ 或 local:",
+    baseUrlEnvVar: LOCAL_BASE_URL_ENV,
+    apiKeyEnvVar: LOCAL_API_KEY_ENV,
+    configured: resolveSetting(LOCAL_BASE_URL_ENV, options).configured,
+    capabilities: localProbeRouter.capabilitiesFor("local/probe-model") ?? FALLBACK_CAPABILITIES,
+  };
+
   return {
     service: "spark-research",
     version: PACKAGE_VERSION,
@@ -305,6 +375,8 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     edgeTypes: EDGE_TYPES,
     evidenceLabels: EVIDENCE_LABELS,
     config,
+    providers,
+    localEndpoint,
   };
 }
 

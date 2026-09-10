@@ -65,9 +65,14 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     type: "enum",
     envVar: null,
     defaultValue: null,
-    allowed: ["kimi", "openrouter"],
+    // R-c-3：R-a（P11-a）已经把 openai/deepseek/qwen 填进 router.ts 的 ADAPTERS
+    // （真的能发请求的清单），这里的 allowed 之前还是只有 kimi/openrouter 两个——
+    // 「声明支持的 provider」与「真的实现了的 provider」又要分家。用
+    // tests/unit/config.test.ts 里的一致性测试钉住：allowed 必须与
+    // `implementedProviders()` 集合相等，往后谁改了 ADAPTERS 忘了改这里，测试会红。
+    allowed: ["kimi", "openrouter", "openai", "deepseek", "qwen", "anthropic"],
     summary: "`spark-research auth` 记录的默认 provider（key 选取顺序）",
-    effect: "只影响没有显式指定模型时挑哪把 key；两把都配了就按这个顺序取。",
+    effect: "只影响没有显式指定模型时挑哪把 key；配了多把时按这个顺序取。",
   },
   {
     key: "contactEmail",
@@ -186,6 +191,98 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     summary: "OpenRouter API key（默认模型走这条路）",
     effect: "缺了默认模型不可用，所有需要模型的能力降级为不可用而不是静默出错。",
     secret: true,
+  },
+  // R-c-3：以下五项是 R-a（P11-a）留给本 lane 的收口缺口——docs/devlog/P11-a.md
+  // 「遗留给后续 lane / 阶段的缺口」第 1 条：这些环境变量在 router.ts 里已经真的
+  // 被读取（`ADAPTERS`/本地端点前缀路由），但没进这张表，`spark-research config`
+  // 系列命令看不到它们、`config get/set` 用不了，`capabilities --json` 的
+  // config 段也不会列出——本次一并补上。
+  {
+    key: "OPENAI_API_KEY",
+    type: "string",
+    envVar: "OPENAI_API_KEY",
+    defaultValue: null,
+    summary: "OpenAI API key",
+    effect:
+      "缺了 openai 系模型（gpt-4o / gpt-4o-mini / o4-mini 等）不可用。值永不打印，也永不进 prompt / 日志。" +
+      "只认环境变量：与 KIMI_API_KEY/OPENROUTER_API_KEY 同样是 secret 项，router.ts 直接读 process.env，" +
+      "不经过 config.json → env 的桥接（凭据永不进 env，见 applyConfigEnvDefaults 的 AD-2 纪律），" +
+      "所以写进 config.json 只会让 `config list` 显示「已设置」，真正生效仍需 `export OPENAI_API_KEY=...`。",
+    secret: true,
+  },
+  {
+    key: "ANTHROPIC_API_KEY",
+    type: "string",
+    envVar: "ANTHROPIC_API_KEY",
+    defaultValue: null,
+    summary: "Anthropic API key",
+    effect:
+      "缺了 claude-* 系模型不可用。Anthropic 走原生 Messages API（不是 OpenAI 兼容形状），" +
+      "适配器见 backend/src/llm/providers/anthropic.ts。值永不打印，也永不进 prompt / 日志。" +
+      "同 OPENAI_API_KEY：只认环境变量，config.json 里的值不会被 router.ts 读取。",
+    secret: true,
+  },
+  {
+    key: "DEEPSEEK_API_KEY",
+    type: "string",
+    envVar: "DEEPSEEK_API_KEY",
+    defaultValue: null,
+    summary: "DeepSeek API key",
+    effect:
+      "缺了 deepseek 系模型（deepseek-chat / deepseek-reasoner 等）不可用。值永不打印，也永不进 prompt / 日志。" +
+      "同 OPENAI_API_KEY：只认环境变量，config.json 里的值不会被 router.ts 读取。",
+    secret: true,
+  },
+  {
+    key: "QWEN_API_KEY",
+    type: "string",
+    envVar: "QWEN_API_KEY",
+    defaultValue: null,
+    summary: "Qwen（阿里云 DashScope / Model Studio）API key",
+    effect:
+      "缺了 qwen 系模型（qwen-max 等）不可用。值永不打印，也永不进 prompt / 日志。" +
+      "同 OPENAI_API_KEY：只认环境变量，config.json 里的值不会被 router.ts 读取。" +
+      "router.ts 目前硬编码中国大陆网关 baseUrl（dashscope.aliyuncs.com），国际网关" +
+      "（dashscope-intl.aliyuncs.com）不可切换——这项只管 key，不管网关，如实记录这个已知缺口。",
+    secret: true,
+  },
+  {
+    key: "SPARK_LOCAL_LLM_BASE_URL",
+    type: "string",
+    envVar: "SPARK_LOCAL_LLM_BASE_URL",
+    defaultValue: null,
+    summary: "本地/自建 OpenAI 兼容 LLM 端点的 baseUrl（ollama / vLLM / 任意自建服务）",
+    effect:
+      "配了之后模型名形如 `local/<真实模型名>` 或 `local:<真实模型名>` 会被显式路由到这个 baseUrl，" +
+      "剥掉前缀后的名字才是发给本地服务器的 `model` 字段。**不参与「没配 key 就退到任一已配置云端 " +
+      "provider」的隐式回退**——本地端点是显式 opt-in，没配这项时请求 `local/...` 会得到可见的" +
+      "「没配 SPARK_LOCAL_LLM_BASE_URL」失败，不会静默打到别的已配置 provider。非 secret：" +
+      "本地端点用的服务器地址通常不敏感，且需要 applyConfigEnvDefaults 桥接才能靠 config.json 生效" +
+      "（secret 项永远不桥接），所以这项特意不标 secret，写进 config.json 就能用，不必手动 export。",
+  },
+  {
+    key: "SPARK_LOCAL_LLM_API_KEY",
+    type: "string",
+    envVar: "SPARK_LOCAL_LLM_API_KEY",
+    defaultValue: null,
+    summary: "本地/自建 LLM 端点的 API key（很多本地服务不校验，允许留空）",
+    effect:
+      "允许为空——为空时不发 Authorization 头（不是发一个空 Bearer），很多本地服务本来就不校验凭据。" +
+      "标 secret 是因为**万一**自建服务确实配了鉴权，这个值也不该被打印；不同于 " +
+      "SPARK_LOCAL_LLM_BASE_URL，它只认环境变量，config.json 里的值不会被桥接生效。",
+    secret: true,
+  },
+  {
+    key: "llmPricingOverridesJson",
+    type: "string",
+    envVar: "SPARK_LLM_PRICING_JSON",
+    defaultValue: null,
+    summary: "覆盖 llm/providers/registry.ts 内置单价表的 JSON（`{\"<provider>:<model>\": {inputPerMillionUsd, outputPerMillionUsd}}`）",
+    effect:
+      "影响 BudgetLedger.record() 给一次调用估算的 costUsd。内置单价表有核实日期但定价会变，" +
+      "长期漂移应该靠这里覆盖而不是等下一次改代码。格式错误（不是合法 JSON，或某一项缺" +
+      "input/output 数字）时整个覆盖被忽略、退回内置表——不会部分生效，也不会让 costUsd 变成" +
+      "一个基于半解析数据算出的可疑数字。",
   },
 ];
 

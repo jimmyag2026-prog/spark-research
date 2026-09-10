@@ -17,7 +17,7 @@ import {
   saveConfig,
 } from "../../backend/src/config";
 import { runConfigCommand } from "../../backend/src/config/cli";
-import { DEFAULT_MODEL } from "../../backend/src/llm/router";
+import { DEFAULT_MODEL, implementedProviders, providerApiKeyEnv } from "../../backend/src/llm/router";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS } from "../../backend/src/lab/wet_backend";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS } from "../../backend/src/simulation/registry";
 import {
@@ -52,6 +52,30 @@ describe("配置面 · 设置表是单一真源", () => {
     const byKey = Object.fromEntries(CONFIG_SETTINGS.map((s) => [s.key, s]));
     expect([...byKey.wetBackend!.allowed!].sort()).toEqual([...WET_BACKEND_IDS].sort());
     expect([...byKey.simulationPlatform!.allowed!].sort()).toEqual([...SIMULATION_PLATFORM_IDS].sort());
+  });
+
+  // R-c-3：defaultProvider.allowed 之前只有 ["kimi","openrouter"]，但 R-a（P11-a）
+  // 已经把 openai/deepseek/qwen 填进 router.ts 的 ADAPTERS（真的能发请求的清单）——
+  // 「声明支持」与「真的实现了」又要分家一次。这条钉住两者的集合恒等，
+  // 谁改了 ADAPTERS 忘了同步这里，测试会红（不依赖具体顺序，只比集合）。
+  // P11 收口踩到的第三次同类问题：加一个 provider 要改 N 个地方（ADAPTERS /
+  // PROVIDER_API_KEY_ENV / defaultProvider.allowed / 这张设置表）。前两处已经改成
+  // 从单一真源派生；这张表按设计不能反向依赖 llm 模块（config 层要保持零依赖），
+  // 所以改不成派生——那就让「漏了」**大声失败**：下面这条断言在漏掉时直接点名，
+  // 而不是等到运行时 resolveSetting 抛「未知配置项」。
+  test("每个已实装 provider 都有对应的 API key 设置项（漏一个就红，不留运行时惊喜）", () => {
+    const keys = new Set(CONFIG_SETTINGS.map((spec) => spec.key));
+    const missing = Object.values(providerApiKeyEnv()).filter((env) => !keys.has(env));
+    expect(
+      missing,
+      `这些 provider 的 API key 环境变量没有登记进 CONFIG_SETTINGS：${missing.join(", ")}\n` +
+        `后果是 capabilities 探测该 provider 时 resolveSetting 会抛「未知配置项」。`,
+    ).toEqual([]);
+  });
+
+  test("defaultProvider.allowed 与 implementedProviders()（真实实现的 ADAPTERS）集合一致", () => {
+    const byKey = Object.fromEntries(CONFIG_SETTINGS.map((s) => [s.key, s]));
+    expect([...byKey.defaultProvider!.allowed!].sort()).toEqual([...implementedProviders()].sort());
   });
 
   test("每一项都写了 summary 与 effect（改了影响什么不许缺）", () => {
@@ -152,6 +176,75 @@ describe("配置面 · 凭据不泄漏（AD-2 延伸）", () => {
     // dataDir 决定 config.json 自己在哪儿，倒过来设没有意义
     expect(env.SPARK_RESEARCH_DATA_DIR).toBeUndefined();
     expect(applied).toEqual([CONTACT_EMAIL_ENV]);
+  });
+});
+
+describe("配置面 · R-c-3 新增设置项（R-a 留下的收口缺口）", () => {
+  test("OPENAI_API_KEY / DEEPSEEK_API_KEY / QWEN_API_KEY / SPARK_LOCAL_LLM_API_KEY 都标 secret", () => {
+    const byKey = Object.fromEntries(CONFIG_SETTINGS.map((s) => [s.key, s]));
+    for (const key of ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "QWEN_API_KEY", "SPARK_LOCAL_LLM_API_KEY"]) {
+      expect(byKey[key], `${key} 应该存在于 CONFIG_SETTINGS`).toBeDefined();
+      expect(byKey[key]!.secret).toBe(true);
+      expect(byKey[key]!.envVar).toBe(key);
+    }
+  });
+
+  test("secret 项配置后只报 configured，值不出现在 resolveSetting 结果里", () => {
+    const root = tmpRoot();
+    saveConfig({ OPENAI_API_KEY: "sk-should-never-appear", QWEN_API_KEY: "sk-qwen-secret" }, { root });
+    const openai = resolveSetting("OPENAI_API_KEY", { root, env: {} });
+    expect(openai.configured).toBe(true);
+    expect(openai.value).toBeNull();
+    const qwen = resolveSetting("QWEN_API_KEY", { root, env: {} });
+    expect(qwen.configured).toBe(true);
+    expect(qwen.value).toBeNull();
+  });
+
+  test("config list / --json 不泄漏这几个新 key 的值", () => {
+    const root = tmpRoot();
+    saveConfig(
+      { OPENAI_API_KEY: "sk-should-never-appear", DEEPSEEK_API_KEY: "sk-ds-secret", SPARK_LOCAL_LLM_API_KEY: "sk-local-secret" },
+      { root },
+    );
+    for (const args of [["list"], ["list", "--json"]]) {
+      const { lines, out } = capture();
+      expect(runConfigCommand(args, { root, env: {}, out, err: out })).toBe(0);
+      const text = lines.join("\n");
+      expect(text).not.toContain("sk-should-never-appear");
+      expect(text).not.toContain("sk-ds-secret");
+      expect(text).not.toContain("sk-local-secret");
+    }
+  });
+
+  test("SPARK_LOCAL_LLM_BASE_URL 不是 secret，且是「先有目录才有文件」之外唯一走 config.json→env 桥接的本 lane 新增项", () => {
+    const byKey = Object.fromEntries(CONFIG_SETTINGS.map((s) => [s.key, s]));
+    expect(byKey.SPARK_LOCAL_LLM_BASE_URL!.secret).toBeFalsy();
+    const root = tmpRoot();
+    saveConfig({ SPARK_LOCAL_LLM_BASE_URL: "http://localhost:11434" }, { root });
+    const env: Record<string, string | undefined> = {};
+    const applied = applyConfigEnvDefaults({ root, env });
+    expect(env.SPARK_LOCAL_LLM_BASE_URL).toBe("http://localhost:11434");
+    expect(applied).toContain("SPARK_LOCAL_LLM_BASE_URL");
+  });
+
+  test("SPARK_LOCAL_LLM_API_KEY 是 secret，不会被 applyConfigEnvDefaults 桥接（AD-2：凭据永不进 env）", () => {
+    const root = tmpRoot();
+    saveConfig({ SPARK_LOCAL_LLM_API_KEY: "sk-should-never-appear" }, { root });
+    const env: Record<string, string | undefined> = {};
+    applyConfigEnvDefaults({ root, env });
+    expect(env.SPARK_LOCAL_LLM_API_KEY).toBeUndefined();
+  });
+
+  test("llmPricingOverridesJson 存在、非 secret、能通过 env 覆盖被读到", () => {
+    const byKey = Object.fromEntries(CONFIG_SETTINGS.map((s) => [s.key, s]));
+    expect(byKey.llmPricingOverridesJson).toBeDefined();
+    expect(byKey.llmPricingOverridesJson!.secret).toBeFalsy();
+    expect(byKey.llmPricingOverridesJson!.envVar).toBe("SPARK_LLM_PRICING_JSON");
+    const resolved = resolveSetting("llmPricingOverridesJson", {
+      root: tmpRoot(),
+      env: { SPARK_LLM_PRICING_JSON: '{"x:y":{"inputPerMillionUsd":1,"outputPerMillionUsd":1}}' },
+    });
+    expect(resolved.value).toContain("inputPerMillionUsd");
   });
 });
 

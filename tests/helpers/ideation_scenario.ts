@@ -4,6 +4,7 @@ import { FixtureHttp, type FixtureMode } from "../../backend/src/http/fixture";
 import type { LiteratureSource } from "../../backend/src/literature/models";
 import { LiteratureSearcher } from "../../backend/src/literature/search";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
+import { llmExtras } from "../../backend/src/llm/types";
 
 // P4 双向对照 e2e 的单一真源。
 //
@@ -74,9 +75,9 @@ export class ScriptedLlm {
     this.prompts.push(user);
     for (const handler of this.handlers) {
       const answer = handler(user);
-      if (answer !== null) return { ok: true, provider: "kimi", model, content: answer, mock: false };
+      if (answer !== null) return { ok: true, provider: "kimi", model, content: answer, ...llmExtras() };
     }
-    return { ok: true, provider: "kimi", model, content: "{}", mock: false };
+    return { ok: true, provider: "kimi", model, content: "{}", ...llmExtras() };
   };
 
   listModels = () => ({ kimi: [], openai: [], anthropic: [], deepseek: [], qwen: [], openrouter: [] });
