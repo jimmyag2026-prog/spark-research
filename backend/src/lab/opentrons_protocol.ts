@@ -206,7 +206,13 @@ export function compileToOpentrons(
         // 不假装机器人做了配液，也不会把 50 mL 往 360 µL 的孔里倒。
         const volumeUl = toMicroliters(step.params.volume, step.params.unit);
         const names = reagentNamesOf(step);
-        const reagentName = names[0] ?? "reagent";
+        // **窄范围验收 A**：`names` 为空（试剂不在词表里）时，这里原本一律用字面量
+        // `"reagent"`。后果不只是显示丢身份——下一行 `reservoir.wellFor(name)` 是**按名字
+        // 分配孔位**的，于是**两种不同的未识别试剂会被塌缩到同一个 reservoir 孔**，
+        // 编译产物指示机器人从同一个孔取两次液。这已经不是显示问题。
+        // 占位符按步骤 id 唯一化：身份仍然不知道（词表就那么大，不假装认识），
+        // 但至少**不同的东西不会变成同一个东西**，且名字自己说明它没被识别。
+        const reagentName = names[0] ?? `未识别试剂#${step.id}`;
         const well = reservoir.wellFor(reagentName);
         const amount = volumeUl === null ? "（未给体积）" : `${volumeUl} µL`;
         notes.push("离机配液：把配好的试剂放进 reservoir 对应孔位，模拟器不执行配液本身");
@@ -232,7 +238,7 @@ export function compileToOpentrons(
           throw new ProtocolCompileError(`${step.id}: 缺少可解析的体积（params.volume）`);
         }
         const names = reagentNamesOf(step);
-        const sourceName = names[0] ?? "sample";
+        const sourceName = names[0] ?? `未识别试剂#${step.id}`;  // 同上，见 prepareReagent 分支的注释
         const sourceWell = reservoir.wellFor(sourceName);
         const target = String(step.params.well ?? defaultWell);
         // 超过移液器量程就分次转移。这是**编译期**的物理约束，不是安全问题；

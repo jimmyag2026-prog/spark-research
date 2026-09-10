@@ -3,6 +3,7 @@ import { compileToOpentrons } from "../../backend/src/lab/opentrons_protocol";
 import { LabSafetyGate } from "../../backend/src/lab/orchestrator";
 import { ProtocolCompiler, type Protocol } from "../../backend/src/lab/protocol";
 import {
+  MAX_CONCENTRATION,
   SAFETY_RULES,
   biosafetyRule,
   chemicalCompatibilityRule,
@@ -20,7 +21,12 @@ const compiler = new ProtocolCompiler();
 
 function withReagents(
   text: string,
-  reagents: Array<{ name: string; reagentId?: string; concentration?: number }>,
+  reagents: Array<{
+    name: string;
+    reagentId?: string;
+    concentration?: number;
+    concentrationUnit?: "percent" | "molar" | "other" | "unspecified";
+  }>,
   stepIndex = 0,
 ): Protocol {
   const protocol = compiler.compile(text, { name: "adversarial", protocolId: "pid" });
@@ -134,11 +140,39 @@ describe("对抗 ② 超浓度", () => {
     expect(concentrationLimitRule.evaluate({ protocol }).passed).toBe(true);
   });
 
-  test("表外试剂不设上限 → 放行（不凭空造标准）", () => {
+  // **发布前外部验收（BLOCKER-2）推翻了这条断言的结论，但保住了它的意图。**
+  //
+  // 原断言是「表外试剂不设上限 → 放行（不凭空造标准）」。「不凭空造标准」是对的，
+  // 现在也没有造——但**「没有标准可查」不该用 ✅ 渲染**。验收者点破了性质：
+  //
+  //   「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是**同一个符号**」
+  //
+  // 这正是本项目红线「没查到 ≠ 查了没有」的镜像违反，而且落在湿实验安全门上——
+  // README 自己写着「过度声明的安全门比没有安全门更危险」。
+  //
+  // 新行为：**不放行，但理由说清楚是「没有规则可查」而不是「超标」**（两者该做的事不同），
+  // 且**一个阈值都没有编造**。湿实验本来就要过人工审批（AD-6），
+  // 门在这里拦一下只是把人的注意力引到该看的地方。
+  test("表外试剂 → 不放行，理由是「没有规则可查」而不是「超标」（仍然不凭空造标准）", () => {
     const protocol = withReagents("加入10uL缓冲液", [
       { name: "buffer", reagentId: "buffer", concentration: 9999 },
     ]);
-    expect(concentrationLimitRule.evaluate({ protocol }).passed).toBe(true);
+    const result = concentrationLimitRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+    // 关键：理由必须是「未覆盖」，不能是「超标」——把它说成超标就是凭空造了标准。
+    expect(result.detail).toContain("没有规则可查");
+    expect(result.detail).not.toContain("over-limit");
+  });
+
+  test("解析出百分比 > 100 → 不放行（物理上不存在，与限值表无关，也不需要造阈值）", () => {
+    const protocol = withReagents("配制101%硫酸", [
+      { name: "硫酸", reagentId: "strong_acid", concentration: 101, concentrationUnit: "percent" },
+    ]);
+    const result = concentrationLimitRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain("物理上不可能");
+    // 这条独立于 MAX_CONCENTRATION：strong_acid 的阈值是 200，光靠查表拦不住 101%。
+    expect(MAX_CONCENTRATION.strong_acid).toBeGreaterThan(101);
   });
 
   // V25：上面三条全是 withReagents() 手工注入——测的是规则本身。这条走**真实编译入口**，

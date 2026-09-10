@@ -78,6 +78,8 @@ interface ReagentLike {
   name: string;
   reagentId?: string;
   concentration?: number;
+  /** 浓度单位（发布前外部验收补）：规则不能在不知道单位的情况下比较数值。见 protocol.ts 的 ReagentSpec。 */
+  concentrationUnit?: "percent" | "molar" | "other" | "unspecified";
   stepId?: string;
 }
 
@@ -130,18 +132,60 @@ export const concentrationLimitRule: SafetyRule = {
   check: "concentration limit",
   description: "受管制试剂的浓度不得超过 MAX_CONCENTRATION 表中的上限",
   evaluate({ protocol }) {
-    const overLimit = reagentsOf(protocol).filter(
-      (r) =>
-        r.reagentId != null &&
-        r.concentration != null &&
-        (MAX_CONCENTRATION[r.reagentId] ?? Infinity) < r.concentration,
+    // **发布前外部验收（BLOCKER-2）**：这里原来是 `MAX_CONCENTRATION[r.reagentId] ?? Infinity`
+    // ——限值表里没有条目的试剂，阈值当成无穷大，于是**一律 ✅ 通过**。
+    //
+    // 验收者的原话点破了性质：「『我查了，没有针对这个试剂的规则』和『我查了，通过了』
+    // 在输出里是**同一个符号**」——这正是本项目红线「没查到 ≠ 查了没有」的镜像违反，
+    // 而且落在湿实验安全门上，是 README 自己说的「过度声明的安全门比没有安全门更危险」。
+    //
+    // 修法：**解析出了浓度、却查不到限值** = 这条规则**没有覆盖**它，不是「安全」。
+    // 判定为不通过，理由里说清楚是「没有规则可查」而不是「超标」——两者该做的事不同。
+    // 湿实验本来就要过人工审批（AD-6），门在这里拦一下只是把人的注意力引到该看的地方。
+    const withConcentration = reagentsOf(protocol).filter(
+      (r) => r.reagentId != null && r.concentration != null,
     );
+    // 「物理上不可能」与「超标」**不重复报**：150% 次氯酸钠既 >100% 又超过表里的 100，
+    // 两条都列会让用户以为是两个独立问题（窄范围验收指出消息拼接略糙）。
+    // 物理不可能是更根本的那条，命中它就不再报超标。
+    const impossibleSet = new Set(
+      withConcentration.filter((r) => r.concentrationUnit === "percent" && r.concentration! > 100),
+    );
+    const overLimit = withConcentration.filter(
+      (r) =>
+        !impossibleSet.has(r) &&
+        MAX_CONCENTRATION[r.reagentId!] != null &&
+        MAX_CONCENTRATION[r.reagentId!]! < r.concentration!,
+    );
+    const uncovered = withConcentration.filter((r) => MAX_CONCENTRATION[r.reagentId!] == null);
+    // **物理上不可能的浓度**：百分比 > 100。这一条与限值表无关，也**不需要编造任何阈值**——
+    // 验收发现 `101% 硫酸` 能通过，因为 strong_acid 的阈值写的是 200（那个数在百分比语境下
+    // 没有意义）。单位口径本身是既有未决问题（解析器原来把单位丢了，规则在比较自己不知道
+    // 单位的数），这里只做无歧义的那一半：**浓度超过 100% 的东西不存在**。
+    const impossible = [...impossibleSet];
+
+    const details: string[] = [];
+    if (impossible.length) {
+      details.push(
+        `浓度在物理上不可能（百分比 > 100%）：` +
+          `${impossible.map((r) => `${r.name} (${r.concentration}%)`).join(", ")}。` +
+          `下一步：确认是不是把 mol/L 写成了 %，或者少写了小数点。`,
+      );
+    }
+    if (overLimit.length) {
+      details.push(`over-limit reagents: ${overLimit.map((r) => `${r.name} (${r.concentration})`).join(", ")}`);
+    }
+    if (uncovered.length) {
+      details.push(
+        `限值表里没有这些试剂的条目，本规则**未覆盖**它们（这不是「安全」，是「没有规则可查」）：` +
+          `${uncovered.map((r) => `${r.name} (${r.concentration})`).join(", ")}。` +
+          `下一步：人工核对这些浓度是否安全；若该试剂应当受管，把阈值加进 MAX_CONCENTRATION 再重新编译。`,
+      );
+    }
     return {
       check: "concentration limit",
-      passed: overLimit.length === 0,
-      detail: overLimit.length
-        ? `over-limit reagents: ${overLimit.map((r) => `${r.name} (${r.concentration})`).join(", ")}`
-        : undefined,
+      passed: overLimit.length === 0 && uncovered.length === 0 && impossible.length === 0,
+      detail: details.length ? details.join("；") : undefined,
     };
   },
 };

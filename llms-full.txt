@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.4.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.5.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -226,7 +226,19 @@ spark-research mcp    # stdio 传输
 
 > ⚠️ **安全门当前的真实覆盖范围**（V25 更新，如实写在这里，不再只说「四条规则」）：
 > `volume_capacity` 在自然语言主管线上全程可信；`chemical_compatibility` 的试剂词表
-> 已扩到中英文与常见分子式，但仍然是有限词表。
+> 已扩到中英文与常见分子式，但仍然是**有限词表**——**词表之外的试剂它完全看不见，
+> 不是「相容」**。
+>
+> ⚠️ **自然语言步骤解析目前只吃中文**（发布前外部验收发现）：英文协议
+> （`Transfer 50uL of sample into well A1...`）编译不出任何步骤，会直接报错
+> 「协议没有任何步骤」——不会静默产出空协议，但也确实用不了。
+> 试剂词表是双语的，可上游解析器不是，所以词表永远拿不到英文输入。
+>
+> ⚠️ **限值表里没有的试剂，`concentration_limit` 不放行**（发布前外部验收，BLOCKER-2）。
+> 它原来把「没有这条规则可查」渲染成 ✅——验收者一句话点破：
+> 「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」。
+> 现在它拦下来并说明理由是「没有规则可查」而不是「超标」，**一个阈值都没有编造**。
+> 另外浓度百分比 > 100 一律拦（物理上不存在，与限值表无关）。
 >
 > **`concentration_limit` 与 `biosafety` 从 V25 起不再恒空转，但覆盖是部分的、边界明确**：
 > `concentration_limit` 只在**同一子句里恰好点名一种试剂**时才吃得到浓度（例如
@@ -253,7 +265,7 @@ spark-research mcp    # stdio 传输
 |----|-------|---------|
 | **A 文献调研与写作** | 9 个文献源跨源检索去重入库、OA PDF 下载、结构化精读卡、综述草稿、BibTeX/CSL 导出 | `spark-research lit` |
 | **B 实验验证** | 干实验：仿真平台适配（OpenMM / pyref），`design→dry_run→collect→analyze→conclude` 状态机，断点续跑<br>湿实验：自然语言协议 → Opentrons Python Protocol v2 → 安全门 → 人工 approve → 官方模拟器执行 | `spark-research exp` / `lab` |
-| **C 全流程数据记录** | 8 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
+| **C 全流程数据记录** | 9 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
 | **F 远端算力**（v0.5 新增） | `plan → approve → run → collect` 的作业生命周期；plan 摘要审批（计费/联网/用密钥三者任一成立就要人点头）、逐文件上传清单与 sha256、产物收割与释放。**执行地目前只有 `local` 可用** | `spark-research compute` |
@@ -280,11 +292,16 @@ UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（�
 > **在 node 下跑不起来**——所以 npm 包也只是把「clone 仓库」换成「npm install」，
 > 该装的 Bun 一样得装。
 >
-> 唯一不需要预装运行时的是单二进制，但它**目前只有浅层命令可用**：
-> `bun build --compile` 不嵌入 `.sql` / `.py` 这类非 JS 资产，于是
-> `spark-research project new` 直接 `ENOENT: /$bunfs/root/schema.sql`。
-> `--version` / `--help` / `capabilities` / `lit sources` 能跑，**建不了项目就干不了实事**。
-> 已登记 BACKLOG **V27**，v0.5 处理。**这一版不要把单二进制当主力分发形态。**
+> 唯一不需要预装运行时的是**单二进制**，v0.5 起它**深层命令也能用了**（V27 已修）：
+> `project new` / `lit search` / `lit add` / `exp run` / `lab compile` / `compute` /
+> `report export` / `chem depict` 都在干净目录里实测通过——**一条完整研究线索可以在
+> 纯二进制上走通**，不需要 clone 仓库、不需要装 Bun。
+>
+> 二进制里**仍然不可用的两处**（V43，如实列出）：`server` 起得来但没有前端产物；
+> `new skill|connector|platform` 与 `ext verify --kind platform` 已改成**显式拒绝**
+> （而不是静默做错），只在源码 checkout 可用。
+> Python 相关能力（openmm / scanpy / pydeseq2 / cobrapy / opentrons / rdkit）仍需自己装依赖，
+> `doctor` 会逐档告诉你缺什么、装哪条命令。
 
 下面是推荐路径（源码）。需要 [Bun](https://bun.sh) ≥ 1.3 与 Python ≥ 3.11。
 
@@ -367,21 +384,32 @@ bun scripts/demo-research-thread.ts
 
 ## 能力概览
 
-**文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
+**文献源（10）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv · bioRxiv ·
 AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
 
-> **默认集是六个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` / `arxiv`
-> ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用（V34，v0.5 修复）。
+> **默认集是七个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` /
+> `arxiv` / `biorxiv` ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用
+> （V34，v0.5 修复）。
+>
+> ⚠️ **两条要知道的**：`semanticscholar` 实测**匿名调用持续 429**，没配 key 时它会报
+> `skipped`（不是静默返回空），所以它虽在默认集里但没 key 时不出结果；
+> **`biorxiv` 的 `search` 不是真正的全文检索**——上游没有检索端点，connector 用
+> 「最近 N 篇 + 客户端关键词打分」模拟，**查不到 ≠ 不存在**，用它的结果时要知道这一点。
+>
 > `aminer` 需自备 key、`cnki` / `wanfang` 是占位实现无公开 API，这三个默认不参与，
 > 但**排除必须带理由**：`tests/unit/literature_source_parity.test.ts` 以连接器注册表为真源，
 > 任何已实装且无需 key 的源不在默认集里就会让门禁变红。
 > 这条门禁是 V34 的教训——当时 `lit search --sources arxiv` 能用、`capabilities` 也报可用，
 > 只有默认值没跟上，而 AD-12 只核「在不在注册表」，核不了「在不在默认集」。
-**科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
-**仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
+**科学 connector（非文献类 11，连接器总数 21）**：UniProt · PDB · AlphaFold · Ensembl · NCBI ·
+CNCB · ChEMBL · PubChem · ClinVar · Reactome · STRING-DB
+**仿真平台（5）**：OpenMM · pyref 纯 Python 参考实现 · scanpy（`sc-cluster`）·
+pydeseq2（`bulk-de`）· cobrapy（`fba`）。`deterministic` 标签的口径见 BACKLOG **V49**——
+后四个同机重跑逐字节一致，**但不保证跨机器 / 跨 BLAS / 换求解器**。
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
-**技能（10）**：literature-search · paper-download · library-curation · literature-review ·
-idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-protocol · research-report
+**技能（13）**：literature-search · paper-download · library-curation · literature-review ·
+idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-protocol ·
+research-report · scanpy · pydeseq2 · cobrapy
 **Reviewer 检查器（4）**：`citation-integrity` · `data-consistency` · `capability-labeling` ·
 `stats-plausibility`（前三条出 hard，最后一条只出 soft 提示）
 
@@ -399,7 +427,7 @@ idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-pro
   projects/<slug>/
     project.json                  项目元信息
     library.db                    文献库（论文/作者/标签/笔记/阅读状态）
-    records.db                    证据图：8 类 record + 5 类边
+    records.db                    证据图：9 类 record + 5 类边
     papers/                       PDF（不入 git）
     artifacts/                    产物 + artifacts.db（版本与 lineage）
     experiments/<platform>/       仿真状态真源：prepared/ 与 runs/
@@ -477,7 +505,10 @@ spark-research mcp    # stdio 传输
 { "mcpServers": { "spark-research": { "command": "spark-research", "args": ["mcp"] } } }
 ```
 
-暴露 24 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告）。
+暴露 **30** 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告 / 算力 / 化学），
+并**刻意扣留 8 个**（`lab_approve` / `lab_reject` / `lab_simulate` / `conclusion_review` /
+`project_archive` / `compute_approve` / `compute_run` / `compute_release`）——
+花钱与碰物理世界的动作不做成工具，`capabilities` 对每一条都给出扣留理由与人该敲的命令。
 接入后第一步调 `research_capabilities`。
 
 **`lab approve` / `lab reject` / `lab simulate` / `conclusion review` 刻意不暴露为 MCP 工具**：
@@ -2412,6 +2443,18 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V49 | **`deterministic=true` 的口径待裁定**（用户 2026-09-11 决定推迟） | W5-3 β 实测：scanpy / pydeseq2 / cobrapy 三个平台**同机重跑逐字节一致**（runner 把 n_jobs/n_cpus 钉成 1、固定种子、cobrapy 默认 pFBA），但**不保证跨机器 / 跨 BLAS / 换求解器**。staged 设计稿原写 `false`，β 按实测改成 `true` 并配了每次重测的门禁。<br>**问题是口径而非事实**：如果「跨机器可复现」才配叫 deterministic，这三个标签要一起翻，而 `pyref`（唯一既有的 `deterministic=true`）也要重新审。这个标签是**确定性层的输入**，标错等于让模型的结论绕过约束。<br>**β 的第 4 条阴性对照还挖出一件更深的**：「deterministic 标错」在加 `embedding.csv` 之前**根本红不起来**——拿掉 PCA 种子后 clusters/markers 一个字节都不变。**产出里没有对随机性敏感的数据时，这个标签在测试层面不可观测。** |
 | V50 | `rev` 编号跳变无解释 | 外部验收 S12 的第 5 条。δ 诊断到根因是 CAS 每次写自增（`job_store.ts:170` + `broker.ts` 多个调用点），新 plan 出来就是 rev 2、run 完跳 5、collect 完跳 7。**δ 明说没有把握的修法**，只给了两个候选方向（对外只暴露单调计数 / 把内部写次数与用户可见 rev 分开）。属产品判断，留给下一版。 |
 | V51 | 共享 helper 位置别扭 + 三处探测仍是内联形状 | W5-3 β 交代：`probeCodeFor`/`datasetParam` 放在 `simulation/scanpy/probe.ts`，另两个平台 `import ../scanpy/probe`——**本该在 `simulation/` 顶层，是文件所有权逼出来的形状**，搬走是纯移动。另：`doctor.ts` / `pyref` / `openmm` 的探测仍是内联字符串形状（**「探测说可用、真提交任务却坏」的老形状**，V27 时期咬过一次），β 已把修法验证可复用，但不在其授权内。 |
+| R1 | **湿实验编译器改写试剂身份**（🔴 已修） | **发布前零上下文外部验收（干净机器、只有二进制）的头号 blocker，主会话实机复现**：写「硫酸」，编译产物是「**盐酸**」；写「硝酸」「甲醇」则被抹成 `reagent`。真因：`extractReagents()` 用 `name: r.keywords[0]`——**组内第一个关键词替换掉用户实际写的试剂名**。<br>**危害不是显示瑕疵，是落在物理世界路径上的身份改写**：人在 `lab approve` 读的是协议原文（硫酸）、批准的是编译产物的 hash（盐酸）——**他批的不是他读的那个东西**，AD-6 的署名审批失去意义；审计记录里会出现方案中根本不存在的化学品；拦截报告也跟着错。<br>已修：`name` 用**真正匹配上的那个关键词**，`reagentId` 仍是分类 id（规则匹配不受影响）。 |
+| R2 | **`concentration_limit` 把「查不到规则」渲染成「✅ 通过」**（🔴 已修） | 同一次验收的第二个 blocker。`MAX_CONCENTRATION[id] ?? Infinity`——**表里没有条目的试剂阈值当无穷大，一律放行**。验收者一句话点破性质：**「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」**——本项目红线「没查到 ≠ 查了没有」的镜像违反，且落在湿实验安全门上。<br>已修且**一个阈值都没有编造**：查不到限值 → 不放行，理由写「没有规则可查」而不是「超标」（两者该做的事不同）。另加一条与限值表无关的判断：**百分比 > 100 物理上不存在，一律拦**。<br>**顺带挖出更深的一层**：`extractConcentration()` 原来**把单位丢了**，`%` 与 `mol/L` 都只返回裸数字——**规则在比较自己不知道单位的数**。现已把单位带下来（见 V52）。<br>这条推翻了一条**有意为之**的旧断言（「表外试剂不设上限 → 放行，不凭空造标准」）：「不造标准」是对的、现在也没造，被推翻的是「所以放行」。 |
+| R3 | **`chem depict` 在二进制里不可用，却四处声称可用**（🟠 已修） | 验收实测 `can't open file '/$bunfs/root/depict.py'`。**这是 V27 家族的遗漏**——W5-1 ε 修了 10 处资产，但 chem 是同一波 γ 并行交付的新文件，两条 lane 谁也没覆盖到对方；**收口（我）接了 `case "chem"` 却没给它的 `.py` 走内嵌机制**。后果比一般 ENOENT 更糟：`--help` / `capabilities` / MCP `tools/list` / `llms.txt` 四处都说它可用。已改用 `materializeAssetTree`，二进制实测出图。 |
+| V52 | 浓度单位口径未统一（`MAX_CONCENTRATION` 的数到底是什么单位） | R2 挖出：解析器现已把单位带下来（`percent` / `molar` / `unknown`），但 `MAX_CONCENTRATION` 的三个数（hypochlorite 100 · ethanol 95 · strong_acid 200）**没有声明单位**——strong_acid 的 200 在百分比语境下无意义。当前只做了无歧义的一半（百分比 > 100 必拦）。**要真正修好，得先定义这张表的单位，可能还要按单位分表。**验收者另指出：次氯酸钠阈值 100% 意味着这条规则只拦物理上不可能的浓度——商用漂白水是 5–15%。**这属于要请领域判断的事，不该由实现者拍。** |
+| V53 | `doctor` 的 `packagingLimitation` 机制对真实故障零覆盖 | 验收实测：`doctor --json` 三个档位 `packagingLimitation` **全是 false**，而唯一真实产生 `/$bunfs/` 报错的 `chem depict` **根本不在 doctor 的探测范围内**。INSTALL.md 描述过这个检测机制（识别 `/$bunfs/` 子串 → 打 ⚠️ 而非 ❌）——**字段存在，机制未生效**。R3 修完后这个具体故障消失了，但**机制本身仍未被任何真实故障验证过**。 |
+| V54 | bioRxiv 的「不是真检索」免责声明人类看不到 | `capabilities --json` 的 `caveat` 里写得清清楚楚「search 是最近 N 篇 + 客户端打分模拟的，查不到 ≠ 不存在」，但 `lit sources` 与 `lit search` 两个**人类实际使用的入口**都只显示 ✅ / 「免 key」。验收者的对照很刺眼：缺凭据的源老老实实标 `⏭️ skipped` 并说明原因（本项目做得最好的地方之一），**而 bioRxiv 用一个 ✅ 掩盖了「这不是检索」**——同一个输出里诚实与不诚实并存。README 已补说明（v0.5 收口），但**两个 CLI 入口仍未显示 caveat**。附带：标题里的 `&amp;amp;` 未解码，会流进 BibTeX 与报告。 |
+| V55 | 湿实验自然语言解析只吃中文 | 验收实测：英文协议编译不出任何步骤（直接报错，不静默产出空协议）。**试剂词表是双语的，但上游步骤解析器不是**，所以词表永远拿不到英文输入。README 已如实补上这条（原文只说词表覆盖中英文，读起来像整条链路都支持）。 |
+| V56 | 未知命令不回显打错的那个词 · 报告不带 unconsumedWarnings · observation 表格压成一行 | 验收的三条低危：`spark-research frobnicate` 打印一屏帮助但**从不提及 `frobnicate`**（退出码正确）；`report export` 的湿实验条目**不携带 unconsumedWarnings**——README 说 CLI 编译与审批输出必须显示它，**报告是第三个面，目前是缺口**；`report export` 把 observation 的 markdown 表格压成一行。 |
+| V57 | **一大片路径三次外部验收都没验过**（不是缺陷，是覆盖缺口） | **三次零上下文验收共同的空白**，如实记下来免得被误当成「验过了」：<br>· **所有 LLM 路径**：`idea new` / `idea check` / `lit read` / `lit review` / `chat` / `auth`——验收者按「花钱操作不自动批准」的纪律**主动不跑**（环境里有真实 key）。README 快速开始的第 ②③⑥ 步因此整段未验证。<br>· **`lab simulate` 与真 Opentrons 后端**：本机无 opentrons，湿实验链条只验到 `awaiting_approval`。<br>· **5 个仿真平台里的 4 个**（openmm / scanpy / pydeseq2 / cobrapy）：本机未装依赖，只验了 pyref。<br>· **Web 工作台**：前端产物未构建，未启动。<br>· **Modal 算力**：产品自述 gateway 未实现，未尝试。<br>· **`conclusion review` / `lab approve` 的署名审批实际写入**：未产生可评审的结论卡，未走到。<br>**处置建议**：下一版的验收任务书里，把「花钱路径」单独列出来并预先约定预算，否则它会**永远**停在未验证——三次都是同一个原因跳过的。 |
+| V58 | **安全门语义刚改，而第三次验收跑在改之前** | v0.5 发布前收口把 `concentration_limit` 从「表外试剂放行」改成「不放行」，这是**行为变更**，可能误杀正常协议。改动只经过单测与几条手工命令，**没有人以用户视角重走一遍**。已补跑一次窄范围验收（只打安全门，误杀与漏放两个方向都看）。<br>**记下来的是教训不是待办**：**在验收之后改动被验收的东西，等于那次验收作废了一部分。**要么改动前置、要么补跑——不能默认「测试绿了就等于验过了」。 |
+| V59 | 安全门的剩余缺口（窄范围验收，发布前**未修**，如实列出） | 发布前最后一次窄范围验收（只打安全门）在两条 blocker 修好之后又挖出这些，**v0.5 没修**：<br>· **限值表只覆盖 4 类试剂**（盐酸/硫酸 · 次氯酸钠 · 乙醇），且其中三类阈值就是 100 ——与「物理上不可能」那条完全重合，**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**。审批人看到这一行会被误导。<br>· **`biosafety` 只认字面 `BSL-n` / `生物安全N级`**：`P3 实验室`（最常见的中文口语写法）静默通过且零告警。<br>· **`chemical_compatibility` 不看孔位**：A1 的次氯酸钠 + B1 的盐酸也拦，消息没说「本规则不看孔位」。<br>· **旧的 `over-limit` 消息不合格**：英文残句、不说限值是多少、不说单位、不给下一步——同一条规则里新分支的消息质量比它高一个数量级。`volume capacity` / `chemical compatibility` 同样没有下一步。<br>· **`lab compile` 那一屏不打印覆盖范围声明**（`lab status` 有，写得很好）——**而绝大多数人是在 compile 那一屏看到四行 ✅ 的**。 |
+| V60 | 词表外试剂的身份仍然丢失（只止住了塌缩） | v0.5 收口把占位符按步骤唯一化（`未识别试剂#step-1`），**止住了「两种不同试剂共用同一个 reservoir 孔」**这个真实的物理别名，并补了未消费告警。**但用户写的原文没有保留进编译产物**——人在审批时仍然看不到自己写的是「硝酸」。要真正修好得让编译产物携带原文片段，属解析器工作。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2434,30 +2477,149 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ---
 
-## [未发布]
+## [0.5.0] — 2026-09-11
+
+**把「远端算力」从一个假实现变成一条真链路，并把三次外部验收补齐。**
+
+v0.4 补的是运行时与生态。v0.5 做四件：远端算力的作业生命周期与审批链、
+单二进制从「只有浅层命令可用」变成真的能用、外部 MCP 工具真正接进 agent 运行时、
+以及**三次零上下文外部验收全部跑完**（v0.4 方案要求三次、一次没跑，这是当时如实记下的欠账）。
+
+分闸门 F + 三个波次并行开发（W5-1 七条 lane · W5-2 四条 · W5-3 四条），
+单元测试 **1403 → 2035**，pytest **48 → 73**，e2e 14 → 15。
+
+### ⚠️ 发布时如实说明的九件事
+
+1. **Modal 远端算力只有契约，没有真实链路。** 本版本交付了 adapter 契约、录制层与假
+   gateway，**真实 `ModalGateway`（Modal SDK 客户端）尚未实现——填了 token 也跑不起来**。
+   `doctor` 与 `compute targets` 会如实报 `unavailable` 并说明原因，不会报「只差一把钥匙」。
+   准确的说法是：**算力抽象层与审批链已落地并有 `local` 实现；Modal adapter 的契约已立、
+   真实链路未验证**。SSH 是明确的占位槽位。
+2. **local 算力的 SIGKILL 恢复路径今天走不通**（BACKLOG V48）。adapter handle 在执行期间
+   不落盘，编排进程中途被杀就既接不回也收不了。设计里写的「SIGKILL → resume → 收割」
+   这条验收路径在 local 上**不成立**。
+3. **湿实验安全门仍是部分覆盖**（V25，边界写在 README）。`concentration_limit` /
+   `biosafety` 从「恒空转」变成真消费，但只吃「浓度/BSL 与目标试剂或步骤**同句**出现」；
+   跨句写法（最常见的那种）编译器**拒绝猜归属**、仍落未消费告警。
+   **对接真实 Opentrons 的门槛不因此解除。**
+4. **单二进制仍有两处不可用**（V43）：`server` 起得来但没有前端产物；
+   `new skill|connector|platform` 与 `ext verify --kind platform` 已改成**显式拒绝**
+   （而不是静默做错），只在源码 checkout 可用。
+5. **`deterministic=true` 的口径待裁定**（V49）：三个新平台同机重跑逐字节一致，
+   但**不保证跨机器 / 跨 BLAS / 换求解器**。
+6. **湿实验的自然语言解析只吃中文**（V55）。试剂词表是双语的，但上游步骤解析器不是，
+   英文协议编译不出任何步骤（会直接报错，不会静默产出空协议）。
+7. **浓度限值表的单位未声明**（V52）。表里三个数没说是 % 还是 mol/L，
+   `strong_acid` 的 200 在百分比语境下没有意义；次氯酸钠阈值 100% 意味着这条规则
+   只拦物理上不可能的浓度（商用漂白水是 5–15%）。**这要请领域判断，不该由实现者拍。**
+8. **安全门仍有明确缺口**（V59，发布前最后一次验收挖出、本版未修）：限值表只覆盖 4 类试剂
+   且多数阈值就是 100%（**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**）；
+   `biosafety` 只认字面 `BSL-n`，`P3 实验室` 这种写法静默通过；`chemical_compatibility` 不看孔位。
+   **这些都不改变一条：本项目这一版不对接真实 Opentrons。**
+9. **bioRxiv 的 `search` 不是真正的全文检索**（V54）。上游没有检索端点，connector 用
+   「最近 N 篇 + 客户端关键词打分」模拟——**查不到 ≠ 不存在**。它在默认源集合里，
+   README 已写明，但 `lit sources` / `lit search` 两个 CLI 入口目前**还不显示这条 caveat**。
+
+### 新增
+
+**远端算力（主线 C1）**
+- `spark-research compute`：`plan / approve / reject / run / status / list / collect /
+  cancel / release / recover / targets` 的完整作业生命周期。
+- **审批语义做进状态机本体**：`dispatch` 只有两条入边——`approved`（携带 digest 相符的
+  未消费 approval）或 `planned`（仅当 `approvalRequired === false`，而这是派生值）。
+  broker 没有 `force` 参数，**「无审批派发」在结构上没有落脚点，所以不需要测试后门**。
+- **审批门按后果开**：计费 / 联网 / 用密钥三者任一成立才要人点头；都不成立
+  （典型是 `local` + `network=none` + 无 secret）直接可跑，**plan 的输出会说明免审批的原因**。
+- CLI 审批要求真实 TTY（AD-9），非交互环境默认拒绝；`compute_approve` / `compute_run` /
+  `compute_release` **一律不暴露为 MCP 工具**（AD-14），HTTP 面也没有派发端点。
+- **算力产出进证据图**：一条 `observation`（`kind=compute_output`, `evidence=computed`,
+  `runId=jobId`）+ harvest 文件各一条 artifact record + `derives_from` 边。
+  这一步让「基于一次算力运行写出能通过评审的结论」真的走得通。
+
+**单二进制**
+- 10 处资产真正嵌进二进制（3 处 `schema.sql` 静态 import · 4 处 `.py` 内嵌文本 +
+  运行期解包再 spawn · 3 处 prompt `.txt`），外加 3 处危险默认路径。
+  `project new` / `lit search --add` / `doctor` / `exp run --platform pyref` 在干净目录全部可用。
+- **`workspaceRoot` 不再解析到文件系统根**（V33）。原默认值在编译产物里等于 `/workspaces`，
+  紧接着就是 `mkdirSync(..., {recursive:true})`——**这不是读不到文件，是往根目录写**。
+- 技能索引不再为空：二进制里 `capabilities --json` 从「技能 0 个」修到 10 个（现 13 个）。
+
+**外部 MCP 接进 agent 运行时**
+- 完整生命周期：发现已装且已 `--trust` 的扩展 → 连接子进程 → 注册 → 绑定 `recordSink` →
+  收尾 → **逐扩展失败隔离（一个坏扩展不许拖垮整轮）**。
+- 每次外部工具调用落一条 `observation`（四个分支：成功/失败/超时/未知工具都落），
+  **并被排除出证据图**——外部调用是审计不是进展，算进证据会让停止条件失效。
+- 外部工具的 spec 进模型可见的 tools 列表（同样过 grants 白名单）。
+  **没装外部扩展的用户行为与 v0.4 逐字节一致。**
+
+**仿真平台三件套** scanpy（`sc-cluster`）· pydeseq2（`bulk-de`）· cobrapy（`fba`）。
+科学判据不是「跑完没报错」：cobrapy 的 nuoA 敲除掉到厌氧那个值（两条独立路径同一个数）、
+pydeseq2 全部 30 个 spike-in 方向正确且噪声假阳性 1.5%、scanpy 三组 marker 纯度 100%。
+
+**文献与可用性**
+- 默认检索源 4 → 6（补上已实装的 arxiv / pubmed），并加**对等门禁**：
+  已实装且无需 key 的源必须在默认集里，或在排除表里带理由。
+- CLI 长任务可见性：`lit read --all` / `lit review` 走任务句柄，
+  **开跑第一行就给句柄与重连命令**，新增 `lit tasks` 断开后查状态。
+- 证据图可见性：`report records` / `report show`（含入边出边）。
+- 化学结构图：`chem depict`（SMILES → 2D SVG，落 artifact + record）。
+- connector +4：clinvar · biorxiv · reactome · string-db；**限速器按 host 合池**
+  （不按 connector——四个 connector 各自为政会集体被 429）。
+- `auth` 与 `config list` / `doctor` 口径统一（V37），并加断言禁止手写 provider 表复发。
 
 ### 💥 破坏性变更
 
-- **删除 `connectors/base.ts` 的三个 deprecated 别名** `MCPConnector` / `MCPConnectorConfig` /
-  `MCPTool`（BACKLOG V15）。P9 引入、v0.4 §2.2 的废弃周期已随 v0.4.0 发布走完，全仓库确认零
-  活引用后直接删除，不留过渡层。**外部扩展若引用了这三个名字，请改用 `Connector` /
-  `ConnectorConfig` / `ConnectorTool`**——只是改名，形状完全一致。新增 grep 断言测试防止
-  别名再长回来。
-- **删除 `compute` 技能**。它从 v0.1 起就是假的：`ComputeService` / `DefaultCompute` 返回
-  写死的成功结果，从不真的提交任何计算作业。同批清掉的还有两个同族假实现——
-  `query_frames`（永远返回空 frames）与 `analytic_libraries`（在 kernel 权限表里声明、
-  零调用方）。真正的远端算力是 v0.5 主线 C1，**在它落地前，声称能力比没有能力更糟**。
-  `TASK_KINDS` 与 CLI banner 同步去掉 `compute`。
+- **删除 `connectors/base.ts` 的三个 deprecated 别名** `MCPConnector` /
+  `MCPConnectorConfig` / `MCPTool`（V15）。废弃周期已随 v0.4.0 走完，全仓库确认零活引用后
+  直接删除。**外部扩展请改用 `Connector` / `ConnectorConfig` / `ConnectorTool`**——
+  只是改名，形状完全一致。
+- **删除 `compute` 技能**。它从 v0.1 起就是假的：`ComputeService` / `DefaultCompute`
+  返回写死的成功结果，从不真的提交作业。同批清掉两个同族假实现（`query_frames` 永远返回
+  空 frames、`analytic_libraries` 零调用方）。**在真算力落地前，声称能力比没有能力更糟。**
+- **词面新颖性阈值 `HIGH_AFFINITY` 0.75 → 0.70**。原值是在 **2 条样本**上定的；
+  新值依据 68 条真实样本（错分 2 → 1，假阴清零）。方向是安全的那边：
+  阈值降低 → 更多「novel」被降级为 existing。**并加了门禁**：在同一份语料上用生产函数
+  重扫阈值，断言生产值落在最优区间内——**它不再是一个魔数**。
 
 ### 修复
 
-- **未知 task kind 不再被静默吞掉**。`normalizeTask()` 原先会把不在 `TASK_KINDS` 白名单里的
-  任务直接过滤掉——计划里凭空少一个任务、执行日志不留痕迹，而 `executeTask()` 的 `default`
-  失败分支因此永远走不到，是**看起来存在、实际不可达的守卫**。现在未知 kind 会留在计划里、
-  命中 `default`、显式返回 `ok:false` 并写执行记录。
-- `doctor` 对单二进制打包限制的误报（F-c）。
-
----
+- **湿实验编译器不再改写试剂身份**（发布前外部验收的头号 blocker）。写「硫酸」，
+  编译产物曾经是「**盐酸**」——`extractReagents()` 用组内第一个关键词替换掉用户实际写的名字。
+  **这不是显示瑕疵，是落在物理世界路径上的身份改写**：人在 `lab approve` 读的是协议原文（硫酸）、
+  批准的是编译产物的 hash（盐酸）——**他批的不是他读的那个东西**，AD-6 的署名审批失去意义；
+  审计记录里还会出现方案中根本不存在的化学品。
+- **`concentration_limit` 不再把「查不到规则」渲染成「✅ 通过」**（同一次验收的第二个 blocker）。
+  限值表里没有条目的试剂，阈值曾被当成无穷大、一律放行。验收者一句话点破性质：
+  **「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」**
+  ——这是本项目红线「没查到 ≠ 查了没有」的镜像违反，而且落在**安全门**上。
+  现在它拦下来并说明理由是「没有规则可查」而不是「超标」，**一个阈值都没有编造**；
+  另加一条与限值表无关的判断：**浓度百分比 > 100 物理上不存在，一律拦**。
+  顺带修好更深的一层：浓度解析器原来**把单位丢了**，`%` 与 `mol/L` 都只返回裸数字，
+  **规则在比较自己不知道单位的数**（单位口径本身待定，见 BACKLOG V52）。
+- **湿实验安全门不再跨单位比大小**（发布前窄范围验收）。`200mmol/L 乙醇`（0.2 M，实验室最普通
+  的东西）曾被拦下并报「over-limit 乙醇 (200)」——规则把单位剥掉，拿裸数字去撞百分比限值表。
+  **最恶劣的不是拦，是理由撒谎**：说「超标」，真相是「我把 mmol/L 读成了 %」。
+  现在非百分比口径一律走未消费告警，并**说出这一次真正的原因**（原消息枚举的两个原因
+  在实测场景里一个都不成立）。`g/L` / `mg/L` / `ppm` / 稀释比此前**连告警都没有**，现已纳入。
+- **两种未识别试剂不再被塌缩到同一个 reservoir 孔**。词表外试剂曾一律叫 `reagent`，
+  而孔位是按名字分配的——**编译产物会指示机器人从同一个孔取两次液**。这已经不是显示问题。
+  占位符现按步骤唯一化，并补了未消费告警（身份仍未保留，见 BACKLOG V60）。
+- **`chem depict` 在单二进制里真的能用了**。它此前报 `can't open file '/$bunfs/root/depict.py'`，
+  而 `--help` / `capabilities` / MCP / `llms.txt` **四处都声称它可用**——
+  按本项目的价值观，「声称有、实际用不了」比没有更糟。
+- **`lit add` 不再把一种标识符形态降级成另一种去撞库**。`lit add 9999.99999`
+  （不存在的 arXiv id）曾导入一篇 1978 年的无关论文并**报 ✅、退出码 0**——
+  **不是「没查到」被报成「查了没有」，而是「没查到」被报成「查到了，给你另一篇」**。
+  垃圾论文会落进证据图、被精读卡花真钱处理、并列进报告参考文献，而「引用必须在库内」
+  的核验会**全部放行**。
+- **未知 task kind 不再被静默吞掉**：原先的 `default` 失败分支是**看起来存在、实际不可达
+  的守卫**（上游已把非法 kind 过滤掉了）。
+- **`defaultProvider` 从只写不读变成真的生效**：`auth` 让用户挑、落盘、回显，
+  但没有任何代码用它选 provider——用户选了 kimi，只要 openrouter 的 key 也在就走 openrouter。
+- `doctor` 补上算力段；`chem` 补进主帮助；`compute plan` 打印目标项目
+  （**证据静默落进错误项目而用户收不到信号**是信任损伤）；`project new` 明说不自动切换当前项目。
+- BibTeX 的「Last F」作者名解析（连带修好 `dedupe.ts` 的跨源姓氏比对）；
+  `lit review --help` 不再直接执行；`report export` 的证据索引不再是不加说明的空表。
 
 ## [0.4.0] — 2026-09-10
 

@@ -26,7 +26,19 @@
 
 > ⚠️ **安全门当前的真实覆盖范围**（V25 更新，如实写在这里，不再只说「四条规则」）：
 > `volume_capacity` 在自然语言主管线上全程可信；`chemical_compatibility` 的试剂词表
-> 已扩到中英文与常见分子式，但仍然是有限词表。
+> 已扩到中英文与常见分子式，但仍然是**有限词表**——**词表之外的试剂它完全看不见，
+> 不是「相容」**。
+>
+> ⚠️ **自然语言步骤解析目前只吃中文**（发布前外部验收发现）：英文协议
+> （`Transfer 50uL of sample into well A1...`）编译不出任何步骤，会直接报错
+> 「协议没有任何步骤」——不会静默产出空协议，但也确实用不了。
+> 试剂词表是双语的，可上游解析器不是，所以词表永远拿不到英文输入。
+>
+> ⚠️ **限值表里没有的试剂，`concentration_limit` 不放行**（发布前外部验收，BLOCKER-2）。
+> 它原来把「没有这条规则可查」渲染成 ✅——验收者一句话点破：
+> 「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」。
+> 现在它拦下来并说明理由是「没有规则可查」而不是「超标」，**一个阈值都没有编造**。
+> 另外浓度百分比 > 100 一律拦（物理上不存在，与限值表无关）。
 >
 > **`concentration_limit` 与 `biosafety` 从 V25 起不再恒空转，但覆盖是部分的、边界明确**：
 > `concentration_limit` 只在**同一子句里恰好点名一种试剂**时才吃得到浓度（例如
@@ -53,7 +65,7 @@
 |----|-------|---------|
 | **A 文献调研与写作** | 9 个文献源跨源检索去重入库、OA PDF 下载、结构化精读卡、综述草稿、BibTeX/CSL 导出 | `spark-research lit` |
 | **B 实验验证** | 干实验：仿真平台适配（OpenMM / pyref），`design→dry_run→collect→analyze→conclude` 状态机，断点续跑<br>湿实验：自然语言协议 → Opentrons Python Protocol v2 → 安全门 → 人工 approve → 官方模拟器执行 | `spark-research exp` / `lab` |
-| **C 全流程数据记录** | 8 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
+| **C 全流程数据记录** | 9 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
 | **F 远端算力**（v0.5 新增） | `plan → approve → run → collect` 的作业生命周期；plan 摘要审批（计费/联网/用密钥三者任一成立就要人点头）、逐文件上传清单与 sha256、产物收割与释放。**执行地目前只有 `local` 可用** | `spark-research compute` |
@@ -80,11 +92,16 @@ UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（�
 > **在 node 下跑不起来**——所以 npm 包也只是把「clone 仓库」换成「npm install」，
 > 该装的 Bun 一样得装。
 >
-> 唯一不需要预装运行时的是单二进制，但它**目前只有浅层命令可用**：
-> `bun build --compile` 不嵌入 `.sql` / `.py` 这类非 JS 资产，于是
-> `spark-research project new` 直接 `ENOENT: /$bunfs/root/schema.sql`。
-> `--version` / `--help` / `capabilities` / `lit sources` 能跑，**建不了项目就干不了实事**。
-> 已登记 BACKLOG **V27**，v0.5 处理。**这一版不要把单二进制当主力分发形态。**
+> 唯一不需要预装运行时的是**单二进制**，v0.5 起它**深层命令也能用了**（V27 已修）：
+> `project new` / `lit search` / `lit add` / `exp run` / `lab compile` / `compute` /
+> `report export` / `chem depict` 都在干净目录里实测通过——**一条完整研究线索可以在
+> 纯二进制上走通**，不需要 clone 仓库、不需要装 Bun。
+>
+> 二进制里**仍然不可用的两处**（V43，如实列出）：`server` 起得来但没有前端产物；
+> `new skill|connector|platform` 与 `ext verify --kind platform` 已改成**显式拒绝**
+> （而不是静默做错），只在源码 checkout 可用。
+> Python 相关能力（openmm / scanpy / pydeseq2 / cobrapy / opentrons / rdkit）仍需自己装依赖，
+> `doctor` 会逐档告诉你缺什么、装哪条命令。
 
 下面是推荐路径（源码）。需要 [Bun](https://bun.sh) ≥ 1.3 与 Python ≥ 3.11。
 
@@ -167,21 +184,32 @@ bun scripts/demo-research-thread.ts
 
 ## 能力概览
 
-**文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
+**文献源（10）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv · bioRxiv ·
 AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
 
-> **默认集是六个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` / `arxiv`
-> ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用（V34，v0.5 修复）。
+> **默认集是七个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` /
+> `arxiv` / `biorxiv` ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用
+> （V34，v0.5 修复）。
+>
+> ⚠️ **两条要知道的**：`semanticscholar` 实测**匿名调用持续 429**，没配 key 时它会报
+> `skipped`（不是静默返回空），所以它虽在默认集里但没 key 时不出结果；
+> **`biorxiv` 的 `search` 不是真正的全文检索**——上游没有检索端点，connector 用
+> 「最近 N 篇 + 客户端关键词打分」模拟，**查不到 ≠ 不存在**，用它的结果时要知道这一点。
+>
 > `aminer` 需自备 key、`cnki` / `wanfang` 是占位实现无公开 API，这三个默认不参与，
 > 但**排除必须带理由**：`tests/unit/literature_source_parity.test.ts` 以连接器注册表为真源，
 > 任何已实装且无需 key 的源不在默认集里就会让门禁变红。
 > 这条门禁是 V34 的教训——当时 `lit search --sources arxiv` 能用、`capabilities` 也报可用，
 > 只有默认值没跟上，而 AD-12 只核「在不在注册表」，核不了「在不在默认集」。
-**科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
-**仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
+**科学 connector（非文献类 11，连接器总数 21）**：UniProt · PDB · AlphaFold · Ensembl · NCBI ·
+CNCB · ChEMBL · PubChem · ClinVar · Reactome · STRING-DB
+**仿真平台（5）**：OpenMM · pyref 纯 Python 参考实现 · scanpy（`sc-cluster`）·
+pydeseq2（`bulk-de`）· cobrapy（`fba`）。`deterministic` 标签的口径见 BACKLOG **V49**——
+后四个同机重跑逐字节一致，**但不保证跨机器 / 跨 BLAS / 换求解器**。
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
-**技能（10）**：literature-search · paper-download · library-curation · literature-review ·
-idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-protocol · research-report
+**技能（13）**：literature-search · paper-download · library-curation · literature-review ·
+idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-protocol ·
+research-report · scanpy · pydeseq2 · cobrapy
 **Reviewer 检查器（4）**：`citation-integrity` · `data-consistency` · `capability-labeling` ·
 `stats-plausibility`（前三条出 hard，最后一条只出 soft 提示）
 
@@ -199,7 +227,7 @@ idea-coexplore · novelty-check · protein-analysis · dry-experiment · wet-pro
   projects/<slug>/
     project.json                  项目元信息
     library.db                    文献库（论文/作者/标签/笔记/阅读状态）
-    records.db                    证据图：8 类 record + 5 类边
+    records.db                    证据图：9 类 record + 5 类边
     papers/                       PDF（不入 git）
     artifacts/                    产物 + artifacts.db（版本与 lineage）
     experiments/<platform>/       仿真状态真源：prepared/ 与 runs/
@@ -277,7 +305,10 @@ spark-research mcp    # stdio 传输
 { "mcpServers": { "spark-research": { "command": "spark-research", "args": ["mcp"] } } }
 ```
 
-暴露 24 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告）。
+暴露 **30** 个工具（检索 / 文献库 / 思路 / novelty / 实验 / 记录 / 结论 / 报告 / 算力 / 化学），
+并**刻意扣留 8 个**（`lab_approve` / `lab_reject` / `lab_simulate` / `conclusion_review` /
+`project_archive` / `compute_approve` / `compute_run` / `compute_release`）——
+花钱与碰物理世界的动作不做成工具，`capabilities` 对每一条都给出扣留理由与人该敲的命令。
 接入后第一步调 `research_capabilities`。
 
 **`lab approve` / `lab reject` / `lab simulate` / `conclusion review` 刻意不暴露为 MCP 工具**：

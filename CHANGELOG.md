@@ -5,30 +5,149 @@
 
 ---
 
-## [未发布]
+## [0.5.0] — 2026-09-11
+
+**把「远端算力」从一个假实现变成一条真链路，并把三次外部验收补齐。**
+
+v0.4 补的是运行时与生态。v0.5 做四件：远端算力的作业生命周期与审批链、
+单二进制从「只有浅层命令可用」变成真的能用、外部 MCP 工具真正接进 agent 运行时、
+以及**三次零上下文外部验收全部跑完**（v0.4 方案要求三次、一次没跑，这是当时如实记下的欠账）。
+
+分闸门 F + 三个波次并行开发（W5-1 七条 lane · W5-2 四条 · W5-3 四条），
+单元测试 **1403 → 2035**，pytest **48 → 73**，e2e 14 → 15。
+
+### ⚠️ 发布时如实说明的九件事
+
+1. **Modal 远端算力只有契约，没有真实链路。** 本版本交付了 adapter 契约、录制层与假
+   gateway，**真实 `ModalGateway`（Modal SDK 客户端）尚未实现——填了 token 也跑不起来**。
+   `doctor` 与 `compute targets` 会如实报 `unavailable` 并说明原因，不会报「只差一把钥匙」。
+   准确的说法是：**算力抽象层与审批链已落地并有 `local` 实现；Modal adapter 的契约已立、
+   真实链路未验证**。SSH 是明确的占位槽位。
+2. **local 算力的 SIGKILL 恢复路径今天走不通**（BACKLOG V48）。adapter handle 在执行期间
+   不落盘，编排进程中途被杀就既接不回也收不了。设计里写的「SIGKILL → resume → 收割」
+   这条验收路径在 local 上**不成立**。
+3. **湿实验安全门仍是部分覆盖**（V25，边界写在 README）。`concentration_limit` /
+   `biosafety` 从「恒空转」变成真消费，但只吃「浓度/BSL 与目标试剂或步骤**同句**出现」；
+   跨句写法（最常见的那种）编译器**拒绝猜归属**、仍落未消费告警。
+   **对接真实 Opentrons 的门槛不因此解除。**
+4. **单二进制仍有两处不可用**（V43）：`server` 起得来但没有前端产物；
+   `new skill|connector|platform` 与 `ext verify --kind platform` 已改成**显式拒绝**
+   （而不是静默做错），只在源码 checkout 可用。
+5. **`deterministic=true` 的口径待裁定**（V49）：三个新平台同机重跑逐字节一致，
+   但**不保证跨机器 / 跨 BLAS / 换求解器**。
+6. **湿实验的自然语言解析只吃中文**（V55）。试剂词表是双语的，但上游步骤解析器不是，
+   英文协议编译不出任何步骤（会直接报错，不会静默产出空协议）。
+7. **浓度限值表的单位未声明**（V52）。表里三个数没说是 % 还是 mol/L，
+   `strong_acid` 的 200 在百分比语境下没有意义；次氯酸钠阈值 100% 意味着这条规则
+   只拦物理上不可能的浓度（商用漂白水是 5–15%）。**这要请领域判断，不该由实现者拍。**
+8. **安全门仍有明确缺口**（V59，发布前最后一次验收挖出、本版未修）：限值表只覆盖 4 类试剂
+   且多数阈值就是 100%（**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**）；
+   `biosafety` 只认字面 `BSL-n`，`P3 实验室` 这种写法静默通过；`chemical_compatibility` 不看孔位。
+   **这些都不改变一条：本项目这一版不对接真实 Opentrons。**
+9. **bioRxiv 的 `search` 不是真正的全文检索**（V54）。上游没有检索端点，connector 用
+   「最近 N 篇 + 客户端关键词打分」模拟——**查不到 ≠ 不存在**。它在默认源集合里，
+   README 已写明，但 `lit sources` / `lit search` 两个 CLI 入口目前**还不显示这条 caveat**。
+
+### 新增
+
+**远端算力（主线 C1）**
+- `spark-research compute`：`plan / approve / reject / run / status / list / collect /
+  cancel / release / recover / targets` 的完整作业生命周期。
+- **审批语义做进状态机本体**：`dispatch` 只有两条入边——`approved`（携带 digest 相符的
+  未消费 approval）或 `planned`（仅当 `approvalRequired === false`，而这是派生值）。
+  broker 没有 `force` 参数，**「无审批派发」在结构上没有落脚点，所以不需要测试后门**。
+- **审批门按后果开**：计费 / 联网 / 用密钥三者任一成立才要人点头；都不成立
+  （典型是 `local` + `network=none` + 无 secret）直接可跑，**plan 的输出会说明免审批的原因**。
+- CLI 审批要求真实 TTY（AD-9），非交互环境默认拒绝；`compute_approve` / `compute_run` /
+  `compute_release` **一律不暴露为 MCP 工具**（AD-14），HTTP 面也没有派发端点。
+- **算力产出进证据图**：一条 `observation`（`kind=compute_output`, `evidence=computed`,
+  `runId=jobId`）+ harvest 文件各一条 artifact record + `derives_from` 边。
+  这一步让「基于一次算力运行写出能通过评审的结论」真的走得通。
+
+**单二进制**
+- 10 处资产真正嵌进二进制（3 处 `schema.sql` 静态 import · 4 处 `.py` 内嵌文本 +
+  运行期解包再 spawn · 3 处 prompt `.txt`），外加 3 处危险默认路径。
+  `project new` / `lit search --add` / `doctor` / `exp run --platform pyref` 在干净目录全部可用。
+- **`workspaceRoot` 不再解析到文件系统根**（V33）。原默认值在编译产物里等于 `/workspaces`，
+  紧接着就是 `mkdirSync(..., {recursive:true})`——**这不是读不到文件，是往根目录写**。
+- 技能索引不再为空：二进制里 `capabilities --json` 从「技能 0 个」修到 10 个（现 13 个）。
+
+**外部 MCP 接进 agent 运行时**
+- 完整生命周期：发现已装且已 `--trust` 的扩展 → 连接子进程 → 注册 → 绑定 `recordSink` →
+  收尾 → **逐扩展失败隔离（一个坏扩展不许拖垮整轮）**。
+- 每次外部工具调用落一条 `observation`（四个分支：成功/失败/超时/未知工具都落），
+  **并被排除出证据图**——外部调用是审计不是进展，算进证据会让停止条件失效。
+- 外部工具的 spec 进模型可见的 tools 列表（同样过 grants 白名单）。
+  **没装外部扩展的用户行为与 v0.4 逐字节一致。**
+
+**仿真平台三件套** scanpy（`sc-cluster`）· pydeseq2（`bulk-de`）· cobrapy（`fba`）。
+科学判据不是「跑完没报错」：cobrapy 的 nuoA 敲除掉到厌氧那个值（两条独立路径同一个数）、
+pydeseq2 全部 30 个 spike-in 方向正确且噪声假阳性 1.5%、scanpy 三组 marker 纯度 100%。
+
+**文献与可用性**
+- 默认检索源 4 → 6（补上已实装的 arxiv / pubmed），并加**对等门禁**：
+  已实装且无需 key 的源必须在默认集里，或在排除表里带理由。
+- CLI 长任务可见性：`lit read --all` / `lit review` 走任务句柄，
+  **开跑第一行就给句柄与重连命令**，新增 `lit tasks` 断开后查状态。
+- 证据图可见性：`report records` / `report show`（含入边出边）。
+- 化学结构图：`chem depict`（SMILES → 2D SVG，落 artifact + record）。
+- connector +4：clinvar · biorxiv · reactome · string-db；**限速器按 host 合池**
+  （不按 connector——四个 connector 各自为政会集体被 429）。
+- `auth` 与 `config list` / `doctor` 口径统一（V37），并加断言禁止手写 provider 表复发。
 
 ### 💥 破坏性变更
 
-- **删除 `connectors/base.ts` 的三个 deprecated 别名** `MCPConnector` / `MCPConnectorConfig` /
-  `MCPTool`（BACKLOG V15）。P9 引入、v0.4 §2.2 的废弃周期已随 v0.4.0 发布走完，全仓库确认零
-  活引用后直接删除，不留过渡层。**外部扩展若引用了这三个名字，请改用 `Connector` /
-  `ConnectorConfig` / `ConnectorTool`**——只是改名，形状完全一致。新增 grep 断言测试防止
-  别名再长回来。
-- **删除 `compute` 技能**。它从 v0.1 起就是假的：`ComputeService` / `DefaultCompute` 返回
-  写死的成功结果，从不真的提交任何计算作业。同批清掉的还有两个同族假实现——
-  `query_frames`（永远返回空 frames）与 `analytic_libraries`（在 kernel 权限表里声明、
-  零调用方）。真正的远端算力是 v0.5 主线 C1，**在它落地前，声称能力比没有能力更糟**。
-  `TASK_KINDS` 与 CLI banner 同步去掉 `compute`。
+- **删除 `connectors/base.ts` 的三个 deprecated 别名** `MCPConnector` /
+  `MCPConnectorConfig` / `MCPTool`（V15）。废弃周期已随 v0.4.0 走完，全仓库确认零活引用后
+  直接删除。**外部扩展请改用 `Connector` / `ConnectorConfig` / `ConnectorTool`**——
+  只是改名，形状完全一致。
+- **删除 `compute` 技能**。它从 v0.1 起就是假的：`ComputeService` / `DefaultCompute`
+  返回写死的成功结果，从不真的提交作业。同批清掉两个同族假实现（`query_frames` 永远返回
+  空 frames、`analytic_libraries` 零调用方）。**在真算力落地前，声称能力比没有能力更糟。**
+- **词面新颖性阈值 `HIGH_AFFINITY` 0.75 → 0.70**。原值是在 **2 条样本**上定的；
+  新值依据 68 条真实样本（错分 2 → 1，假阴清零）。方向是安全的那边：
+  阈值降低 → 更多「novel」被降级为 existing。**并加了门禁**：在同一份语料上用生产函数
+  重扫阈值，断言生产值落在最优区间内——**它不再是一个魔数**。
 
 ### 修复
 
-- **未知 task kind 不再被静默吞掉**。`normalizeTask()` 原先会把不在 `TASK_KINDS` 白名单里的
-  任务直接过滤掉——计划里凭空少一个任务、执行日志不留痕迹，而 `executeTask()` 的 `default`
-  失败分支因此永远走不到，是**看起来存在、实际不可达的守卫**。现在未知 kind 会留在计划里、
-  命中 `default`、显式返回 `ok:false` 并写执行记录。
-- `doctor` 对单二进制打包限制的误报（F-c）。
-
----
+- **湿实验编译器不再改写试剂身份**（发布前外部验收的头号 blocker）。写「硫酸」，
+  编译产物曾经是「**盐酸**」——`extractReagents()` 用组内第一个关键词替换掉用户实际写的名字。
+  **这不是显示瑕疵，是落在物理世界路径上的身份改写**：人在 `lab approve` 读的是协议原文（硫酸）、
+  批准的是编译产物的 hash（盐酸）——**他批的不是他读的那个东西**，AD-6 的署名审批失去意义；
+  审计记录里还会出现方案中根本不存在的化学品。
+- **`concentration_limit` 不再把「查不到规则」渲染成「✅ 通过」**（同一次验收的第二个 blocker）。
+  限值表里没有条目的试剂，阈值曾被当成无穷大、一律放行。验收者一句话点破性质：
+  **「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」**
+  ——这是本项目红线「没查到 ≠ 查了没有」的镜像违反，而且落在**安全门**上。
+  现在它拦下来并说明理由是「没有规则可查」而不是「超标」，**一个阈值都没有编造**；
+  另加一条与限值表无关的判断：**浓度百分比 > 100 物理上不存在，一律拦**。
+  顺带修好更深的一层：浓度解析器原来**把单位丢了**，`%` 与 `mol/L` 都只返回裸数字，
+  **规则在比较自己不知道单位的数**（单位口径本身待定，见 BACKLOG V52）。
+- **湿实验安全门不再跨单位比大小**（发布前窄范围验收）。`200mmol/L 乙醇`（0.2 M，实验室最普通
+  的东西）曾被拦下并报「over-limit 乙醇 (200)」——规则把单位剥掉，拿裸数字去撞百分比限值表。
+  **最恶劣的不是拦，是理由撒谎**：说「超标」，真相是「我把 mmol/L 读成了 %」。
+  现在非百分比口径一律走未消费告警，并**说出这一次真正的原因**（原消息枚举的两个原因
+  在实测场景里一个都不成立）。`g/L` / `mg/L` / `ppm` / 稀释比此前**连告警都没有**，现已纳入。
+- **两种未识别试剂不再被塌缩到同一个 reservoir 孔**。词表外试剂曾一律叫 `reagent`，
+  而孔位是按名字分配的——**编译产物会指示机器人从同一个孔取两次液**。这已经不是显示问题。
+  占位符现按步骤唯一化，并补了未消费告警（身份仍未保留，见 BACKLOG V60）。
+- **`chem depict` 在单二进制里真的能用了**。它此前报 `can't open file '/$bunfs/root/depict.py'`，
+  而 `--help` / `capabilities` / MCP / `llms.txt` **四处都声称它可用**——
+  按本项目的价值观，「声称有、实际用不了」比没有更糟。
+- **`lit add` 不再把一种标识符形态降级成另一种去撞库**。`lit add 9999.99999`
+  （不存在的 arXiv id）曾导入一篇 1978 年的无关论文并**报 ✅、退出码 0**——
+  **不是「没查到」被报成「查了没有」，而是「没查到」被报成「查到了，给你另一篇」**。
+  垃圾论文会落进证据图、被精读卡花真钱处理、并列进报告参考文献，而「引用必须在库内」
+  的核验会**全部放行**。
+- **未知 task kind 不再被静默吞掉**：原先的 `default` 失败分支是**看起来存在、实际不可达
+  的守卫**（上游已把非法 kind 过滤掉了）。
+- **`defaultProvider` 从只写不读变成真的生效**：`auth` 让用户挑、落盘、回显，
+  但没有任何代码用它选 provider——用户选了 kimi，只要 openrouter 的 key 也在就走 openrouter。
+- `doctor` 补上算力段；`chem` 补进主帮助；`compute plan` 打印目标项目
+  （**证据静默落进错误项目而用户收不到信号**是信任损伤）；`project new` 明说不自动切换当前项目。
+- BibTeX 的「Last F」作者名解析（连带修好 `dedupe.ts` 的跨源姓氏比对）；
+  `lit review --help` 不再直接执行；`report export` 的证据索引不再是不加说明的空表。
 
 ## [0.4.0] — 2026-09-10
 

@@ -4,6 +4,17 @@ export interface ReagentSpec {
   name: string;
   reagentId?: string;
   concentration?: number;
+  /**
+   * 浓度的单位（发布前外部验收补）。
+   *
+   * 原来 `extractConcentration()` **把单位丢了**——`%` 和 `mol/L` 都只返回一个裸数字，
+   * 于是 `concentration_limit` 在**比较自己不知道单位的数**。这比「阈值定错」更深一层：
+   * 101% 和 101 mol/L 在下游完全无法区分。
+   *
+   * 本字段先把单位如实带下来。**没有借此编造任何阈值**——单位口径本身是既有未决问题
+   * （见 BACKLOG）。当前只用它做一件无歧义的判断：**百分比 > 100 物理上不存在**。
+   */
+  concentrationUnit?: "percent" | "molar" | "other" | "unspecified";
   volume?: number;
 }
 
@@ -277,7 +288,19 @@ function allVolumeMentions(sentence: string): string[] {
   return out;
 }
 
-const CONCENTRATION_SIGNAL = /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z]))|摩尔浓度|浓度\s*(?:为|是|：|:)?\s*\d/i;
+// **窄范围验收 B-5**：原正则只认 % 与 mol 系单位，于是 `g/L` / `mg/L` / `ppm` / `1:10 稀释`
+// 这些写法**连未消费告警都不落**——用户写了浓度、规则没看见、还静默 ✅。
+// 这直接违反 README 自己立的口径「『用户写了但安全门没看见』的内容绝不静默绿灯通过」。
+// SIGNAL 的职责只是「这句话疑似有浓度描述」，宁可宽一点：抠不出可比的值就落告警，
+// 那正是这个机制存在的理由。
+const CONCENTRATION_SIGNAL =
+  /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z])|g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)|摩尔浓度|质量浓度|\d+\s*[:：]\s*\d+\s*(?:稀释|dilution)|稀释\s*\d+\s*[:：]\s*\d+|浓度\s*(?:为|是|：|:)?\s*\d/i;
+// 收窄到**明确的配液/试剂措辞**：原来把「加入」「取 N µL」也算进来，于是
+// 「取样品50µL加入96孔板」这种干净协议也报警——正是窄范围验收警告的那种误杀。
+const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液/;
+// 通用实验室液体：它们本来就不是受管化学品，报「不在试剂词表内」只会制造噪音。
+// （窄范围验收的教训是两头都要防：漏放要报，误杀也是问题。）
+const GENERIC_LIQUIDS = /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS/i;
 const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]/i;
 
 // V25：SIGNAL 正则只负责「这句话疑似有这类描述」；下面两个函数负责「能不能确定性地
@@ -285,11 +308,20 @@ const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosa
 // 天然抠不出值，属于「有信号、解析失败」的合法情形，不是 bug。
 const CHINESE_LEVEL_DIGIT: Readonly<Record<string, number>> = { 一: 1, 二: 2, 三: 3, 四: 4 };
 
-function extractConcentration(sentence: string): number | undefined {
-  const withUnit = /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z]))/i.exec(sentence);
-  if (withUnit) return Number(withUnit[1]);
+function extractConcentration(sentence: string): { value: number; unit: ReagentSpec["concentrationUnit"] } | undefined {
+  // 单位必须带下来：原实现返回裸数字，让下游规则在比较自己不知道单位的数（见 ReagentSpec）。
+  const pct = /(\d+(?:\.\d+)?)\s*%/.exec(sentence);
+  if (pct) return { value: Number(pct[1]), unit: "percent" };
+  const molar = /(\d+(?:\.\d+)?)\s*(?:mol\/l|mmol\/l|mM|M(?![a-z]))/i.exec(sentence);
+  if (molar) return { value: Number(molar[1]), unit: "molar" };
+  // 质量/体积浓度等：数值抠得出，但**不是百分比口径**，所以标 unknown 让下游据实说明
+  // （告警里说「单位不认识」而不是「抠不出数字」——窄范围验收发现后者是假话）。
+  const other = /(\d+(?:\.\d+)?)\s*(?:g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)/i.exec(sentence);
+  if (other) return { value: Number(other[1]), unit: "other" };
   const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)/.exec(sentence);
-  if (explicit) return Number(explicit[1]);
+  // 裸数字（「浓度为500」，没给单位）：按限值表的口径理解——V25 起的既有行为。
+  // 跨单位比较的问题出在**认识但不同口径**的单位上（mol/L、g/L），不在这里。
+  if (explicit) return { value: Number(explicit[1]), unit: "unspecified" };
   return undefined;
 }
 
@@ -303,10 +335,38 @@ function extractBiosafetyLevel(sentence: string): number | undefined {
   return undefined;
 }
 
+/** 说出**这一次**真正的原因，不枚举一串可能性（窄范围验收 C）。 */
+function concentrationMissReason(
+  reason?: { reagentCount: number; unit?: "percent" | "molar" | "other" | "unspecified"; hasValue: boolean },
+): string {
+  if (!reason) return "原因未记录。";
+  if (!reason.hasValue) {
+    return "这句话里抠不出一个确定的浓度数值（比如只写了「摩尔浓度」而没给数）。下一步：把数值和单位写全，例如「配制 10% 次氯酸钠溶液」。";
+  }
+  if (reason.unit === "molar" || reason.unit === "other") {
+    return (
+      `数值抠出来了，但单位是${reason.unit === "molar" ? " mol 系（mol/L · mmol/L · mM）" : "本规则不认识的口径"}，` +
+      `而限值表是**百分比口径**（见 BACKLOG V52）——**跨单位比大小会得出错误结论，所以宁可不比**。` +
+      "下一步：若这个浓度需要受管，把它换算成百分比再写；否则人工核对。"
+    );
+  }
+  if (reason.reagentCount === 0) {
+    return "这句话里没有一个**词表内**的试剂——试剂词表只覆盖有限几类，词表外的试剂本规则完全看不见（这不是「相容」也不是「安全」）。下一步：人工核对该试剂的浓度是否安全。";
+  }
+  if (reason.reagentCount > 1) {
+    return `同句里出现了 ${reason.reagentCount} 种试剂，浓度该挂给谁无法从句法上确定——**编译器不瞎猜**。下一步：把每种试剂的浓度分句写。`;
+  }
+  return "未能确定归属。";
+}
+
 function scanUnconsumedSignals(
   clause: string,
   outcome: { params: Record<string, unknown> | null; mergedInto: ProtocolStep | null },
   consumed: { concentration: boolean; biosafety: boolean },
+  // **窄范围验收 C**：原来的告警把两个原因**枚举死**（「抠不出数字」/「同句多试剂」），
+  // 而验收实测的场景里**两个都不成立**——真实原因是「试剂名不在词表里」。
+  // 用户照着那条提示改写句子，改多少遍都没用。所以把真实原因传进来，说实话。
+  reason?: { reagentCount: number; unit?: "percent" | "molar" | "other" | "unspecified"; hasValue: boolean },
 ): string[] {
   const warnings: string[] = [];
   const volumes = allVolumeMentions(clause);
@@ -329,8 +389,26 @@ function scanUnconsumedSignals(
   // ProtocolStep.params.biosafetyLevel 的，不再报（那是真消费了，不是空转）。
   if (CONCENTRATION_SIGNAL.test(clause) && !consumed.concentration) {
     warnings.push(
-      `「${clause}」疑似包含浓度描述，但没能解析出确定归属的浓度值（要么抠不出数字，` +
-        `要么同句里不止一种试剂、无法确定挂给谁）——concentration_limit 规则看不到它。`,
+      `「${clause}」疑似包含浓度描述，但 concentration_limit 规则看不到它——` +
+        concentrationMissReason(reason),
+    );
+  }
+  // **窄范围验收 A**：整句认出了一个「要用某种试剂」的动作，却一个词表内试剂都没匹配上时，
+  // 编译产物里只剩一个占位符——用户无从核对自己批准的是什么，而
+  // `chemical_compatibility` / `concentration_limit` 两条规则也**完全看不见它**（不是「相容」）。
+  // 之前这种情形**零告警**，直接进 awaiting_approval。这是「安全门没看见的东西绝不静默通过」
+  // 的直接违反，所以在这里补一条。
+  if (
+    reason &&
+    reason.reagentCount === 0 &&
+    REAGENT_MENTION_SIGNAL.test(clause) &&
+    !GENERIC_LIQUIDS.test(clause)
+  ) {
+    warnings.push(
+      `「${clause}」提到了要用某种试剂，但**没有一个在试剂词表内**——` +
+        `编译产物里只会出现占位符，chemical_compatibility 与 concentration_limit 两条规则` +
+        `**完全看不见它**（这不是「相容」也不是「安全」）。` +
+        `下一步：人工核对该试剂的相容性与浓度；若它应当受管，把它加进试剂词表再重新编译。`,
     );
   }
   if (BIOSAFETY_SIGNAL.test(clause) && !consumed.biosafety) {
@@ -356,10 +434,24 @@ export class ProtocolCompiler {
       // V25：浓度只在这句话恰好点名一种试剂时才挂上去——同句多种试剂时浓度归谁
       // 没法从句法上确定，宁可报未消费也不瞎猜（同一条纪律见 chemical_compatibility
       // 「表外试剂不设上限」、以及体积信号「≥2 处才报」的保守方针）。
+      // **窄范围验收 B-1（我上一轮修了一半）**：`200mmol/L 乙醇` 曾被拦下并报
+      // 「over-limit reagents: 乙醇 (200)」——0.2 M 乙醇是实验室最普通的东西。
+      // 病根不是阈值，是**跨单位比较**：规则把单位剥掉，拿裸数字去撞百分比限值表。
+      // 而最恶劣的是**理由撒谎**：说「超标」，真相是「我把 mmol/L 读成了 %」。
+      // 用户会去改浓度，改到 0.09 M 才过关，全程不知道发生了什么。
+      //
+      // 上一轮我已经把单位解析出来了，却只用它做了「>100% 必拦」这一半。这里补另一半：
+      // **只有百分比口径的浓度才挂上去**（`MAX_CONCENTRATION` 是百分比表，见 BACKLOG V52）。
+      // 非百分比单位不是「安全」也不是「超标」，是**这条规则看不懂它**——
+      // 走未消费告警，与「同句多试剂」「跨句归属」同一条纪律：宁可说看不懂，不瞎比。
       const concentrationValue = extractConcentration(clause);
-      const concentrationAttachable = concentrationValue !== undefined && reagents.length === 1;
+      const concentrationComparable =
+        concentrationValue?.unit === "percent" || concentrationValue?.unit === "unspecified";
+      const concentrationAttachable =
+        concentrationValue !== undefined && concentrationComparable && reagents.length === 1;
       if (concentrationAttachable) {
-        reagents[0]!.concentration = concentrationValue;
+        reagents[0]!.concentration = concentrationValue.value;
+        reagents[0]!.concentrationUnit = concentrationValue.unit;
       }
       const biosafetyValue = extractBiosafetyLevel(clause);
       const rule = ACTION_RULES.find(
@@ -386,6 +478,7 @@ export class ProtocolCompiler {
               clause,
               { params: null, mergedInto: previous },
               { concentration: concentrationAttachable && reagentsMerged, biosafety: biosafetyMerged },
+              { reagentCount: reagents.length, unit: concentrationValue?.unit, hasValue: concentrationValue !== undefined },
             ),
           );
           continue;
@@ -400,6 +493,7 @@ export class ProtocolCompiler {
             clause,
             { params: null, mergedInto: null },
             { concentration: false, biosafety: false },
+            { reagentCount: reagents.length, unit: concentrationValue?.unit, hasValue: concentrationValue !== undefined },
           ),
         );
         continue;
@@ -412,6 +506,7 @@ export class ProtocolCompiler {
           clause,
           { params, mergedInto: null },
           { concentration: concentrationAttachable, biosafety: biosafetyValue !== undefined },
+          { reagentCount: reagents.length, unit: concentrationValue?.unit, hasValue: concentrationValue !== undefined },
         ),
       );
       steps.push({
@@ -435,12 +530,25 @@ export class ProtocolCompiler {
 
   private extractReagents(sentence: string): ReagentSpec[] {
     const lower = sentence.toLowerCase();
-    return REAGENT_PATTERNS.filter((r) => r.keywords.some((k) => lower.includes(k.toLowerCase()))).map(
-      (r) => ({
-        name: r.keywords[0],
-        reagentId: r.id,
-      }),
-    );
+    const out: ReagentSpec[] = [];
+    for (const pattern of REAGENT_PATTERNS) {
+      // **发布前外部验收（BLOCKER-1）**：这里原来是 `name: r.keywords[0]`——
+      // 于是同一分类下的任何试剂都被显示成组内第一个关键词：
+      //     写「硫酸」→ 编译产物是「盐酸」（strong_acid 组的 keywords[0]）
+      //
+      // 这不是显示瑕疵，是**改写试剂身份**，而且落在物理世界路径上：
+      //   · 人在 `lab approve` 时读的是「协议原文」（硫酸），批准的是编译产物的 hash（盐酸）
+      //     ——**他批的不是他读的那个东西**，AD-6 的署名审批在这里失去意义；
+      //   · 审计记录里会出现实验方案中根本不存在的化学品，证据链溯源到的是错的；
+      //   · 拦截报告也跟着错（验收者原话：「我从没写过盐酸」）。
+      //
+      // 修法：**`name` 用真正匹配上的那个关键词**（用户写什么就是什么），
+      // `reagentId` 仍是分类 id（规则匹配靠它，不受影响）。
+      const matched = pattern.keywords.find((k) => lower.includes(k.toLowerCase()));
+      if (matched === undefined) continue;
+      out.push({ name: matched, reagentId: pattern.id });
+    }
+    return out;
   }
 }
 
