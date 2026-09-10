@@ -222,6 +222,22 @@ export function computeTargetViews(options: {
       };
     }
     if (kind === "modal") {
+      // 收口(W5-2)：**adapter 在场时，一切非可用情形都由它的 status() 说了算**。
+      // 放在凭据分支之前，是因为「没配凭据」和「真实 gateway 没实现」会同时成立——
+      // 只报前者的话，用户会去申请 token、填上、然后才发现还是跑不起来。
+      // 一次把两件事都说清楚，才是 V19/V36 要求的那种「失败消息给下一步」。
+      const modalReport = adapter && typeof (adapter as { status?: unknown }).status === "function"
+        ? (adapter as unknown as { status: () => ModalStatusReport }).status()
+        : null;
+      if (modalReport && modalReport.availability !== "available") {
+        return {
+          ...base,
+          credentialConfigured: modalReport.credentialConfigured,
+          availability: modalReport.availability,
+          reason: modalReport.reason,
+          setupHint: modalReport.howToConfigure.length > 0 ? modalReport.howToConfigure.join(" ") : MODAL_SETUP_HINT,
+        };
+      }
       if (base.credentialConfigured !== true) {
         return {
           ...base,
@@ -239,21 +255,6 @@ export function computeTargetViews(options: {
             "凭据已配置，但本版本没有装载 Modal adapter——算力抽象层与审批链已落地并有 local 实现，" +
             "Modal adapter 的契约已立、真实链路未验证（不要读成「支持 Modal 远端算力」）",
           setupHint: null,
-        };
-      }
-      // 收口(W5-2)：**问 adapter 自己**，不要在这里猜「有 adapter + 有凭据 = 可用」。
-      // α 的 Modal adapter 在真实 gateway 落地前 `transport === "not_wired"`，
-      // 此时即使凭据齐全也**不可用**——猜出来的 available 就是 AD-12 禁止的那种谎。
-      const report = typeof (adapter as { status?: unknown }).status === "function"
-        ? (adapter as unknown as { status: () => ModalStatusReport }).status()
-        : null;
-      if (report && report.availability !== "available") {
-        return {
-          ...base,
-          credentialConfigured: report.credentialConfigured,
-          availability: report.availability,
-          reason: report.reason,
-          setupHint: report.howToConfigure.length > 0 ? report.howToConfigure.join(" ") : MODAL_SETUP_HINT,
         };
       }
       return { ...base, availability: "available" as const, reason: null, setupHint: null };

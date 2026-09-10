@@ -61,6 +61,17 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
   }
   out("");
 
+  // 收口(W5-2)：算力执行地。三种状态用三个不同的记号，**刻意不把「未配置」画成 ❌**——
+  // 未配置是"差一把钥匙"，不可用是"这条路现在走不通"，两者该做的事完全不同。
+  out(`▎算力执行地（${report.computeTargets.length}）`);
+  for (const t of report.computeTargets) {
+    const mark = t.availability === "available" ? "✅" : t.availability === "needs_credential" ? "🔑" : "·";
+    out(`  ${mark} ${pad(t.kind, 12)}${t.availability}${t.isDefault ? "（默认）" : ""}`);
+    if (t.reason) out(`      ${t.reason}`);
+    if (t.setupHint) out(`      ${t.setupHint}`);
+  }
+  out("");
+
   out("▎前端");
   if (report.frontendBuilt) {
     out(`  ✅ 已构建  ${report.frontendDir}`);
