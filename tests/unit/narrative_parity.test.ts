@@ -77,6 +77,10 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   "backend/src/agents/swarm.ts":
     "**已知缺口**：v0.1 遗留，生产代码零调用方、dependsOn 未实现、decompose 是三条正则。" +
     "README 的「100 并发 swarm」宣传语即出自此处。方案 v0.3 P12 决定删除（BACKLOG V7）",
+  "backend/src/llm/providers/anthropic.ts":
+    "**等接线**：v0.4 P11 lane R-b 交付的 Anthropic 适配器。router.ts 的 ADAPTERS 注册由主会话在 " +
+    "P11 收口时统一接线（R-b/R-c 都不持有 router.ts，避免两条 lane 在同一文件上撞车）。" +
+    "接线完成后必须删除本条——门禁的『多余登记必须删除』对称检查会强制这件事。",
   // v0.4 P11 lane R-d 之前，backend/src/proteins/analysis.ts 在这里登记过一条「已知缺口」：
   // protein-analysis 技能有 e2e、有 SKILL.md，但 CLI / HTTP / MCP 三个入口全无（BACKLOG V22）。
   // R-d-2 补齐了三个入口（proteins/cli.ts、server/routes/proteins.ts、mcp/tools.ts 的
