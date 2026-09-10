@@ -152,7 +152,8 @@ describe("pydeseq2 · 依赖缺失时给出可操作的安装命令", () => {
     const available = await platform.available();
     expect(available.ok).toBe(false);
     expect(available.reason).toContain("pydeseq2 不可用");
-    expect(available.reason).toContain("No module named 'pydeseq2'");
+    // 同 scanpy_contract.test.ts：缺哪一环是环境属性，语义是「透出 python 原始报错」。
+    expect(available.reason).toContain("No module named");
     expect(available.reason).toContain("uv pip install pydeseq2");
     expect(available.detail.exitCode).not.toBe(0);
   }, 120_000);
