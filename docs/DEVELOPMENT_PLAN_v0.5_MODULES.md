@@ -1183,3 +1183,75 @@ target 即可，不必等 Modal），**发布前**第三次（干净机器）。
 v0.5.0 发布时**不许**宣称「支持 Modal 远端算力」。准确的说法是：
 **算力抽象层与审批链已落地并有 local 实现；Modal adapter 的契约已立、真实链路未验证。**
 （这与 v0.4.0 发布时如实说明三件未关闭事项是同一条纪律。）
+
+---
+
+## 三·补.8：W5-3 lane 划分与足迹核验（主会话，2026-09-10）
+
+> §3.3 的原表写于 W5-2 之前。这里按**两件已发生的事**重排：
+> ① W5-2 末的零上下文外部验收产出；② V45（外部 MCP 运行时接线）被识别为一条 lane。
+
+### 补.8.1 第二批 connector（原 γ）**取消**——这是方案自己的规则在生效
+
+§3.3 给 W5-3 γ 的条件是「**只在 F-1 或 W5-2 末外部验收给出拉动时才开；否则本 lane 空置**」。
+
+W5-2 末的验收**没有要求更多文献源**。它要的是：算力进证据图（S2）、能看原始 record（S11）、
+报告的证据索引别空着（S10）。**所以第二批 connector 不开**——不是忘了，是判据说不该开。
+这条规则存在的理由就是防止重演 v0.4 的铺量（方案 §2）。
+
+腾出来的位置给**更值钱的**两条：V45 与「证据图可见性」。
+
+### 补.8.2 四条 lane
+
+| lane | 内容 | 模型 |
+|---|---|---|
+| **α** | CB-6 桥 + **S2（算力产出进证据图）** + 真实 SIGKILL e2e | Opus |
+| **β** | C3 平台三件套（scanpy / pydeseq2 / cobrapy） | Opus |
+| **γ** | **V45**：外部 MCP 的运行时接线（子进程生命周期） | Opus |
+| **δ** | **证据图可见性**：S10 / S11 / S12 | Sonnet |
+
+**α 为什么把 S2 一并做**：设计 §1.1 本来就把「一条 `observation`（`kind:"compute_output"`,
+`evidence:"computed"`）+ harvest 文件各一条 artifact record」排给 W5-3 α。
+验收撞到它只是因为 W5-3 还没跑。**S2 不是新增范围，是它本来的范围。**
+
+**γ 为什么是 lane 不是收口活**：W5-2 收口追查发现 `connectExternalMcp()` 整条生产路径
+零调用方——不是「忘了传参数」，是**没有那条流程可传**。要建的是完整生命周期：
+发现已装的 `mcp_client` 扩展 → agent 开跑时连接**子进程** → 注册进 `ExternalToolRegistry` →
+绑定项目的 `recordSink` → 结束时收掉 → **坏扩展不许拖垮整轮**。
+在收口里手搓子进程生命周期正是工程纪律第 13 条警告的那类跨层改动。
+
+**δ 刻意扩 `report` 而不是新建 `records` 命名空间**：`report` CLI 已经有
+`export`/`stats` 且已在 `index.ts` 接线，`RecordStore` 也已有 `list`/`get`/`edgesOf`/`listEdges`
+（只读，够用）。扩它**一次消掉三处枢纽争用**（`index.ts` · `narrative_parity.test.ts` ·
+新命令的「等接线」登记），而且证据图检视本来就属于 `report` 的语义。
+
+### 补.8.3 足迹核验（grep 实核，不凭记忆）
+
+| 文件 | α | β | γ | δ | 处置 |
+|---|---|---|---|---|---|
+| `backend/src/compute/sim_bridge.ts`（新建） | ✅ | | | | 独占 |
+| `backend/src/compute/{cli,broker}.ts` | ✅（S2 落 record） | | | | 独占 |
+| `backend/src/experiment/{loop,models,cli}.ts` | ✅ | | | | 独占 |
+| `backend/src/server/routes/experiments.ts` | ✅ | | | | 独占 |
+| `backend/src/mcp/tools.ts` | ✅（`exp_design` 加 `target`） | | | | 独占 |
+| `backend/src/simulation/registry.ts` + 三个新平台 | | ✅ | | | 独占（α 的桥只读它，§1.1.9） |
+| `backend/src/skills/**` · `docs/EXTENDING.md` · `pyproject.toml` | | ✅ | | | 独占 |
+| `tests/unit/narrative_parity.test.ts` | | ✅（SKILL_ENTRYPOINTS 三行） | | | **β 独占**；γ 不需要（`mcp_client.ts` 本就有生产调用方，非孤儿，已核）；δ 不需要（扩 `report`，无新入口） |
+| `backend/src/extensions/{loader,mcp_client}.ts` | | | ✅ | | 独占 |
+| `backend/src/daemon/daemon.ts` · `server/context.ts` · `index.ts` | | | ✅ | | **γ 独占**——δ 改扩 `report` 后不再需要 `index.ts` |
+| `backend/src/agents/orchestrator.ts` | | | ✅ | | 独占（α 不碰它） |
+| `backend/src/report/{cli,export}.ts` | | | | ✅ | 独占 |
+| `backend/src/project/records.ts` | 只读 | | | 只读 | **无人写**——α 用既有 `create()`，δ 用既有查询 API |
+| `backend/src/artifacts/store.ts` | 只读（调 `save()`） | | | | 无人写 |
+
+**结论：零争用。** 与 W5-1/W5-2 相比这轮足迹格外干净，主要靠 δ 改扩 `report` 那个决定。
+
+### 补.8.4 这轮任务书要带的三条教训
+
+1. **基线数字必须实测后写进任务书**（W5-1 教训：新 worktree 缺 `.venv`/`node_modules` 时
+   python 套件**不报错、静默变 skip**，lane 会量到假基线）。worktree 建好后预装依赖并抽验一次。
+2. **跨层改动的 lane 必须在任务书里点名要求跑 e2e**（W5-1 教训：δ 的足迹里没有 `tests/e2e/`，
+   V25 的连带回归漏到收口才发现）。本轮 α 与 γ 都属跨层。
+3. **并行 lane 之间的「同一件事两份手写副本」单条 lane 的门禁看不见**（V46 教训：
+   Modal 凭据字段名对不上）。本轮 α 与 δ 都会碰「算力产出在证据图里长什么样」——
+   **任务书里把 record 的 `kind` / `evidence` 字面量指定死，并要求双方都从同一处 import**。
