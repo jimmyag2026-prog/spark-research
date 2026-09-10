@@ -39,6 +39,8 @@ export const LIT_HELP = `用法:
   spark-research lit tasks [<task-id>] [--json] [--limit N]
                                                   长任务状态（read --all / review 断开后查这里）
 
+所有涉及项目数据的子命令支持 --project <slug> 显式指定项目（并发多会话时务必带上——
+当前项目指针是全局的，另一个会话切换项目会影响不带 --project 的命令）。
 任何子命令后加 --help 看该子命令的详细用法，例如 spark-research lit review --help
 `;
 
@@ -229,7 +231,7 @@ function printSourceStatus(
 //   2. 有源被跳过/失败吗 → 是缺凭据还是网络错 → 分别怎么处理；
 //   3. 兜底：不知道标识符时该用 `lit search ... --add`。
 
-export type IdentifierShape = "doi" | "arxiv" | "pmid" | "openalex" | "unknown";
+export type IdentifierShape = "doi" | "arxiv" | "pmid" | "openalex" | "aminer" | "unknown";
 
 export function classifyIdentifier(raw: string): IdentifierShape {
   const id = raw.trim();
@@ -239,6 +241,9 @@ export function classifyIdentifier(raw: string): IdentifierShape {
   if (/^(arxiv:)?[a-z-]+(\.[A-Z]{2})?\/\d{7}(v\d+)?$/i.test(id)) return "arxiv";
   if (/^W\d+$/i.test(id)) return "openalex";
   if (/^\d{1,8}$/.test(id)) return "pmid";
+  // AMiner 内部 id：24 位十六进制（R1-T3 实测：用户会从 aminer 检索结果里拿到它
+  // 然后自然地去 lit add——识别出来才能给对的指引，而不是当 unknown 透传去撞库）
+  if (/^[0-9a-f]{24}$/i.test(id)) return "aminer";
   return "unknown";
 }
 
@@ -260,6 +265,9 @@ export const SHAPE_SOURCES: Record<IdentifierShape, LiteratureSource[]> = {
   arxiv: ["arxiv", "semanticscholar"],
   pmid: ["pubmed", "europepmc"],
   openalex: ["openalex"],
+  // aminer：getPaper 详情接口已验通（G-4）但**尚未接进 lit add 的取数管线**——
+  // 空表 = 没有源能按这个 id 取单篇，如实。接入前 add 会前置拒绝并给检索绕行指引。
+  aminer: [],
   unknown: [],
 };
 
@@ -268,6 +276,7 @@ const SHAPE_LABEL: Record<IdentifierShape, string> = {
   arxiv: "arXiv id",
   pmid: "PMID",
   openalex: "OpenAlex id",
+  aminer: "AMiner 内部 id",
   unknown: "无法识别的标识符形态",
 };
 
@@ -334,8 +343,11 @@ export function addNotFoundGuidance(
 }
 
 // 打开当前项目并拿到文献库句柄（含 records 联动）。
-function openLibrary(manager: ProjectManager): { project: Project; library: LibraryStore } {
-  const project = manager.defaultProject();
+// R1-P0：`--project <slug>` 显式覆盖。state.json 的 currentProject 是全局无锁指针，
+// 并发会话会互相改写（R1 双向污染实锤）；在指针加锁/会话隔离落地前，显式 flag 是
+// 让并发使用可靠的最小机制。不给 flag 时行为与从前逐字节一致（走全局指针）。
+function openLibrary(manager: ProjectManager, projectSlug?: string): { project: Project; library: LibraryStore } {
+  const project = projectSlug ? manager.open(projectSlug) : manager.defaultProject();
   const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
   return { project, library };
 }
@@ -416,7 +428,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         result.papers.forEach((paper, i) => printPaper(paper, i, out));
 
         if (flags.add === true || typeof flags.add === "string") {
-          const { project, library } = openLibrary(manager);
+          const { project, library } = openLibrary(manager, flagString(flags.project));
           const tags = flagString(flags.tag)?.split(",").map((t) => t.trim()).filter(Boolean) ?? [];
           let added = 0;
           let merged = 0;
@@ -439,6 +451,23 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           err("用法: spark-research lit add <doi|arxiv-id|pmid>");
           return 1;
         }
+        // R1-P0（S1 形状补全）：认不出形态、或认得出但没有任何源能按 id 取数的标识符，
+        // **前置拒绝、一个源都不查**。S1 修掉了「已知形态送错源」，但 unknown 是整体
+        // 绕过门禁的——R1-T3 实测：AMiner 内部 id 被透传去撞库、静默匹配到无关论文
+        // 并报 ✅。「没查到 ≠ 查了没有」的镜像：**查到了不对的东西比没查到更糟**。
+        const addShape = classifyIdentifier(id);
+        if (SHAPE_SOURCES[addShape].length === 0) {
+          err(`❌ 标识符 '${id}' 被识别为「${SHAPE_LABEL[addShape]}」——没有任何源能按它取单篇，已拒绝检索（防止被某个源宽容解析成无关论文）。`);
+          err("下一步:");
+          if (addShape === "aminer") {
+            err("  · AMiner 内部 id 暂不能直接 lit add（getPaper 尚未接入取数管线）。");
+            err("    用论文标题检索后入库：spark-research lit search \"<标题>\" --sources aminer --add");
+          } else {
+            err("  · lit add 只按标识符（DOI / arXiv id / PMID / OpenAlex id）取单篇；");
+            err("    如果这是标题或关键词，用 lit search 而不是 lit add。");
+          }
+          return 1;
+        }
         const sources = parseSources(flagString(flags.sources));
         const result = await makeSearcher().fetchById(id, { sources });
         if (result.papers.length === 0) {
@@ -448,7 +477,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           for (const line of addNotFoundGuidance(id, sources, result.sources)) err(line);
           return 1;
         }
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         const tags = flagString(flags.tag)?.split(",").map((t) => t.trim()).filter(Boolean) ?? [];
         const added = library.add(result.papers[0]!, { tags });
         library.rebuildCitations();
@@ -462,7 +491,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       }
 
       case "list": {
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         const papers = library.list({
           tag: flagString(flags.tag),
           readingStatus: flagString(flags.status) as LibraryPaper["readingStatus"] | undefined,
@@ -487,7 +516,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           err("用法: spark-research lit pdf <paper-id>");
           return 1;
         }
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         // 支持传 id 前缀（list 里展示的是前 8 位）。
         const match = library.get(paperId) ?? library.list().find((p) => p.id.startsWith(paperId));
         if (!match) {
@@ -515,7 +544,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       }
 
       case "read": {
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         const records = project.records();
         let targets: LibraryPaper[] = [];
         if (flags.all === true) {
@@ -633,7 +662,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       }
 
       case "review": {
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         const records = project.records();
         const cards = listReadingCards(records, library);
         if (cards.length === 0) {
@@ -777,7 +806,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           err(`❌ 未知导出格式 '${format}'（可用: bibtex, csl）`);
           return 1;
         }
-        const { project, library } = openLibrary(manager);
+        const { project, library } = openLibrary(manager, flagString(flags.project));
         const papers = library.list({ tag: flagString(flags.tag) });
         const content = exportLibrary(papers, format);
         const target = flagString(flags.out);
