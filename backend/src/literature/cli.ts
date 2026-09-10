@@ -16,6 +16,7 @@ import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
 import { LibraryStore, type LibraryPaper } from "./library";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, normalizeDoi, type LiteratureSource, type Paper } from "./models";
 import { PdfDownloader } from "./pdf";
+import { extractPdfText } from "./pdf_text";
 import { ReadingCardGenerator, listReadingCards, renderReadingCard } from "./reading";
 import { ReviewDraftGenerator, baselinesFrom } from "./review";
 import { LiteratureSearcher } from "./search";
@@ -84,6 +85,7 @@ export const LIT_SUBCOMMAND_HELP: Record<string, string> = {
   read: `用法: spark-research lit read <paper-id> | --all [--tag 标签] [--redo] [--budget-usd N] [--model M] [--json]
 
   --all 默认跳过已有精读卡的论文（重跑接续不重复花钱），--redo 强制全部重读。
+  有 PDF 的论文自动抽全文精读（需 .venv 装 pypdf；缺了降级回摘要并在输出标注）。
   --budget-usd N：本项目累计已知花费达 $N 即停止新的 LLM 调用（已完成的卡保留）。
 
   生成结构化精读卡（研究问题/方法/核心结论/局限/与本项目关系）并落进证据图。
@@ -134,6 +136,8 @@ export interface LitCliDeps {
   // V35：长任务句柄的 registry。不注入时按项目根目录建一个（落盘到 <项目>/tasks/），
   // 这样断开/重启之后 `lit tasks` 还查得到。测试注入纯内存的那个。
   taskRegistry?: TaskRegistry;
+  // V66：全文抽取注入点（测试注入 fake，生产走 extractPdfText/pypdf）。
+  fullTextFor?: (paper: LibraryPaper) => Promise<import("./reading").ReadingFullText>;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
@@ -609,6 +613,13 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           records,
           model,
           projectContext: project.meta.description || undefined,
+          // V66：有 PDF 就抽全文喂给精读；没有/失败降级回摘要并留痕（basis 元数据）。
+          fullTextFor:
+            deps.fullTextFor ??
+            (async (p) =>
+              p.pdfPath
+                ? extractPdfText(p.pdfPath)
+                : { ok: false, reason: "库内无 PDF（未下载或不可得）" }),
         });
 
         // V35：接 TaskRegistry（不是另起一套 CLI 进度机制——见 cli/progress.ts 文件头）。
@@ -647,9 +658,18 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         } else {
           for (const card of cards) {
             out(renderReadingCard(card));
-            out(`\n（record: ${card.recordId}）\n`);
+            // V66：这张卡读的是全文还是只有摘要必须可见——「看起来精读了其实只有摘要」
+            // 正是 R1 抓到的名不副实。
+            out(
+              card.basis === "fulltext"
+                ? `\n（record: ${card.recordId} · 基于全文）\n`
+                : `\n（record: ${card.recordId} · 仅基于摘要${card.basisReason ? `：${card.basisReason}` : ""}）\n`,
+            );
           }
-          if (cards.length > 0) out(`✅ 生成 ${cards.length} 张精读卡（项目 ${project.slug}）`);
+          if (cards.length > 0) {
+            const fulltextCount = cards.filter((c) => c.basis === "fulltext").length;
+            out(`✅ 生成 ${cards.length} 张精读卡（项目 ${project.slug}；全文 ${fulltextCount} / 摘要 ${cards.length - fulltextCount}）`);
+          }
           // 失败必须可见，不能被「成功 N 张」盖过去；全失败时更不该先报一个 ✅。
           for (const failure of failures) err(`❌ ${failure.paperId}: ${failure.error}`);
           if (failures.length > 0) {

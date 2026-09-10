@@ -31,6 +31,9 @@ export interface StoredReadingCard extends ReadingCard {
   recordId: string;
   createdAt: string;
   model: string | null;
+  // V66：这张卡基于全文还是仅摘要（老 record 无此字段时按 abstract 读）。
+  basis?: "fulltext" | "abstract";
+  basisReason?: string;
 }
 
 export class ReadingCardError extends Error {
@@ -111,7 +114,7 @@ export function validateReadingCardPayload(payload: unknown): CardValidation {
 
 // ── prompt ──────────────────────────────────────────────────────────────────
 
-export const READING_CARD_SYSTEM_PROMPT = `你是科研文献精读助手。给定一篇论文的元数据与摘要，产出一张结构化精读卡。
+export const READING_CARD_SYSTEM_PROMPT = `你是科研文献精读助手。给定一篇论文的元数据、摘要（以及可能提供的全文），产出一张结构化精读卡。
 
 只输出一个 JSON 对象，不要任何解释文字，字段如下：
 {
@@ -123,11 +126,20 @@ export const READING_CARD_SYSTEM_PROMPT = `你是科研文献精读助手。给�
 }
 
 纪律（违反即视为无效输出）：
-- 只依据给定的元数据与摘要作答。摘要没提到的数字、样本量、baseline 名称一律不要凭记忆补全。
-- 不确定的地方写「摘要未提及」，不要编造。
+- 只依据给定的材料（元数据/摘要/全文）作答。材料没提到的数字、样本量、baseline 名称一律不要凭记忆补全。
+- 不确定的地方写「材料未提及」，不要编造。给了全文时优先引用全文中的具体数字与实验设置。
 - keyFindings 至少 1 条，每条必须是这篇论文自己的结论，不是领域常识。`;
 
-function paperBrief(paper: LibraryPaper): string {
+// V66：全文材料。R1 实测 10/10 精读卡全是摘要级推理——PDF 下载了但从未被抽取喂给
+// 模型，「精读」名不副实。全文经 pdf_text 抽取注入；抽不到时降级回摘要并**如实标注**。
+export interface ReadingFullText {
+  ok: boolean;
+  text?: string;
+  truncated?: boolean;
+  reason?: string;
+}
+
+function paperBrief(paper: LibraryPaper, fullText?: ReadingFullText): string {
   const authors = paper.authors.slice(0, 8).map((a) => a.name).join(", ") || "作者未知";
   const lines = [
     `标题: ${paper.title}`,
@@ -135,17 +147,22 @@ function paperBrief(paper: LibraryPaper): string {
     `年份: ${paper.year ?? "未知"}`,
     `venue: ${paper.venue ?? "未知"}`,
     `DOI: ${paper.doi ?? "无"}`,
-    `摘要: ${paper.abstract ?? "（库内无摘要，只能基于标题与元数据作答，请在不确定处写「摘要未提及」）"}`,
+    `摘要: ${paper.abstract ?? "（库内无摘要）"}`,
   ];
   if (paper.notes.trim()) lines.push(`用户笔记: ${paper.notes.trim()}`);
+  if (fullText?.ok && fullText.text) {
+    lines.push(`全文${fullText.truncated ? "（超长已截断）" : ""}:\n${fullText.text}`);
+  } else {
+    lines.push("（未提供全文，只能基于标题/摘要作答，请在不确定处写「材料未提及」）");
+  }
   return lines.join("\n");
 }
 
-export function buildReadingCardPrompt(paper: LibraryPaper, projectContext?: string): string {
+export function buildReadingCardPrompt(paper: LibraryPaper, projectContext?: string, fullText?: ReadingFullText): string {
   const context = projectContext?.trim()
     ? `本研究项目的背景：${projectContext.trim()}`
     : "本研究项目的背景：未提供；relationToProject 请只写「这篇工作可被哪类项目借鉴/对比」，不要臆测具体项目。";
-  return `${context}\n\n待精读论文：\n${paperBrief(paper)}`;
+  return `${context}\n\n待精读论文：\n${paperBrief(paper, fullText)}`;
 }
 
 // ── 渲染 ────────────────────────────────────────────────────────────────────
@@ -187,6 +204,9 @@ export interface ReadingCardDeps {
   model?: string;
   // 「与本项目关系」一栏的项目背景；不给时 prompt 会明确要求不臆测。
   projectContext?: string;
+  // V66：按论文取全文（通常= extractPdfText 包一层）。不注入 = 摘要模式，
+  // 行为与从前逐字节一致；注入了但某篇抽取失败 = 那篇降级回摘要并记录原因。
+  fullTextFor?: (paper: LibraryPaper) => Promise<ReadingFullText>;
 }
 
 export interface GenerateCardOptions {
@@ -215,7 +235,11 @@ export class ReadingCardGenerator {
     if (!paper) throw new ReadingCardError(`论文 '${paperId}' 不在项目文献库中`, { attempts: 0 });
 
     const model = this.deps.model;
-    const userPrompt = buildReadingCardPrompt(paper, this.deps.projectContext);
+    // V66：有注入就尝试取全文；失败降级回摘要，basis/降级原因随 record 元数据留痕。
+    const fullText = this.deps.fullTextFor ? await this.deps.fullTextFor(paper) : undefined;
+    const basis: "fulltext" | "abstract" = fullText?.ok ? "fulltext" : "abstract";
+    const basisReason = fullText && !fullText.ok ? fullText.reason ?? "全文抽取失败（未给原因）" : undefined;
+    const userPrompt = buildReadingCardPrompt(paper, this.deps.projectContext, fullText);
     let lastErrors: string[] = [];
     let lastRaw = "";
     // 区分「模型没答上来」与「答了但不合 schema」——两种失败的处理动作完全不同
@@ -260,7 +284,7 @@ export class ReadingCardGenerator {
         title: paper.title,
         ...validation.fields!,
       };
-      const stored = this.persist(card, paper, response.model, options);
+      const stored = this.persist(card, paper, response.model, options, { basis, basisReason });
       if (options.markRead !== false) {
         this.deps.library.update(paper.id, { readingStatus: "read" });
       }
@@ -312,10 +336,11 @@ export class ReadingCardGenerator {
     paper: LibraryPaper,
     model: string | null,
     options: GenerateCardOptions,
+    provenance?: { basis: "fulltext" | "abstract"; basisReason?: string },
   ): StoredReadingCard {
     const records = this.deps.records;
     if (!records) {
-      return { ...card, recordId: "", createdAt: new Date().toISOString(), model };
+      return { ...card, recordId: "", createdAt: new Date().toISOString(), model, basis: provenance?.basis, basisReason: provenance?.basisReason };
     }
     // record 类型选 observation：精读卡是「对一篇文献的观察」，evidence=sourced 表明
     // 它的内容锚在一个外部来源上（区别于实验产出的 observed）。见 devlog P3 决策 D1。
@@ -331,6 +356,10 @@ export class ReadingCardGenerator {
         bibtexKey: card.bibtexKey,
         doi: paper.doi,
         model,
+        // V66：这张卡基于什么材料生成（fulltext / abstract）。降级时把原因也留下——
+        // 「看起来读了全文其实只有摘要」正是 R1 抓到的名不副实，留痕让它可审计。
+        basis: provenance?.basis ?? "abstract",
+        ...(provenance?.basisReason ? { basisReason: provenance.basisReason } : {}),
         // 卡片里唯一属于「推断」的字段，单独标出来，核验时不拿它当对照基准。
         inferredFields: ["relationToProject"],
         card: {
@@ -344,7 +373,7 @@ export class ReadingCardGenerator {
     });
     // 证据图：精读卡 --cites--> 该论文的 paper record。
     if (paper.recordId) records.link(record.id, paper.recordId, "cites");
-    return { ...card, recordId: record.id, createdAt: record.createdAt, model };
+    return { ...card, recordId: record.id, createdAt: record.createdAt, model, basis: provenance?.basis, basisReason: provenance?.basisReason };
   }
 }
 
