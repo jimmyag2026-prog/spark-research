@@ -124,6 +124,8 @@ export async function runChemCommand(args: string[], deps: ChemCliDeps = {}): Pr
       out(`✅ ${result.canonicalSmiles}（${result.formula}，MW=${result.molWeight}）`);
       out(`artifact: ${result.artifactId}`);
       out(`record: ${result.recordId}`);
+      // S12（外部验收）：`--json` 里有 path，人类输出里没有——而人最想要的恰恰是「图在哪」。
+      out(`path: ${result.path}`);
     }
     return 0;
   } finally {

@@ -242,8 +242,16 @@ export function validatePlan(plan: ComputePlan, caps: AdapterCapabilities): void
     throw new PlanValidationError(`resources.timeoutMinutes 必须是 1..${MAX_TIMEOUT_MINUTES} 的整数`);
   }
   if (r.gpu !== null && !caps.gpus.includes(r.gpu)) {
+    // S12（外部验收）：原文案是「（可选：无）」——一个空列表读起来像出了什么错，
+    // 而且**不给下一步**。两种情形要说的话完全不同：
+    //   有 GPU 目录 → 列出可选项（用户挑错型号了）
+    //   压根不提供 → 说清楚这个执行地从不提供 GPU，并指出该换哪个执行地
     throw new PlanValidationError(
-      `target '${plan.target.kind}' 不提供 GPU '${r.gpu}'（可选：${caps.gpus.length ? caps.gpus.join(" / ") : "无"}）`,
+      caps.gpus.length > 0
+        ? `target '${plan.target.kind}' 不提供 GPU '${r.gpu}'。该执行地可选：${caps.gpus.join(" / ")}。`
+        : `target '${plan.target.kind}' 从不提供 GPU（它是本机子进程），所以 --gpu '${r.gpu}' 无处可用。` +
+          `下一步：去掉 --gpu 在本机跑，或改用提供 GPU 的执行地（--target modal；` +
+          `先用 spark-research compute targets 看它现在可不可用）。`,
     );
   }
 

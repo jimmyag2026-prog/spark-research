@@ -720,6 +720,9 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           if (evidence.observationId) out(`    observation: ${evidence.observationId}`);
           out("    用 spark-research report stats 复核证据图");
           printJob(job, out);
+          // S12（外部验收）：收割完 `resource` 仍是 active，而这里**从没提示过 release**——
+          // 用户会不知不觉攒一堆未释放的槽位。run/approve/status 都调了 nextActionFor，只有 collect 漏了。
+          out(`下一步：${nextActionFor(job)}`);
         }
         return harvest.reconcileError ? 1 : 0;
       }

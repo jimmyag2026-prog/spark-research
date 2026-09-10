@@ -785,7 +785,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 
   {
     name: "compute_collect",
-    description: `【何时调】**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
+    description: `【何时调】**delivery 是 none / pending / failed 且 execution 已到终态时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
 【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
 【何时不该用】① execution 还没到终态——会得到 409，不是「等一会再试」的意思，是「你调早了」。② delivery 已经是 complete——再调一次没有语义。
 【典型链路】compute_status 看到 execution=succeeded & delivery=pending → compute_collect → 产物落到 harvest/，之后才允许人 release 远端资源。
