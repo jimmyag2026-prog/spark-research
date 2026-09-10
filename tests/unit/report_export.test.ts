@@ -181,6 +181,23 @@ describe("buildReport", () => {
     expect(report.markdown).toContain("（模拟）");
   });
 
+  test("S10：正文没有点名引用任何 record 时，附录 A 说明而不是留空表装没事", () => {
+    const { project } = newWorkspace("no-citations");
+    const records = project.records();
+    // 只有论文与精读卡，没有 idea/实验/结论去引用它们——正文不会 track 到任何 record id，
+    // 但 stats 仍会显示「论文 N」。这正是验收者被误导的场景（S10）。
+    records.create({ type: "paper", title: "从不被引用的论文", content: "abs", evidence: "sourced" });
+    records.create({ type: "reading", title: "精读卡", content: "# 精读", evidence: "sourced" });
+
+    const report = buildReport({ meta: project.meta, records, generatedAt: "2026-09-10T00:00:00Z" });
+    expect(report.recordIds.length).toBe(0);
+    expect(report.markdown).toContain("## 附录 A · 证据索引");
+    // 必须显式说明「不代表证据图是空的」，且指去能看全量 record 的命令——不能是裸空表。
+    expect(report.markdown).toContain("不代表证据图是空的");
+    expect(report.markdown).toContain("spark-research report records");
+    expect(report.markdown).toContain("spark-research report show");
+  });
+
   test("思路区带 novelty 状态与支持/反对文献边", () => {
     const { project } = newWorkspace("ideas");
     const records = project.records();
