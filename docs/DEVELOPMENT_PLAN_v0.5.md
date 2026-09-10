@@ -28,6 +28,58 @@
 **这是弹药库，不是排期承诺。** 规划目录自己写得很清楚：「154 个 staged 是弹药库不是排期承诺」。
 本方案把这句话当硬约束执行——见 §2。
 
+### 0.2·补 · 资源清点（2026-09-10 实测）
+
+**规划目录体量 70M，其中 66M 是 upstream/openscience 只读参考克隆**（Apache 2.0，main @ 2026-09-10）。
+真正的自产素材约 4M：
+
+#### 29 个 staged connector
+
+```
+arrayexpress bindingdb biogrid biorxiv chebi clinvar dbsnp depmap expression-atlas
+geo gnomad gtex gtopdb hpa intact interpro kegg mygene myvariant ncbi-gene
+opentargets pdbe reactome sifts single-cell-atlas string-db surechembl ucsc wikipathways
+```
+
+| 维度 | 实测 |
+|---|---|
+| 需凭据 | **仅 biogrid 1 个**，其余 28 个免 key |
+| 验证状态 | 结构测试 201 pass / 0 fail + `tsc` 干净；**fixture 未录、真实网络未验** |
+| **主机合池风险（V26）** | **ncbi.nlm.nih.gov 4 个**（clinvar/dbsnp/geo/ncbi-gene）· ebi.ac.uk 系 4 个。加上仓库已有的 pubmed，**NCBI eutils 单主机就有 5 个消费方** |
+| 已知红旗 | WikiPathways 实测 403；KEGG 学术免费/商业收费/3 req/s；COSMIC 需注册 |
+
+> **V26 的紧迫性被这份清点抬高了**：connector 层至今**没有任何限速器**，只有礼貌头。
+> 一旦这批集成，NCBI 单主机会有 5 个消费方各自打各自的——限速器必须**按 host 键控合池**，
+> 而不是每个 connector 自己限自己。这条要排进 C2 的第一批，**先于任何 NCBI 系 connector 集成**。
+
+#### 154 个 staged skill
+
+| 域 | 数量 | 形态 |
+|---|---|---|
+| experiment | **105** | 平台型 29 个（走 `SimulationPlatform`）· 带 scripts 97 个 |
+| literature | 28 | |
+| report | 15 | |
+| ideation | 6 | |
+
+**依赖分布**：约 125/158 行的 connector 字段是 `—`——**大多数技能不依赖 connector**，
+靠 kernel 脚本干活。这对集成节奏是好消息：技能与 connector 两条线**耦合比预想的松**，
+可以各自按拉动推进，不必等对方。
+
+**目录总账**：313 全量盘点 = SKIP(初判) 143 + staged 154 + SKIP(细判) 9 + 折并 1。
+每个 SKIP 都有书面理由。
+
+#### 其余资源
+
+| 资源 | 内容 |
+|---|---|
+| `workstreams/compute/COMPUTE_DESIGN.md` | 远端算力设计，含上游源码逐条引用 + 7 个实施切片 + 风险表 |
+| `workstreams/provider/`（4 份） | PROVIDER_INTEL · **PROVIDER_QUIRKS（已在 v0.4 反哺 P11）** · V05_PROVIDER_DESIGN |
+| `upstream/openscience/` | 只读参考克隆，**不入库** |
+| 集成候选提案（5 条） | 见 BATCH_ROLLUP：方程发现须 held-out 验证的确定性规则 · C0/C1 算力分层 · base.ts per-tool content-type · `registerCustom()` 作近期桥 · **湿实验技能一律汇入 wet-protocol 现有审批门，禁止平行审批通道** |
+
+> 最后那条提案（禁止平行审批通道）**应该直接写进 `EXTENDING.md` 的技能规范**，
+> 而不是等某个技能集成时才想起来——它是 AD-6 在技能层的推论。
+
 ### 0.3 v0.4 完成之后，依赖图全清
 
 规划目录的依赖表写于 v0.4 在飞时，列了 8 处「等 P11/P12/P15/P16 落地」。**这些约束现在全部解除**：
