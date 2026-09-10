@@ -1,0 +1,26 @@
+{
+  "id": "arxiv-xml-probe-w3d",
+  "baseUrl": "https://export.arxiv.org/api",
+  "description": "W3-d 判断证据（反向）：故意尝试用 manifest 的 normalize 受限路径 DSL 去解 arXiv 的 Atom XML 响应。编译期能过（normalize 的路径语法本身合法），但运行期每个字段都会取到 undefined——因为 evaluateRestrictedPath 只在已解析的 JSON 对象树上做 .field/[N] 取值，喂给它一个字符串（responseType:text 的原样 XML 文本）时，第一步 objGet 就因为 `typeof cur !== \"object\"` 直接返回 undefined。这不是路径写错了，是这个 DSL 里根本没有『XML→对象树』这一步。可运行的复现见 tests/unit/connector_manifest.test.ts，结论详见 docs/devlog/W3-d.md。这不是一个可用的生产 connector。",
+  "tools": [
+    {
+      "name": "search",
+      "description": "探测用：对 Atom XML 响应尝试用受限路径 DSL 取 title / totalResults",
+      "endpoint": "/query",
+      "method": "GET",
+      "responseType": "text",
+      "params": {
+        "search_query": { "type": "string", "required": true }
+      },
+      "normalize": {
+        "title": "feed.entry.title",
+        "totalResults": "feed.totalResults"
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "arxiv.org",
+    "apiKeyRequired": false,
+    "caveat": "探测 fixture：normalize 对 XML/text 响应结构性失效，字段全部取到 undefined，这正是本 fixture 要证明的事"
+  }
+}
