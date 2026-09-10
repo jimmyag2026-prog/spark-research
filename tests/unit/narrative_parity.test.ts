@@ -89,13 +89,17 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // connector_verify.ts 的 ext verify 逻辑），manifest.ts 有了真实生产调用方，
   // 按对称检查删除本条（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。
 
-  "backend/src/agents/contract.ts":
-    "**等接线**：v0.4 P13 波次 W2-b 交付的 Research Contract（AD-10：完成判定问图不问模型，" +
-    "`ContractStage.check(q: EvidenceQuery)` + `literature-review` 契约 + `NoProgressGuard`）。" +
-    "它的消费方是 W3-a 的 replan 循环（观察反馈循环 planner/execute/distill，见" +
-    "DEVELOPMENT_PLAN_v0.4.md §4.3），那条 lane 还没落地，所以现在没有生产调用方——" +
-    "只有 tests/unit/contract.test.ts 引用它。**W3-a 接上 replan 循环后必须删除本条**" +
-    "（门禁的『多余登记必须删除』对称检查会强制这件事，做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  // backend/src/agents/contract.ts 曾在此登记「等接线：W3-a 的 replan 循环接上后删除」——
+  // 实际接线路径与预期不同：W3-c 的 backend/src/literature/cli.ts 现在
+  // `import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from
+  // "../agents/contract"`，并在 `lit review` 命令里用它落一条 citation-integrity 的
+  // observation record（见 docs/devlog/W3-c.md）——孤儿检测是**整文件**粒度，这条真实
+  // import 边已经让 contract.ts 不再是孤儿，按对称检查删除本条。
+  // **诚实说明**：这不等于「W2-b 的契约系统已经被消费」——`ContractStage.check()` /
+  // `evaluateRound()` / `literature-review` 契约本体依然没有生产调用方，真正把它们接进
+  // replan 循环仍然是 W3-a 的分内活，只是那条依赖已经不能再用「contract.ts 是孤儿模块」
+  // 这条门禁来表达了（下面新增的「存储层生产写入方」断言同样只覆盖本 lane 接的这两条线，
+  // 不覆盖 W3-a 的那部分——见该断言前的大段注释）。
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
@@ -187,6 +191,247 @@ const SKILL_ENTRYPOINTS: Record<string, SkillEntrypoints> = {
   "research-report": { cli: ["report", "conclusion"], mcp: ["report_export"] },
   "wet-protocol": { cli: ["lab"], mcp: ["lab_compile", "lab_status"] },
 };
+
+// ── W3-c：存储层必须有生产写入方 ────────────────────────────────────────────
+//
+// 背景：v0.4 W1-b 建好了 findings 状态机的存储层（findings_store.ts）+ CLI，W2-b 建好了
+// literature-review 契约、把 citations_verified stage 的判据钉死成「存在某种 observation
+// record」——但两条 lane 交付时都在各自 devlog 里诚实写明：这一层**没有生产写入方**。
+// `ReviewerAgent.review()` 从不调用 findings_store 的 `reviewTarget()`，表永远是空的；
+// `lit review` 命令只把核验结果打印到 stdout，不落那条 record，citations_verified 在生产
+// 里永远过不了。上面两条既有断言都抓不到这一类问题：孤儿模块检测看的是「文件有没有被
+// import」——findings_store.ts 被 cli.ts import、cli.ts 被 index.ts import，import 链是
+// 真的，模块可达；技能可达性看的是「入口存在」。「有没有真的调用写方法/真的构造出这条
+// 约定记录」是一个 import 链和入口可达都测不出来的第三维度。
+//
+// 判据设计（与上面两条断言同一套纪律：显式登记表 + 去真实结构化数据源对账，不靠脆弱正则
+// 猜散文）：
+//   ① STORE_WRITE_BINDINGS：「存储层文件的写方法 → 生产调用方文件」。三段核实——
+//      a) 存储层文件本身真的定义了这个方法（防登记表把方法名拼错也能白过）；
+//      b) 写入方文件真的从存储层文件 import 了指定符号——用跟孤儿检测同一套「解析
+//         import 语句里的相对路径、normalize 后按文件系统真实对账」的办法，不是猜
+//         文件名像不像、也不是搜整个仓库；
+//      c) 写入方源码里真的出现对该方法的调用语法（`.method(`）——结构性调用语法，
+//         跟 SKILL_ENTRYPOINTS 用 switch-case 字面量、MCP_TOOLS 用结构化数组核实是
+//         同一个等级的确定性，不是对自然语言 triggers 做模糊匹配。
+//   ② CONTRACT_RECORD_PRODUCERS：目标不是「调用某个类的写方法」，而是「某个约定记录
+//      形状（metadata.kind 常量）有没有被真的构造出来」——citations_verified 这条判据
+//      依赖的不是某个 store 类的方法（RecordStore.create() 到处都在用，不是新建的存储层，
+//      早就有无数真实写入方，不适合套①的模板），而是「有没有人真的拿这个 kind 常量去
+//      创建一条 record」。核实写入方 import 了这个常量，且源码里真的出现
+//      `kind: <常量名>` 这种赋值语法——只 import 常量当类型引用摆在那、从没构造过
+//      对应形状的 record，这条检查必须能抓到。
+//
+// 为什么不做成「扫描全部 *Store 类、要求每一个都登记」：本仓库已有的 RecordStore /
+// ArtifactStore / LibraryStore / CredentialStore 等等都是早就有大量真实调用方的通用存储层，
+// 强行要求它们也逐一登记「谁写了它」只是把孤儿模块检测重新发明一遍（那些类不孤儿，import
+// 链本来就是真的）——这条新断言要抓的是更窄、更具体的一类问题：**新建的、专门为某个特定
+// 状态机/契约服务的存储层，写方从设计到交付之间有没有真的接上**，不是「这张表有没有人碰
+// 过」。全量扫描/自动发现留给后续（可参考 R-d-1 的思路：把登记表搬进模块自己的元数据里，
+// 而不是维护在测试文件里）——本 lane 只登记这两条本 lane 亲手接上的线，按需增长，且同样
+// 遵守「反向：登记错了/接线被拆了必须报红」的纪律（见下面阴性对照）。
+interface StoreWriteBinding {
+  // 存储层文件（相对 REPO_ROOT，不含 .ts）。
+  store: string;
+  // 该文件里必须真实存在的写方法名。
+  method: string;
+  // 写入方需要从 store 文件 import 的符号名（类名/类型名都行）。
+  importedSymbol: string;
+  // 生产写入方文件（相对 REPO_ROOT，不含 .ts）。
+  writer: string;
+  note: string;
+}
+
+const STORE_WRITE_BINDINGS: StoreWriteBinding[] = [
+  {
+    store: "backend/src/reviewer/findings_store",
+    method: "reviewTarget",
+    importedSymbol: "FindingsStore",
+    writer: "backend/src/reviewer/agent",
+    note:
+      "ReviewerAgent.review() 每轮把 Finding[] 映射成 FindingHit[]，按 (checker, target) " +
+      "upsert 进 findings 状态机（agent.ts 的 recordFindings()，只在 options.findings 配置时" +
+      "生效）。见 docs/devlog/W3-c.md。",
+  },
+];
+
+interface ContractRecordProducerBinding {
+  // 判据依赖的常量所在文件（相对 REPO_ROOT，不含 .ts）。
+  from: string;
+  // 判据依赖的 metadata.kind 常量名。
+  kindConst: string;
+  // 生产写入方文件（相对 REPO_ROOT，不含 .ts）。
+  writer: string;
+  note: string;
+}
+
+const CONTRACT_RECORD_PRODUCERS: ContractRecordProducerBinding[] = [
+  {
+    from: "backend/src/agents/contract",
+    kindConst: "CITATION_INTEGRITY_REVIEW_KIND",
+    writer: "backend/src/literature/cli",
+    note:
+      "`lit review` 命令在核验完成后落一条 metadata.kind=CITATION_INTEGRITY_REVIEW_KIND 的 " +
+      "observation record，满足 literature-review 契约 citations_verified stage 的判据。见 " +
+      "docs/devlog/W3-c.md 与 docs/devlog/W2-b.md「citations_verified 的已知缺口」一节。",
+  },
+];
+
+// 下面几条结构性判据都是拿 regex 去匹配「调用语法」，而不是对自然语言做模糊匹配——但
+// regex 分不清代码和注释：解释代码该怎么写的注释里，完全可能原样出现跟真实调用一样的
+// 字符串（比如这个文件自己：写文档解释判据设计时，就在注释里写过一遍
+// `.create({ ... kind: XXX ... })` 这样的示例片段，第一版判据因此被自己的说明性注释
+// 骗过，误把「注释里的示例」当成「真实调用」——见 docs/devlog/W3-c.md 记录的这次意外）。
+// 所以任何结构性核实之前，先把注释剥掉，只在真代码上做匹配。
+//
+// **不能**用两趟独立的全局正则（先全局删 /* */，再全局删 //）——踩过这个坑：
+// backend/src/agents/contract.ts 的一行 `//` 注释里提到了 `literature/**`（口语化的
+// 「literature 目录下所有文件」，不是代码），先跑的 block-comment 正则会把这段 `//` 注释
+// 文本里的 `/**` 认成一个真正的块注释起点，然后一路找到几行之后另一个真正 JSDoc 的
+// `*/` 才收手，把中间的 `export const CITATION_INTEGRITY_REVIEW_KIND = ...` 一并吃掉——
+// 两趟全局正则不知道「这个 `/*` 其实出现在一个已经被 `//` 起头的注释内部，不该被
+// 单独当块注释解析」。改成单趟从左到右扫描：每个位置先看是不是 `//`（是则跳到行尾），
+// 再看是不是 `/*`（是则跳到最近的 `*/`），谁先出现在文本里就按谁处理——这样「`//` 注释
+// 内部出现的 `/*`」永远不会被单独解释，因为扫描在遇到 `//` 的那一刻就已经跳过了整行，
+// 根本不会再单独检视里面的字符。
+// 仍然是近似解析（不追踪字符串字面量，字符串里恰好出现 `//`/`/*` 会被误当注释起点），
+// 但跟本文件其余判据（switch-case 字面量提取、BADGE_TONE 键名解析）是同一个量级的
+// 确定性，好过完全不剥、也好过两趟全局正则那种「不知道自己身处哪个注释内部」的写法。
+function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    if (src.startsWith("//", i)) {
+      const nl = src.indexOf("\n", i);
+      i = nl === -1 ? src.length : nl; // 保留换行本身，不破坏后续多行匹配的行边界
+      continue;
+    }
+    if (src.startsWith("/*", i)) {
+      const end = src.indexOf("*/", i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    out += src[i];
+    i++;
+  }
+  return out;
+}
+
+// 解析一段源码里 `import {...} from "./relative"` 形式的相对 import，返回每条 import 语句
+// 具名引入的符号列表 + 它实际指向的、去掉 .ts 扩展名的绝对路径。兼容 `import type {...}` 与
+// 括号内单个符号前缀 `type `（`import { A, type B } from ...`）两种写法——本仓库两种都在用。
+// 传入的 src 必须已经 stripComments 过，否则注释里提到的 import 语句会被误当成真的。
+function namedRelativeImports(src: string, fileAbs: string): Array<{ named: string[]; resolvedNoExt: string }> {
+  const out: Array<{ named: string[]; resolvedNoExt: string }> = [];
+  for (const m of src.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"(\.[^"]+)"/g)) {
+    const named = m[1]!
+      .split(",")
+      .map((s) => s.replace(/^\s*type\s+/, "").trim())
+      .filter(Boolean);
+    const resolvedRaw = normalize(join(dirname(fileAbs), m[2]!));
+    const resolvedNoExt = resolvedRaw.endsWith(".ts") ? resolvedRaw.slice(0, -3) : resolvedRaw;
+    out.push({ named, resolvedNoExt });
+  }
+  return out;
+}
+
+function verifyStoreWriteBinding(binding: StoreWriteBinding): string[] {
+  const problems: string[] = [];
+  const storeAbs = join(REPO_ROOT, `${binding.store}.ts`);
+  const writerAbs = join(REPO_ROOT, `${binding.writer}.ts`);
+
+  let storeSrc: string;
+  try {
+    storeSrc = stripComments(readFileSync(storeAbs, "utf8"));
+  } catch {
+    return [`登记的存储层文件不存在：${binding.store}.ts`];
+  }
+  if (!new RegExp(`\\b${binding.method}\\s*\\(`).test(storeSrc)) {
+    problems.push(`存储层文件 ${binding.store}.ts 里核实不到方法 '${binding.method}'（登记表可能拼错了名字）`);
+  }
+
+  let writerSrc: string;
+  try {
+    writerSrc = stripComments(readFileSync(writerAbs, "utf8"));
+  } catch {
+    return [...problems, `登记的写入方文件不存在：${binding.writer}.ts`];
+  }
+
+  const storeNoExt = join(REPO_ROOT, binding.store);
+  const importsStore = namedRelativeImports(writerSrc, writerAbs).some(
+    (imp) => imp.resolvedNoExt === storeNoExt && imp.named.includes(binding.importedSymbol),
+  );
+  if (!importsStore) {
+    problems.push(
+      `写入方 ${binding.writer}.ts 核实不到 'import { ${binding.importedSymbol} } from ...' 指向 ` +
+        `${binding.store}.ts 的真实 import 边`,
+    );
+  }
+
+  if (!new RegExp(`\\.${binding.method}\\s*\\(`).test(writerSrc)) {
+    problems.push(`写入方 ${binding.writer}.ts 源码里核实不到对 '.${binding.method}(' 的调用语法`);
+  }
+
+  return problems;
+}
+
+function verifyContractRecordProducer(binding: ContractRecordProducerBinding): string[] {
+  const problems: string[] = [];
+  const fromAbs = join(REPO_ROOT, `${binding.from}.ts`);
+  const writerAbs = join(REPO_ROOT, `${binding.writer}.ts`);
+
+  let fromSrc: string;
+  try {
+    fromSrc = stripComments(readFileSync(fromAbs, "utf8"));
+  } catch {
+    return [`登记的判据来源文件不存在：${binding.from}.ts`];
+  }
+  if (!new RegExp(`export\\s+const\\s+${binding.kindConst}\\b`).test(fromSrc)) {
+    problems.push(`${binding.from}.ts 里核实不到 'export const ${binding.kindConst}'（登记表可能拼错了名字）`);
+  }
+
+  let writerSrc: string;
+  try {
+    writerSrc = stripComments(readFileSync(writerAbs, "utf8"));
+  } catch {
+    return [...problems, `登记的写入方文件不存在：${binding.writer}.ts`];
+  }
+
+  const fromNoExt = join(REPO_ROOT, binding.from);
+  const importsConst = namedRelativeImports(writerSrc, writerAbs).some(
+    (imp) => imp.resolvedNoExt === fromNoExt && imp.named.includes(binding.kindConst),
+  );
+  if (!importsConst) {
+    problems.push(
+      `写入方 ${binding.writer}.ts 核实不到 import { ${binding.kindConst} } 指向 ${binding.from}.ts 的真实 import 边`,
+    );
+  }
+
+  // 结构性判据：`.create({ ... kind: <常量> ... })`——`kind:` 紧跟这个常量名，且必须落在
+  // 同一次 `.create(` 调用的参数窗口内（下面 800 字符的上限覆盖真实调用里 title/content/
+  // origin 等字段的合理长度），而不是「整篇文本搜有没有出现过这两个 token」。
+  // 这条比只搜 `kind: 常量名` 更严格是有意为之：本 lane 实测过一次更弱的版本——
+  // 把 metadata 对象拆成一个中间变量 `const meta = { kind: 常量, ... }` 再传
+  // `metadata: meta`，弱版本看到源码里仍然物理存在 `kind: 常量` 这几个字符就判过，哪怕
+  // 那个变量从未被传给任何 `.create()` 调用（阴性对照②第一次就是这样被弱版本放过的，
+  // 见 docs/devlog/W3-c.md）。要求 `.create(` 与 `kind:` 出现在同一段窗口内，逼着生产
+  // 代码把「构造这条 record」与「落库」写成同一个调用表达式（cli.ts 现在就是这么写的），
+  // 判据不需要做变量流追踪就能可靠核实——比追踪变量身份简单，又不会被「变量造出来但没用」
+  // 这种半接线蒙混过去。
+  const callSiteWindow = 800;
+  const createWithKind = new RegExp(
+    `\\.create\\s*\\(\\s*\\{[\\s\\S]{0,${callSiteWindow}}?kind\\s*:\\s*${binding.kindConst}\\b`,
+  );
+  if (!createWithKind.test(writerSrc)) {
+    problems.push(
+      `写入方 ${binding.writer}.ts 源码里核实不到 '.create({ ... kind: ${binding.kindConst} ... })'——` +
+        `同一次调用里构造并落库这条 record 的语法（可能是只 import 了常量没真的用，或者把 ` +
+        `metadata 拆成了不会被传给 create() 的中间变量）`,
+    );
+  }
+
+  return problems;
+}
 
 describe("叙事一致性门禁（AD-12）", () => {
   test("孤儿模块：生产代码零引用者的文件必须在册，且在册理由不许为空", () => {
@@ -384,6 +629,21 @@ describe("叙事一致性门禁（AD-12）", () => {
       unreachable,
       `这些技能声称有能力（SKILL.md + triggers + capabilities 广播），但登记的入口一条都核实不到，` +
         `等于自描述面对外撒谎（AD-12）：${unreachable.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  // 第 8 条（W3-c）：存储层生产写入方。判据设计见上面两张登记表之前的大段注释。
+  test("存储层的写方法 / 约定记录的 metadata.kind 必须有可核实的生产写入方", () => {
+    const storeProblems = STORE_WRITE_BINDINGS.flatMap(verifyStoreWriteBinding);
+    expect(
+      storeProblems,
+      `以下登记的存储层写入方核实不通过（要么真的没接线，要么登记表本身写错了）：\n  ${storeProblems.join("\n  ")}`,
+    ).toEqual([]);
+
+    const recordProblems = CONTRACT_RECORD_PRODUCERS.flatMap(verifyContractRecordProducer);
+    expect(
+      recordProblems,
+      `以下登记的约定记录生产者核实不通过：\n  ${recordProblems.join("\n  ")}`,
     ).toEqual([]);
   });
 });
