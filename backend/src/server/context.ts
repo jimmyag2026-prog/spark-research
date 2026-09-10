@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { OrchestratorAgent } from "../agents/orchestrator";
-import { configuredWetBackend, resolveSetting } from "../config";
+import { configuredDefaultModel, configuredWetBackend } from "../config";
 import { ConnectorRegistry } from "../connectors/registry";
 import { SparkResearchDaemon } from "../daemon/daemon";
 import { CredentialStore } from "../daemon/credentials";
@@ -168,8 +168,11 @@ export class ServerContext {
   }
 
   // 各 pipeline 用的模型：注入 > 用户 config.json > 各自的内部默认（传 undefined）。
+  // G-1（v0.6）：解析逻辑收进 config 层的 configuredDefaultModel（CLI/HTTP 共用一份），
+  // 这里原来的 resolveSetting 手写版有个差异：value 为 "" 时会返回 ""，下游把空串当
+  // 真模型名传给 router——helper 版把 "" 归一成 undefined。
   model(): string | undefined {
-    return this.deps.model ?? resolveSetting("defaultModel").value?.toString();
+    return this.deps.model ?? configuredDefaultModel();
   }
 
   simulationRegistry(project: Project): SimulationRegistry {

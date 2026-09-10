@@ -15,7 +15,10 @@ export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
   anthropic: ["claude-sonnet-4-5", "claude-opus-4-5"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   qwen: ["qwen3", "qwen-max"],
-  openrouter: ["moonshotai/kimi-k2.6"],
+  // z-ai/glm-5.3-flash：v0.6 B2 轮次指定模型。必须显式登记——providerForModel 的
+  // 关键词兜底认不出 "z-ai/glm"（不含 kimi/gpt/claude/deepseek/qwen 任何一个词），
+  // 不登记会静默落到 kimi adapter 用错误的 baseUrl 调用。
+  openrouter: ["moonshotai/kimi-k2.6", "z-ai/glm-5.3-flash"],
 };
 
 export const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
