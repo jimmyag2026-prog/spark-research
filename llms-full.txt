@@ -1996,7 +1996,8 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-09（v0.2.1 外部验收收口；全部 19 条 V 项已由 v0.3 方案归口，见 §「去向总表」）
+> 最后更新：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
+> v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
 
 ## 去向总表（一眼看清每条在哪）
 
@@ -2007,6 +2008,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.5 规划中**（本地规划目录，未入库） | V2 V4 V15 V25(字段兑现) V26 · 另有 connector/skill/内联视图扩展等新项，见规划目录 TODO_v0.5.md |
 
 ---
 
@@ -2019,7 +2021,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 
 | # | 项 | 为什么等 | 何时该启动 |
 |---|-----|---------|-----------|
-| V4 | 远端算力真实实现（Docker / SSH / Modal / 火山引擎） | 抽象层已就位，但没有真实课题要求跑远端；凭空实现会照着想象中的用法做错 | 有一个课题的算力需求超出本机时 |
+| V4 | 远端算力真实实现（Docker / SSH / Modal / 火山引擎） | 抽象层已就位，但没有真实课题要求跑远端；凭空实现会照着想象中的用法做错 | 有一个课题的算力需求超出本机时<br>✅ **启动条件已触发（2026-09-10 用户拍板，定为 v0.5 主线）**：连接设计已完成（规划目录 `workstreams/compute/COMPUTE_DESIGN.md`，照 OpenScience JobBroker 架构：Plan 摘要审批 + 持久卷结果真源 + 符号化凭据 + 三轴生命周期；第一实现 Modal，SSH/火山引擎留 Target 槽位）。v0.4 侧仅 P12 §4.2 第 6 条的接口预留 |
 | V5 | R kernel | permit set 里早有位置，但至今无人要 R；P12 做实子代理后再加一个 kernel 成本更低 | 有用户明确要 R |
 | D1 | 第三个仿真平台（材料计算 VASP/LAMMPS？EDA？） | `SimulationPlatform` 契约已被 OpenMM + pyref 两个实现验证过通用性。P15 的 `ext verify` 落地后，第三方自己加比我们代做更划算 | 用户的真实课题指定了平台 |
 
@@ -2027,7 +2029,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 
 | # | 项 | 卡在什么前置 |
 |---|-----|-------------|
-| V2 | novelty 相似度语义化（词面 → embedding） | 需要 embedding provider 决策（自托管？走 LLM provider？）。P11 的 provider 抽象为它铺路，铺好了再做才不会做两遍。**当前风险已知**：词面阈值 0.75，标定样本仅 2 个 claim，最近邻余量 0.08 |
+| V2 | novelty 相似度语义化（词面 → embedding） | 需要 embedding provider 决策（自托管？走 LLM provider?）。P11 的 provider 抽象为它铺路，铺好了再做才不会做两遍。**当前风险已知**：词面阈值 0.75，标定样本仅 2 个 claim，最近邻余量 0.08<br>**2026-09-10 补**：调研确认 OpenScience **没有** embedding 抽象（上游 `embeddingModel` 被显式注释停用），无作业可抄；v0.5 设计稿已备（规划目录 provider workstream：`llm/embeddings.ts` 与 chat 平级的抽象，后端优先 Ollama 本地零 key + OpenAI 复用现有 key，词面法保留为降级路径、双留痕符合 AD-8）。落地仍等 P11 |
 | V6 | 物理 Opentrons / 真实设备对接 | 硬前置是 v0.3 的 D-8「安全门声明兑现」。在安全门真的守得住之前碰物理设备是不负责任的。同设备族接入靠新 `WetLabBackend` 即插即用；**非 Opentrons 设备族**需把设备语言编译下沉进 backend（施工说明见 `EXTENDING.md` 第 4 节） |
 | V10 | HTTP 层真实身份（多用户场景） | v0.3 先把 agent 层做实。当前 approve 的 actor 是「谁自称就是谁」——单用户本地诚实，**做多用户前必须先解决**，否则审批审计不成立。与 V19（审批要求可交互终端，v0.3 P12 做）配套才完整 |
 | V15 | 移除 `MCPConnector` 等 deprecated 别名 | v0.3 P10 会尝试；确认无外部引用才能删。做不掉就留这里 |
@@ -2089,6 +2091,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V23 | 湿实验 `unconsumedWarnings` 尚未在 HTTP / Web 审批面强制展示 | P10 lane D-d 交付：CLI 的编译与审批输出已强制显示，HTTP/UI 侧还没接。**接物理设备前必须补**——否则经 Web 批准的人看不到「你写了但安全门没看见」的部分<br>✅ **v0.4 P11 lane R-d 已消化**：HTTP 层原本已结构性透传（`viewJson()` 整体 spread `WetExperimentView`）只是没测试；真实缺口在前端——`WetExperiment` 类型缺 `unconsumedWarnings` 字段、审批弹窗从不渲染它。已补类型 + 显眼的告警块（`data-testid="unconsumed-warnings"`）+ HTTP 断言 + e2e ⑨b。阴性对照：强制隐藏告警块 → e2e ⑨b 红。 |
 | V24 | `RecordIntegrityError` 没有恢复路径 | P10 lane D-d 新增的 record 完整性哈希校验，检测到被篡改的记录只能拒绝信任，没有「人工确认后修复」的入口，只能用 `RecordStore` 原始接口手工处理 |
 | V25 | `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」
+| V26 | connector 限速按 host 合池 | **2026-09-10 新登记**（来源：v0.5 connector 扩展调研）。现状：connector 层只有礼貌头（`politeness.ts`），**没有任何限速器**。pubmed 与 ncbi 已共享 NCBI eutils 的主机级预算，v0.5 计划新增的 ClinVar / GEO 也打同一主机——四个 connector 各自为政会集体被 429。限速器若做必须按 host 键控合池，不按 connector。去向：v0.5 集成 eutils 系新 connector 时同批做 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
