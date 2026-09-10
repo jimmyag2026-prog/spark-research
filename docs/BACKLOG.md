@@ -154,7 +154,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没 |
 | V66 | **精读卡不吃已下载的 PDF 全文（仅摘要推理）** | R1-T1：10/10 张卡全部呈摘要级推理形态，含 PDF 已成功下载的论文。文献链路价值大头——精读的「读」目前名不副实。需查 reading.ts 的输入构造是否根本没接 PDF 文本抽取<br>✅ **v0.6 R1 修复窗口已做**：pdf_text.py（pypdf）抽取 + reading 注入全文（40k 字符截断）+ basis/basisReason 落 record 元数据 + CLI 显示「基于全文/仅摘要」。降级路径不抛：无 PDF/抽取失败/缺 pypdf 都回摘要并留原因。实弹：AlphaFold3 论文 24 页抽出 40k 字符。pypdf 为可选依赖（缺了整体降级），doctor 探测面未加——后续有人被绊再补 |
 | V67 | 默认检索排序让里程碑论文沉底 | R1-T1：任务书检索式下召回 2/8，--limit 提到 50 才 5/8；3 篇里程碑（ESMFold/Foldseek/ProGen2）任何设置都不出现在检索结果但 DOI 直加秒中——**排序问题非覆盖问题**。方向：被引数加权 / 源侧排序参数 |
-| V68 | `idea new` / `idea check` 无任务句柄 | R1-T1：进程被杀 100% 丢工作、零痕迹——与 lit read/review（V35 已接任务句柄）能力不对等。照 runCliTask 同款接线 |
+| V68 | `idea new` / `idea check` 无任务句柄 | R1-T1：进程被杀 100% 丢工作、零痕迹——与 lit read/review（V35 已接任务句柄）能力不对等。照 runCliTask 同款接线<br>✅ **v0.6 R1 修复窗口已做**：非交互 idea new 与 idea check 走 runCliTask（kind=idea-new/idea-check），快照落盘、被杀可查；任务失败时原始错误原因透出（不被包装吞掉，V36）。交互模式刻意不包（readline 生命周期由人掌控） |
 | V69 | 项目 `--desc` 逐字注入每次 LLM prompt，污染报告正文 | R1 双课题都观察到：desc 文本渗入精读卡「与本项目关系」与报告「研究问题」。projectContext 注入时应显式框定为背景说明而非任务指令 |
 | V70 | 长任务进程被杀后快照僵死「running」 | R1-T3：kill 后 lit tasks 永久显示 running，无 liveness 判据（V3 的亲戚：缺 pid/start-time 交叉核验） |
 | V71 | `review findings` 不显示刚落的 citation-integrity soft finding | R1-T1：soft finding 刚写入证据图，review findings 却看不到——查询过滤面或类型映射有洞 |
