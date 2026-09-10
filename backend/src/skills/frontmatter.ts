@@ -206,6 +206,11 @@ export function skillDirs(root: string = SKILLS_DIR): string[] {
   // `capabilities --json` 于是平静地报「技能 0 个」。**安静的错误答案比响亮的失败更糟**，
   // 而且正是 AD-12 要防的形状。内嵌副本只在「默认根 + 磁盘上没有」时兜底：
   // 显式传了 root 的调用方（测试、扩展目录）行为一个字不变。
+  // ⚠️ 判据不能只靠 existsSync：`/$bunfs/...` 的可见性是平台相关的——macOS 上
+  // existsSync 为假（走兜底，13 个技能），Linux 上为真但目录枚举拿不到技能结构，
+  // 于是又回到「平静地报 0 个」（v0.6 G-2 的首个 Linux CI run 实测抓到）。
+  // 虚拟路径前缀是显式判据，两个平台行为归一。
+  if (root === SKILLS_DIR && root.startsWith("/$bunfs")) return Object.keys(EMBEDDED_SKILLS).sort();
   if (!existsSync(root)) return root === SKILLS_DIR ? Object.keys(EMBEDDED_SKILLS).sort() : [];
   return readdirSync(root)
     .filter((entry) => {
@@ -219,7 +224,9 @@ export function skillDirs(root: string = SKILLS_DIR): string[] {
 // 静默跳过等于让一个坏掉的技能永远不被发现。
 export function loadSkills(options: ParseOptions & { root?: string } = {}): SkillEntry[] {
   const root = options.root ?? SKILLS_DIR;
-  const embedded = root === SKILLS_DIR && !existsSync(root);
+  // 与 skillDirs 同一判据（/$bunfs 前缀优先于 existsSync），否则 Linux 二进制里
+  // skillDirs 走内嵌、这里却以为磁盘可读，readFileSync 直接炸。
+  const embedded = root === SKILLS_DIR && (root.startsWith("/$bunfs") || !existsSync(root));
   return skillDirs(root).map((name) => {
     const path = join(root, name, SKILL_FILE);
     const raw = embedded ? EMBEDDED_SKILLS[name]! : readFileSync(path, "utf8");
