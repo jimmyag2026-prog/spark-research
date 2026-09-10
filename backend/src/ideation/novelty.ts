@@ -42,14 +42,29 @@ import { IdeaStore } from "./store";
 export const MAX_CLAIMS = 5;
 export const MIN_QUERIES_PER_CLAIM = 2;
 export const MAX_QUERIES_PER_CLAIM = 3;
-// 「高相似候选」的门槛：候选的标题+摘要要覆盖 claim（或它某条检索式）**3/4 以上**的内容词。
-// 这个值是在 P4 的真实检索样本上标定的，不是拍的——标定表见 devlog P4：
-//   (a) 已发表 claim 的原文 = 1.00，同领域邻近工作 = 0.86 / 0.86 / 0.57…
-//   (b) 杜撰组合 claim 的最近邻 = 0.67，其余 ≤ 0.56
-// 0.75 把「就是这件事」与「同一个领域」分开，两侧都留了余量。
-// 注意这是**词面覆盖率**不是语义相似度：它会把用词高度重合的邻近工作judge得偏高，
+// 「高相似候选」的门槛：候选的标题+摘要要覆盖 claim（或它某条检索式）足够多的内容词。
+//
+// **v0.5 W5-1 收口重标定：0.75 → 0.70。** 原值是 P4 在**2 条样本**上定的；
+// W5-1 β 为标定语义阈值录了一份 68 样本的真实语料（`tests/fixtures/novelty/calibration.json`，
+// 论文全部来自 P2/P4 真实录制的检索响应），顺带量出 0.75 连自己的最优区间都不在。
+//
+// 在那份语料上用生产函数 `claimAffinity()` 扫阈值：
+//   0.75  → 错分 2：假阴 1（e07 → adversarial-mutations，0.714）+ 假阳 1（h01 → attend-and-diagnose，0.857）
+//   0.70  → 错分 1：假阴 0 + 假阳 1（**同一条**，那条降阈值修不掉——要修得把阈值抬到 0.857 以上，
+//                    代价是大批假阴）
+// 所以 0.70 严格优于 0.75。最优点其实是 0.714，但它正压在一个样本上、零余量；
+// 0.70 落在最大负样本（0.667）与最小正样本（0.714）之间，两侧都有余量。
+//
+// **方向也是安全的那边**：阈值降低 → R5 更常触发 → 更多「novel」被降级为 existing。
+// novelty checker 宁可错说「已存在」（用户一看就能反驳），也不该错发一张新颖性通行证。
+//
+// 这个值**不许再当魔数改**：`tests/unit/novelty_threshold.test.ts` 在同一份语料上
+// 用生产函数重算最优区间并断言 HIGH_AFFINITY 落在里面。改了 `affinity.ts` 的打分规则
+// 而没重标定，那条测试会当场变红。
+//
+// 注意这是**词面覆盖率**不是语义相似度：它会把用词高度重合的邻近工作 judge 得偏高，
 // 所以它只用来做「不许在有高相似候选时说 novel」这类**约束**，不用来直接下结论。
-export const HIGH_AFFINITY = 0.75;
+export const HIGH_AFFINITY = 0.7;
 
 // v0.5 C4：**词面口径的阈值就到此为止**。语义口径（embedding 余弦）是完全不同的量纲，
 // 阈值另标一套，登记在 `llm/embeddings/calibration.ts` 的 SEMANTIC_THRESHOLDS 里——

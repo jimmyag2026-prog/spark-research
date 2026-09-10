@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { claimAffinity } from "../../backend/src/ideation/affinity";
 import { HIGH_AFFINITY } from "../../backend/src/ideation/novelty";
+
+// v0.5 W5-1 收口把词面阈值从 0.75 重标到 0.70（依据就是本文件这份 68 样本语料——
+// 见 novelty.ts 的 HIGH_AFFINITY 注释与 tests/unit/novelty_threshold.test.ts）。
+// 本文件里有几条断言记录的是**当时 0.75 还是生产值**那一刻的量测，它们描述历史、
+// 不描述现状，所以显式用这个具名常量，而不是继续借 HIGH_AFFINITY 指代。
+const LEXICAL_THRESHOLD_BEFORE_W5_1 = 0.75;
 import { SEMANTIC_THRESHOLDS } from "../../backend/src/llm/embeddings/calibration";
 import { cosine } from "../../backend/src/llm/embeddings/types";
 import {
@@ -195,12 +201,20 @@ describe("语义口径 · 实测分布", () => {
     expect(zero.falseNegatives).toBe(4);
   });
 
-  test("阴性对照③：把语义阈值换回词面阈值 0.75 → 一条正样本都够不着，R5 永不触发", () => {
+  test("阴性对照③：把词面阈值套到余弦上 → 量纲不对，R5 几乎/完全不触发", () => {
     const dist = distribution(semanticOf);
-    const at = errorsAt(dist, HIGH_AFFINITY);
-    expect(at.falseNegatives.length).toBe(dist.positives.length);
-    expect(at.falsePositives.length).toBe(0);
-    expect(Math.max(...dist.positives.map((s) => s.score))).toBeLessThan(HIGH_AFFINITY);
+
+    // (a) 收口前的词面阈值 0.75：**一条正样本都够不着**（余弦最高的正样本才 0.746）。
+    const atOld = errorsAt(dist, LEXICAL_THRESHOLD_BEFORE_W5_1);
+    expect(atOld.falseNegatives.length).toBe(dist.positives.length);
+    expect(atOld.falsePositives.length).toBe(0);
+
+    // (b) 收口后的 0.70：不再是"一条都够不着"（0.746 那条够得着），但**依然是错的量纲**——
+    // 绝大多数真高相似候选被判在门外，而假阳性一条没有（余弦负样本最高 0.660）。
+    // 换阈值救不了跨量纲比较，这正是 SEMANTIC_THRESHOLDS 必须自成一套的理由。
+    const atNow = errorsAt(dist, HIGH_AFFINITY);
+    expect(atNow.falsePositives.length).toBe(0);
+    expect(atNow.falseNegatives.length).toBeGreaterThan(dist.positives.length / 2);
   });
 
   test("阈值挪 ±0.1 判据就不成立（这套断言真的在卡这个数）", () => {
@@ -212,8 +226,9 @@ describe("语义口径 · 实测分布", () => {
 });
 
 describe("词面口径 · 同一份样本下的对照", () => {
-  test("词面在生产阈值 0.75 上错分 2/47（假阴 1 / 假阳 1）", () => {
-    const at = errorsAt(distribution(lexicalOf), HIGH_AFFINITY);
+  test("收口前的 0.75 错分 2（假阴 1 / 假阳 1）——这就是重标定的依据", () => {
+    const at = errorsAt(distribution(lexicalOf), LEXICAL_THRESHOLD_BEFORE_W5_1);
+    // e07 是一条**真**高相似候选（0.714），却被 0.75 判在门外——白白放过一次该降级的 novel。
     expect(at.falseNegatives.map((s) => s.id)).toEqual(["e07"]);
     // h01 的邻近工作词面覆盖率 0.857 —— 正是 novelty.ts 注释里预警过的
     // 「用词高度重合的邻近工作被 judge 得偏高」。语义确实修掉了这一条（只给 0.615）。
@@ -221,13 +236,25 @@ describe("词面口径 · 同一份样本下的对照", () => {
     expect(at.total).toBe(2);
   });
 
-  test("词面自己的最优区间是 [0.67, 0.71]（错分 1），并不包含 0.75", () => {
-    // P4 那个 0.75 是在 2 条样本上标的。样本一多，它连自己的最优区间都不在。
+  test("收口后的生产阈值错分 1：假阴清零，剩下的假阳挪阈值修不掉", () => {
+    const at = errorsAt(distribution(lexicalOf), HIGH_AFFINITY);
+    expect(at.falseNegatives).toEqual([]);
+    // 这条 0.857 的假阳性**降阈值修不掉**——要修得把阈值抬到 0.857 以上，代价是大批假阴。
+    // 它是词面口径的固有上限，不是标定没做好。
+    expect(at.falsePositives.map((s) => s.id)).toEqual(["h01/neg"]);
+    expect(at.total).toBe(1);
+  });
+
+  test("词面最优区间是 [0.67, 0.71]（错分 1）：0.75 在区间外，收口后的生产值在区间内", () => {
+    // P4 那个 0.75 是在 **2 条样本**上标的。样本一多，它连自己的最优区间都不在——
+    // 这是 v0.5 W5-1 收口把它重标到 0.70 的直接依据。
     const band = bestThresholdBand(distribution(lexicalOf));
     expect(band.low).toBeCloseTo(0.67, 3);
     expect(band.high).toBeCloseTo(0.71, 3);
     expect(band.errors).toBe(1);
-    expect(HIGH_AFFINITY).toBeGreaterThan(band.high);
+    expect(LEXICAL_THRESHOLD_BEFORE_W5_1).toBeGreaterThan(band.high);
+    expect(HIGH_AFFINITY).toBeGreaterThanOrEqual(band.low);
+    expect(HIGH_AFFINITY).toBeLessThanOrEqual(band.high);
   });
 });
 
@@ -238,9 +265,11 @@ describe("结论：语义没有赢过词面，所以不登记（K-4）", () => {
     // ① 最优错分：语义 3，词面 1 —— 词面更好
     expect(bestThresholdBand(semantic).errors).toBe(3);
     expect(bestThresholdBand(lexical).errors).toBe(1);
-    // ② 各自生产阈值上的错分：语义（零假阳性点 0.665）4，词面（0.75）2 —— 词面更好
+    // ② 各自生产阈值上的错分：语义（零假阳性点 0.665）4，词面 2（当时的 0.75）—— 词面更好。
+    // 收口把词面重标到 0.70 之后差距只会更大（词面 1），**结论方向不变**：语义没赢。
     expect(errorsAt(semantic, zeroFalsePositiveThreshold(semantic).threshold).total).toBe(4);
-    expect(errorsAt(lexical, HIGH_AFFINITY).total).toBe(2);
+    expect(errorsAt(lexical, LEXICAL_THRESHOLD_BEFORE_W5_1).total).toBe(2);
+    expect(errorsAt(lexical, HIGH_AFFINITY).total).toBe(1);
     // ③ 零假阳性点上的假阴数：4 vs 4 —— 打平
     expect(zeroFalsePositiveThreshold(semantic).falseNegatives).toBe(4);
     expect(zeroFalsePositiveThreshold(lexical).falseNegatives).toBe(4);
