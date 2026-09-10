@@ -127,6 +127,19 @@ const ALLOWED_ORPHANS: Record<string, string> = {
     "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
   "backend/src/compute/adapters/local.ts":
     "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
+  // v0.5 W5-2 α（CB-4）：Modal adapter 走「无 token 的降级交付」（设计 §三·补.7）。
+  // 这一条比上面两条**多欠一件事**，删除条件因此有两个，缺一不可：
+  //   ① 等接线：W5-2 β 的 `compute/cli.ts` 把它注册进 adapter 表；
+  //   ② **等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制
+  //      （`tests/fixtures/compute/modal/` 里出现 `provenance: "real-modal"` 的那份），
+  //      并把「真实 gateway 未实现」这件事从 `modal.ts` 的口径里去掉。
+  // 在 ② 完成之前，本仓库对外**不许**宣称「支持 Modal 远端算力」——
+  // 准确说法是「Modal adapter 的契约已立、真实链路未验证」。
+  // `tests/unit/compute_modal.test.ts` 的「约束三」用例盯着本条：只要还没有真实录制，
+  // 「等真实录制」这五个字就必须留在本文件里（哪怕 ① 已经完成、本条已按对称检查移出
+  // 本表，也要照本仓库既有做法以「曾在此登记」的注释形式把这笔债留下）。
+  "backend/src/compute/adapters/modal.ts":
+    "等接线：W5-2 β 的 `compute/cli.ts` 接上后删；**等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制并删本条",
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
