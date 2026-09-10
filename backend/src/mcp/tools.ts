@@ -669,6 +669,28 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   },
 
   {
+    name: "chem_depict",
+    description: `【何时调】要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
+【参数示例】{"smiles": "CCO", "name": "ethanol"} —— name 可省略（省略时按 canonical SMILES 的短 hash 生成文件名，重复 depict 同一个分子会稳定落到同一个 artifact 并递增版本号）。
+【何时不该用】① 只是想核对 SMILES 语法是否合法而不需要图——直接本地跑 RDKit 更快。② 需要 3D 构象/对接姿态——这个工具只画 2D 结构图，不算 3D 坐标，也不做对接。
+【典型链路】lit_search / idea_coexplore 聊到某个具体分子 → chem_depict 生成结构图存进证据图 → 结构图的 artifactId 可以在报告里引用。
+【常见错误】SMILES 语法不合法（括号不配对、化合价超限等）会返回失败而不是一张空图——错误信息里带了具体该查哪里（元素符号/化合价/环闭合编号/括号），不是「解析失败」四个字了事。`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        smiles: str("要绘制的分子 SMILES 表达式", "CCO"),
+        name: str("产物文件名（不含扩展名）。省略则按 canonical SMILES 的短 hash 自动生成", "ethanol"),
+        width: num("SVG 宽度（像素），默认 400", 400),
+        height: num("SVG 高度（像素），默认 300", 300),
+        project: PROJECT_ARG,
+      },
+      required: ["smiles"],
+      additionalProperties: false,
+    },
+    request: (args) => ({ method: "POST", path: withProject("/api/chem/depict", args), body: args }),
+  },
+
+  {
     name: "task_status",
     description: `【何时调】某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 【参数示例】{"taskId": "6d5e4f3a-..."}

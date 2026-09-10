@@ -17,6 +17,7 @@ import { conclusionRoutes, reportRoutes } from "./routes/report";
 import { sessionRoutes, taskRoutes } from "./routes/session";
 import { projectRoutes } from "./routes/projects";
 import { proteinRoutes } from "./routes/proteins";
+import { chemRoutes } from "./routes/chem";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
 
@@ -232,6 +233,7 @@ export function createApp(deps: ServerDeps = {}): Hono {
   // app.ts 未被任何并行 P11 lane 认领，改动是纯新增两行、不改既有路由——详见
   // docs/devlog/P11-d.md 的「文件边界」一节。
   app.route("/api/proteins", proteinRoutes(ctx));
+  app.route("/api/chem", chemRoutes(ctx));
   app.route("/api/records", recordRoutes(ctx));
   app.route("/api/conclusions", conclusionRoutes(ctx));
   app.route("/api/report", reportRoutes(ctx));
