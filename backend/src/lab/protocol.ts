@@ -27,14 +27,17 @@ export interface Protocol {
   steps: ProtocolStep[];
   safetyChecks: SafetyCheckResult[];
   createdAt: string;
-  // P10-d · D-8：「未消费」告警——协议原文里出现了量纲/试剂/浓度/生物安全等级之类的信号，
-  // 但没有被任何一步 / 任何一条安全规则读取。安全门只吃编译产物，这里列的就是
+  // P10-d · D-8 → V25：「未消费」告警——协议原文里出现了量纲/试剂/浓度/生物安全等级之类的
+  // 信号，但没有被任何一步 / 任何一条安全规则读取。安全门只吃编译产物，这里列的就是
   // 「用户写了但安全门根本看不到」的部分，绝不能让它悄悄消失在编译过程里。
-  // **口径**：安全门四条规则里，只有 `volume_capacity` 全程接编译产物核对；
+  // **口径（V25 更新）**：安全门四条规则里，`volume_capacity` 全程接编译产物核对；
   // `chemical_compatibility` 认识的试剂表有限（见 REAGENT_PATTERNS）；`concentration_limit` /
-  // `biosafety` 需要的 concentration / biosafetyLevel 字段，这条主管线目前完全不解析——
-  // 这两条规则在正常调用路径上永远是空转的（对抗测试里用 `withReagents()` 手工注入的输入
-  // 除外，那是在测规则本身，不是在测编译器产不产得出这种输入）。
+  // `biosafety` 需要的 concentration / biosafetyLevel 字段，这条主管线**现在会尝试解析**
+  // （见 `extractConcentration` / `extractBiosafetyLevel`）——解析成功且能明确归属到某个
+  // 试剂/步骤时，字段会真的写进编译产物，规则不再空转；解析失败（信号存在但抠不出值，
+  // 或同句里试剂不止一种、归属歧义，或没有任何步骤可挂）时仍然只报 unconsumed 告警，
+  // 不假装消费了。这仍然不是完整的自然语言浓度/生物安全解析器——跨句归属、复杂表达式
+  // 依旧不认，见 safety.ts 顶部注释与 README「安全门当前的真实覆盖范围」。
   warnings: string[];
 }
 
@@ -257,9 +260,12 @@ function mergeReagents(step: ProtocolStep, reagents: ReagentSpec[]): boolean {
 //   - 温度 / 时长：句子里有温度或时长的文字描述，但这一句最终产出的 step.params
 //     里没有对应字段——说明这句话被识别成了一个根本不认温度/时长的动作（比如整句被
 //     addSample 抢走），描述被静默吞掉了。
-//   - 浓度 / 生物安全等级：编译器主管线**完全不解析**这两类字段（安全门的
-//     concentration_limit / biosafety 规则永远空转，见 D-8 devlog），只要句子里出现
-//     类似表达就无条件报——不判断"有没有被用到"，因为压根不会被用到。
+//   - 浓度 / 生物安全等级（V25 更新）：编译器主管线**会尝试解析**这两类字段
+//     （`extractConcentration` / `extractBiosafetyLevel`），解析成功且能确定归属
+//     （浓度：同句里恰好一种试剂；生物安全：有步骤可挂）时就真的写进编译产物，
+//     concentration_limit / biosafety 规则吃得到，这里就不报。解析失败——信号在但抠不出
+//     数值、或同句多种试剂导致归属歧义、或没有任何步骤可挂——仍然报，且报的原因跟以前
+//     不一样了：不是「主管线完全不解析」，是「这次没能确定性地解析/归属」（见 D-8 → V25 devlog）。
 //   - 试剂：不做"看起来像化学式就报"的通用启发式——"OD"这种常见缩写会被误伤成
 //     两两分开的元素符号。只用扩过的 REAGENT_PATTERNS 词表；词表之外的化学品
 //     暂时没有专门信号，这是本次收敛里明确承认没做的部分（见 devlog）。
@@ -274,9 +280,33 @@ function allVolumeMentions(sentence: string): string[] {
 const CONCENTRATION_SIGNAL = /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z]))|摩尔浓度|浓度\s*(?:为|是|：|:)?\s*\d/i;
 const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]/i;
 
+// V25：SIGNAL 正则只负责「这句话疑似有这类描述」；下面两个函数负责「能不能确定性地
+// 抠出一个可用的数值」。两者刻意不是同一个正则——SIGNAL 里的「摩尔浓度」分支就没有数字，
+// 天然抠不出值，属于「有信号、解析失败」的合法情形，不是 bug。
+const CHINESE_LEVEL_DIGIT: Readonly<Record<string, number>> = { 一: 1, 二: 2, 三: 3, 四: 4 };
+
+function extractConcentration(sentence: string): number | undefined {
+  const withUnit = /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z]))/i.exec(sentence);
+  if (withUnit) return Number(withUnit[1]);
+  const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)/.exec(sentence);
+  if (explicit) return Number(explicit[1]);
+  return undefined;
+}
+
+function extractBiosafetyLevel(sentence: string): number | undefined {
+  const bsl = /BSL[-\s]?([1-4])/i.exec(sentence);
+  if (bsl) return Number(bsl[1]);
+  const zh = /生物安全([一二三四1234])级/.exec(sentence);
+  if (zh) return CHINESE_LEVEL_DIGIT[zh[1]!] ?? Number(zh[1]);
+  const en = /biosafety\s*level\s*([1-4])/i.exec(sentence);
+  if (en) return Number(en[1]);
+  return undefined;
+}
+
 function scanUnconsumedSignals(
   clause: string,
   outcome: { params: Record<string, unknown> | null; mergedInto: ProtocolStep | null },
+  consumed: { concentration: boolean; biosafety: boolean },
 ): string[] {
   const warnings: string[] = [];
   const volumes = allVolumeMentions(clause);
@@ -295,16 +325,18 @@ function scanUnconsumedSignals(
       warnings.push(`「${clause}」提到了时长，但这句话最终没有落在带时长参数的步骤上——时长信息未被消费。`);
     }
   }
-  if (CONCENTRATION_SIGNAL.test(clause)) {
+  // V25：只在解析失败/归属不了时报——解析成功并且已经写进 ReagentSpec.concentration /
+  // ProtocolStep.params.biosafetyLevel 的，不再报（那是真消费了，不是空转）。
+  if (CONCENTRATION_SIGNAL.test(clause) && !consumed.concentration) {
     warnings.push(
-      `「${clause}」疑似包含浓度描述，但编译器当前不解析试剂浓度——concentration_limit 规则对这句话空转` +
-        `（P10-d D-8：这条规则在主管线里还没接通，见 devlog）。`,
+      `「${clause}」疑似包含浓度描述，但没能解析出确定归属的浓度值（要么抠不出数字，` +
+        `要么同句里不止一种试剂、无法确定挂给谁）——concentration_limit 规则看不到它。`,
     );
   }
-  if (BIOSAFETY_SIGNAL.test(clause)) {
+  if (BIOSAFETY_SIGNAL.test(clause) && !consumed.biosafety) {
     warnings.push(
-      `「${clause}」疑似包含生物安全等级描述，但编译器当前不解析 biosafetyLevel——biosafety 规则对这句话空转` +
-        `（P10-d D-8：这条规则在主管线里还没接通，见 devlog）。`,
+      `「${clause}」疑似包含生物安全等级描述，但没能把它挂到任何一个步骤上——` +
+        `biosafety 规则看不到它。`,
     );
   }
   return warnings;
@@ -321,6 +353,15 @@ export class ProtocolCompiler {
     const warnings: string[] = [];
     for (const clause of clauses) {
       const reagents = this.extractReagents(clause);
+      // V25：浓度只在这句话恰好点名一种试剂时才挂上去——同句多种试剂时浓度归谁
+      // 没法从句法上确定，宁可报未消费也不瞎猜（同一条纪律见 chemical_compatibility
+      // 「表外试剂不设上限」、以及体积信号「≥2 处才报」的保守方针）。
+      const concentrationValue = extractConcentration(clause);
+      const concentrationAttachable = concentrationValue !== undefined && reagents.length === 1;
+      if (concentrationAttachable) {
+        reagents[0]!.concentration = concentrationValue;
+      }
+      const biosafetyValue = extractBiosafetyLevel(clause);
       const rule = ACTION_RULES.find(
         (r) =>
           r.keywords.some((k) => clause.includes(k)) &&
@@ -332,20 +373,47 @@ export class ProtocolCompiler {
       if (previous && (!rule || CONTINUATION_MARKERS.test(clause))) {
         const paramsMerged = mergeContinuation(previous, clause);
         const reagentsMerged = mergeReagents(previous, reagents);
-        if (paramsMerged || reagentsMerged) {
-          warnings.push(...scanUnconsumedSignals(clause, { params: null, mergedInto: previous }));
+        // V25：biosafetyLevel 挂到「这句话最终归属的步骤」——续句里没有动作词，
+        // 归属的就是上一步（与温度/时长续句同一套逻辑）。
+        let biosafetyMerged = false;
+        if (biosafetyValue !== undefined) {
+          previous.params.biosafetyLevel = biosafetyValue;
+          biosafetyMerged = true;
+        }
+        if (paramsMerged || reagentsMerged || biosafetyMerged) {
+          warnings.push(
+            ...scanUnconsumedSignals(
+              clause,
+              { params: null, mergedInto: previous },
+              { concentration: concentrationAttachable && reagentsMerged, biosafety: biosafetyMerged },
+            ),
+          );
           continue;
         }
       }
       if (!rule) {
         // 整句一个动作都没认出来、也没能合并进上一步——最彻底的「静默丢弃」，
         // 更要扫一遍：至少浓度/生物安全/多体积这几类信号不能因为整句被跳过就消失。
-        warnings.push(...scanUnconsumedSignals(clause, { params: null, mergedInto: null }));
+        // 没有任何步骤可挂，浓度/生物安全无论解析成功与否都算未消费。
+        warnings.push(
+          ...scanUnconsumedSignals(
+            clause,
+            { params: null, mergedInto: null },
+            { concentration: false, biosafety: false },
+          ),
+        );
         continue;
       }
       const params = rule.paramBuilder(clause);
       if (reagents.length) params.reagents = reagents;
-      warnings.push(...scanUnconsumedSignals(clause, { params, mergedInto: null }));
+      if (biosafetyValue !== undefined) params.biosafetyLevel = biosafetyValue;
+      warnings.push(
+        ...scanUnconsumedSignals(
+          clause,
+          { params, mergedInto: null },
+          { concentration: concentrationAttachable, biosafety: biosafetyValue !== undefined },
+        ),
+      );
       steps.push({
         id: `step-${steps.length + 1}`,
         action: rule.action,

@@ -140,6 +140,21 @@ describe("对抗 ② 超浓度", () => {
     ]);
     expect(concentrationLimitRule.evaluate({ protocol }).passed).toBe(true);
   });
+
+  // V25：上面三条全是 withReagents() 手工注入——测的是规则本身。这条走**真实编译入口**，
+  // 验证 protocol.ts 现在真的会把浓度解析出来并挂到 ReagentSpec.concentration 上，
+  // concentration_limit 不再永远空转。这是 V25 的关键断言（devlog 阴性对照①依赖它）。
+  test("V25：浓度超限必须 fail——真实编译入口解析出浓度，不再靠 withReagents 手工注入", () => {
+    const protocol = compiler.compile("配制浓度为500的次氯酸钠溶液", { name: "real-concentration" });
+    const reagent = (protocol.steps[0]!.params.reagents as Array<{ reagentId?: string; concentration?: number }>)[0]!;
+    expect(reagent.reagentId).toBe("hypochlorite");
+    expect(reagent.concentration).toBe(500);
+    const result = concentrationLimitRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain("次氯酸钠 (500)");
+    // 解析成功即消费：不再落 unconsumed 告警。
+    expect(protocol.warnings).toEqual([]);
+  });
 });
 
 describe("对抗 ③ 生物安全等级", () => {
@@ -156,6 +171,17 @@ describe("对抗 ③ 生物安全等级", () => {
     const protocol = compiler.compile("加入50uL样品", { name: "bsl2" });
     protocol.steps[0]!.params.biosafetyLevel = 2;
     expect(biosafetyRule.evaluate({ protocol }).passed).toBe(true);
+  });
+
+  // V25：真实编译入口——biosafetyLevel 现在会被 protocol.ts 解析并写进
+  // ProtocolStep.params，不用手工赋值。
+  test("V25：BSL-3 必须 fail——真实编译入口解析出 biosafetyLevel，不再手工赋值", () => {
+    const protocol = compiler.compile("在BSL-3环境下加入50uL样品", { name: "real-biosafety" });
+    expect(protocol.steps[0]!.params.biosafetyLevel).toBe(3);
+    const result = biosafetyRule.evaluate({ protocol });
+    expect(result.passed).toBe(false);
+    expect(result.detail).toContain("BSL-3");
+    expect(protocol.warnings).toEqual([]);
   });
 });
 

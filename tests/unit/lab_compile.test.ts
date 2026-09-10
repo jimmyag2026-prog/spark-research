@@ -137,13 +137,45 @@ describe("ProtocolCompiler · D-8 unconsumed 信号（漏检必须可见，不�
     expect(b.warnings).toEqual([]);
   });
 
-  test("浓度描述始终报未消费——concentration_limit 在主管线里空转，靠这个信号兜底", () => {
+  // V25：浓度/生物安全等级从「恒空转」变成「解析成功即消费」——下面四个 test 覆盖
+  // 成功消费（不再报）与解析失败（仍然报）两种分支，两边都要测，否则只测到一半。
+
+  test("V25：同句恰好一种试剂时，浓度被真正解析并写进 ReagentSpec.concentration，不再报未消费", () => {
     const protocol = compiler.compile("配制10%次氯酸钠溶液", { name: "concentration" });
+    const reagents = protocol.steps[0]!.params.reagents as Array<{ reagentId?: string; concentration?: number }>;
+    expect(reagents?.find((r) => r.reagentId === "hypochlorite")?.concentration).toBe(10);
+    expect(protocol.warnings).toEqual([]);
+  });
+
+  test("V25：同句出现两种试剂时，浓度归属歧义——不瞎猜，仍报未消费，且不挂到任何一种试剂上", () => {
+    const protocol = compiler.compile("配制10%次氯酸钠和乙醇混合液", { name: "concentration-ambiguous" });
+    const reagents = protocol.steps[0]!.params.reagents as Array<{ reagentId?: string; concentration?: number }>;
+    expect(reagents?.every((r) => r.concentration === undefined)).toBe(true);
     expect(protocol.warnings.join(" ")).toContain("浓度");
   });
 
-  test("生物安全等级描述始终报未消费——biosafety 在主管线里空转，靠这个信号兜底", () => {
-    const protocol = compiler.compile("BSL-2实验室内操作", { name: "biosafety" });
+  test("V25：浓度描述所在子句里没有点名任何试剂——挂不上去，仍报未消费", () => {
+    const protocol = compiler.compile("溶液浓度为70%", { name: "concentration-no-target" });
+    expect(protocol.steps).toHaveLength(0);
+    expect(protocol.warnings.join(" ")).toContain("浓度");
+  });
+
+  test("V25：生物安全等级被真正解析并写进 ProtocolStep.params.biosafetyLevel，不再报未消费", () => {
+    const protocol = compiler.compile("在BSL-3环境下加入50uL样品", { name: "biosafety" });
+    expect(protocol.steps[0]!.params.biosafetyLevel).toBe(3);
+    expect(protocol.warnings).toEqual([]);
+  });
+
+  test("V25：生物安全等级作为续句挂到上一步（与温度/时长续句同一套逻辑）", () => {
+    const protocol = compiler.compile("加入50uL样品，BSL-2实验室内操作", { name: "biosafety-continuation" });
+    expect(protocol.steps).toHaveLength(1);
+    expect(protocol.steps[0]!.params.biosafetyLevel).toBe(2);
+    expect(protocol.warnings).toEqual([]);
+  });
+
+  test("V25：生物安全等级独立成句、前面没有任何步骤可挂——仍报未消费（结构性失败，不是漏解析）", () => {
+    const protocol = compiler.compile("BSL-2实验室内操作", { name: "biosafety-no-target" });
+    expect(protocol.steps).toHaveLength(0);
     expect(protocol.warnings.join(" ")).toContain("生物安全");
   });
 });

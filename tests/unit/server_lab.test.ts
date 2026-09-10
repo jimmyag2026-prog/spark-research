@@ -134,10 +134,13 @@ describe("HTTP · lab compile", () => {
   // viewJson() 把整个 WetExperimentView（除 record）原样转发，unconsumedWarnings 是
   // view 的字段之一，所以这里断言的是它**确实**出现在 compile 的 HTTP 响应体里，
   // 不是只存在于 CLI 的正文渲染里。
-  test("浓度描述编译进去后：HTTP 响应体的 unconsumedWarnings 非空（不是只有 CLI 才看得到）", async () => {
+  // V25（W5-1 δ）：`配制10%次氯酸钠溶液` 这类「浓度 + 单一试剂同句」的写法现在会被
+  // extractConcentration() 解析并消费，不再报未消费。换成同句两种试剂的归属歧义场景
+  // 保持这条测试的原意（unconsumedWarnings 真的能非空且透传到 HTTP 响应体）。
+  test("浓度描述归属歧义时：HTTP 响应体的 unconsumedWarnings 非空（不是只有 CLI 才看得到）", async () => {
     const fx = makeServer();
     try {
-      const body = await compile(fx, "配制10%次氯酸钠溶液200uL");
+      const body = await compile(fx, "配制10%次氯酸钠和乙醇的混合液200uL");
       expect(body.safetyReport.passed).toBe(true); // 安全门四条全过——正是「看不见」的那种危险
       expect(body.experiment.unconsumedWarnings.length).toBeGreaterThan(0);
       expect(body.experiment.unconsumedWarnings.join(" ")).toContain("浓度");
