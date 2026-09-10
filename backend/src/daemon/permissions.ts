@@ -3,23 +3,19 @@ export const PERMIT_SETS = {
     "mcp_call",
     "create_agent",
     "delegate_task",
-    "query_frames",
     "manage_skills",
-    "compute_submit",
   ],
   python_kernel: [
     "artifact_lookup",
     "lineage_query",
     "model_call",
     "credentials",
-    "analytic_libraries",
   ],
   r_kernel: [
     "artifact_lookup",
     "lineage_query",
     "model_call",
     "credentials",
-    "analytic_libraries",
   ],
 } as const;
 
