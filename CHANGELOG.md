@@ -5,7 +5,42 @@
 
 ---
 
-## [Unreleased]
+## [0.6.0-alpha.1] — 2026-09-11
+
+**v0.6 第一个内部基线：闸门 G（模型配置化 / 预算闸 / 发行面）+ W6-1 三 lane
+（connector 台账 / 工作台四面板 / CLI 清扫）。**
+
+### 新增
+
+- **模型配置化（G-1）**：`z-ai/glm-5.3-flash` 进 openrouter 路由与定价表（实效价含
+  5.5% 手续费，保守估计）；CLI 模型解析链 `--model` flag > 注入 > config `defaultModel`
+  > 内部默认——此前 CLI 是三个入口里唯一不读 `defaultModel` 的（V40「只写不读」形状
+  第 8 例）。新门禁 `config_reader_parity`：可写配置项必须登记读者且读者真有调用点。
+- **轮级用量台账与预算闸（G-3）**：每次 LLM 调用落 `usage.jsonl`（按项目、跨进程累计）；
+  `lit read/review`、`idea new/check` 支持 `--budget-usd N`——已知花费下界达上限即拒绝
+  后续调用（kind=`budget`，请求不发出、已完成产出保留、消息给下一步）。成本未知**绝不
+  当 0**：unknown>0 时 `usage` 命令明说总花费报不出。新命令 `spark-research usage`。
+- **connector 调用台账（W6-1 α）**：base 层单点埋点，全部 connector 的每次 HTTP 调用落
+  `api_calls.jsonl`（只记 host 绝不记 URL，防 query 里的凭据；有源码级门禁）。
+  `usage api` 子命令与 `GET /api/usage`、`GET /api/usage/api` 两个只读端点。
+- **工作台四面板（W6-1 β）**：长任务进度（落盘快照、刷新仍在）、record/证据图浏览、
+  算力只读（**无任何派发入口**——V47 裁定的 UI 面兑现，面板内说明「派发与审批仅 CLI」）、
+  用量面板（只消费后端数字，前端零成本算术）。
+- **发行面（G-2）**：前端构建产物内嵌进单二进制——`npx`/二进制起 `server` 打开即是
+  工作台（V43① 关闭）；npm 打包字段补齐（`files`/`engines`/`prepublishOnly`，V29）；
+  首个 GitHub Actions CI（单测 + 二进制冒烟，V28）。
+- `lit read --all` 默认跳过已有精读卡的论文（断点重跑不重复花钱），`--redo` 强制全读。
+
+### 修复
+
+- **Linux 单二进制技能索引恒为空**：`existsSync("/$bunfs/…")` 的语义平台相关（macOS
+  假 → 内嵌兜底生效；Linux 真 → 枚举拿不到技能 → 平静地报 0 个）。判据改为显式
+  `/$bunfs` 前缀。首个 Linux CI 冒烟实测抓到——正是 V28 想抓的「本机绿 ≠ 产物绿」。
+- bioRxiv「search 不是真检索」的 caveat 现在显示在 `lit sources` / `lit search` 两个
+  人类入口（V54）；标题/摘要的 HTML 实体解码。
+- 未知命令回显打错的词；`report export` 携带湿实验 unconsumedWarnings、observation
+  表格不再压成一行（V56）。
+- AMiner `getPaper` 详情接口带真实 key 实测验证通过（V9）。
 
 ### Changed
 
