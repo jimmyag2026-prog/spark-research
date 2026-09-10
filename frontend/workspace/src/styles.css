@@ -730,6 +730,20 @@ select {
   gap: 2px 12px;
   font-size: 12px;
 }
+
+/* ── 长任务进度条（W6-1 β） ──────────────────────────────────────────────── */
+.progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
 .kv dt {
   color: var(--text-faint);
 }

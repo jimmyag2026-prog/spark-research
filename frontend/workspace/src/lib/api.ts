@@ -1,5 +1,7 @@
 import type {
+  ApiCallTotals,
   ArtifactVersion,
+  ComputeJobView,
   ConclusionAssessment,
   ConclusionCard,
   DryExperiment,
@@ -13,6 +15,7 @@ import type {
   ResearchRecord,
   StateMachine,
   TaskSnapshot,
+  UsageTotals,
   WetExperiment,
 } from "./types";
 
@@ -383,5 +386,34 @@ export const api = {
         "/api/session/chat",
         body,
       ),
+  },
+
+  // W6-1 β：长任务进度面板消费的只读出口。落盘快照（server/tasks.ts），
+  // 刷新页面能看到同样的数据——不是前端状态。
+  tasks: {
+    list: (project?: string, limit?: number) =>
+      request<{ tasks: TaskSnapshot[] }>(
+        withProject(`/api/tasks${limit ? `?limit=${limit}` : ""}`, project),
+      ),
+  },
+
+  // W6-1 β：算力面板消费的只读出口。**没有 dispatch/approve/reject 的客户端方法**——
+  // 派发与审批只在 CLI 有真实交互终端的地方发起（V47 裁定，见 server/routes/compute.ts
+  // 顶部注释）；这层 API 客户端不给 UI 任何调用这些端点的手段，UI 组件也就无从画按钮。
+  compute: {
+    jobs: (project?: string, state?: string) =>
+      request<{ project: string; jobs: ComputeJobView[] }>(
+        withProject(`/api/compute/jobs${state ? `?state=${encodeURIComponent(state)}` : ""}`, project),
+      ),
+    job: (id: string, project?: string) =>
+      request<{ project: string; job: ComputeJobView }>(withProject(`/api/compute/jobs/${id}`, project)),
+  },
+
+  // W6-1 β/α：用量面板消费的只读出口。两个端点分别对应 usage.jsonl（按项目）与
+  // api_calls.jsonl（全局）——字段与各自 CLI --json 出口逐字段一致，前端不重算任何数字
+  // （DEVELOPMENT_PLAN_v0.6.md §W6-1 lane β 纪律：「两处算同一数字」是 V37 的形状）。
+  usage: {
+    get: (project?: string) => request<UsageTotals>(withProject("/api/usage", project)),
+    apiCalls: () => request<ApiCallTotals>("/api/usage/api"),
   },
 };
