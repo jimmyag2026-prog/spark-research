@@ -483,3 +483,33 @@ test("⑬ SSE 权威流：delta 事件逐块到达（是答案本身的增量，
     proc.kill();
   }
 });
+
+test("⑭ C5-② depict → 产物列表出现 .svg → img.naturalWidth > 0", async ({ page }) => {
+  await page.goto("/");
+
+  // 种子数据直接打 HTTP（/api/chem/depict 是 chem.ts 自己的路由 + app.ts 一行接线），
+  // 不经过 CLI/`backend/src/index.ts` 的 `case "chem"`——那一行按 §三·补.3 归了 lane η，
+  // 由收口接（见 docs/devlog/W5-1-c.md「收口接线清单」）。这条用例只验 HTTP → artifact
+  // → 前端渲染这条链路，所以能在收口前就真的跑绿；CLI 入口本身的验证在
+  // tests/unit/chem_cli.test.ts。
+  const seeded = await page.evaluate(async () => {
+    const res = await fetch("/api/chem/depict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ smiles: "CCO", name: "e2e-ethanol" }),
+    });
+    return { status: res.status, body: await res.json() };
+  });
+  expect(seeded.status).toBe(200);
+
+  // 产物列表用 Solid createResource(slug, ...) 拉取，不会因为别的入口写了新数据自动重拉；
+  // reload 触发一次新的 mount 取到最新列表（与真实用户刷新页面看到新产物是同一路径）。
+  await page.reload();
+  await page.locator(".left").getByRole("button", { name: /^产物/ }).click();
+  await page.locator(".center .nav-item").filter({ hasText: "e2e-ethanol.svg" }).first().click();
+
+  const img = page.locator(".center article.card img");
+  await expect(img).toBeVisible();
+  const naturalWidth = await img.evaluate((el: HTMLImageElement) => el.naturalWidth);
+  expect(naturalWidth).toBeGreaterThan(0);
+});
