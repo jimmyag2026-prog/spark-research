@@ -22,6 +22,7 @@ import { ExtensionGrantStore } from "./grants";
 import { readVerifyCache, subjectPathFor } from "./verify_cache";
 import { sha256File } from "./fingerprint";
 import { extensionsRoot, type ExtensionPathOptions } from "./paths";
+import { readMcpDiscoveryCache } from "./mcp_client";
 
 export type ExtensionCapabilityStatus = "available" | "needs_grant" | "unverified" | "stale_verify" | "failed";
 
@@ -34,6 +35,12 @@ export interface ExtensionCapability {
   reason: string | null;
   requires: { credentials: string[]; tools: string[] };
   granted: { credentials: string[]; tools: string[] };
+  // kind="mcp_client" 时才有：标明这份能力的来源是外部 MCP server（不是内置/仓库代码），
+  // 与任务书"要标明来源"的要求对应。工具清单来自上一次发现缓存（.mcp_discovery.json），
+  // 不实时连接——理由同本文件头部注释（只读端点不该顺手起进程）。
+  origin?: "external_mcp_server";
+  mcpTools?: Array<{ name: string; description?: string }>;
+  mcpDiscoveredAt?: string | null;
 }
 
 export async function listExtensionCapabilities(options: ExtensionPathOptions = {}): Promise<ExtensionCapability[]> {
@@ -78,6 +85,31 @@ export async function listExtensionCapabilities(options: ExtensionPathOptions = 
         status = "available";
       }
 
+      // mcp_client（装载强度③）额外叠一层：discovery 缓存记录"上一次尝试连接
+      // 外部 server 到底活不活"。needs_grant 仍然优先展示（用户能直接采取行动的
+      // 那一档）；除此之外，discovery 显式失败要覆盖成 failed——阴性对照②要钉死
+      // 的就是这一条："外部 server 挂了/超时"必须反映在 capabilities 里，而不是
+      // 悄悄停留在上一次成功探测的状态上。
+      let mcpTools: Array<{ name: string; description?: string }> | undefined;
+      let mcpDiscoveredAt: string | null | undefined;
+      if (manifest.kind === "mcp_client") {
+        const discovery = readMcpDiscoveryCache(dir);
+        if (!discovery) {
+          mcpDiscoveredAt = null;
+          if (status === "available" || status === "unverified") {
+            status = "unverified";
+            reason = "从未发现过外部工具（先跑 `ext add-mcp` 的发现步骤或 `ext verify`）";
+          }
+        } else if (!discovery.ok && status !== "needs_grant") {
+          status = "failed";
+          reason = `外部 MCP server 不可达：${discovery.reason ?? "未知原因"}`;
+          mcpDiscoveredAt = discovery.at;
+        } else {
+          mcpTools = discovery.tools;
+          mcpDiscoveredAt = discovery.at;
+        }
+      }
+
       out.push({
         name: manifest.name,
         kind: manifest.kind,
@@ -87,6 +119,7 @@ export async function listExtensionCapabilities(options: ExtensionPathOptions = 
         reason,
         requires: { credentials: requiresCredentials, tools: requiresTools },
         granted: { credentials: grant.credentials, tools: grant.tools },
+        ...(manifest.kind === "mcp_client" ? { origin: "external_mcp_server" as const, mcpTools, mcpDiscoveredAt } : {}),
       });
     } catch (error) {
       // manifest 本身就坏了（恶意/损坏的 extension.json）——照样要出现在清单里，

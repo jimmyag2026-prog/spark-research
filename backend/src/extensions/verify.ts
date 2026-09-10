@@ -12,6 +12,7 @@ import { verifyConnectorExtension, type VerifyCheck } from "./connector_verify";
 import { verifyPlatformExtension } from "./platform_verify";
 import { verifyRuleExtension } from "./rule_verify";
 import { verifySkillExtension } from "./skill_verify";
+import { verifyMcpClientExtension } from "./mcp_client_verify";
 
 export type { VerifyCheck } from "./connector_verify";
 
@@ -60,6 +61,10 @@ export async function verifyExtension(extensionDir: string): Promise<ExtensionVe
     }
     case "skill": {
       const result = await verifySkillExtension(extensionDir);
+      return { ok: result.ok, name: manifest.name, kind: manifest.kind, checks: result.checks };
+    }
+    case "mcp_client": {
+      const result = await verifyMcpClientExtension(extensionDir, manifest);
       return { ok: result.ok, name: manifest.name, kind: manifest.kind, checks: result.checks };
     }
     case "backend": {

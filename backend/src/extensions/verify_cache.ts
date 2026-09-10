@@ -26,10 +26,12 @@ export function verifyCachePath(extensionDir: string): string {
   return join(extensionDir, ".verify.json");
 }
 
-// connector kind 校验的是 connector.json；其余 kind 校验的是 entry 文件。
-// 与 verify.ts 里 case 分支使用的对象保持一致。
+// connector kind 校验的是 connector.json；mcp_client kind 校验的是 mcp.json；
+// 其余 kind 校验的是 entry 文件。与 verify.ts 里 case 分支使用的对象保持一致。
 export function subjectPathFor(extensionDir: string, manifest: Pick<ExtensionManifest, "kind" | "entry">): string {
-  return manifest.kind === "connector" ? join(extensionDir, "connector.json") : join(extensionDir, manifest.entry ?? "index.ts");
+  if (manifest.kind === "connector") return join(extensionDir, "connector.json");
+  if (manifest.kind === "mcp_client") return join(extensionDir, "mcp.json");
+  return join(extensionDir, manifest.entry ?? "index.ts");
 }
 
 export function readVerifyCache(extensionDir: string): VerifyCacheRecord | null {

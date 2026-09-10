@@ -4,15 +4,16 @@
 // 所有权：index.ts 不许动除此之外的任何东西）。子命令的解析、输出格式、退出码
 // 全部收在本文件。
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { extensionsRoot } from "./paths";
+import { extensionsRoot, extensionDir } from "./paths";
 import { verifyExtension, formatVerifyResult } from "./verify";
 import { writeVerifyCache, subjectPathFor } from "./verify_cache";
-import { sha256File } from "./fingerprint";
+import { checkTrust, sha256File } from "./fingerprint";
 import { loadExtension } from "./loader";
 import { ExtensionGrantStore } from "./grants";
 import { loadExtensionManifest, ExtensionManifestError } from "./types";
+import { loadMcpClientConfig, McpClientConfigError, discoverExternalMcpTools } from "./mcp_client";
 
 const HELP = `spark-research ext —— 扩展装载 + 契约验收（v0.4 P17）
 
@@ -24,6 +25,12 @@ const HELP = `spark-research ext —— 扩展装载 + 契约验收（v0.4 P17�
   spark-research ext grant <name> --tool <name>     授权扩展调用某个 ToolBus 工具
   spark-research ext revoke <name> --credential <id>
   spark-research ext revoke <name> --tool <name>
+  spark-research ext add-mcp <name> --cmd "<command> [args...]" [--trust]
+                                                     接入一个外部 MCP server（装载强度③，stdio transport）
+    [--env VAR]...                                  额外透传的宿主环境变量名（白名单，可重复）
+    [--credential <id>:<field>:<envVar>]...          凭据映射：ext grant 批准后，取该凭据记录的
+                                                     <field> 字段注入子进程的 <envVar>（可重复）
+    [--description <text>]                          描述文字，默认自动生成
 
 <path> 可以是绝对/相对路径，也可以是 ~/.spark-research/extensions/ 下的扩展名。
 `;
@@ -163,6 +170,85 @@ export async function runExtCommand(argv: string[]): Promise<number> {
           "ExtensionContext 仍然会拒绝（声明 + 授权必须同时满足，见 context.ts）。",
       );
       return 0;
+    }
+
+    case "add-mcp": {
+      const name = rest.find((a) => !a.startsWith("--"));
+      const cmdIdx = rest.indexOf("--cmd");
+      const trust = rest.includes("--trust");
+      if (!name || cmdIdx === -1 || !rest[cmdIdx + 1]) {
+        console.log('用法: spark-research ext add-mcp <name> --cmd "<command> [args...]" [--trust] [--env VAR]... [--credential <id>:<field>:<envVar>]... [--description <text>]');
+        return 1;
+      }
+      // 朴素的空白切分，**不是**完整 shell 解析——带引号/转义的复杂命令行需要用户
+      // 自己拆成 command + 单个 args 数组（如实标注，不假装支持任意 shell 语法；
+      // 这与 StdioClientTransport 本身 shell:false 的边界一致）。
+      const cmdParts = rest[cmdIdx + 1].trim().split(/\s+/).filter(Boolean);
+      if (cmdParts.length === 0) {
+        console.log("--cmd 不能是空字符串");
+        return 1;
+      }
+      const [command, ...cmdArgs] = cmdParts;
+
+      const envAllow: string[] = [];
+      const credentials: Array<{ id: string; field: string; env: string }> = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === "--env" && rest[i + 1]) envAllow.push(rest[i + 1]);
+        if (rest[i] === "--credential" && rest[i + 1]) {
+          const [id, field, envVar] = rest[i + 1].split(":");
+          if (id && field && envVar) credentials.push({ id, field, env: envVar });
+        }
+      }
+      const descIdx = rest.indexOf("--description");
+      const description = descIdx !== -1 && rest[descIdx + 1] ? rest[descIdx + 1] : `外部 MCP server（command="${command}"）`;
+
+      const dir = extensionDir(name);
+      mkdirSync(dir, { recursive: true });
+
+      const manifestJson = {
+        kind: "mcp_client",
+        name,
+        version: "0.1.0",
+        description,
+        requires: { credentials: credentials.map((c) => c.id), tools: [] },
+      };
+      writeFileSync(join(dir, "extension.json"), JSON.stringify(manifestJson, null, 2) + "\n");
+
+      const mcpJson = { command, args: cmdArgs, env: envAllow, credentials };
+      writeFileSync(join(dir, "mcp.json"), JSON.stringify(mcpJson, null, 2) + "\n");
+
+      console.log(`✓ 已写入扩展目录 ${dir}（kind=mcp_client）`);
+
+      // 启动任意 command 等价于本地任意命令执行——同 TS 扩展一样需要 --trust，
+      // 指纹覆盖 mcp.json（见 fingerprint.ts / loader.ts 的 mcp_client 分支）。
+      const trustCheck = checkTrust(name, join(dir, "mcp.json"), trust, undefined);
+      console.log(trustCheck.message);
+      if (!trustCheck.trusted) {
+        console.log("未信任，跳过发现步骤。确认 command/args/env 可信后，重新执行并加 --trust 以连接一次外部 server 并发现它的工具。");
+        return 1;
+      }
+
+      let mcpConfig;
+      try {
+        mcpConfig = loadMcpClientConfig(readFileSync(join(dir, "mcp.json"), "utf8"));
+      } catch (error) {
+        console.log(`✗ mcp.json 校验失败：${error instanceof McpClientConfigError ? error.message : String(error)}`);
+        return 1;
+      }
+      const manifest = loadExtensionManifest(readFileSync(join(dir, "extension.json"), "utf8"));
+      const grant = new ExtensionGrantStore().get(name);
+      const discovery = await discoverExternalMcpTools(dir, manifest, mcpConfig, grant);
+      if (discovery.ok) {
+        console.log(`✓ 发现 ${discovery.tools.length} 个外部工具：${discovery.tools.map((t) => t.name).join(", ") || "(无)"}`);
+      } else {
+        console.log(`✗ 连接失败（外部 server 挂了/超时/协议不对）：${discovery.reason}`);
+        console.log("主进程未受影响——这条失败已经写进 .mcp_discovery.json，`ext capabilities` 会看到 status=failed。");
+      }
+      console.log(
+        "注意：本命令只做结构性装载 + 一次性发现探测，不接入真实的 daemon/AgentToolBus/capabilities 输出汇总——" +
+          "那部分接线见 docs/devlog/W4-d.md「给收口的接线说明」。",
+      );
+      return discovery.ok ? 0 : 1;
     }
 
     default:
