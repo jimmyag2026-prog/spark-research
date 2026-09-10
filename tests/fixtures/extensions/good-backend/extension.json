@@ -1,0 +1,7 @@
+{
+  "kind": "backend",
+  "name": "good-backend",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "示例 WetLabBackend 扩展（强度②），供 ext verify 的结构性检查正向用例使用（未覆盖完整契约测试，见 docs/devlog/W2-c.md 已知限制）。"
+}

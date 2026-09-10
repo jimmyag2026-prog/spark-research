@@ -1523,7 +1523,133 @@ MCP 客户端配置（以 Claude Code 为例）：
 
 ---
 
-## 8. 提交前自查
+## 8. 扩展装载（第三方 extension，不改仓库源码）
+
+上面 1–6 节讲的是"往仓库里加一个模块"（你有仓库写权限，改完提 PR）。本节讲另一条路：
+**不改仓库**，把扩展放进 `~/.spark-research/extensions/<name>/`，运行时装载——
+面向不想 fork 仓库的第三方开发者，或者想按用户/环境动态开关的能力。
+
+### 目录布局
+
+```
+~/.spark-research/extensions/<name>/
+  extension.json      manifest：kind / name / version / entry / requires（必需）
+  connector.json       kind=connector 时：声明式 connector 定义（见第 2 节的契约，
+                        直接复用同一套 schema——backend/src/connectors/manifest.ts）
+  index.ts              kind=skill|platform|backend|rule 时：TS 实现
+  SKILL.md               kind=skill 时：同第 1 节的 frontmatter 契约
+  tests/                 配套验证
+```
+
+### 三种装载强度
+
+| 强度 | 形态 | 是否执行代码 | 需要 `--trust` |
+|---|---|---|---|
+| ① 声明式 connector | `connector.json` | 否——只是数据，编译成受限的 URL 拼装 + 受限的响应字段抽取（第 2 节 DSL 的边界原样适用） | 否 |
+| ② TS 扩展 | `skill` / `platform` / `backend` / `rule` 的 `index.ts` | 是——与宿主进程同 UID、同权限，跟仓库里写的代码没有区别 | **是** |
+| ③ 外部 MCP client | —— | 不在本节范围（另一条集成路径） | —— |
+
+`extension.json` 的形状：
+
+```ts
+interface ExtensionManifest {
+  kind: "connector" | "skill" | "platform" | "backend" | "rule";
+  name: string;        // kebab-case，须与目录名一致
+  version: string;      // "0.1.0" 这类
+  description: string;
+  entry?: string;        // kind !== "connector" 时用，默认 "index.ts"
+  requires?: {
+    credentials?: string[]; // 想访问哪些 connector 的凭据（申报，不等于拿到）
+    tools?: string[];        // 想调用哪些 ToolBus 工具（同上）
+  };
+}
+```
+
+### `--trust`：TOFU 信任模型
+
+TS 扩展与仓库代码同权限执行——`--trust` 不是沙箱开关，是"未经确认的静默执行"的
+开关。模型是 trust-on-first-use（同 SSH `known_hosts`）：
+
+```bash
+spark-research ext load ~/.spark-research/extensions/my-rule
+# ✗ 扩展 "my-rule"（kind 需要代码执行）尚未信任，拒绝装载。
+#   入口文件指纹：sha256:3f9c...
+#   确认这段代码可信后，重新执行并加上 --trust。
+
+spark-research ext load ~/.spark-research/extensions/my-rule --trust
+# ✓ 已装载扩展 "my-rule"（kind=rule）
+```
+
+指纹记在扩展目录旁的 `.trust.json`（不是直接改写 `extension.json`——那是用户手写/
+版本控制的文件，静默重写它风险大于收益）。第二次装载**不需要**再传 `--trust`，
+只要入口文件内容没变；内容一旦变化（哪怕只改一个字符），指纹跟着变，下一次装载
+又会回到"未信任"状态，必须重新确认。
+
+**这不是沙箱**：`--trust` 挡的是"没看一眼指纹就被动执行"，挡不住"确认了之后代码
+干了什么"——被信任的扩展能做任何仓库代码能做的事（读写文件、发网络请求、…）。
+真正的边界在下一段。
+
+### 凭据 / ToolBus 访问：声明 + 授权缺一不可
+
+扩展**默认拿不到任何凭据或 ToolBus 工具**，即使 `extension.json` 里声明了
+`requires.credentials` / `requires.tools`——声明只是申报，用户要显式批准：
+
+```bash
+spark-research ext grant my-rule --credential paidsource
+spark-research ext grant my-rule --tool lit_search
+```
+
+装载器构造的 `ExtensionContext`（`backend/src/extensions/context.ts`）在
+**声明过 且 被授权过**的交集之外一律拒绝——manifest 没声明的 id/工具名，授权了也没用；
+声明过但没被授权的，同样没用。凭据值本体依然只经过 `CredentialStore`（AD-2 原有边界
+不变），扩展代码永远看不到"这个值是怎么存的"，只能通过 context 拿到已授权项的值。
+
+### 装载后出现在 `capabilities` 里
+
+扩展的能力位由 `backend/src/extensions/capabilities.ts` 的 `listExtensionCapabilities()`
+产出（`available` / `needs_grant` / `unverified` / `stale_verify` / `failed` 五档），
+**不执行任何扩展代码**——只读 `extension.json`（数据）+ 授权记录 + 上一次 `ext verify`
+的缓存结论，理由与主 capabilities 模块"静态可用性 vs 探测可用性"的分档一致：一个会被
+频繁调用的只读自描述端点，不应该顺手把每个扩展的 `index.ts` 都 import 一遍。
+
+## 9. `ext verify`：能装上不等于装好了（AD-11）
+
+```bash
+spark-research ext verify ~/.spark-research/extensions/<name>
+```
+
+四类扩展各自跑什么、直接复用了哪套既有投资：
+
+| kind | 跑什么 | 复用的既有投资 |
+|---|---|---|
+| `connector` | 100 并发参数映射一致性（串行 vs 并行逐位比对）+ 凭据不进出站请求 + 错误消息不回显响应体 | `tests/concurrency/connector_race.test.ts` 的手法（v0.3.0 修 P0 竞态的第二次回本）+ W1-c 的 SSRF 白名单（装载路径真的会走到 `assertOutboundUrlAllowed`） |
+| `platform` | 生成一个临时 `*.test.ts`，原样 `import { describeSimulationContract }` 并喂给扩展提供的 `contract.json`（`okSpec`/`equivalentSpec`/…/`runTimeoutMs`），spawn 一次 `bun test` 跑完整 13 条契约断言 | `tests/helpers/simulation_contract.ts`（AD-4"两个实现验证接口"的投资在这里第二次回本，跑的断言逻辑一个字都没重写） |
+| `rule` | 静态扫描源码有没有明显的 IO / 非确定性原语（`node:fs`/`fetch`/`Math.random()`…）+ 用扩展声明的 `VERIFY_SAMPLE_INPUT` 调用 `evaluate()` 两次比对结果 | —— |
+| `skill` | `SKILL.md` frontmatter schema 校验（`backend/src/skills/frontmatter.ts`，P9 真源）+ `validation[]` 声明的 e2e 文件实际存在且 `bun test` 能跑通 | P9 的 frontmatter 校验器 |
+| `backend`（WetLabBackend） | **已知限制**：只做结构检查（能 import、导出 `{id, description, available(), execute()}`），不跑 `backend/src/lab/` 的完整契约测试——那套依赖真实 `opentrons.simulate` 且不在本节所有权范围内 | —— |
+
+`ext verify` 的结论会缓存（扩展目录下的 `.verify.json`，记录结论 + 被校验对象的
+sha256），`ext load` 装载时会拿当前内容的指纹跟缓存比对：**从未验证过**、
+**验证过但内容已变化**、**上次没通过**，三种情况都会在装载时打印一条不阻断装载的
+`⚠️` 警告——AD-11 的字面意思是"能装上不算装好"，所以装载器选择"仍然装上，但把
+这件事大声告诉你"，而不是替你做"要不要用一个没验证过的扩展"这个决定。
+
+### 安全边界的准确表述（不重蹈评审 S-3"沙箱一行逃逸"）
+
+- **`ext verify` 不是沙箱，是契约测试**。跑 `platform`/`rule`/`skill` 的 verify 本身
+  就需要执行扩展代码（这是运行时契约测试的本质要求），它验证的是"这段代码的行为
+  符不符合契约"，不提供任何执行隔离。
+- **`--trust` 挡的是"未经确认的静默执行"，不是代码本身的行为**。信任了的扩展与
+  仓库代码同权限、同 UID，能读写文件、发任意网络请求。
+- **声明式 connector（强度①）不执行任意代码，这是它比 TS 扩展更安全的地方**——
+  但它的 SSRF 防护是字面量白名单，不防 DNS rebinding（继承自 W1-c 的已知限制，
+  见 `backend/src/connectors/manifest.ts` 头部注释）。
+- **`ExtensionContext` 挡得住"扩展代码规规矩矩地"通过 context 访问凭据/工具时
+  越界的请求**（声明外的 id/工具名会被拒绝），**挡不住**扩展绕过 context、直接
+  `import` 其它模块自己拿凭据/发请求——TS 扩展与仓库代码同权限，这条防线是
+  "对遵守约定的代码的结构性约束"，不是运行时隔离。
+
+## 10. 提交前自查
 
 ```bash
 bun run typecheck

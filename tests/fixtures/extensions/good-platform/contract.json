@@ -1,0 +1,11 @@
+{
+  "okSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "steps": 50 } },
+  "equivalentSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "scale": 1, "steps": 50, "stallSeconds": 0 } },
+  "differentSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "steps": 80 } },
+  "slowSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "steps": 10, "stallSeconds": 5 } },
+  "failingSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "steps": 5, "scale": 1e300 } },
+  "invalidSpec": { "platform": "good-platform", "kind": "demo-run", "params": { "steps": -1 } },
+  "expectedOutputs": ["series.csv", "final_state.json"],
+  "summaryKeys": ["steps", "final"],
+  "runTimeoutMs": 30000
+}

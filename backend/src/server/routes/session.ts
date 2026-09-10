@@ -81,7 +81,21 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     // 预览流默认开；调用方可显式 `{"preview": false}` 关掉（省一次模型调用——见上面
     // 大注释的代价说明）。只在 chat 模式尝试：coexplore 的 prompt/grounding 装配更复杂
     // （CoExploreSession，见 agents/orchestrator.ts），本 lane 不重新拼一份。
-    const wantsPreview = body["preview"] !== false && mode === "chat";
+    // **W2 收口裁定：预览流默认关闭（`preview: true` 才开）。**
+    //
+    // W2-d 把它做成默认开，理由是「一次真实的模型输出，比把权威结果切成假 token 回放诚实」
+    // ——前半句对，后半句的对比选错了参照物。真正的问题是**预览的内容和权威答案无关**：
+    // 预览发的是 `[{role:"user", content: message}]`（裸消息，无 system prompt、无技能上下文、
+    // 无 plan），而权威答案走完整 orchestrator 管线（plan → execute → review）。
+    // 两者是**两个不同的回答**，不是同一个回答的两个阶段。
+    //
+    // 用户不会把先出现的那段文字读成「占位」，会读成「答案」——然后它被换掉。
+    // 展示一段与最终产出无关、却读起来像答案的文字，比不做流式更糟。
+    // 附带代价：每次 chat 多一次模型调用。
+    //
+    // 根治是让 orchestrator 支持 `onDelta`，把预览与权威合而为一——那是 W3-a 的活
+    // （它本来就要重构 orchestrator 做 replan 循环）。在那之前保留能力、默认关闭。
+    const wantsPreview = body["preview"] === true && mode === "chat";
 
     return sseResponse(
       (sender) => {

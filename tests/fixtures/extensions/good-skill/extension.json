@@ -1,0 +1,7 @@
+{
+  "kind": "skill",
+  "name": "good-skill",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "示例技能扩展（强度②），供 ext verify 正向用例使用：SKILL.md frontmatter + 配套可跑的 e2e。"
+}

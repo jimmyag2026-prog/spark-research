@@ -398,7 +398,7 @@ async function freePort(): Promise<number> {
   });
 }
 
-test("⑬ SSE 预览流：delta 事件逐块到达（不是一次性 dump）", async () => {
+test("⑬ SSE 预览流（需 preview:true 显式开启）：delta 事件逐块到达，不是一次性 dump", async () => {
   const port = await freePort();
   const root = mkdtempSync(join(tmpdir(), "spark-e2e-sse-"));
   const fixtureDir = mkdtempSync(join(tmpdir(), "spark-e2e-sse-fixture-"));
@@ -424,7 +424,11 @@ test("⑬ SSE 预览流：delta 事件逐块到达（不是一次性 dump）", a
     const res = await fetch(`http://127.0.0.1:${port}/api/session/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: "e2e-sse-delta", message: "讲讲你自己", mode: "chat" }),
+      // W2 收口起预览流默认关闭（见 server/routes/session.ts 的裁定注释：
+      // 预览发的是裸消息，与走完整 orchestrator 管线的权威答案是两个不同的回答，
+      // 默认展示它会被用户读成答案）。这条用例验的是「开了之后确实逐块到达」，
+      // 所以要显式 opt-in。
+      body: JSON.stringify({ sessionId: "e2e-sse-delta", message: "讲讲你自己", mode: "chat", preview: true }),
     });
     expect(res.status).toBe(200);
     expect(res.body).toBeTruthy();

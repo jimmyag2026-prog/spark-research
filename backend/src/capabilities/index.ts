@@ -1,3 +1,4 @@
+import { listExtensionCapabilities, type ExtensionCapability } from "../extensions/capabilities";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import { CONFIG_SETTINGS, resolveAll, resolveSetting, type ConfigOptions } from "../config";
@@ -154,6 +155,12 @@ export interface CapabilityManifest {
   wetBackends: WetBackendCapability[];
   skills: SkillCapability[];
   rules: RuleCapability[];
+  /**
+   * 已安装的第三方扩展（v0.4 W2-c）。
+   * 只读 manifest + 授权记录 + verify 缓存，**不执行任何扩展代码**，
+   * 所以不需要 `probe` opt-in——成本与其它静态可用性字段一致。
+   */
+  extensions: ExtensionCapability[];
   mcp: {
     tools: McpToolCapability[];
     // 刻意不暴露的危险动作（AD-6）。写进能力清单本身就是文档：
@@ -354,6 +361,9 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     capabilities: localProbeRouter.capabilitiesFor("local/probe-model") ?? FALLBACK_CAPABILITIES,
   };
 
+  // W2-c 交付、W2 收口接线：只读 manifest / 授权记录 / verify 缓存，不执行扩展代码。
+  const extensions = await listExtensionCapabilities({ root: options.root });
+
   return {
     service: "spark-research",
     version: PACKAGE_VERSION,
@@ -363,6 +373,7 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     wetBackends,
     skills,
     rules,
+    extensions,
     mcp: {
       tools: MCP_TOOLS.map((tool) => ({
         name: tool.name,

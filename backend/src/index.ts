@@ -28,6 +28,8 @@ import { runReviewCommand } from "./reviewer/cli";
 // 这里只加两个 case 分支接进去，不动零参数（welcome）行为（W1-d 所有权）。
 import { runInit } from "./onboarding/init";
 import { runDemo } from "./onboarding/demo";
+// W2-c（P15）：扩展装载与 ext verify。所有权在 backend/src/extensions/**。
+import { runExtCommand } from "./extensions/cli";
 // W1-d（B-a 打包分发）：原先是 `await Bun.file(join(import.meta.dir, "../../package.json")).json()`——
 // `bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，
 // 运行期拼路径读不到真实的 package.json（ENOENT，`--version`/`--help`/`capabilities` 全部炸）。
@@ -54,6 +56,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research doctor      环境体检（bun / Python 三档依赖 / provider key / 前端产物），缺什么给修复命令
   spark-research config      用户配置（list / get / set / unset / path）
   spark-research new         脚手架（new skill|connector|platform <name>）
+  spark-research ext         扩展装载 + 契约验收（list / verify / load / grant / revoke）
   spark-research mcp         以 MCP server 模式运行（stdio），供外部 agent 接入
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
@@ -412,6 +415,12 @@ function main() {
     case "capabilities":
     case "caps": {
       runCapabilitiesCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "ext": {
+      runExtCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

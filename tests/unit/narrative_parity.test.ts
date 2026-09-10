@@ -82,12 +82,12 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // loop 里为每个子代理构造一个 AgentToolBus 实例，toolbus.ts 有了真实生产调用方，
   // 按对称检查删除本条。
 
-  "backend/src/connectors/manifest.ts":
-    "**等接线**：v0.4 W1-c 交付的声明式 connector manifest 编译器（P15 X-b）。" +
-    "它的消费方是 W2-c 的扩展装载器（三种装载强度之一），那条 lane 还没落地，" +
-    "所以现在没有生产调用方——只有 tests/unit/connector_manifest.test.ts 引用它。" +
-    "**W2-c 接上后必须删除本条**（门禁的『多余登记必须删除』对称检查会强制这件事，" +
-    "做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  // backend/src/connectors/manifest.ts 曾在此登记「等接线：W2-c（扩展装载器）接上后
+  // 必须删除本条」——W2-c 的 backend/src/extensions/loader.ts 已经
+  // `import { loadManifestFromJson, ManifestError } from "../connectors/manifest"`
+  // 并在 kind="connector" 的装载路径里真实调用它（连同 backend/src/extensions/
+  // connector_verify.ts 的 ext verify 逻辑），manifest.ts 有了真实生产调用方，
+  // 按对称检查删除本条（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。
 
   "backend/src/agents/contract.ts":
     "**等接线**：v0.4 P13 波次 W2-b 交付的 Research Contract（AD-10：完成判定问图不问模型，" +
@@ -98,6 +98,9 @@ const ALLOWED_ORPHANS: Record<string, string> = {
     "（门禁的『多余登记必须删除』对称检查会强制这件事，做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
+
+  // backend/src/extensions/capabilities.ts 曾在此登记「等接线：capabilities 接上后删除」——
+  // W2 收口已接（buildCapabilities() 里加了 extensions 字段），本条按对称检查删除。
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
   "backend/src/agents/swarm.ts":

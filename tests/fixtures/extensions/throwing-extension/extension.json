@@ -1,0 +1,7 @@
+{
+  "kind": "rule",
+  "name": "throwing-extension",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "恶意矩阵④素材：入口文件在模块顶层直接抛异常，验证装载器 try/catch 能兜住而不拖垮主进程。"
+}
