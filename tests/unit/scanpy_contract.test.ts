@@ -162,7 +162,10 @@ describe("scanpy · 依赖缺失时给出可操作的安装命令", () => {
     const status = await platform.available();
     expect(status.ok).toBe(false);
     expect(status.reason).toContain("scanpy 不可用");
-    expect(status.reason).toContain("No module named 'scanpy'");
+    // 不锁死具体模块名：宿主 python 缺哪一环（scanpy 本体，或它的依赖 pandas/numpy）
+    // 是环境属性，CI 实测会先死在依赖链上。本测试的语义是「探测失败要透出 python 的
+    // 原始报错」，不是「报错必须是 scanpy 自己」。
+    expect(status.reason).toContain("No module named");
     expect(status.reason).toContain("uv pip install scanpy");
     // 静默降级的形状（ok:true + 空 detail）在这里必须不可能出现。
     expect(status.detail.exitCode).not.toBe(0);

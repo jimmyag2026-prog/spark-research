@@ -344,6 +344,9 @@ describe("V45 · ExternalMcpRuntime 的完整生命周期", () => {
       },
     });
     await runtime.attach({ recordSink: sink });
-    expect(seen).toEqual(["v45-sink-a", "v45-sink-b"]);
+    // 首个 CI run（Linux）抓到的顺序不确定性：两个扩展的 connect 完成序在 Linux 与
+    // macOS 上不同。本断言验的是「recordSink 递给了每一个 connect」，顺序不是它的
+    // 语义——排序后比较，别让平台差异当回归。
+    expect([...seen].sort()).toEqual(["v45-sink-a", "v45-sink-b"]);
   });
 });

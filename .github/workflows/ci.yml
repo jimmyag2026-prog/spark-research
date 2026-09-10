@@ -16,6 +16,11 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      # chem（rdkit 出 SVG）与 scanpy/pydeseq2 的探测测试依赖这两个包在 runner 上存在：
+      # rdkit 是 chem 全链路的真依赖；numpy 让「模块缺失」探测报出正确的缺失模块名
+      # （没有 numpy 时所有探测都死在 numpy，断言的模块名对不上——首个 CI run 实测）。
+      - name: 安装科学依赖（chem/探测测试用）
+        run: python3 -m pip install --quiet numpy rdkit
       - name: 单元测试
         run: bun test tests/unit
       - name: 二进制冒烟（构建 + 版本一致 + capabilities + server/UI）
