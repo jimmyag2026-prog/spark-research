@@ -27,11 +27,24 @@ function SessionStream(): JSX.Element {
     const placeholder = ws.pushMessage({ role: "agent", mode: mode(), text: "", pending: true });
     scrollToEnd();
 
+    // P14 预览流（W2-d）：`delta` 事件逐块到达就是"模型正在生成"的实时预览，
+    // 不是权威回答——`result` 到达后用权威正文整体替换掉这段预览文字，不是拼接。
+    // 没有任何 delta 到达也完全正常（没配 provider / fake LLM 不支持流式），
+    // 界面退化回原来的「思考中…」占位，行为不变。
+    let preview = "";
     try {
       await streamChat(
         { sessionId: SESSION_ID, message: text, mode: mode() },
         {
-          onProgress: (data) => ws.updateMessage(placeholder, { text: data.message, pending: true }),
+          onDelta: (data) => {
+            preview += data.chunk;
+            ws.updateMessage(placeholder, { text: preview, pending: true });
+            scrollToEnd();
+          },
+          onProgress: (data) => {
+            // 只有还没收到任何预览片段时才用生命周期文案占位，避免覆盖正在流入的预览文字。
+            if (!preview) ws.updateMessage(placeholder, { text: data.message, pending: true });
+          },
           onResult: (data) => {
             ws.updateMessage(placeholder, { text: data.response, pending: false });
             // co-explore 落了卡就把思路库与时间线刷一下。
@@ -75,7 +88,13 @@ function SessionStream(): JSX.Element {
                   <span>{message.at.slice(11, 19)}</span>
                 </div>
                 <div class="msg-body">
-                  <Show when={!message.pending} fallback={<Spinner label={message.text || "思考中…"} />}>
+                  {/* P14 预览流（W2-d）：pending 且已经有文字 = 预览片段正在逐块到达，
+                      直接按 markdown 渲染增长的文字，spinner 只当一个"未定稿"提示条；
+                      pending 且还没文字 = 老的"思考中…"占位（没有预览流时的原行为）。 */}
+                  <Show when={message.pending}>
+                    <Spinner label={message.text ? "预览生成中…" : "思考中…"} />
+                  </Show>
+                  <Show when={message.text}>
                     <Markdown source={message.text} knownKeys={ws.knownKeys()} />
                   </Show>
                 </div>

@@ -24,6 +24,10 @@ import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
 import { runDoctorCommand } from "./doctor/cli";
 import { runReviewCommand } from "./reviewer/cli";
+// W2-d（B-b/B-c）：向导 + 离线 demo。所有权在 backend/src/onboarding/**；
+// 这里只加两个 case 分支接进去，不动零参数（welcome）行为（W1-d 所有权）。
+import { runInit } from "./onboarding/init";
+import { runDemo } from "./onboarding/demo";
 // W1-d（B-a 打包分发）：原先是 `await Bun.file(join(import.meta.dir, "../../package.json")).json()`——
 // `bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，
 // 运行期拼路径读不到真实的 package.json（ENOENT，`--version`/`--help`/`capabilities` 全部炸）。
@@ -424,6 +428,45 @@ function main() {
     }
     case "doctor": {
       runDoctorCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    // W2-d：init 向导（建项目 → 探测 provider/本地 Ollama → 一次真实文献检索 →
+    // 证据图 → 下一步命令）。参数极简，全部可选：不传 slug 就用时间戳生成一个。
+    case "init": {
+      const initArgs = process.argv.slice(3);
+      const initFlags: Record<string, string> = {};
+      const initPositional: string[] = [];
+      for (let i = 0; i < initArgs.length; i++) {
+        const arg = initArgs[i]!;
+        if (arg.startsWith("--")) {
+          const name = arg.slice(2);
+          const next = initArgs[i + 1];
+          if (next !== undefined && !next.startsWith("--")) {
+            initFlags[name] = next;
+            i++;
+          }
+        } else {
+          initPositional.push(arg);
+        }
+      }
+      runInit({
+        slug: initPositional[0],
+        query: initFlags.query,
+        name: initFlags.name,
+        description: initFlags.description,
+      }).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    // W2-d：离线示例项目（零网络、零 API key，fixture 驱动的完整研究线索）。
+    case "demo": {
+      const demoArgs = process.argv.slice(3);
+      const outIndex = demoArgs.indexOf("--out");
+      const outFile = outIndex >= 0 ? demoArgs[outIndex + 1] : undefined;
+      runDemo({ outFile }).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

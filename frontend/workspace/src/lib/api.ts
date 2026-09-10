@@ -121,6 +121,12 @@ function streamTask(id: string, onMessage: (message: string) => void): Promise<v
 
 export interface StreamHandlers {
   onStart?: (data: { sessionId: string; mode: string }) => void;
+  // P14：预览流的增量片段（W2-d）。**不是**权威回答本身——权威回答只在 onResult
+  // 一次性给全文，onDelta 只是"模型正在生成"的实时预览，两者内容可能不完全一致
+  // （权威回答走完整的 plan/execute/review 循环，预览只是一次独立的直接模型调用）。
+  // 没配置 provider、或后端 fake LLM 不支持流式时，这个事件永远不会到达——UI 不能
+  // 假设它一定会来。
+  onDelta?: (data: { chunk: string }) => void;
   onProgress?: (data: { message: string }) => void;
   onResult?: (data: { response: string; review?: unknown; ideaRecordId?: string | null }) => void;
   onError?: (data: { message: string }) => void;
@@ -165,6 +171,7 @@ export async function streamChat(
       if (!name || !raw) continue;
       const data = JSON.parse(raw) as never;
       if (name === "start") handlers.onStart?.(data);
+      else if (name === "delta") handlers.onDelta?.(data);
       else if (name === "progress") handlers.onProgress?.(data);
       else if (name === "result") handlers.onResult?.(data);
       else if (name === "error") handlers.onError?.(data);
