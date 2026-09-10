@@ -11,6 +11,7 @@ import {
   buildClaimPrompt,
   buildComparePrompt,
   constrainRating,
+  constraintBasis,
   renderNoveltyReport,
   summarizeSources,
   validateAssessmentPayload,
@@ -44,12 +45,19 @@ function candidate(key: string, affinity: number, overrides: Partial<NoveltyCand
     key,
     paper: paper({ title: `${key} 的论文`, year: 2020 }),
     affinity,
+    semanticAffinity: null,
+    affinityBasis: "lexical",
     inLibrary: false,
     libraryPaperId: null,
     libraryRecordId: null,
     queries: ["q1"],
     ...overrides,
   };
+}
+
+// 语义口径的候选：词面分数刻意压低，好让「按哪个口径判」这件事在断言里无处可藏。
+function semanticCandidate(key: string, semanticAffinity: number, lexical = 0.1): NoveltyCandidate {
+  return candidate(key, lexical, { semanticAffinity, affinityBasis: "semantic" });
 }
 
 function declared(overrides: Partial<DeclaredAssessment> = {}): DeclaredAssessment {
@@ -491,6 +499,9 @@ describe("NoveltyChecker 管线", () => {
     };
 
     const checker = new NoveltyChecker({
+      // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+      // SPARK_RESEARCH_EMBEDDING_MODEL 就会让单测偷偷打真实网络）。
+      embedder: null,
       llm: scripted,
       searcher: searcher as unknown as LiteratureSearcher,
       library: f.library,
@@ -553,6 +564,9 @@ describe("NoveltyChecker 管线", () => {
       },
     };
     const checker = new NoveltyChecker({
+      // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+      // SPARK_RESEARCH_EMBEDDING_MODEL 就会让单测偷偷打真实网络）。
+      embedder: null,
       llm: scripted,
       searcher: searcher as unknown as LiteratureSearcher,
       library: f.library,
@@ -583,6 +597,9 @@ describe("NoveltyChecker 管线", () => {
       },
     };
     const checker = new NoveltyChecker({
+      // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+      // SPARK_RESEARCH_EMBEDDING_MODEL 就会让单测偷偷打真实网络）。
+      embedder: null,
       llm: scripted,
       searcher: searcher as unknown as LiteratureSearcher,
       library: f.library,
@@ -603,6 +620,9 @@ describe("NoveltyChecker 管线", () => {
     const { f, records, idea } = await seed("novelty-badclaims");
     const before = records.count();
     const checker = new NoveltyChecker({
+      // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+      // SPARK_RESEARCH_EMBEDDING_MODEL 就会让单测偷偷打真实网络）。
+      embedder: null,
       llm: new FakeLlm(['{"claims":[]}']),
       searcher: new StubSearcher({}) as unknown as LiteratureSearcher,
       library: f.library,
@@ -639,6 +659,9 @@ describe("NoveltyChecker 管线", () => {
       },
     };
     const result = await new NoveltyChecker({
+      // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+      // SPARK_RESEARCH_EMBEDDING_MODEL 就会让单测偷偷打真实网络）。
+      embedder: null,
       llm: scripted,
       searcher: searcher as unknown as LiteratureSearcher,
       library: f.library,
@@ -651,5 +674,268 @@ describe("NoveltyChecker 管线", () => {
     expect(result.markdown).toContain("Novelty check 报告");
     f.library.close();
     f.project.close();
+  });
+});
+
+// ── v0.5 C4 · 语义口径 ──────────────────────────────────────────────────────
+//
+// 这一段守的是本 lane 最要紧的一条：**语义化不得削弱确定性层**（AD-8）。
+// embedding 相似度是**输入**，不是最终判据——下面每个用例都在检查
+// 「模型说了什么」与「确定性层最后判了什么」这两件事仍然是分开的。
+
+/**
+ * 可控余弦的假 embedder。
+ *
+ * 所有 claim 文本都映射到单位向量 [1, 0]；一篇论文文本映射到 [v, √(1-v²)]，
+ * 于是 cos(claim, paper) 恰好等于 `similarity(paperText)` 给出的 v——
+ * 想让某条候选「语义上有多近」就是多近，不必依赖任何真实模型。
+ */
+class StubEmbedder {
+  readonly calls: string[][] = [];
+  constructor(
+    private model: string | null,
+    private similarity: (text: string) => number | null,
+    private failure: { kind: "auth" | "upstream" | "timeout" | "parse" | "unsupported"; message: string } | null = null,
+  ) {}
+
+  modelId = (): string | null => this.model;
+
+  embed = async (texts: string[]) => {
+    this.calls.push(texts);
+    if (this.failure) {
+      return {
+        ok: false as const,
+        provider: "stub",
+        model: this.model ?? "",
+        vectors: null,
+        dims: null,
+        usage: { tokens: 0 as const, costUsd: null, usageUnavailable: true as const },
+        error: { ...this.failure, retryable: false },
+      };
+    }
+    const vectors = texts.map((text) => {
+      const v = this.similarity(text);
+      if (v === null) return [1, 0];
+      return [v, Math.sqrt(Math.max(0, 1 - v * v))];
+    });
+    return {
+      ok: true as const,
+      provider: "stub",
+      model: this.model ?? "",
+      vectors,
+      dims: 2,
+      usage: { tokens: texts.length, costUsd: null, usageUnavailable: false },
+    };
+  };
+}
+
+// 生产的 SEMANTIC_THRESHOLDS 现在是**空表**（bge-m3 标定过但没赢过词面，见 calibration.ts）。
+// 语义约束这条分支仍然必须被完整测到，所以这里注入一张表——注入的是本 lane 实测出来的
+// 「零假阳性」阈值 0.665，不是编的数（见 tests/unit/novelty_calibration.test.ts）。
+const CALIBRATED = "local/bge-m3";
+const TEST_THRESHOLDS = {
+  [CALIBRATED]: { high: 0.665, calibratedOn: "2026-09-10", sampleSize: 30, source: "tests/fixtures/novelty/calibration.json" },
+};
+
+describe("评级校验层 · 语义口径", () => {
+  test("语义候选却不给语义阈值 → 抛错（绝不拿词面阈值去卡语义分数）", () => {
+    expect(() => constrainRating(declared(), [semanticCandidate("k1", 0.9)])).toThrow(/语义阈值/);
+  });
+
+  test("R5 在语义口径下照样工作：语义高相似 + 模型说 novel → 升级 existing", () => {
+    const result = constrainRating(
+      declared({ rating: "novel", nearestWorks: [{ key: "k1", sameness: "同", difference: "异" }] }),
+      // 词面只有 0.10（远低于 0.75），单看词面这条不会被升级——升级只能来自语义。
+      [semanticCandidate("k1", 0.72, 0.10)],
+      { semanticHighAffinity: 0.665 },
+    );
+    expect(result.declaredRating).toBe("novel");
+    expect(result.rating).toBe("existing");
+    expect(result.violations.map((v) => v.code)).toContain("novel_despite_high_affinity");
+    expect(result.violations[0]!.message).toContain("语义相似度");
+    expect(result.affinityBasis).toBe("semantic");
+    expect(result.affinityThreshold).toBe(0.665);
+    // 两个都留：词面口径的最高分仍然可读（AD-8 的「两种相似度都留」）
+    expect(result.topAffinity).toBe(0.72);
+    expect(result.topLexicalAffinity).toBe(0.10);
+  });
+
+  test("判据真的换成了语义：词面 0.9 但语义 0.50 → novel 不被升级", () => {
+    const result = constrainRating(
+      declared({ rating: "novel", nearestWorks: [{ key: "k1", sameness: "同", difference: "异" }] }),
+      [semanticCandidate("k1", 0.50, 0.90)],
+      { semanticHighAffinity: 0.665 },
+    );
+    expect(result.rating).toBe("novel");
+    expect(result.violations).toEqual([]);
+  });
+
+  test("R4 在语义口径下照样工作：模型说 existing 但语义最近邻只有 0.30 → 降级 incremental", () => {
+    const result = constrainRating(declared({ rating: "existing" }), [semanticCandidate("k1", 0.30, 0.95)], {
+      semanticHighAffinity: 0.665,
+    });
+    expect(result.rating).toBe("incremental");
+    expect(result.violations.map((v) => v.code)).toContain("existing_without_high_affinity");
+  });
+
+  test("全零向量 → 语义相似度全 0 → existing 必被降级（不会悄悄全判成相似）", () => {
+    // 阴性对照 ②：provider 吐全零向量时 cosine 返回 0（不是 1），
+    // 于是确定性层判的是「一条高相似候选都没有」，而不是「全都是同一件事」。
+    const result = constrainRating(declared({ rating: "existing" }), [semanticCandidate("k1", 0, 0.99)], {
+      semanticHighAffinity: 0.665,
+    });
+    expect(result.rating).toBe("incremental");
+    expect(result.topAffinity).toBe(0);
+  });
+
+  test("口径不许混：一条候选没有语义分数 → 整条 claim 退回词面", () => {
+    const mixed = [semanticCandidate("k1", 0.9), candidate("k2", 0.2)];
+    expect(constraintBasis(mixed)).toBe("lexical");
+    // 退回词面后按词面判：k1 词面 0.1 / k2 词面 0.2，都够不着 0.75 → existing 被降级
+    const result = constrainRating(declared({ rating: "existing" }), mixed);
+    expect(result.affinityBasis).toBe("lexical");
+    expect(result.rating).toBe("incremental");
+  });
+
+  test("候选为空时口径恒为词面（没有候选就没有语义分数可言）", () => {
+    expect(constraintBasis([])).toBe("lexical");
+  });
+});
+
+describe("NoveltyChecker 管线 · 语义口径", () => {
+  const semanticClaimsJson = JSON.stringify({
+    claims: [{ statement: "自注意力替代循环结构做序列转导", queries: ["self attention transduction", "transformer recurrence"] }],
+  });
+
+  async function runWithEmbedder(slug: string, embedder: StubEmbedder, rating: string) {
+    const f = makeProjectWithPapers(3, slug);
+    roots.push(f.root);
+    const records = f.project.records();
+    const seedLlm = new FakeLlm([
+      JSON.stringify({
+        critique: `讨论[@${f.keys[0]}]。`,
+        hypothesis: "自注意力可以替代循环结构做序列转导",
+        supporting: [{ key: f.keys[0], note: "支持" }],
+        contradicting: [{ key: f.keys[1], note: "反对" }],
+        openQuestions: ["长序列上是否成立"],
+      }),
+    ]);
+    const idea = (await new CoExploreSession({ llm: seedLlm, library: f.library, records }).explore("想法", {
+      sessionId: slug,
+    })).stored;
+
+    const hit = paper({
+      title: "Attention Is All You Need",
+      abstract: "A transformer based solely on attention, replacing recurrence for sequence transduction.",
+      doi: "10.1/attn",
+      year: 2017,
+    });
+    const searcher = new StubSearcher({
+      "self attention transduction": [hit],
+      "transformer recurrence": [hit],
+    });
+    let call = 0;
+    const scripted = {
+      call: async (messages: ChatMessage[]) => {
+        call++;
+        const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
+        if (call === 1) return { ok: true as const, provider: "kimi", model: "m", content: semanticClaimsJson, ...llmExtras() };
+        const key = user.match(/\[@([A-Za-z0-9][A-Za-z0-9_\-:]*)\]/)![1]!;
+        return {
+          ok: true as const,
+          provider: "kimi",
+          model: "m",
+          content: JSON.stringify({
+            claims: [{ claimId: "c1", rating, nearestWorks: [{ key, sameness: "同", difference: "异" }], verdict: "判词" }],
+          }),
+          ...llmExtras(),
+        };
+      },
+    };
+    const result = await new NoveltyChecker({
+      embedder,
+      semanticThresholds: TEST_THRESHOLDS,
+      llm: scripted,
+      searcher: searcher as unknown as LiteratureSearcher,
+      library: f.library,
+      records,
+      artifacts: f.project.artifacts(),
+      workDir: f.project.paths.artifactsDir,
+    }).check(idea, { persist: false });
+    f.library.close();
+    f.project.close();
+    return result;
+  }
+
+  test("已标定模型 + 语义高相似 → 模型说 novel 被确定性层升级为 existing（AD-8 在语义口径下不打折）", async () => {
+    const embedder = new StubEmbedder(CALIBRATED, (text) => (text.startsWith("Attention Is All You Need") ? 0.72 : null));
+    const result = await runWithEmbedder("semantic-upgrade", embedder, "novel");
+    expect(result.embedding.basis).toBe("semantic");
+    expect(result.embedding.modelId).toBe(CALIBRATED);
+    expect(result.embedding.threshold).toBe(0.665);
+    expect(result.embedding.degradedReason).toBeNull();
+    expect(result.assessments[0]!.declaredRating).toBe("novel");
+    expect(result.assessments[0]!.rating).toBe("existing");
+    expect(result.assessments[0]!.affinityBasis).toBe("semantic");
+    // 一次批量调用覆盖「claim 陈述 + 各检索式 + 各候选文本」，同一篇论文只嵌一次
+    expect(embedder.calls).toHaveLength(1);
+    expect(embedder.calls[0]).toHaveLength(4);
+    expect(result.markdown).toContain("本次评级约束按「语义」口径");
+    expect(result.markdown).toContain("最高相似度（语义）");
+  });
+
+  test("已标定模型 + 语义分数低 → 模型说 existing 被降级为 incremental", async () => {
+    const embedder = new StubEmbedder(CALIBRATED, (text) => (text.startsWith("Attention Is All You Need") ? 0.20 : null));
+    const result = await runWithEmbedder("semantic-downgrade", embedder, "existing");
+    expect(result.embedding.basis).toBe("semantic");
+    expect(result.assessments[0]!.declaredRating).toBe("existing");
+    expect(result.assessments[0]!.rating).toBe("incremental");
+  });
+
+  test("未标定模型：向量照算作参考列，但评级约束强制退回词面（K-4）", async () => {
+    const embedder = new StubEmbedder("local/未标定的模型", (text) =>
+      text.startsWith("Attention Is All You Need") ? 0.99 : null,
+    );
+    const result = await runWithEmbedder("semantic-uncalibrated", embedder, "novel");
+    expect(result.embedding.basis).toBe("lexical");
+    expect(result.embedding.calibrated).toBe(false);
+    expect(result.embedding.vectorsAvailable).toBe(true);
+    expect(result.embedding.degradedReason).toContain("没有登记标定阈值");
+    // 向量算出来了（0.99 远超任何阈值），但**没有**被拿来升级评级
+    expect(result.retrievals[0]!.candidates[0]!.semanticAffinity).toBeCloseTo(0.99, 2);
+    expect(result.assessments[0]!.affinityBasis).toBe("lexical");
+    // 报告里必须写明为什么退回词面
+    expect(result.markdown).toContain("本次未能按语义口径判定，已退回词面");
+  });
+
+  test("**embedding 调用失败 → 走可见的失败路径**，不静默退回词面还装作没事（AD-13）", async () => {
+    const embedder = new StubEmbedder(CALIBRATED, (text) =>
+      text.startsWith("Attention Is All You Need") ? 0.99 : null,
+    { kind: "timeout", message: "请求超过 120000ms 未返回" });
+    const result = await runWithEmbedder("semantic-failure", embedder, "novel");
+    // ① 口径如实退回词面，且**带着原因**
+    expect(result.embedding.basis).toBe("lexical");
+    expect(result.embedding.vectorsAvailable).toBe(false);
+    expect(result.embedding.degradedReason).toContain("embedding 调用失败（timeout）");
+    expect(result.embedding.degradedReason).toContain("请求超过 120000ms 未返回");
+    // ② 候选上没有假造的语义分数
+    expect(result.retrievals[0]!.candidates.every((c) => c.semanticAffinity === null)).toBe(true);
+    // ③ 报告里有醒目的降级说明——读者不会以为这份报告是按语义判的
+    expect(result.markdown).toContain("⚠️ **本次未能按语义口径判定，已退回词面**");
+    expect(result.markdown).toContain("timeout");
+    // ④ 确定性层照常工作：词面口径下 existing 判据不成立 → 该降级还是降级
+    expect(result.assessments[0]!.affinityBasis).toBe("lexical");
+  });
+
+  test("没配 embedding（modelId=null）→ 纯词面，不算降级，报告里也不该出现降级告警", async () => {
+    const embedder = new StubEmbedder(null, () => 0.99);
+    const result = await runWithEmbedder("semantic-unconfigured", embedder, "novel");
+    expect(result.embedding.modelId).toBeNull();
+    expect(result.embedding.basis).toBe("lexical");
+    expect(result.embedding.degradedReason).toBeNull();
+    expect(result.markdown).not.toContain("本次未能按语义口径判定");
+    expect(result.markdown).toContain("本次评级约束按「词面」口径");
+    // 一次网络请求都不该发
+    expect(embedder.calls).toHaveLength(0);
   });
 });
