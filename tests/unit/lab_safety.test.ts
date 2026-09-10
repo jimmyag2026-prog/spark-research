@@ -25,7 +25,7 @@ function withReagents(
     name: string;
     reagentId?: string;
     concentration?: number;
-    concentrationUnit?: "percent" | "molar" | "unknown";
+    concentrationUnit?: "percent" | "molar" | "other" | "unspecified";
   }>,
   stepIndex = 0,
 ): Protocol {

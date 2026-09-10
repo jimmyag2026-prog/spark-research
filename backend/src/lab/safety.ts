@@ -79,7 +79,7 @@ interface ReagentLike {
   reagentId?: string;
   concentration?: number;
   /** 浓度单位（发布前外部验收补）：规则不能在不知道单位的情况下比较数值。见 protocol.ts 的 ReagentSpec。 */
-  concentrationUnit?: "percent" | "molar" | "unknown";
+  concentrationUnit?: "percent" | "molar" | "other" | "unspecified";
   stepId?: string;
 }
 
@@ -145,17 +145,24 @@ export const concentrationLimitRule: SafetyRule = {
     const withConcentration = reagentsOf(protocol).filter(
       (r) => r.reagentId != null && r.concentration != null,
     );
+    // 「物理上不可能」与「超标」**不重复报**：150% 次氯酸钠既 >100% 又超过表里的 100，
+    // 两条都列会让用户以为是两个独立问题（窄范围验收指出消息拼接略糙）。
+    // 物理不可能是更根本的那条，命中它就不再报超标。
+    const impossibleSet = new Set(
+      withConcentration.filter((r) => r.concentrationUnit === "percent" && r.concentration! > 100),
+    );
     const overLimit = withConcentration.filter(
-      (r) => MAX_CONCENTRATION[r.reagentId!] != null && MAX_CONCENTRATION[r.reagentId!]! < r.concentration!,
+      (r) =>
+        !impossibleSet.has(r) &&
+        MAX_CONCENTRATION[r.reagentId!] != null &&
+        MAX_CONCENTRATION[r.reagentId!]! < r.concentration!,
     );
     const uncovered = withConcentration.filter((r) => MAX_CONCENTRATION[r.reagentId!] == null);
     // **物理上不可能的浓度**：百分比 > 100。这一条与限值表无关，也**不需要编造任何阈值**——
     // 验收发现 `101% 硫酸` 能通过，因为 strong_acid 的阈值写的是 200（那个数在百分比语境下
     // 没有意义）。单位口径本身是既有未决问题（解析器原来把单位丢了，规则在比较自己不知道
     // 单位的数），这里只做无歧义的那一半：**浓度超过 100% 的东西不存在**。
-    const impossible = withConcentration.filter(
-      (r) => r.concentrationUnit === "percent" && r.concentration! > 100,
-    );
+    const impossible = [...impossibleSet];
 
     const details: string[] = [];
     if (impossible.length) {
