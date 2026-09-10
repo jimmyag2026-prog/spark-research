@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { ConnectorRegistry } from "../../backend/src/connectors/registry";
-import { MCP_TOOLS } from "../../backend/src/mcp/tools";
+import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
+import { TARGET_KINDS } from "../../backend/src/compute/target";
+import { defaultComputeAdapters } from "../../backend/src/compute/cli";
 import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/lab/wet_models";
 import { EXPERIMENT_STATES } from "../../backend/src/experiment/models";
 import { loadSkills } from "../../backend/src/skills/frontmatter";
@@ -120,13 +122,37 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
 
-  // v0.5 W5-1 α（CB-1/CB-2）：算力层的编排入口与第一个 adapter 在本波交付，
-  // 但生产调用方（CLI `spark-research compute …`）是 W5-2 β 的所有权。
-  // 这两条是本波**唯一**的跨波「等接线」（DEVELOPMENT_PLAN_v0.5_MODULES.md §5.1）。
-  "backend/src/compute/broker.ts":
-    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
-  "backend/src/compute/adapters/local.ts":
-    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
+  // v0.5 W5-1 α 在这里登记过两条「等接线」：`backend/src/compute/broker.ts` 与
+  // `backend/src/compute/adapters/local.ts`（当时 CLI 还没有，算力层没有生产调用方）。
+  // W5-2 β 已经把 `backend/src/compute/cli.ts` 接上——它 import 了 ComputeBroker 与
+  // LocalComputeAdapter，`backend/src/index.ts` 的 `case "compute"` 又 import 了它，
+  // 两者都有了真实的生产调用方，按对称检查删除这两条。
+  //
+  // **这张表同时是接线清单**：忘接会红（未登记的孤儿），接了不删也会红（多余的登记）。
+  // 这正是它不该变成永久豁免的机制——见下面「反向：在册的条目若已不再是孤儿」那一段。
+  // v0.5 W5-2 α（CB-4）：Modal adapter 走「无 token 的降级交付」（设计 §三·补.7）。
+  // 这一条比上面两条**多欠一件事**，删除条件因此有两个，缺一不可：
+  //   ① 等接线：W5-2 β 的 `compute/cli.ts` 把它注册进 adapter 表；
+  //   ② **等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制
+  //      （`tests/fixtures/compute/modal/` 里出现 `provenance: "real-modal"` 的那份），
+  //      并把「真实 gateway 未实现」这件事从 `modal.ts` 的口径里去掉。
+  // 在 ② 完成之前，本仓库对外**不许**宣称「支持 Modal 远端算力」——
+  // 准确说法是「Modal adapter 的契约已立、真实链路未验证」。
+  // `tests/unit/compute_modal.test.ts` 的「约束三」用例盯着本条：只要还没有真实录制，
+  // 「等真实录制」这五个字就必须留在本文件里（哪怕 ① 已经完成、本条已按对称检查移出
+  // 本表，也要照本仓库既有做法以「曾在此登记」的注释形式把这笔债留下）。
+  //
+  // **收口(W5-2)：① 已完成**——`compute/cli.ts` 的 `defaultComputeAdapters()` 已经把
+  // `ModalComputeAdapter` 注册进 adapter 表，modal.ts 有了真实的生产调用方，
+  // 按对称检查从本表移出（在册但已不是孤儿会红）。
+  // **但 ② 还欠着**：真实 gateway 仍未实现，`status().transport === "not_wired"`。
+  // 按 α 的交代与本仓库既有做法（见下面 swarm.ts / anthropic.ts 两例），
+  // 条目移出、**债以注释形式留在本文件里**——`tests/unit/compute_modal.test.ts` 的
+  // 「约束三」用例盯着「等真实录制」这五个字，删掉它测试就红。
+  //   **等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制
+  //   （`tests/fixtures/compute/modal/` 里出现 `provenance: "real-modal"` 的那份），
+  //   并把「真实 gateway 未实现」这件事从 `modal.ts` 的口径里去掉。
+  //   在此之前对外**不许**宣称「支持 Modal 远端算力」。
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
@@ -514,6 +540,53 @@ describe("叙事一致性门禁（AD-12）", () => {
     const raw = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { version: string };
     expect(PACKAGE_VERSION, "version.ts 的读法与 package.json 对不上——多半又是靠运行期读文件").toBe(raw.version);
     expect(PACKAGE_VERSION).not.toBe("0.0.0");
+  });
+
+  // v0.5 W5-2 β（CB-5 接线）：算力执行地的「数」与「口径」都必须是派生的。
+  //
+  // 这条断言防的是与 connector 数、技能数完全同一类的漂移：capabilities 对外说有几个
+  // 执行地、每个能不能用，如果是手写的，加一个 adapter 就会错，而且不报警。
+  // 额外钉住 AD-12 在算力上的具体形态（§三·补.7 约束二）：**注册表里没有 adapter 的
+  // 执行地，永远不许报 available**——没配 Modal 凭据时它必须是「未配置」
+  // 收口(W5-2) 后：真实 gateway 未实现 → `unavailable`（见下面 S8 那段注释）。
+  test("算力执行地：capabilities 声称的 target 数 = TARGET_KINDS，且无 adapter 者一律不报 available", async () => {
+    const manifest = await buildCapabilities();
+    expect(manifest.compute.targets.map((t) => t.kind)).toEqual([...TARGET_KINDS]);
+
+    const registered = new Set(Object.keys(defaultComputeAdapters()));
+    for (const target of manifest.compute.targets) {
+      if (target.availability === "available") {
+        expect(
+          registered.has(target.kind),
+          `capabilities 说 target '${target.kind}' 可用，但 adapter 注册表里根本没有它——` +
+            `这正是 AD-12 禁止的形状（声称 > 实现）`,
+        ).toBe(true);
+      }
+      // 每一个非 available 的执行地都必须说清楚为什么，不许只给一个状态词。
+      if (target.availability !== "available") {
+        expect(target.reason, `target '${target.kind}' 报了 ${target.availability} 却没给理由`).toBeTruthy();
+      }
+    }
+
+    // modal 的口径：本仓库的测试环境不配 Modal 凭据，所以它必须是「未配置」。
+    const modal = manifest.compute.targets.find((t) => t.kind === "modal")!;
+    expect(modal.credentialConfigured).toBe(false);
+    // S8（W5-2 末外部验收）：本仓库把 Modal adapter 接上之后，modal 的口径从
+    // `needs_credential` 变成了 `unavailable`——**不是退步，是更准确**。
+    // 验收者原话：`needs_credential` + 🔑 + 「只差一把钥匙」三者共同告诉用户
+    // 「去拿 token 就行」，而真相是**拿了也没用**（真实 gateway 还没实现），
+    // 那句真相排在长指引第三条的末尾。状态名必须自己承担这个信息。
+    // 不变的是这条断言真正要守的东西：**modal 绝不许报 available**。
+    expect(modal.availability).toBe("unavailable");
+    expect(modal.availability).not.toBe("available");
+    expect(modal.setupHint, "报「未配置」就必须同时给出配置指引（V36）").toBeTruthy();
+
+    // 默认执行地是 local，且 withheld 清单从 MCP_WITHHELD 派生（不是又抄一份）。
+    expect(manifest.compute.defaultTarget).toBe("local");
+    expect([...manifest.compute.withheld].sort()).toEqual(
+      MCP_WITHHELD.map((w) => w.name).filter((n) => n.startsWith("compute_")).sort(),
+    );
+    expect(manifest.compute.withheld).toHaveLength(3);
   });
 
   test("MCP 工具：每个工具名唯一，且 withheld 清单与暴露清单不重叠", () => {

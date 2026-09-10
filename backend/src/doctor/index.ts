@@ -1,7 +1,10 @@
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, dataDir, type ConfigOptions } from "../config";
+import { loadConfig, dataDir, configuredComputeTarget, type ConfigOptions } from "../config";
+// 收口(W5-2)：算力判定复用算力层自己的视图，doctor 不另写一份。
+import { computeTargetViews, defaultComputeAdapters } from "../compute/cli";
+import { CredentialStore } from "../daemon/credentials";
 import { DEFAULT_FRONTEND_DIR } from "../server/app";
 import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { resolvePython } from "../simulation/platform";
@@ -56,10 +59,30 @@ export interface DoctorReport {
   python: PythonStatus;
   tiers: DependencyTierStatus[];
   providers: ProviderKeyStatus[];
+  /**
+   * 收口(W5-2)：算力执行地。lane β 接线时 `doctor/**` 不在它的所有权里，
+   * 于是 `doctor` 里**压根没有算力段**——不是报错，是这块能力对 doctor 不可见。
+   * 用户装完之后最先敲的就是 `doctor`，一个它看不见的能力等于没有。
+   *
+   * 判定**复用 `computeTargetViews()`**，不在这里另写一份——两处各判一次
+   * 就是本轮反复修的那种病（V34 默认源、V37 auth 口径、modal 凭据字段名）。
+   */
+  computeTargets: ComputeTargetStatus[];
   frontendBuilt: boolean;
   frontendDir: string;
   dataDir: string;
   timestamp: string;
+}
+
+export interface ComputeTargetStatus {
+  kind: string;
+  availability: string;
+  /** modal: 有没有配凭据；local/ssh: null。 */
+  credentialConfigured: boolean | null;
+  isDefault: boolean;
+  /** 不可用/未配置时**为什么**，以及该做什么——`doctor` 的价值全在这两句上。 */
+  reason: string | null;
+  setupHint: string | null;
 }
 
 export interface TierProbeResult {
@@ -204,6 +227,20 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
       configured: Boolean(env[envVar] ?? config[envVar]),
     }));
 
+  // 复用算力层自己的判定：doctor 只做展示，不做第二套判断。
+  const computeTargets: ComputeTargetStatus[] = computeTargetViews({
+    adapters: defaultComputeAdapters({ root: options.root, env }),
+    credentials: new CredentialStore({ root: options.root }),
+    defaultTarget: configuredComputeTarget("local", options),
+  }).map((v) => ({
+    kind: v.kind,
+    availability: v.availability,
+    credentialConfigured: v.credentialConfigured,
+    isDefault: v.isDefault,
+    reason: v.reason,
+    setupHint: v.setupHint,
+  }));
+
   const frontendDir = options.frontendDir ?? DEFAULT_FRONTEND_DIR;
   const frontendBuilt = existsSync(join(frontendDir, "index.html"));
 
@@ -214,6 +251,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     python: pythonStatus,
     tiers,
     providers,
+    computeTargets,
     frontendBuilt,
     frontendDir,
     dataDir: dataDir(options),

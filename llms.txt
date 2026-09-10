@@ -52,13 +52,13 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 26 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 30 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
 - `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
 - `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
-- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。6 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。7 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed / biorxiv；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 - `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
 - `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
 - `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
@@ -79,6 +79,10 @@ spark-research mcp    # stdio 传输
 - `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
 - `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
 - `chem_depict`：要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
+- `compute_plan`：任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
+- `compute_status`：plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
+- `compute_list`：想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
+- `compute_collect`：**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
 - `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 
 **刻意不暴露的动作**（设计声明，不是未实现清单）：
@@ -88,14 +92,18 @@ spark-research mcp    # stdio 传输
 - `lab_simulate`：执行协议是物理世界动作的模拟入口，且只允许从 awaiting_approval 经人工批准进入。开放它等于绕过 approve gate。 人来做：`spark-research lab simulate <id>（须先经人工 approve）`
 - `conclusion_review`：结论卡能否进报告结论区是可信度的最后一道闸。让外部 agent 给自己产出的结论盖章，等于取消这道闸。预评估已通过 conclusion_get 只读开放。 人来做：`spark-research conclusion review <id> --actor <名字>`
 - `project_archive`：归档会把项目移出默认视图，是破坏性的组织动作，不应由外部 agent 代劳。 人来做：`spark-research project archive <slug>`
+- `compute_approve`：AD-6 同构：批准一次算力派发就是批准一笔账单。若 agent 能自己批准，它就能自己 plan、自己批准、自己派发，审批门退化成注释——而这一次退化的代价是真钱。 人来做：`spark-research compute approve <jobId> --actor <名字>（须在真实交互终端里执行）`
+- `compute_run`：派发就是计费动作本身，且只允许从 approved 经人工进入（与 lab_simulate 同构）。开放它等于绕过 approve gate；HTTP 层也刻意没有这个端点，不存在「换条路调」的余地。 人来做：`spark-research compute run <jobId>（须先经人工 approve）`
+- `compute_release`：释放会删掉远端卷/工作目录，是不可逆的破坏性动作（与 project_archive 同构）。产物只剩远端那一份时状态机会拦，但「该不该扔掉这批结果」本身是人的判断。 人来做：`spark-research compute release <jobId>（先 collect，或用 --discard 显式放弃产物）`
 
 ## 能力面
 
-### 数据源 Connector（17）
+### 数据源 Connector（21）
 
 - **chemistry**：chembl / pubchem
-- **genomics**：ensembl / ncbi / cncb
-- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang
+- **genomics**：ensembl / ncbi / cncb / clinvar
+- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang / biorxiv
+- **pathways**：reactome / string-db
 - **proteins**：uniprot / pdb / alphafold
 
 可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。
@@ -145,6 +153,8 @@ spark-research mcp    # stdio 传输
 - `userAgent`（默认 —，env `SPARK_RESEARCH_USER_AGENT`）：文献 connector 的 User-Agent（默认由版本号 + 项目地址 + contactEmail 拼出）
 - `wetBackend`（默认 opentrons_simulate，env `SPARK_RESEARCH_WET_BACKEND`）：湿实验默认执行后端
 - `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
+- `computeTarget`（默认 local，env `SPARK_RESEARCH_COMPUTE_TARGET`）：`spark-research compute plan` 不给 --target 时的默认执行地
+- `modalEnvironment`（默认 —，env `SPARK_RESEARCH_MODAL_ENVIRONMENT`）：Modal 账户的 environment 名（多环境账户才需要；不填走账户默认环境）
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
 - `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
 - `httpTimeoutMs`（默认 30000，env `SPARK_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）

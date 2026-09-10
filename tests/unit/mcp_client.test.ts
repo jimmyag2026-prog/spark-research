@@ -51,6 +51,11 @@ import { MCP_TOOLS } from "../../backend/src/mcp/tools";
 import { createApp } from "../../backend/src/server/app";
 import { ProjectManager } from "../../backend/src/project/manager";
 import { MockDeviceBackend } from "../../backend/src/lab/wet_backend";
+import { RecordStore } from "../../backend/src/project/records";
+import {
+  EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
+  type ExternalToolCallObservationMetadata,
+} from "../../backend/src/agents/contract";
 
 const FIXTURES = join(import.meta.dir, "../fixtures/mcp");
 const GOOD_SERVER = join(FIXTURES, "good_server.ts");
@@ -684,5 +689,118 @@ describe("ExtensionGrantStore 与 mcp_client 共用授权账本（不另起一�
     const config = validateMcpClientConfig({ command: "true", credentials: [{ id: "paidsource", field: "apiKey", env: "UPSTREAM_KEY" }] });
     const env = resolveMcpChildEnv(manifest, config, grant, { credentials: { has: () => true, get: () => ({ apiKey: "v" }) } });
     expect(env.UPSTREAM_KEY).toBe("v");
+  });
+});
+
+// ── §13 V31（W5-2 δ）：外部工具调用再落一条证据图 observation ────────────────
+//
+// 相对 §5（.mcp_calls.jsonl 的阴性对照①）的关系：这里测的是 jsonl **之外**新增的
+// 那一半——`recordSink` 给了之后，同一个 record() 分发点要**同时**落两份记录。
+// 用真的 `RecordStore`（不是手搓假对象）：更贴近生产形态，也顺带验证 metadata 形状
+// 真的能被 `EvidenceRecordSink = Pick<RecordStore, "create">` 这个窄类型接住。
+
+function freshRecordStore(): RecordStore {
+  const root = freshRoot();
+  return new RecordStore(join(root, "records.db"), "w52d-test");
+}
+
+function externalToolCallObservations(store: RecordStore) {
+  return store
+    .list({ type: "observation" })
+    .filter((r) => (r.metadata as Partial<ExternalToolCallObservationMetadata>).kind === EXTERNAL_TOOL_CALL_OBSERVATION_KIND);
+}
+
+describe("V31：recordSink 给了之后，外部工具调用再落一条 observation record", () => {
+  test("正向：成功调用——jsonl 和 observation 都落，observation 的 metadata 形状正确", async () => {
+    const root = freshRoot();
+    const store = freshRecordStore();
+    const manifest = manifestFor("v31-ok");
+    const config = goodServerConfig();
+    const result = await connectExternalMcp({ manifest, config, grant: emptyGrant(), pathOptions: { root }, recordSink: store });
+
+    const jsonlBefore = readMcpCallRecords(manifest.name, { root }).length;
+    await result.session!.call("echo", { text: "hi" });
+
+    // jsonl 那一半：W4-d 原有行为不受影响。
+    expect(readMcpCallRecords(manifest.name, { root }).length).toBe(jsonlBefore + 1);
+
+    // observation 那一半：V31 新增。
+    const obs = externalToolCallObservations(store);
+    expect(obs.length).toBe(1);
+    expect(obs[0]!.type).toBe("observation");
+    expect(obs[0]!.evidence).toBe("sourced");
+    const meta = obs[0]!.metadata as unknown as ExternalToolCallObservationMetadata;
+    expect(meta.extension).toBe("v31-ok");
+    expect(meta.tool).toBe("echo");
+    expect(meta.ok).toBe(true);
+    expect(typeof meta.durationMs).toBe("number");
+    expect(meta.argsSummary).toContain("hi");
+
+    await result.session!.close();
+  });
+
+  test("不给 recordSink：只落 jsonl，不落 observation（W4-d 原样行为，V31 是纯增量不是替换）", async () => {
+    const root = freshRoot();
+    const store = freshRecordStore(); // 建了但不传给 connectExternalMcp
+    const manifest = manifestFor("v31-no-sink");
+    const config = goodServerConfig();
+    const result = await connectExternalMcp({ manifest, config, grant: emptyGrant(), pathOptions: { root } });
+    await result.session!.call("echo", { text: "hi" });
+    expect(readMcpCallRecords(manifest.name, { root }).length).toBe(1); // jsonl 照常落
+    expect(externalToolCallObservations(store).length).toBe(0); // 没传 recordSink，图上什么都没有
+    await result.session!.close();
+  });
+
+  test(
+    "【阴性对照③】失败调用（未知工具）也要落 observation，ok=false——不是只在成功时才落",
+    async () => {
+      const root = freshRoot();
+      const store = freshRecordStore();
+      const manifest = manifestFor("v31-fail-unknown");
+      const config = goodServerConfig();
+      const result = await connectExternalMcp({ manifest, config, grant: emptyGrant(), pathOptions: { root }, recordSink: store });
+      await result.session!.call("does-not-exist", {});
+      const obs = externalToolCallObservations(store);
+      expect(obs.length).toBe(1);
+      const meta = obs[0]!.metadata as unknown as ExternalToolCallObservationMetadata;
+      expect(meta.ok).toBe(false);
+      expect(meta.tool).toBe("does-not-exist");
+      await result.session!.close();
+    },
+  );
+
+  test("超时调用也要落 observation，ok=false（第四个分支，不是悬而未决）", async () => {
+    const root = freshRoot();
+    const store = freshRecordStore();
+    const manifest = manifestFor("v31-fail-timeout");
+    const config = goodServerConfig({ callTimeoutMs: 200 });
+    const result = await connectExternalMcp({ manifest, config, grant: emptyGrant(), pathOptions: { root }, recordSink: store });
+    await result.session!.call("slow", { delayMs: 2000 });
+    const obs = externalToolCallObservations(store);
+    expect(obs.length).toBe(1);
+    expect((obs[0]!.metadata as unknown as ExternalToolCallObservationMetadata).ok).toBe(false);
+    await result.session!.close();
+  }, 10_000);
+
+  test("落 observation 失败（recordSink.create 抛错）不拖垮工具调用本身的返回值，jsonl 仍然照常落", async () => {
+    const root = freshRoot();
+    const manifest = manifestFor("v31-sink-throws");
+    const config = goodServerConfig();
+    const brokenSink = {
+      create(): never {
+        throw new Error("boom：模拟 RecordStore 写入失败（比如磁盘满/db 锁住）");
+      },
+    };
+    const result = await connectExternalMcp({
+      manifest,
+      config,
+      grant: emptyGrant(),
+      pathOptions: { root },
+      recordSink: brokenSink as unknown as RecordStore,
+    });
+    const outcome = await result.session!.call("echo", { text: "hi" });
+    expect(outcome.ok).toBe(true); // 调用本身没受影响
+    expect(readMcpCallRecords(manifest.name, { root }).length).toBe(1); // jsonl 那一半照常落
+    await result.session!.close();
   });
 });

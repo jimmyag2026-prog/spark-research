@@ -23,6 +23,9 @@ import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
 import { runChemCommand } from "./chem/cli";
+// W5-2 β（CB-5 接线）：远端算力的 CLI 入口。算力层本体在 backend/src/compute/**，
+// 这里只加一个 dispatch 分支——与 chem 那一行同一条纪律：接线是接线，实现是实现。
+import { runComputeCommand } from "./compute/cli";
 import { runDoctorCommand } from "./doctor/cli";
 import { runReviewCommand } from "./reviewer/cli";
 // V37 收口：provider → 鉴权环境变量名的**单一真源**是 `llm/router.ts` 的 `ADAPTERS`，
@@ -58,7 +61,9 @@ const HELP = `Spark Research v${pkg.version}
   spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
+  spark-research chem       化学结构图（depict：SMILES → 2D SVG，落 artifact + record）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
+  spark-research compute     远端算力（plan / approve / reject / run / status / list / collect / cancel / release / targets）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
   spark-research review      findings 状态机（findings [--open] / mark-addressed <id>）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
@@ -472,6 +477,14 @@ function main() {
     // 两条 lane 不许写同一个文件——这一行是分界处，接线是收口的活）。
     case "chem": {
       runChemCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    // W5-2 β（CB-5 接线）：`spark-research compute ...`。派发要花真钱，审批门在
+    // compute/cli.ts 里（与 lab approve 共用 approval/gate.ts 的 TTY 门）。
+    case "compute": {
+      runComputeCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

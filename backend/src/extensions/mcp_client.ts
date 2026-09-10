@@ -43,6 +43,14 @@ import type { ExtensionManifest } from "./types";
 import type { ExtensionGrant } from "./grants";
 import { buildExtensionContext, type ExtensionContextDeps } from "./context";
 import { extensionDir, type ExtensionPathOptions } from "./paths";
+// V31：外部工具调用除了 `.mcp_calls.jsonl` 之外，再落一条证据图 observation。
+// `agents/contract.ts` 不会反过来（静态或动态）import 本文件——它只 import
+// `project/models`/`project/records`（类型）与 `reviewer/rules`（值）——所以这里
+// 静态 import 常量 + 类型不会重演文件头那段注释里的环，跟 `McpToolRunner` 那种
+// 动态 import 是两个不同的情形，不需要同样的绕行。
+import { EXTERNAL_TOOL_CALL_OBSERVATION_KIND, type ExternalToolCallObservationMetadata } from "../agents/contract";
+import type { RecordInput } from "../project/models";
+import type { RecordStore } from "../project/records";
 
 // ── mcp.json：装载强度③的 manifest 旁路文件（数据，不是代码）──────────────────
 
@@ -259,6 +267,11 @@ export interface ExternalMcpSession {
   close(): Promise<void>;
 }
 
+// V31：只要「写一条 observation record」这一个方法——不给整个 RecordStore 的写权限
+// （尤其不给 update/link，call() 从头到尾只创建、不修改任何既有 record）。测试可以
+// 传一个只实现了 `.create()` 的假对象，不需要真的起一个 sqlite RecordStore。
+export type EvidenceRecordSink = Pick<RecordStore, "create">;
+
 export interface ConnectExternalMcpOptions {
   manifest: ExtensionManifest;
   config: McpClientConfig;
@@ -266,6 +279,19 @@ export interface ConnectExternalMcpOptions {
   deps?: ExtensionContextDeps;
   pathOptions?: ExtensionPathOptions;
   clientName?: string;
+  /**
+   * V31：给了就在 `.mcp_calls.jsonl` 之外，每次外部工具调用**再**落一条证据图
+   * observation record（`metadata.kind = EXTERNAL_TOOL_CALL_OBSERVATION_KIND`，
+   * `evidence: "sourced"`）——成功/失败/超时/未知工具四个分支全都落，与 jsonl
+   * 审计记录同步（见 `session.call()` 内的 `record()`）。
+   *
+   * 可选、默认不落：本文件的调用方不是只有"研究循环里真有 project 的场景"——
+   * `mcp_client_verify.ts` 的 `ext verify`、`discoverExternalMcpTools()` 的发现
+   * 探测都没有（也不该有）project 上下文，那些调用方不传这个字段，行为与 W4-d
+   * 落地时完全一致（只写 jsonl）。真正接上 project 证据图是收口（orchestrator 持有
+   * 已连接的 project）的职责，见 `docs/devlog/W5-2-d.md`「给收口的接线说明」。
+   */
+  recordSink?: EvidenceRecordSink;
 }
 
 export interface ConnectResult {
@@ -302,7 +328,7 @@ function raceWithHardTimeout<T>(promise: Promise<T>, timeoutMs: number, message:
  *   这与 TS 扩展"--trust 挡的是未经确认的静默执行，不是代码行为本身"是同一类边界。
  */
 export async function connectExternalMcp(options: ConnectExternalMcpOptions): Promise<ConnectResult> {
-  const { manifest, config, grant, deps, pathOptions, clientName } = options;
+  const { manifest, config, grant, deps, pathOptions, clientName, recordSink } = options;
   const env = resolveMcpChildEnv(manifest, config, grant, deps ?? {});
 
   const transport = new StdioClientTransport({
@@ -356,11 +382,48 @@ export async function connectExternalMcp(options: ConnectExternalMcpOptions): Pr
       const record = (partial: Omit<McpCallRecord, "extension" | "tool" | "argsSummary" | "durationMs" | "timestamp">) => {
         // 唯一的记账口：无论走哪条分支，都在这里落一条记录——这是差异化点的
         // 结构性保证（阴性对照①要钉死的就是"这一行永远会跑"）。
+        const durationMs = Date.now() - startedAt;
         appendMcpCallRecord(
           manifest.name,
-          { extension: manifest.name, tool: toolName, argsSummary, durationMs: Date.now() - startedAt, timestamp: startedAt, ...partial },
+          { extension: manifest.name, tool: toolName, argsSummary, durationMs, timestamp: startedAt, ...partial },
           pathOptions,
         );
+        // V31：jsonl 之外，再落一条证据图 observation——同一个 record() 分发点，
+        // 四个分支（成功/失败/超时/未知工具）走的都是这一处，不会有第二条路径
+        // "只写 jsonl 不写 observation"（阴性对照②钉死的就是这一点）。recordSink
+        // 缺省时保持 W4-d 原样行为（只有 jsonl），见 ConnectExternalMcpOptions 的注释。
+        if (recordSink) {
+          // RecordInput.metadata 是 Record<string, unknown>（schema 不区分 record 类型）；
+          // 先按 ExternalToolCallObservationMetadata 用 `satisfies` 做一次结构校验
+          // （字段漏了/类型错了在这里就编译不过），再降级成落库用的宽类型——与
+          // literature/cli.ts 落 CITATION_INTEGRITY_REVIEW_KIND 观察记录同一手法，
+          // 不重新发明一遍。
+          const metadata = ({
+            kind: EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
+            extension: manifest.name,
+            tool: toolName,
+            ok: partial.ok,
+            durationMs,
+            argsSummary,
+            ...(partial.errorSummary !== undefined ? { errorSummary: partial.errorSummary } : {}),
+          } satisfies ExternalToolCallObservationMetadata) as unknown as Record<string, unknown>;
+          const input: RecordInput = {
+            type: "observation",
+            title: `外部工具调用：${manifest.name}/${toolName}`,
+            content: partial.ok
+              ? `外部 MCP 工具 "${toolName}"（扩展 "${manifest.name}"）调用成功，耗时 ${durationMs}ms`
+              : `外部 MCP 工具 "${toolName}"（扩展 "${manifest.name}"）调用失败：${partial.errorSummary ?? "未知原因"}`,
+            evidence: "sourced",
+            metadata,
+          };
+          try {
+            recordSink.create(input);
+          } catch {
+            // 落 observation 失败不该拖垮外部工具调用本身的返回——jsonl 那条审计
+            // 记录已经先落盘了（见上面那一行），这里只是"锦上添花"的第二份记录，
+            // 与本函数"绝不向上抛出未捕获异常"的整体纪律一致（见文件头安全边界注释）。
+          }
+        }
       };
 
       if (!tools.some((t) => t.name === toolName)) {

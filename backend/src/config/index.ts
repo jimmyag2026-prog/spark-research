@@ -158,6 +158,35 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "pyref 零依赖且确定性（deterministic=true）；openmm 需要装 openmm 且 CPU 上不逐位可复现（deterministic=false），下游结论会被要求按「区间对账」措辞。",
   },
   {
+    // v0.5 C1（W5-2 β 接线）：算力的默认执行地。
+    key: "computeTarget",
+    type: "enum",
+    envVar: "SPARK_RESEARCH_COMPUTE_TARGET",
+    defaultValue: "local",
+    // 这里不 import compute/target.ts 的 TARGET_KINDS：config 层保持零依赖（见本文件顶部）。
+    // 也刻意**不含 ssh**——ssh 只有 schema 槽位、没有 adapter，写进来就等于声称能跑。
+    allowed: ["local", "modal"],
+    summary: "`spark-research compute plan` 不给 --target 时的默认执行地",
+    effect:
+      "local 是本机子进程：零凭据、不计费，CI 与开发用它走完整审批链。改成 modal 之后，plan 会" +
+      "被判定为计费型（approvalRequired 派生为 true，L-3），每次派发都要人工审批。**改这一项" +
+      "本身不会让 Modal 可用**：还要在 credentials.json 的 connectors.modal 里配 token；" +
+      "没配时 `compute targets` / `capabilities` 一律如实报「未配置」（needs_credential），" +
+      "既不是「不可用」也不是「可用」。",
+  },
+  {
+    // v0.5 C1（W5-2 β 接线）：Modal 的 environment（多环境账户才需要）。
+    key: "modalEnvironment",
+    type: "string",
+    envVar: "SPARK_RESEARCH_MODAL_ENVIRONMENT",
+    defaultValue: null,
+    summary: "Modal 账户的 environment 名（多环境账户才需要；不填走账户默认环境）",
+    effect:
+      "只在 target=modal 时进 TargetRef，因而**进 plan digest**——换 environment 等于换了执行地，" +
+      "已批准的 plan 会作废、必须重新审批。不填时 TargetRef 里不带这个字段（与「填了空字符串」" +
+      "不是同一个 digest，别用空串当「没配」）。",
+  },
+  {
     key: "dataDir",
     type: "string",
     envVar: "SPARK_RESEARCH_DATA_DIR",
@@ -512,6 +541,23 @@ export function configuredWetBackend(fallback: string, options: ConfigOptions = 
 
 export function configuredSimulationPlatform(fallback: string, options: ConfigOptions = {}): string {
   return stringOr("simulationPlatform", fallback, options);
+}
+
+/** v0.5 C1：`compute plan` 的默认执行地（env > config.json > 传入的代码默认 "local"）。 */
+export function configuredComputeTarget(fallback: string, options: ConfigOptions = {}): string {
+  return stringOr("computeTarget", fallback, options);
+}
+
+/**
+ * v0.5 C1：Modal environment。**没配就是 null，不是空字符串**——
+ * 空字符串会变成 TargetRef 里一个真实存在的 `environment: ""` 字段，进而改变 plan digest。
+ */
+export function configuredModalEnvironment(
+  fallback: string | null = null,
+  options: ConfigOptions = {},
+): string | null {
+  const resolved = resolveSetting("modalEnvironment", options);
+  return typeof resolved.value === "string" && resolved.value !== "" ? resolved.value : fallback;
 }
 
 export function configuredMcpTimeoutMs(fallback: number, options: ConfigOptions = {}): number {

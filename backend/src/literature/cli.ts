@@ -227,7 +227,19 @@ export function classifyIdentifier(raw: string): IdentifierShape {
 }
 
 // 各标识符形态由哪些源解析得了。用于「你给的是 arXiv id，但这次没查 arxiv」这类精确提示。
-const SHAPE_SOURCES: Record<IdentifierShape, LiteratureSource[]> = {
+/**
+ * 各标识符形态由哪些源解析得了。
+ *
+ * **这张表是真源，不只是提示文案的素材。** `literature/search.ts` 的 `fetchOne()` 用它
+ * 决定「这个源该不该拿这个 id 去查」——见那里的注释与 BACKLOG S1/V48。
+ *
+ * 之前 search.ts 里有一份**写死的三源白名单**（crossref/openalex/biorxiv + DOI 判断），
+ * 其余源一律透传原始 id。后果被零上下文外部验收当场抓到：`lit add 9999.99999`
+ * （一个不存在的 arXiv id）被 pubmed 的 eutils「宽容解析」成 PMID 9999，
+ * **导入了一篇完全无关的 1978 年论文并报 ✅、退出码 0**。
+ * 同一件事两份手写副本——这是 V34 / V37 / V46 之后的第四次，所以按同样的办法治：只留一个真源。
+ */
+export const SHAPE_SOURCES: Record<IdentifierShape, LiteratureSource[]> = {
   doi: ["crossref", "openalex", "europepmc", "semanticscholar"],
   arxiv: ["arxiv", "semanticscholar"],
   pmid: ["pubmed", "europepmc"],

@@ -47,7 +47,7 @@
 
 ---
 
-## 五大功能域
+## 六大功能域
 
 | 域 | 做什么 | 主要入口 |
 |----|-------|---------|
@@ -56,6 +56,14 @@
 | **C 全流程数据记录** | 8 类 record + 5 类边的证据图、artifact 版本与 lineage、时间线、**研究报告导出** | `spark-research report` |
 | **D 创新性验证** | claim 提取 → 密集检索 → 对比报告 → **确定性评级校验层**（检索不到 ≠ 新颖） | `spark-research idea check` |
 | **E 结论分析与 Review** | 引用真伪核验、数据-结论一致性、统计合理性提示、**结论卡 review 门槛** | `spark-research conclusion` |
+| **F 远端算力**（v0.5 新增） | `plan → approve → run → collect` 的作业生命周期；plan 摘要审批（计费/联网/用密钥三者任一成立就要人点头）、逐文件上传清单与 sha256、产物收割与释放。**执行地目前只有 `local` 可用** | `spark-research compute` |
+
+> ⚠️ **算力域的真实状态（如实说明）**：`local`（本机子进程）完整可用。
+> **Modal 只交付了契约与录制层，真实 gateway 尚未实现——填了 token 也跑不起来**，
+> `doctor` 会如实报 `unavailable` 并说明原因。SSH 是明确的占位槽位。
+> 另外**算力产出目前不进证据图**（`compute collect` 收回的文件不注册成 artifact，
+> 也不落 execution record），所以还无法基于一次算力运行写出能通过评审的结论。
+> 两件都登记在 `docs/BACKLOG.md`，v0.5 的 W5-3 处理。
 
 外部 agent 可以经 **MCP** 把整个工作台当工具箱接入（`spark-research mcp`），见下方「扩展与接入」。
 

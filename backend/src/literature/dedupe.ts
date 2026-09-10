@@ -63,6 +63,12 @@ export interface DedupeOptions {
 }
 
 // 源可信度：字段冲突时谁说了算（CrossRef 是 DOI 注册方，元数据最规范）。
+//
+// `biorxiv` 键是 W5-2 γ（V26 附带的 C2 第一批）把 bioRxiv 接入统一检索、扩了
+// `LiteratureSource` 联合类型后编译器强制要求的——这张表要求穷尽所有源，不是
+// dedupe 逻辑本身要改。优先级与 arxiv 同档（预印本，未经同行评审，元数据权威性
+// 低于 crossref/openalex 这类正式出版物注册方）。dedupe.ts 不在本 lane 的文件所有权
+// 清单里，这是唯一必要的最小改动，具体说明见 docs/devlog/W5-2-c.md。
 const SOURCE_PRIORITY: Record<LiteratureSource, number> = {
   crossref: 5,
   openalex: 4,
@@ -71,6 +77,7 @@ const SOURCE_PRIORITY: Record<LiteratureSource, number> = {
   aminer: 1,
   pubmed: 1,
   arxiv: 1,
+  biorxiv: 1,
 };
 
 function priorityOf(paper: Paper): number {

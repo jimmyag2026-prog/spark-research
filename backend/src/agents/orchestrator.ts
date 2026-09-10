@@ -20,7 +20,15 @@ import {
 // 但两边都只在**函数体内**（不是模块顶层）用到对方——ESM 的循环 import 只要不在
 // 模块初始化阶段互相读对方尚未求值的绑定就没问题，`server/app.ts` 的 `ServerContext`
 // 构造函数本来就已经是这个模式（`new OrchestratorAgent(...)` 在方法体里，不在顶层）。
-import { McpToolRunner } from "../mcp/server";
+import { McpToolRunner, type McpServerOptions } from "../mcp/server";
+// V32：把 W4-d/W5-2-δ 的 `createExternalToolRunner()` 接进 `getToolRunner()`——
+// 同样是值导入（工厂函数要在运行期真的调），静态 import 不引入新的模块级循环：
+// `extensions/mcp_client.ts` 顶层只 import fs/path/MCP SDK/`llm/types`/`agents/contract`
+// （类型只读引用，contract.ts 不 import 回 extensions/** 或 agents/orchestrator.ts）/
+// `./types`/`./grants`/`./context`/`./paths`；它对 `../mcp/server` 的依赖是**动态**
+// import（见该文件头注释，理由与这里的 `McpToolRunner` 静态导入本身无关——那是
+// mcp_client.ts 自己为了不参与 capabilities/index.ts 那个环而做的选择）。
+import { createExternalToolRunner, type ExternalToolRegistry } from "../extensions/mcp_client";
 // V27/V33：prompt 内嵌副本 + 数据目录解析。dataDir() 是仓库既有的单一真源
 // （env SPARK_RESEARCH_DATA_DIR > ~/.spark-research），不另起一套。
 import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
@@ -126,6 +134,24 @@ export interface OrchestratorDeps {
    * 测试可以直接注入一个假 `McpToolRunner`，不需要真的起 HTTP app。
    */
   toolRunner?: McpToolRunner;
+  /**
+   * V32：已连接的外部 MCP 扩展登记表（`extensions/mcp_client.ts` 的
+   * `ExternalToolRegistry`）。注入后，`getToolRunner()` 惰性构造工具面时改用
+   * `createExternalToolRunner()`——产出的 runner 对 `mcp:<extension>:<tool>` 这类
+   * 已注册的外部工具名路由给对应 session，其余工具名原样交给内置的 `McpToolRunner`
+   * 逻辑（子类化，不是替换）。**只影响"工具名认不认、调用真正执行"这一层**——
+   * 子代理能不能拿到某个 `mcp:` 工具名的授权仍然是 `SubAgentSpec.grants` 白名单说了
+   * 算（`agents/toolbus.ts` 的 AD-2 硬规则），本字段不会绕开授权自动放行任何工具。
+   * 不给就是 v0.4 原样行为：`getToolRunner()` 构造裸的 `McpToolRunner`，`mcp:` 前缀
+   * 的工具名不会被任何人认得（父类的"未知工具"分支兜底）。
+   *
+   * **已知缺口**（如实记录，见 `docs/devlog/W5-2-d.md`）：谁来"连接真实的外部 MCP
+   * 扩展、把它们的 session 注册进这张表"不在本字段的职责内——生产环境该在哪个时刻
+   * 建这张表（daemon 启动时？每个 session 各自连一次？）取决于 `daemon/daemon.ts`、
+   * `index.ts`、`server/context.ts` 这几个构造 `OrchestratorAgent` 的地方，它们都不在
+   * 本 lane 的文件所有权范围内，本 lane 只交付"注入了就能用"这一半。
+   */
+  externalTools?: ExternalToolRegistry;
 }
 
 // skills 目录尚无正式实现，这里用内置目录作为 MVP stub；后续 skill 模块落地后替换。
@@ -220,6 +246,8 @@ export class OrchestratorAgent {
   private seq = 0;
   // 惰性构造、跨调用复用的真实工具面（见 getToolRunner()）；测试可以直接注入一个假的。
   private toolRunner?: McpToolRunner;
+  // V32：注入了就在惰性构造工具面时改用 createExternalToolRunner()，见 getToolRunner()。
+  private externalTools?: ExternalToolRegistry;
 
   constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
     this.daemon = daemon;
@@ -232,6 +260,7 @@ export class OrchestratorAgent {
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
     this.projects = deps.projects;
     this.toolRunner = deps.toolRunner;
+    this.externalTools = deps.externalTools;
     // V33：默认值原本是 `join(import.meta.dir, "../../../workspaces")`。在 `bun build --compile`
     // 产物里 `import.meta.dir` 是 `/$bunfs/root`，往上跳三层被 node:path 归一化钉在文件系统
     // 真实的根——结果是 `/workspaces`，而下一行紧接着 `mkdirSync(..., {recursive:true})`。
@@ -255,11 +284,21 @@ export class OrchestratorAgent {
    * 后者是有意的降级信号——子代理的工具要操作跟当前 session 同一个证据图，没有 project
    * 就没有真实的证据图可操作，调用方（executeTask 的 subagent 分支 / runResearchLoop）
    * 据此决定退回旧路径或直接报错，而不是悄悄用一个跟当前 session 无关的默认 project。
+   *
+   * V32：构造分两条路——注入了 `externalTools` 就走 `createExternalToolRunner()`
+   * （产出的实例仍然是 `McpToolRunner` 的子类，其余调用方看不出区别），否则原样
+   * `new McpToolRunner(...)`。`createExternalToolRunner()` 是 `async` 工厂（内部动态
+   * `import("../mcp/server")`，见 mcp_client.ts 文件头注释），所以本方法也改成
+   * `async`——两处调用方（executeTask 的 subagent 分支、runResearchLoop）本来就在
+   * `async` 函数体内，补一个 `await` 不改变其余逻辑。
    */
-  private getToolRunner(): McpToolRunner | null {
+  private async getToolRunner(): Promise<McpToolRunner | null> {
     if (this.toolRunner) return this.toolRunner;
     if (!this.projects) return null;
-    this.toolRunner = new McpToolRunner({ projects: this.projects, agent: this });
+    const baseOptions: McpServerOptions = { projects: this.projects, agent: this };
+    this.toolRunner = this.externalTools
+      ? await createExternalToolRunner(baseOptions, this.externalTools)
+      : new McpToolRunner(baseOptions);
     return this.toolRunner;
   }
 
@@ -507,7 +546,7 @@ export class OrchestratorAgent {
         }
         case "subagent": {
           const type = (task.params?.subagent ?? "execute") as SubAgentType;
-          const runner = this.getToolRunner();
+          const runner = await this.getToolRunner();
           if (runner) {
             // W3-a 接线：走 W2-a 的真 tool loop（buildSubAgentSpec + runSubAgent），
             // 不再是裸 `llm.call` 零工具的旧路径——explore 真能检索，execute 真能跑
@@ -807,7 +846,7 @@ export class OrchestratorAgent {
     const guard = new NoProgressGuard(q.snapshot(), options.noProgressThreshold ?? 2);
     const maxRounds = options.maxRounds ?? DEFAULT_RESEARCH_MAX_ROUNDS;
 
-    const runner = this.getToolRunner();
+    const runner = await this.getToolRunner();
     if (!runner) {
       throw new Error(
         `session '${sessionId}' 绑定了 project '${project.slug}'，但未能构造 McpToolRunner` +

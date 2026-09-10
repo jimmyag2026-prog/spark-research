@@ -696,6 +696,104 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
     request: (args) => ({ method: "POST", path: withProject("/api/chem/depict", args), body: args }),
   },
 
+  // ── 远端算力（v0.5 C1 · CB-5 接线）────────────────────────────────────────
+  //
+  // 只暴露四个：plan（无副作用）+ status/list（只读）+ collect（产物落地）。
+  // **approve / run / release 一律扣留**，见本文件末尾的 MCP_WITHHELD——
+  // agent 经 MCP 只能 plan 与查状态，**从不派发**（AD-14）。
+  {
+    name: "compute_plan",
+    description: `【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
+【参数示例】{"purpose": "在 GPU 上跑 100ns MD 采样", "command": ["python", "run.py", "--steps", "50000000"], "upload": ["run.py", "system.pdb"], "outputs": ["traj.dcd", "log.txt"], "target": "local", "timeoutMinutes": 120}
+【command 必须是 argv 数组】不接受 shell 字符串——被审批的命令不该再经过一次 shell 展开。写 ["bash","-c","..."] 会被直接拒。
+【何时不该用】① 几秒钟就能算完的东西——本地 exp_run 更快，不必绕远端。② 你想「顺便把它跑起来」——做不到：派发必须由人在真实终端里执行 \`spark-research compute approve <jobId> --run\`，这个工具面上没有派发入口，试也调不到。
+【典型链路】compute_plan（拿到 jobId + digest + 逐文件上传清单 + 费用上界）→ **人**看过之后在终端 approve --run → compute_status 轮询 → 终态后 compute_collect 取产物。
+【返回体里最该看的三样】① warning：这次用谁的账户、上界多少钱；② uploads：**逐个文件**列出来了，会离开这台机器的就是这些，别的都不会；③ humanAction：需要人去敲的那条命令，原样转达给人，不要自己想办法绕过去。`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        purpose: str("这次运行要干什么（会出现在审批面上，人靠它做判断）", "在 GPU 上跑 100ns MD 采样"),
+        command: strList("要执行的 argv 数组（**不是** shell 字符串）", ["python", "run.py", "--steps", "50000000"]),
+        upload: strList("要带上去的文件/目录（相对 workspaceRoot）。密钥类路径会被 deny-list 硬拦", ["run.py", "system.pdb"]),
+        outputs: strList("要收割回来的产物（相对路径 glob）", ["traj.dcd", "log.txt"]),
+        target: str("执行地：local（本机子进程，不计费）或 modal（云端，计费）。不给就用配置的 computeTarget", "local"),
+        workspaceRoot: str("上传的根目录（绝对路径）。不给就用当前项目目录", "~/.spark-research/projects/gpcr-allostery"),
+        network: str("none（默认，声明这次运行不需要网络）或 unrestricted", "none"),
+        secretRefs: strList("密钥的**符号名**（值永不进 plan/job/record）", ["hf_token"]),
+        gpu: str("GPU 型号；local 不提供 GPU，填了会被拒", "A100"),
+        cpus: num("CPU 核数，默认 1", 4),
+        memoryGb: num("内存 GiB，默认 1", 16),
+        timeoutMinutes: num("墙钟超时（分钟），默认 30；费用上界 = 它 × 单价", 120),
+        project: PROJECT_ARG,
+      },
+      required: ["purpose", "command"],
+      additionalProperties: false,
+    },
+    request: (args) => ({ method: "POST", path: withProject("/api/compute/jobs", args), body: args }),
+  },
+
+  {
+    name: "compute_status",
+    description: `【何时调】plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
+【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
+【怎么读三轴】execution 是「跑没跑完」，delivery 是「产物取没取回来」，resource 是「远端资源还在不在」。三者独立：execution=succeeded 且 delivery=pending 意味着**跑完了但产物还在远端**，这时候该调 compute_collect。
+【何时不该用】想推进状态时——这是只读的。批准与派发都必须由人在真实终端里做。
+【典型链路】compute_plan → （人 approve --run）→ compute_status 轮询到 execution 终态 → compute_collect。`,
+    inputSchema: {
+      type: "object",
+      properties: { jobId: str("算力任务 id", "cj-m2x9k1-1a2b3c4d"), project: PROJECT_ARG },
+      required: ["jobId"],
+      additionalProperties: false,
+    },
+    request: (args) => ({
+      method: "GET",
+      path: withProject(`/api/compute/jobs/${encodeURIComponent(String(args.jobId ?? ""))}`, args),
+    }),
+  },
+
+  {
+    name: "compute_list",
+    description: `【何时调】想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
+【参数示例】{"state": "awaiting_approval"} —— 不给 state 就返回全部。
+【何时不该用】只关心某一个任务时——compute_status 更直接。
+【典型链路】compute_list（发现有三个还等着人批）→ 把 humanAction 转达给人 → 人批完之后 compute_status 跟进。`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        state: str("按 execution 状态过滤（planned / awaiting_approval / approved / running / succeeded …）", "awaiting_approval"),
+        project: PROJECT_ARG,
+      },
+      additionalProperties: false,
+    },
+    request: (args) => ({
+      method: "GET",
+      path: withProject(
+        `/api/compute/jobs${args.state ? `?state=${encodeURIComponent(String(args.state))}` : ""}`,
+        args,
+      ),
+    }),
+  },
+
+  {
+    name: "compute_collect",
+    description: `【何时调】**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
+【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
+【何时不该用】① execution 还没到终态——会得到 409，不是「等一会再试」的意思，是「你调早了」。② delivery 已经是 complete——再调一次没有语义。
+【典型链路】compute_status 看到 execution=succeeded & delivery=pending → compute_collect → 产物落到 harvest/，之后才允许人 release 远端资源。
+【为什么收割是独立一步】产物只剩远端那一份时（recoverable=true），释放资源会被状态机直接拒——**不许关掉持有唯一副本的资源**。收割就是把「唯一副本」变成两份的那一步。`,
+    inputSchema: {
+      type: "object",
+      properties: { jobId: str("算力任务 id", "cj-m2x9k1-1a2b3c4d"), project: PROJECT_ARG },
+      required: ["jobId"],
+      additionalProperties: false,
+    },
+    request: (args) => ({
+      method: "POST",
+      path: withProject(`/api/compute/jobs/${encodeURIComponent(String(args.jobId ?? ""))}/collect`, args),
+      body: {},
+    }),
+  },
+
   {
     name: "task_status",
     description: `【何时调】某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
@@ -757,6 +855,35 @@ export const MCP_WITHHELD: readonly WithheldAction[] = [
     name: "project_archive",
     reason: "归档会把项目移出默认视图，是破坏性的组织动作，不应由外部 agent 代劳。",
     humanAction: "spark-research project archive <slug>",
+  },
+  // ── v0.5 C1（CB-5）：算力的三条扣留 ────────────────────────────────────────
+  //
+  // AD-14「子代理永不自批准」在算力上比湿实验更直接：这里批下去的是**真金白银**。
+  // 三条各自对标一个已有先例，不是新发明的边界：
+  //   compute_approve ↔ lab_approve（AD-6：花钱/动物理世界的审批是硬门）
+  //   compute_run     ↔ lab_simulate（派发 = 计费动作本身，只允许从 approved 经人工进入）
+  //   compute_release ↔ project_archive（删远端卷 = 破坏性动作）
+  //
+  // 这张表同时是 `sub_agent.ts:assertNoWithheldGrants` 的**唯一**数据源
+  // （`WITHHELD_NAMES` 从这里派生），所以往这里加一条，AD-14 的三道防线
+  // （构造期 / 运行期 / ToolBus）自动覆盖，不需要在别处再写一遍。
+  {
+    name: "compute_approve",
+    reason:
+      "AD-6 同构：批准一次算力派发就是批准一笔账单。若 agent 能自己批准，它就能自己 plan、自己批准、自己派发，审批门退化成注释——而这一次退化的代价是真钱。",
+    humanAction: "spark-research compute approve <jobId> --actor <名字>（须在真实交互终端里执行）",
+  },
+  {
+    name: "compute_run",
+    reason:
+      "派发就是计费动作本身，且只允许从 approved 经人工进入（与 lab_simulate 同构）。开放它等于绕过 approve gate；HTTP 层也刻意没有这个端点，不存在「换条路调」的余地。",
+    humanAction: "spark-research compute run <jobId>（须先经人工 approve）",
+  },
+  {
+    name: "compute_release",
+    reason:
+      "释放会删掉远端卷/工作目录，是不可逆的破坏性动作（与 project_archive 同构）。产物只剩远端那一份时状态机会拦，但「该不该扔掉这批结果」本身是人的判断。",
+    humanAction: "spark-research compute release <jobId>（先 collect，或用 --discard 显式放弃产物）",
   },
 ];
 

@@ -4,6 +4,7 @@ import type { ConnectorOptions } from "../connectors/base";
 import { dedupePapers, type DedupeOptions } from "./dedupe";
 import { normalizeResponse } from "./normalize";
 import { DEFAULT_SEARCH_SOURCES, normalizeDoi, type LiteratureSource, type Paper } from "./models";
+import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
 //
@@ -114,15 +115,30 @@ export class LiteratureSearcher {
     source: LiteratureSource,
     id: string,
   ): Promise<{ status: SourceStatus; papers: Paper[] }> {
-    // CrossRef / OpenAlex 只认 DOI 形态的 id；不是 DOI 就别去打无谓的 404。
-    const doi = normalizeDoi(id);
-    if ((source === "crossref" || source === "openalex") && !doi && !/^W\d+$/i.test(id)) {
+    // 「这个源认不认得这个 id 形态」——判据来自 `literature/cli.ts` 的 `SHAPE_SOURCES`
+    // **单一真源**，不在这里另写一份。
+    //
+    // 这里原本是一张写死的三源白名单（crossref/openalex/biorxiv + DOI 判断），
+    // **其余源一律把原始 id 透传上去**。零上下文外部验收（W5-2 末）当场抓到后果：
+    //   $ lit add 9999.99999          ← 一个不存在的 arXiv id
+    //   ✅ 已入库  [c0093cc5] Intravenous nitroglycerin （1978 年，与用户要的毫无关系）
+    // pubmed 的 eutils 把 `9999.99999` 宽容解析成 PMID 9999，**报成功、退出码 0**。
+    //
+    // 这比「静默返回空」更糟一档：不是「没查到」被报成「查了没有」，
+    // 而是**「没查到」被报成「查到了，给你另一篇」**——垃圾论文以 paper record 落进证据图、
+    // 被 `lit read` 花真钱生成精读卡、最后并列进 `report export` 的参考文献，
+    // 而 `citation-integrity`「引用必须在库内」会全部放行（它们确实在库内）。
+    //
+    // 形态**未知**时不拦：未知形态可能仍被某个源认得（比如 semanticscholar 的 CorpusId），
+    // 拦掉会把一条能用的路堵死。只拦「形态已识别、且这个源不在该形态的能力表里」。
+    const shape = classifyIdentifier(id);
+    if (shape !== "unknown" && !SHAPE_SOURCES[shape].includes(source)) {
       return {
         status: {
           source,
           outcome: "skipped",
           count: 0,
-          note: `id '${id}' 不是该源可解析的标识符`,
+          note: `id '${id}' 是 ${shape} 形态，不是该源可解析的标识符`,
           elapsedMs: 0,
         },
         papers: [],

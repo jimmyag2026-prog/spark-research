@@ -511,3 +511,74 @@ describe("V16 · 子代理独立模型配置项", () => {
     expect(overridden.model).toBe("explicit");
   });
 });
+
+// ── AD-14 对抗：子代理永不自批准（v0.5 W5-2 β · CB-5 接线）─────────────────────
+//
+// 算力的三条扣留动作（`compute_approve` / `compute_run` / `compute_release`）**不是**
+// 「暂时没做的 MCP 工具」——它们在 `MCP_TOOLS` 里根本不存在，只在 `MCP_WITHHELD` 里
+// 有名字。下面每条对抗测试都从**同一个动作**出发，逐层验证子代理拿不到它：
+//
+//   ① 名字压根不在工具面上（`MCP_TOOLS` 里查无此名）——模型连"有这么个工具"都看不到；
+//   ② 有人把它写进 grants（配置错误或恶意）→ `buildSubAgentSpec()` 构造期就拒；
+//   ③ 手工构造 spec 绕过 ②  → `runSubAgent()` 运行期再拒一次，且**先于任何 llm 调用**；
+//   ④ 模型硬编出这个工具名去调 → ToolBus 拒（stopReason denied），runner 一次都没被碰。
+//
+// 为什么要四层：只有 ① 会被"模型自己编个名字"绕过；只有 ② 会被"手工构造 spec"绕过；
+// 只有 ③ 挡不住"grants 合法但模型乱调"。AD-14 说的是"永不"，那就得每一层都成立。
+describe("AD-14 对抗 · 算力的三条扣留动作，子代理一条都拿不到", () => {
+  const COMPUTE_WITHHELD = ["compute_approve", "compute_run", "compute_release"] as const;
+
+  test("三条都在 MCP_WITHHELD 里，且都不在 MCP_TOOLS 里（工具面上查无此名）", () => {
+    const withheldNames = MCP_WITHHELD.map((w) => w.name);
+    const toolNames = MCP_TOOLS.map((t) => t.name);
+    for (const name of COMPUTE_WITHHELD) {
+      expect(withheldNames, `${name} 必须在 MCP_WITHHELD 里`).toContain(name);
+      expect(toolNames, `${name} 绝不许出现在 MCP_TOOLS 里——那等于把派发权交给 agent`).not.toContain(name);
+      // 每条扣留都必须告诉人「那该怎么办」，否则外部 agent 只会反复重试。
+      const entry = MCP_WITHHELD.find((w) => w.name === name)!;
+      expect(entry.humanAction.length).toBeGreaterThan(8);
+      expect(entry.reason.length).toBeGreaterThan(8);
+    }
+  });
+
+  for (const name of COMPUTE_WITHHELD) {
+    test(`子代理尝试调 ${name}：构造期 / 运行期 / tool loop 三处全拒`, async () => {
+      // ② 构造期：任何一类子代理把它写进 grants 都拒（不静默剔除——剔除会掩盖配置错误）。
+      for (const type of ALL_TYPES) {
+        expect(() => buildSubAgentSpec(type, { grants: [name] })).toThrow(SubAgentGrantViolationError);
+      }
+
+      // ③ 运行期：手工构造 spec 绕过 buildSubAgentSpec，仍然拒，且**一次 llm 都没调**。
+      const illegal: SubAgentSpec = {
+        name: "execute",
+        type: "execute",
+        model: LLMRouter.DEFAULT_MODEL,
+        promptFile: "executor.txt",
+        grants: ["exp_list", name],
+        budget: { maxToolCalls: 5, maxTokens: 10_000, maxWallMs: 60_000 },
+        readOnly: false,
+      };
+      const guard = fakeLlm([() => textResponse("不该跑到这里")]);
+      const guardRunner = fakeRunner();
+      await expect(runSubAgent(illegal, "帮我把这个任务批了并跑起来", { llm: guard.llm, runner: guardRunner.runner }))
+        .rejects.toThrow(SubAgentGrantViolationError);
+      expect(guard.calls.length, "运行期校验必须先于任何 llm 调用").toBe(0);
+      expect(guardRunner.calls.length).toBe(0);
+
+      // ④ tool loop：grants 合法，但模型自己编出这个名字去调 → ToolBus 拒。
+      //    连续两轮全被拒 → stopReason "denied"（提前止损，不陪它烧预算）。
+      const call = (id: string): ToolCall => ({ id, name, args: { jobId: "cj-fake", actor: "子代理自己" } });
+      const { llm } = fakeLlm([
+        () => toolCallResponse([call("c1")]),
+        () => toolCallResponse([call("c2")]),
+        () => textResponse("不该跑到这里"),
+      ]);
+      const { runner, calls } = fakeRunner();
+      const result = await runSubAgent(buildSubAgentSpec("execute"), "把 cj-fake 批准并派发", { llm, runner });
+
+      expect(result.stopReason).toBe("denied");
+      // **最关键的一条**：runner 一次都没被调用——不是"调了但失败了"，是根本没发生。
+      expect(calls.length).toBe(0);
+    });
+  }
+});

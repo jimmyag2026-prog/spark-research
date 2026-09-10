@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { buildDoctorReport, type DoctorReport } from "../../backend/src/doctor";
 import { DOCTOR_HELP, renderDoctor, runDoctorCommand } from "../../backend/src/doctor/cli";
 import { PROVIDER_API_KEY_ENV } from "../../backend/src/llm/providers/registry";
+import { computeTargetViews, defaultComputeAdapters } from "../../backend/src/compute/cli";
+import { CredentialStore } from "../../backend/src/daemon/credentials";
 
 // `spark-research doctor` 的单测。
 //
@@ -231,6 +233,7 @@ describe("doctor · V27 打包限制 vs 真没装依赖（F-c）", () => {
         },
       ],
       providers: [],
+      computeTargets: [],
       frontendBuilt: true,
       frontendDir: "/fake/frontend/dist",
       dataDir: "/fake/.spark-research",
@@ -294,6 +297,7 @@ describe("doctor · CLI 渲染与调度", () => {
         { id: "kimi", envVar: "KIMI_API_KEY", configured: true },
         { id: "openrouter", envVar: "OPENROUTER_API_KEY", configured: false },
       ],
+      computeTargets: [],
       frontendBuilt: false,
       frontendDir: "/fake/frontend/dist",
       dataDir: "/fake/.spark-research",
@@ -359,5 +363,77 @@ describe("doctor · CLI 渲染与调度", () => {
     const code = await runDoctorCommand(["--bogus"], { out: (l) => out.push(l), err: (l) => err.push(l) });
     expect(code).toBe(1);
     expect(err.join("\n")).toContain("--bogus");
+  });
+});
+
+// 收口(W5-2)：doctor 的算力段。lane β 接线时 `doctor/**` 不在它的所有权里，
+// 于是 doctor 里压根没有算力段——用户装完最先敲的就是 doctor，一个它看不见的能力等于没有。
+describe("doctor · 算力执行地（收口 W5-2）", () => {
+  function reportWith(targets: DoctorReport["computeTargets"]): DoctorReport {
+    return {
+      version: "0.5.0-test",
+      bunVersion: "1.3.14",
+      platform: "darwin/arm64",
+      python: { path: "/fake/python", ok: true, version: "Python 3.12.0", error: null },
+      tiers: [],
+      providers: [],
+      computeTargets: targets,
+      frontendBuilt: true,
+      frontendDir: "/fake/dist",
+      dataDir: "/fake/data",
+      timestamp: new Date(0).toISOString(),
+    };
+  }
+
+  test("三种状态用三个不同的记号，「未配置」不许画成 ❌", () => {
+    const lines: string[] = [];
+    renderDoctor(
+      reportWith([
+        { kind: "local", availability: "available", credentialConfigured: null, isDefault: true, reason: null, setupHint: null },
+        {
+          kind: "modal",
+          availability: "needs_credential",
+          credentialConfigured: false,
+          isDefault: false,
+          reason: "未配置 Modal 凭据",
+          setupHint: "把 token 写进 credentials.json",
+        },
+      ]),
+      (l) => lines.push(l),
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("算力执行地");
+    const modalLine = lines.find((l) => l.includes("modal"))!;
+    // 「未配置」是差一把钥匙，「不可用」是这条路走不通——两者该做的事不同，记号也不该相同。
+    expect(modalLine).toContain("🔑");
+    expect(modalLine).not.toContain("❌");
+    expect(text).toContain("未配置 Modal 凭据");
+    expect(text).toContain("把 token 写进 credentials.json");
+  });
+
+  test("默认执行地要标出来（否则用户不知道不加 --target 会跑到哪）", () => {
+    const lines: string[] = [];
+    renderDoctor(
+      reportWith([
+        { kind: "local", availability: "available", credentialConfigured: null, isDefault: true, reason: null, setupHint: null },
+      ]),
+      (l) => lines.push(l),
+    );
+    expect(lines.find((l) => l.includes("local"))!).toContain("默认");
+  });
+
+  test("buildDoctorReport() 真的产出算力段，且与 computeTargetViews 同源（不是另写一份判定）", async () => {
+    const report = await buildDoctorReport();
+    expect(report.computeTargets.length).toBeGreaterThan(0);
+    const kinds = report.computeTargets.map((t) => t.kind).sort();
+    const fromViews = computeTargetViews({
+      adapters: defaultComputeAdapters(),
+      credentials: new CredentialStore(),
+    })
+      .map((v) => v.kind)
+      .sort();
+    expect(kinds).toEqual(fromViews);
+    // 恰好一个默认执行地——零个意味着用户不加 --target 就没有归宿。
+    expect(report.computeTargets.filter((t) => t.isDefault)).toHaveLength(1);
   });
 });

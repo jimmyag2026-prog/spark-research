@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CITATION_INTEGRITY_REVIEW_KIND,
+  EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
   NoProgressGuard,
   RecordStoreEvidenceQuery,
   ResearchContract,
@@ -13,6 +14,7 @@ import {
   type ContractStage,
   type EvidenceQuery,
   type EvidenceSnapshot,
+  type ExternalToolCallObservationMetadata,
 } from "../../backend/src/agents/contract";
 import { CITATION_RULE } from "../../backend/src/reviewer/rules";
 import { RecordStore } from "../../backend/src/project/records";
@@ -42,6 +44,32 @@ function addReading(s: RecordStore, paperId: string, title: string) {
   const r = s.create({ type: "reading", title, content: title, evidence: "sourced" });
   s.link(r.id, paperId, "cites");
   return r;
+}
+
+// V31（W5-2 δ）：外部工具调用落的 observation record——与 citation-integrity-review
+// 同一手法（type: "observation" + metadata.kind 区分），复用 `extensions/mcp_client.ts`
+// 那边约定的 metadata 形状（本文件不 import mcp_client.ts，只按 contract.ts 导出的类型
+// 手工构造，模拟"某次外部工具调用真的落图了"这件事）。
+function addExternalToolCallObservation(
+  s: RecordStore,
+  opts: { extension?: string; tool?: string; ok?: boolean; errorSummary?: string },
+) {
+  const metadata: ExternalToolCallObservationMetadata = {
+    kind: EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
+    extension: opts.extension ?? "some-ext",
+    tool: opts.tool ?? "echo",
+    ok: opts.ok ?? true,
+    durationMs: 12,
+    argsSummary: "{}",
+    ...(opts.errorSummary !== undefined ? { errorSummary: opts.errorSummary } : {}),
+  };
+  return s.create({
+    type: "observation",
+    title: `外部工具调用：${metadata.extension}/${metadata.tool}`,
+    content: "test",
+    evidence: "sourced",
+    metadata: metadata as unknown as Record<string, unknown>,
+  });
 }
 
 function addCitationReview(
@@ -402,5 +430,87 @@ describe("阴性对照 ① 伪造完成", () => {
     const stage = report.stages.find((st) => st.id === "citations_verified")!;
     expect(stage.done).toBe(false);
     expect(stage.reason).toContain("缺失或非法");
+  });
+});
+
+// ── V31（W5-2 δ）：external_tool_call observation 不计入「研究进展」 ──────────────
+//
+// 背景：`extensions/mcp_client.ts` 的 `ExternalMcpSession.call()` 现在每次外部工具
+// 调用都会落一条 metadata.kind=EXTERNAL_TOOL_CALL_OBSERVATION_KIND 的 observation
+// record（V31），但它是审计痕迹，不是研究证据——如果算进 `RecordStoreEvidenceQuery`
+// 的证据口径，子代理每调一次外部工具就会被 `NoProgressGuard` 误判成"这一轮有进展"，
+// 「连续 N 轮无进展就停」这条停机条件会被静默废掉。这正是 contract.ts 文件头大注释
+// 记录的那次 `agent_run` 事故（P12）的翻版——本组测试就是钉死"这次没有重蹈覆辙"。
+describe("V31：external_tool_call observation 不计入证据图（agent_run 事故的复现用例）", () => {
+  test("snapshot()/newSince() 都看不到它——与 agent_run 走同一条排除逻辑", () => {
+    const s = store();
+    const q = new RecordStoreEvidenceQuery(s);
+    const baseline = q.snapshot();
+    expect(baseline.recordIds.size).toBe(0);
+
+    addExternalToolCallObservation(s, { tool: "echo" });
+    addExternalToolCallObservation(s, { tool: "search", ok: false, errorSummary: "boom" });
+
+    const snap = q.snapshot();
+    expect(snap.recordIds.size).toBe(0); // 两条都被排除，快照大小不变
+    expect(q.newSince(baseline).length).toBe(0);
+
+    // 对照组：换一个不属于 NON_EVIDENCE 标记的普通 observation，必须被计入——
+    // 证明上面两次为 0 不是"observation 类型整体被排除"，而是精确按 metadata.kind 排除。
+    const real = s.create({ type: "observation", title: "真实观察", content: "x", evidence: "observed" });
+    expect(q.snapshot().recordIds.has(real.id)).toBe(true);
+  });
+
+  test("listByType('observation') 仍然能看到它（本来就该看得到——只是不算『进展』，不是从图上消失）", () => {
+    const s = store();
+    const q = new RecordStoreEvidenceQuery(s);
+    const rec = addExternalToolCallObservation(s, { tool: "echo" });
+    const observations = q.listByType("observation");
+    expect(observations.map((r) => r.id)).toContain(rec.id);
+  });
+
+  test(
+    "【阴性对照①】连续多轮只新增 external_tool_call observation：NoProgressGuard 必须持续触发 no_progress，" +
+      "不能被这些记录当成『有进展』而反复归零 streak",
+    () => {
+      const s = store();
+      const q = new RecordStoreEvidenceQuery(s);
+      const guard = new NoProgressGuard(q.snapshot(), 2);
+
+      // 第 1 轮：模拟一次外部工具调用（落一条 external_tool_call observation），
+      // 然后 tick。如果排除逻辑被拿掉（比如把 EXTERNAL_TOOL_CALL_OBSERVATION_KIND
+      // 从 NON_EVIDENCE_RECORD_TYPES 里删掉），这里会被判定成"有新增"，streak 归零，
+      // 下面的断言会失败——这正是本用例要钉死的红线。
+      addExternalToolCallObservation(s, { tool: "echo" });
+      const t1 = guard.tick(q.snapshot());
+      expect(t1.streak).toBe(1);
+      expect(t1.addedRecordCount).toBe(0);
+      expect(t1.triggered).toBe(false);
+
+      // 第 2 轮：再调一次外部工具（第二条 external_tool_call observation），
+      // streak 应该继续涨到 2 并触发——而不是被这条新记录重置成 0。
+      addExternalToolCallObservation(s, { tool: "search", ok: false, errorSummary: "timeout" });
+      const t2 = guard.tick(q.snapshot());
+      expect(t2.streak).toBe(2);
+      expect(t2.addedRecordCount).toBe(0);
+      expect(t2.triggered).toBe(true);
+    },
+  );
+
+  test("evaluateRound() 端到端：契约未完成 + 只有外部工具调用记录在涨 → 停机理由是 no_progress，不是误判成有进展", () => {
+    const s = store();
+    const q = new RecordStoreEvidenceQuery(s);
+    const contract = createLiteratureReviewContract(q); // 空图，三个 stage 全部未完成
+    const guard = new NoProgressGuard(q.snapshot(), 2);
+
+    addExternalToolCallObservation(s, { tool: "echo" });
+    const round1 = evaluateRound(contract, guard, q);
+    expect(round1.report.allDone).toBe(false);
+    expect(round1.stopReason).toBeNull(); // 还没到阈值
+
+    addExternalToolCallObservation(s, { tool: "echo" });
+    const round2 = evaluateRound(contract, guard, q);
+    expect(round2.stopReason).toBe("no_progress");
+    expect(describeStop("literature-review", round2)).toContain("连续 2 轮");
   });
 });
