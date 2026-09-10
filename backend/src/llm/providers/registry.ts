@@ -1,4 +1,5 @@
 import { resolveSetting, type ConfigOptions } from "../../config";
+import { providerApiKeyEnv } from "../router";
 
 // R-c-1：provider 单价表 + provider 元数据。
 //
@@ -164,13 +165,10 @@ export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPrici
  * 如果 router.ts 未来给某个 provider 换一个不同的 envKey 名字，这里会静默过期——
  * 已记入 docs/devlog/P11-c.md，交给主会话评估是否值得为此单独导出一个只读映射。
  */
-export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
-  kimi: "KIMI_API_KEY",
-  openrouter: "OPENROUTER_API_KEY",
-  openai: "OPENAI_API_KEY",
-  deepseek: "DEEPSEEK_API_KEY",
-  qwen: "QWEN_API_KEY",
-};
+// **不再手工维护**：这张映射的真源是 router 的 ADAPTERS（provider 注册表本身）。
+// P11 收口实证：手工副本在接线 anthropic 时立刻失同步，capabilities 的一致性断言当场变红。
+// 从真源派生之后，「加了 provider 忘了更新映射」在结构上不可能发生。
+export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = providerApiKeyEnv();
 
 /**
  * 单价可被 config 覆盖（`SPARK_LLM_PRICING_JSON`，见 `config/index.ts` 的

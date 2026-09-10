@@ -5,6 +5,67 @@
 
 ---
 
+## [未发布] — v0.4.0 开发中
+
+### P11 · LLM Runtime v2 + 可达性闸门
+
+**模型中立从声称变成事实。** v0.3.1 实测：`SUPPORTED_PROVIDERS` 声明 6 个 provider，
+`call()` 里只有 kimi / openrouter 两个能真发请求，其余静默落到 OpenRouter 或失败。
+
+#### 新增
+
+- **provider 适配层**：`ProviderAdapter` 契约 + 两个实现——
+  `openai_compat`（一套代码覆盖 openai / kimi / deepseek / qwen / openrouter /
+  ollama / vLLM / 任意自建 baseUrl）与 `anthropic`（原生 Messages API，与 OpenAI 形状差七处）。
+  **实装 provider 由 2 个增至 6 个 + 任意本地端点。**
+- **tool calling**（P12 真子代理的前提）· **流式**（`onDelta`，P14 的 SSE 流接它）·
+  **JSON 模式**（`response_format`，根治 BACKLOG V12）· **token 用量与成本核算**
+- **`BudgetLedger`**：调用数 / token / 成本上限，供 P12 子代理与 P13 帧级账本使用
+- **单价表**（`providers/registry.ts`）：各 provider/model 输入输出单价，**每条附来源与核实日期**，
+  可用 `SPARK_LLM_PRICING_JSON` 覆盖。查不到单价时 `costUsd` 保持 `null`，**绝不填 0 冒充免费**
+- **provider 能力位进 `capabilities --json`**：`{id, models, configured, capabilities:{toolCalling,
+  jsonMode, streaming, usageReported}}` + 独立的 `localEndpoint` 段。
+  外部 agent 与 ToolBus 在**选模型之前**就能知道能不能跑 tool loop
+- **`protein-analysis` 补齐三个生产入口**：CLI `spark-research protein <query>` ·
+  `POST /api/proteins/analyze` · MCP 工具 `protein_analyze`（MCP 工具 29 → 30）。
+  此前它有 SKILL.md、12 个 e2e、被 DESIGN 列为 10 技能之一，**却没有任何调用路径**，
+  而 `capabilities` 照常带 `triggers` 对外广播它
+- **技能可达性断言进门禁**（`narrative_parity.test.ts` 第 7 条）：每个技能必须至少有一条
+  可达入口，登记表的每条都去 `index.ts` 的 `switch(cmd)` case 字面量 / `MCP_TOOLS` /
+  `capabilities` 三处对账（不靠散文正则）
+- 湿实验 `unconsumedWarnings` **接进 Web 审批弹窗**（此前只有 CLI 强制显示），配套 e2e ⑨b
+- 配置项：`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` /
+  `SPARK_LOCAL_LLM_BASE_URL` / `SPARK_LOCAL_LLM_API_KEY` / `llmPricingOverridesJson`
+- `CallOptions.maxTokens`：Anthropic 的 `max_tokens` 是必填参数，此前硬编码 4096
+  会让综述草稿这类长文本**静默截断**（只能从 `finishReason:"length"` 看出来）
+
+#### 变更
+
+- **`LlmResponse` 改为可辨识联合（AD-13）**：`ok:false` 分支的 `content` 是**字面量 `""`**、
+  `error` **必填**。于是「失败但带内容」（内容被误当产出）与「失败但没说为什么」
+  在编译期都不可能。调用方读失败原因请用 `error.message`，不要读 `content`
+- 失败类型改为**机器可读**（`error.kind`：`auth` / `rate_limit` / `timeout` / `parse` /
+  `upstream` / `unsupported`），调用方区分失败不再需要读文案
+- `SUPPORTED_PROVIDERS`（模型名字典）与 `ADAPTERS`（真能发请求的清单）**显式分开**——
+  v0.3.1 那个缺口的根因就是两者被混为一谈
+- `providers/registry.ts` 的 `PROVIDER_API_KEY_ENV` 改为**从 router 的 ADAPTERS 派生**。
+  它原本是手工副本，接线 anthropic 时立刻失同步、当场把一致性断言打红
+- `index.ts` 的 `CONFIG_DIR` 改走 `dataDir()`，与 `config/index.ts` 归一解析（V20）
+- 移除 `LlmResponse.mock`（v0.1 移除 mock 模式后的残留，零消费方）
+
+#### 修复
+
+- 五个域消费方（citation_judge / novelty / review / reading / coexplore）此前把
+  `content` 当错误信息读。AD-13 清空 content 后，若不迁移它们的排障信息会**变成一片空白**
+  ——测试全绿但诊断没了。已全部迁到 `error?.message`
+
+#### 测试
+
+单元 905 → **1018**（0 fail / 0 skip）· e2e 12 → **13** · concurrency + timeout 12 ·
+pytest 48 · `test:lab` 26。
+
+---
+
 ## [0.3.1] — 2026-09-10
 
 ### 修复

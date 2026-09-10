@@ -70,6 +70,22 @@ const ADAPTERS: Partial<Record<Provider, { adapter: ProviderAdapter; envKey: str
   },
 };
 
+/**
+ * provider → 它需要的环境变量名。**这里是单一真源**（就是 ADAPTERS 本身）。
+ *
+ * 为什么要导出：P11 收口时踩过——`providers/registry.ts` 曾手工抄了一份同样的映射，
+ * 我接线 anthropic 时只改了 ADAPTERS，那份副本没跟上，于是 capabilities 的
+ * 「能力位与直接探测一致」断言当场变红。lane R-c 在 devlog 里已经点名这个脆弱性，
+ * 它在同一个 PR 里就兑现了。**副本删掉，改成从这里派生。**
+ */
+export function providerApiKeyEnv(): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const [id, entry] of Object.entries(ADAPTERS)) {
+    if (entry) out[id] = entry.envKey;
+  }
+  return out;
+}
+
 export function implementedProviders(): Provider[] {
   return Object.keys(ADAPTERS) as Provider[];
 }

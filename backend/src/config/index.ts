@@ -70,7 +70,7 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     // 「声明支持的 provider」与「真的实现了的 provider」又要分家。用
     // tests/unit/config.test.ts 里的一致性测试钉住：allowed 必须与
     // `implementedProviders()` 集合相等，往后谁改了 ADAPTERS 忘了改这里，测试会红。
-    allowed: ["kimi", "openrouter", "openai", "deepseek", "qwen"],
+    allowed: ["kimi", "openrouter", "openai", "deepseek", "qwen", "anthropic"],
     summary: "`spark-research auth` 记录的默认 provider（key 选取顺序）",
     effect: "只影响没有显式指定模型时挑哪把 key；配了多把时按这个顺序取。",
   },
@@ -208,6 +208,18 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "只认环境变量：与 KIMI_API_KEY/OPENROUTER_API_KEY 同样是 secret 项，router.ts 直接读 process.env，" +
       "不经过 config.json → env 的桥接（凭据永不进 env，见 applyConfigEnvDefaults 的 AD-2 纪律），" +
       "所以写进 config.json 只会让 `config list` 显示「已设置」，真正生效仍需 `export OPENAI_API_KEY=...`。",
+    secret: true,
+  },
+  {
+    key: "ANTHROPIC_API_KEY",
+    type: "string",
+    envVar: "ANTHROPIC_API_KEY",
+    defaultValue: null,
+    summary: "Anthropic API key",
+    effect:
+      "缺了 claude-* 系模型不可用。Anthropic 走原生 Messages API（不是 OpenAI 兼容形状），" +
+      "适配器见 backend/src/llm/providers/anthropic.ts。值永不打印，也永不进 prompt / 日志。" +
+      "同 OPENAI_API_KEY：只认环境变量，config.json 里的值不会被 router.ts 读取。",
     secret: true,
   },
   {

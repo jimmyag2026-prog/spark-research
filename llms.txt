@@ -154,6 +154,7 @@ spark-research mcp    # stdio 传输
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
 - `OPENAI_API_KEY`（默认 （凭据），env `OPENAI_API_KEY`）：OpenAI API key
+- `ANTHROPIC_API_KEY`（默认 （凭据），env `ANTHROPIC_API_KEY`）：Anthropic API key
 - `DEEPSEEK_API_KEY`（默认 （凭据），env `DEEPSEEK_API_KEY`）：DeepSeek API key
 - `QWEN_API_KEY`（默认 （凭据），env `QWEN_API_KEY`）：Qwen（阿里云 DashScope / Model Studio）API key
 - `SPARK_LOCAL_LLM_BASE_URL`（默认 —，env `SPARK_LOCAL_LLM_BASE_URL`）：本地/自建 OpenAI 兼容 LLM 端点的 baseUrl（ollama / vLLM / 任意自建服务）

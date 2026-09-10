@@ -71,6 +71,12 @@ function productionImportTargets(): Set<string> {
 // 这张表只许缩短、不许悄悄变长：新增一条就等于新增一处「叙事与实现的缺口」，
 // 应该先问「这东西还该不该留」，而不是先把它加进白名单。
 const ALLOWED_ORPHANS: Record<string, string> = {
+  "backend/src/llm/budget.ts":
+    "**等接线**：v0.4 P11 lane R-c 交付的 BudgetLedger。它的消费方是 P12 的 ToolBus" +
+    "（子代理的调用数 / token / 成本上限）与 P13 的帧级账本，两者都还没落地，" +
+    "所以现在没有生产调用方。**W1-a（ToolBus）接上后必须删除本条**——" +
+    "门禁的『多余登记必须删除』对称检查会强制这件事（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
