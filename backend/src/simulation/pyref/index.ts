@@ -1,10 +1,30 @@
 import { join } from "node:path";
+// V27：`runner.py` 由外部 python 按路径执行。而且它不是孤立脚本——开头就
+// `sys.path.insert(0, str(Path(__file__).resolve().parents[2]))` 然后
+// `from simulation.pyref.oscillator import simulate` / `from simulation.sim_runtime import ...`。
+// 所以解包单位必须是**整棵包树**（含两个 `__init__.py` 与 sim_runtime.py），
+// 只解包 runner.py 一个文件，python 会在 import 阶段就 ModuleNotFoundError。
+import SIM_PACKAGE_INIT_PY from "../__init__.py" with { type: "text" };
+import SIM_RUNTIME_PY from "../sim_runtime.py" with { type: "text" };
+import PYREF_PACKAGE_INIT_PY from "./__init__.py" with { type: "text" };
+import OSCILLATOR_PY from "./oscillator.py" with { type: "text" };
+import RUNNER_PY from "./runner.py" with { type: "text" };
+import { materializeAssetTree } from "../../assets/embedded";
 import {
   SubprocessSimulationPlatform,
   numberParam,
   type NormalizedSpec,
   type SubprocessPlatformOptions,
 } from "../platform";
+
+// 解包后的目录结构必须让 `parents[2]`（= 树根）成为一个能 import 到 `simulation.*` 的 sys.path 项。
+const PYREF_RUNNER_TREE = {
+  "simulation/__init__.py": SIM_PACKAGE_INIT_PY,
+  "simulation/sim_runtime.py": SIM_RUNTIME_PY,
+  "simulation/pyref/__init__.py": PYREF_PACKAGE_INIT_PY,
+  "simulation/pyref/oscillator.py": OSCILLATOR_PY,
+  "simulation/pyref/runner.py": RUNNER_PY,
+} as const;
 
 export const PYREF_KINDS = ["damped-oscillator"] as const;
 export type PyRefKind = (typeof PYREF_KINDS)[number];
@@ -25,7 +45,7 @@ export class PyRefPlatform extends SubprocessSimulationPlatform {
   }
 
   protected entryPointFor(): string {
-    return join(import.meta.dir, "runner.py");
+    return join(materializeAssetTree("sim-pyref", PYREF_RUNNER_TREE), "simulation", "pyref", "runner.py");
   }
 
   protected probeCode(): string {

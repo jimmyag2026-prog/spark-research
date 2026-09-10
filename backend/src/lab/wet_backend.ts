@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// V27：`opentrons_backend.py` 由外部 python 子进程按路径执行（--probe / --script）。
+// F-c 在未修的二进制上实机复现过：`can't open file '/$bunfs/root/opentrons_backend.py'`，
+// 而 doctor 会把它渲染成"lab 档不可用"——用户照着去装 opentrons 装完毫无变化。
+import OPENTRONS_BACKEND_PY from "./opentrons_backend.py" with { type: "text" };
+import { materializeAsset } from "../assets/embedded";
 import type { OpentronsProgram } from "./opentrons_protocol";
 
 // 湿实验执行后端（DESIGN 域 B2 · DEVELOPMENT_PLAN P6）。
@@ -109,7 +114,11 @@ export function resolveLabPython(): string {
   return existsSync(venv) ? venv : "python3";
 }
 
-const BACKEND_SCRIPT = join(import.meta.dir, "opentrons_backend.py");
+// 惰性解包：模块被 import 就写盘是没必要的副作用（`lab backends` 这类命令根本不 spawn python）。
+// materializeAsset 自身按内容指纹幂等，重复调用不会重复写盘。
+function backendScript(): string {
+  return materializeAsset("lab", "opentrons_backend.py", OPENTRONS_BACKEND_PY);
+}
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 function nowIso(): string {
@@ -144,7 +153,7 @@ export class OpentronsSimulatorBackend implements WetLabBackend {
   }
 
   async available(): Promise<WetBackendAvailability> {
-    const proc = Bun.spawn([this.python, BACKEND_SCRIPT, "--probe"], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([this.python, backendScript(), "--probe"], { stdout: "pipe", stderr: "pipe" });
     const [exitCode, stdout, stderr] = await Promise.all([
       proc.exited,
       new Response(proc.stdout).text(),
@@ -192,7 +201,7 @@ export class OpentronsSimulatorBackend implements WetLabBackend {
 
     const startedAt = nowIso();
     const started = Date.now();
-    const proc = Bun.spawn([this.python, BACKEND_SCRIPT, "--script", scriptPath, "--outdir", dir], {
+    const proc = Bun.spawn([this.python, backendScript(), "--script", scriptPath, "--outdir", dir], {
       stdout: "pipe",
       stderr: "pipe",
       stdin: "ignore",
