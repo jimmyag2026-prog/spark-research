@@ -130,6 +130,16 @@ dist/spark-research lab simulate ...        ← ENOENT: opentrons_backend.py
 **结论**：单二进制目前**不建议**作为主力分发形态。想要完整功能，用 §1（源码）或 §2（npm，
 但目标机器需要预装 bun）。
 
+**这不是永久判决**：`docs/devlog/F-c.md`（v0.5 闸门 F-c）对 V27 做了精确盘点 + 三条修法的
+实测验证，**结论是「修，成本可控」，不是「永久降级」**——最小可行集（3 处 `schema.sql` 改静态
+`import ... with { type: "text" }`）实测编译后 `project new` 即可在单二进制里跑通，见该文档
+§2 的真实终端输出（补丁前 ENOENT、补丁后成功建项目，两次编译两次运行的对照）。`.py` 类资源
+（`opentrons_backend.py`、各 `runner.py`、`python_kernel.py`）需要额外一步（内容静态 import
+成文本 + 运行期 `writeFileSync` 到临时目录再 `Bun.spawn` 那个真实路径），`docs/devlog/F-c.md`
+§3 里也有实测验证 Bun 的 `type: "file"`/`Bun.embeddedFiles` **不能**直接用于外部子进程 spawn
+（虚拟路径外部进程读不到），这条路必须走"解包到真实磁盘路径"这一步。真正把这 23 处改完是
+另一条 lane 的工作（不在 F-c 文件所有权内），F-c 只负责把可行性、修法优先级和风险敲实。
+
 ---
 
 ## 4. 环境体检：`spark-research doctor`
@@ -144,3 +154,10 @@ spark-research doctor --json   # 机器可读，给 agent/脚本判断用
 报告内容：bun 版本、Python 解释器路径与版本、core/science/lab 三档依赖各自是否可用（真探测，
 不是猜）、配置了哪些 LLM provider key（只报"已配置/未配置"，**密钥值永不出现在输出里**）、
 前端产物是否已构建。缺什么，输出里直接给可复制粘贴的修复命令。
+
+**在单二进制里跑 `doctor`**：`lab` 档探测 `opentrons_backend.py` 会因为 V27（见 §3）读不到
+文件，但 `doctor` 现在（F-c 修复）能把这种「二进制打包限制」跟「真没装 opentrons」分清楚——
+前者打 ⚠️ 而不是 ❌，文案明确写「这不是依赖没装」，不会误导你去跑一遍装不完的 `uv pip
+install`。`--json` 输出里对应 `tiers[].packagingLimitation` 字段，供脚本/agent 判断，不用猜
+文案。判定法：探测失败原因里出现 `/$bunfs/` 这个子串——只有编译产物才会产生这个虚拟路径，
+源码/npm/npx 三条路径下这个子串不会出现在任何真实报错里，不会误伤真实缺依赖的场景。

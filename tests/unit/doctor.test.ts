@@ -135,6 +135,117 @@ describe("doctor · buildDoctorReport（注入假探测器）", () => {
   });
 });
 
+describe("doctor · V27 打包限制 vs 真没装依赖（F-c）", () => {
+  // 背景：`bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟路径
+  // `/$bunfs/root/`，`lab/wet_backend.ts` 读 `opentrons_backend.py` 会 ENOENT，
+  // `OpentronsSimulatorBackend.available()` 把子进程报错原样透传——真实产物里长这样
+  // （docs/devlog/F-c.md §4 有完整终端记录，这里截取到刚好够做判定的子串）：
+  const REAL_BUNFS_REASON =
+    "opentrons 模拟器不可用（python=python3, exit=2）：" +
+    "/Library/Developer/CommandLineTools/usr/bin/python3: can't open file " +
+    "'/$bunfs/root/opentrons_backend.py': [Errno 2] No such file or directory。" +
+    "安装：VIRTUAL_ENV=.venv uv pip install opentrons";
+
+  test("lab 探测失败原因带 /$bunfs/ → 判定为打包限制，reason 改写为如实诊断，不再劝装依赖当首要建议", async () => {
+    const report = await buildDoctorReport({
+      root: tmpRoot(),
+      env: {},
+      python: "fake-python",
+      probePython: async () => ({ path: "fake-python", ok: true, version: "x", error: null }),
+      probeScience: async () => ({ ok: true, reason: null }),
+      probeLab: async () => ({ ok: false, reason: REAL_BUNFS_REASON }),
+      frontendDir: tmpRoot(),
+    });
+    const lab = report.tiers.find((t) => t.id === "lab")!;
+    expect(lab.available).toBe(false); // 这个二进制里确实用不了 lab 档，不能因为"不是依赖问题"就谎报可用
+    expect(lab.packagingLimitation).toBe(true);
+    expect(lab.reason).toContain("BACKLOG V27");
+    expect(lab.reason).toContain("不是依赖没装");
+    // 原始报错还在（供排障），但不再是唯一/首要的诊断文案。
+    expect(lab.reason).toContain(REAL_BUNFS_REASON);
+  });
+
+  test("science 探测失败原因带 /$bunfs/ 同样被判定为打包限制（不止 lab 一档）", async () => {
+    const report = await buildDoctorReport({
+      root: tmpRoot(),
+      env: {},
+      python: "fake-python",
+      probePython: async () => ({ path: "fake-python", ok: true, version: "x", error: null }),
+      probeScience: async () => ({
+        ok: false,
+        reason: "openmm runner 不可用：can't open file '/$bunfs/root/runner.py': No such file or directory",
+      }),
+      probeLab: async () => ({ ok: true, reason: null }),
+      frontendDir: tmpRoot(),
+    });
+    const science = report.tiers.find((t) => t.id === "science")!;
+    expect(science.packagingLimitation).toBe(true);
+    expect(science.reason).toContain("BACKLOG V27");
+  });
+
+  test("阴性对照：真没装依赖（reason 不含 /$bunfs/）不能被误判成打包限制", async () => {
+    const report = await buildDoctorReport({
+      root: tmpRoot(),
+      env: {},
+      python: "fake-python",
+      probePython: async () => ({ path: "fake-python", ok: true, version: "x", error: null }),
+      probeScience: async () => ({ ok: false, reason: "openmm 不可用：装一下 uv pip install openmm" }),
+      probeLab: async () => ({ ok: false, reason: "opentrons 不可用：装一下 uv pip install opentrons" }),
+      frontendDir: tmpRoot(),
+    });
+    const science = report.tiers.find((t) => t.id === "science")!;
+    const lab = report.tiers.find((t) => t.id === "lab")!;
+    expect(science.packagingLimitation).toBe(false);
+    expect(lab.packagingLimitation).toBe(false);
+    // 真缺依赖的原始文案不能被这条新逻辑动过——改写只对 /$bunfs/ 命中生效。
+    expect(science.reason).toBe("openmm 不可用：装一下 uv pip install openmm");
+    expect(lab.reason).toBe("opentrons 不可用：装一下 uv pip install opentrons");
+    expect(science.reason).not.toContain("BACKLOG V27");
+    expect(lab.reason).not.toContain("BACKLOG V27");
+  });
+
+  test("renderDoctor：打包限制用 ⚠️ 不用 ❌（语义不是「装一下就好」）", () => {
+    const lines: string[] = [];
+    const report: DoctorReport = {
+      version: "0.4.0-test",
+      bunVersion: "1.3.14",
+      platform: "darwin/arm64",
+      python: { path: "/fake/python", ok: true, version: "Python 3.12.0", error: null },
+      tiers: [
+        { id: "core", label: "core", summary: "核心域", available: true, reason: null, packagingLimitation: false },
+        {
+          id: "science",
+          label: "science",
+          summary: "openmm",
+          available: true,
+          reason: null,
+          packagingLimitation: false,
+        },
+        {
+          id: "lab",
+          label: "lab",
+          summary: "opentrons",
+          available: false,
+          reason: `这不是依赖没装——是单二进制发行版的已知限制（BACKLOG V27）：${REAL_BUNFS_REASON}`,
+          packagingLimitation: true,
+        },
+      ],
+      providers: [],
+      frontendBuilt: true,
+      frontendDir: "/fake/frontend/dist",
+      dataDir: "/fake/.spark-research",
+      timestamp: "2026-09-10T00:00:00.000Z",
+    };
+    renderDoctor(report, (l) => lines.push(l));
+    const text = lines.join("\n");
+    expect(text).toContain("⚠️");
+    expect(text).toContain("BACKLOG V27");
+    // 不应该在 lab 那一行打 ❌——❌ 是留给"真缺依赖，装一下就好"的语义。
+    const labLine = lines.find((l) => l.includes("opentrons") && l.includes("lab"))!;
+    expect(labLine).not.toContain("❌");
+  });
+});
+
 describe("doctor · 真实探测（阴性对照①的正样本）", () => {
   test("系统 python3（没装 openmm/opentrons）必须被真实判定为 unavailable，不是随便一个假值", async () => {
     if (!existsSync(SYSTEM_PYTHON)) {
@@ -168,9 +279,16 @@ describe("doctor · CLI 渲染与调度", () => {
       platform: "darwin/arm64",
       python: { path: "/fake/python", ok: true, version: "Python 3.12.0", error: null },
       tiers: [
-        { id: "core", label: "core", summary: "核心域", available: true, reason: null },
-        { id: "science", label: "science", summary: "openmm", available: false, reason: "装一下 uv pip install openmm" },
-        { id: "lab", label: "lab", summary: "opentrons", available: true, reason: null },
+        { id: "core", label: "core", summary: "核心域", available: true, reason: null, packagingLimitation: false },
+        {
+          id: "science",
+          label: "science",
+          summary: "openmm",
+          available: false,
+          reason: "装一下 uv pip install openmm",
+          packagingLimitation: false,
+        },
+        { id: "lab", label: "lab", summary: "opentrons", available: true, reason: null, packagingLimitation: false },
       ],
       providers: [
         { id: "kimi", envVar: "KIMI_API_KEY", configured: true },
