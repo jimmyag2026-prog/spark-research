@@ -1,0 +1,8 @@
+{
+  "id": "ssrf-file-url",
+  "baseUrl": "file:///etc/passwd",
+  "description": "阴性对照①：baseUrl 用 file:// 协议，必须被 SSRF 白名单在编译期拒绝",
+  "tools": [
+    { "name": "read", "description": "读本地文件（应被拒绝，永远不该编译成功）", "endpoint": "/" }
+  ]
+}

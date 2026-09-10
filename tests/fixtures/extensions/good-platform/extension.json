@@ -1,0 +1,7 @@
+{
+  "kind": "platform",
+  "name": "good-platform",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "示例 TS 仿真平台扩展（强度②），供 ext verify 复用 P5 SimulationPlatform 契约测试套件的正向用例使用。"
+}

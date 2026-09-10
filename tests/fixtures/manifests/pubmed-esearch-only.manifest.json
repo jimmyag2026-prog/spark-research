@@ -1,0 +1,27 @@
+{
+  "id": "pubmed-esearch-only-w3d",
+  "baseUrl": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils",
+  "description": "W3-d 判断证据（正向）：PubMed 的 esearch 单独看是可以用 manifest 表达的——query→term 是纯改名，mapTo 直接够用（W1-c 交接就是这么说的，这里给出可运行的复现）。但 esearch 只返回 PMID 列表，不含 title/authors，单独这一跳不足以喂出统一检索需要的论文详情，真正可用的 PubMedConnector.search() 还要再串一次 esummary——那一跳是 manifest 的『一个 tool = 一次 HTTP 请求』模型表达不了的，见 docs/devlog/W3-d.md。这个 fixture 只是拿来证明『query→term 这半步能表达』，不是一个可用的生产 connector。",
+  "tools": [
+    {
+      "name": "search",
+      "description": "esearch：按关键词取 PMID 列表（不含标题/作者/摘要）",
+      "endpoint": "/esearch.fcgi",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "query": { "type": "string", "required": true, "mapTo": "term" },
+        "retmax": { "type": "number", "default": 10 }
+      },
+      "defaults": {
+        "db": "pubmed",
+        "retmode": "json"
+      }
+    }
+  ],
+  "metadata": {
+    "domain": "ncbi.nlm.nih.gov",
+    "apiKeyRequired": false,
+    "caveat": "只是 esearch 一跳的探测 fixture，不含 esummary 第二跳，实际的 PubMedConnector.search() 走 TS 扩展"
+  }
+}

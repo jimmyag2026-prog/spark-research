@@ -22,8 +22,20 @@ import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
 import { runProteinCommand } from "./proteins/cli";
-
-const pkg = await Bun.file(join(import.meta.dir, "../../package.json")).json();
+import { runDoctorCommand } from "./doctor/cli";
+import { runReviewCommand } from "./reviewer/cli";
+// W2-d（B-b/B-c）：向导 + 离线 demo。所有权在 backend/src/onboarding/**；
+// 这里只加两个 case 分支接进去，不动零参数（welcome）行为（W1-d 所有权）。
+import { runInit } from "./onboarding/init";
+import { runDemo } from "./onboarding/demo";
+// W2-c（P15）：扩展装载与 ext verify。所有权在 backend/src/extensions/**。
+import { runExtCommand } from "./extensions/cli";
+// W1-d（B-a 打包分发）：原先是 `await Bun.file(join(import.meta.dir, "../../package.json")).json()`——
+// `bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，
+// 运行期拼路径读不到真实的 package.json（ENOENT，`--version`/`--help`/`capabilities` 全部炸）。
+// 改成静态 import：Bun 的打包器能分析到这个引用，把 JSON 内容直接编译进二进制，
+// 编译产物和 `bun backend/src/index.ts` 直接跑两种模式都不再依赖运行期文件系统。
+import pkg from "../../package.json";
 
 const HELP = `Spark Research v${pkg.version}
 开源科学 Agent 平台：干湿闭环 + 自动化实验室
@@ -38,10 +50,13 @@ const HELP = `Spark Research v${pkg.version}
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）
   spark-research lab         湿实验（compile / approve / reject / simulate / status / backends）
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
+  spark-research review      findings 状态机（findings [--open] / mark-addressed <id>）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
   spark-research capabilities 能力自描述（--json 给 agent，不带则给人看的表格）
+  spark-research doctor      环境体检（bun / Python 三档依赖 / provider key / 前端产物），缺什么给修复命令
   spark-research config      用户配置（list / get / set / unset / path）
   spark-research new         脚手架（new skill|connector|platform <name>）
+  spark-research ext         扩展装载 + 契约验收（list / verify / load / grant / revoke）
   spark-research mcp         以 MCP server 模式运行（stdio），供外部 agent 接入
   spark-research info        模块状态与权限矩阵
   spark-research ping        健康检查
@@ -151,20 +166,51 @@ async function auth() {
   }
 }
 
-function welcome() {
-  const auth = getApiKey();
-  console.log("");
-  console.log("  Spark Research v" + pkg.version);
-  console.log("  开源科学 Agent 平台 — 对标 Claude Science");
-  console.log("");
-  if (auth) {
-    console.log(`  API: ${auth.provider} (已配置)`);
-  } else {
-    console.log("  API: 未配置 — 运行 spark-research auth 设置");
+// W1-d（B-a 打包分发）：零参数行为。
+//
+// 方案 §4.4/P14 说零参数该"起 server + 开浏览器"——但那是向导/demo 的形态（读
+// docs/DEVELOPMENT_PLAN_v0.4.md §5·补.2，B-b/B-c 记在 W2-d，不在这条 lane 的任务书里）。
+// 这里判断：一个刚 `npx spark-research` 装完、什么都没配置过的人，此刻最需要的不是
+// 被直接扔进一个还没配好 key 的 Web UI，而是**看清楚当前状态 + 该敲哪条命令**——
+// 抢先起 server 会在 W2-d 真正做向导时产生两套"第一屏"设计，先把浅层的引导做对，
+// 深层的向导留给 W2-d 去接。保持零参数路径**快**（不 spawn 子进程探测 Python，
+// 那是 `doctor` 的活）、**不报错**（现在已经这样，这里只是把"下一步"从一句话
+// 扩成几条具体命令），符合任务书第 5 条的要求。
+// 参数全部可选、全部有默认值：不传就是真实的零参数行为；传了就是
+// tests/unit/cli_entry.test.ts 用来断言「引导内容随状态变化」与「打包产物缺失时不炸」的钩子
+// （阴性对照②：frontendBuilt:false 时输出必须给出 `bun run build:web`，不许报错或吞掉信息）。
+export interface WelcomeOptions {
+  out?: (line: string) => void;
+  auth?: { provider: string; key: string } | null;
+  frontendBuilt?: boolean;
+  configDir?: string;
+  version?: string;
+}
+
+export function welcome(options: WelcomeOptions = {}): void {
+  const out = options.out ?? ((line: string) => console.log(line));
+  const auth = options.auth !== undefined ? options.auth : getApiKey();
+  const frontendBuilt = options.frontendBuilt ?? existsSync(join(DEFAULT_FRONTEND_DIR, "index.html"));
+  const configDir = options.configDir ?? CONFIG_DIR;
+  const version = options.version ?? pkg.version;
+
+  out("");
+  out("  Spark Research v" + version);
+  out("  开源科学 Agent 平台 — 对标 Claude Science");
+  out("");
+  out("  当前状态");
+  out(`    API Key   ${auth ? `${auth.provider}（已配置）` : "未配置"}`);
+  out(`    Web 前端  ${frontendBuilt ? "已构建" : "未构建（不影响 CLI/API，只影响 Web UI）"}`);
+  out(`    数据目录  ${configDir}`);
+  out("");
+  out("  下一步");
+  if (!auth) {
+    out("    spark-research auth              配置 API Key（第一步，其余功能都要它）");
   }
-  console.log("");
-  console.log("  运行 spark-research help 查看可用命令");
-  console.log("");
+  out("    spark-research doctor             环境体检：Python 三档依赖 / provider key / 前端产物，缺什么给修复命令");
+  out("    spark-research project new <名字> 新建一个研究项目");
+  out("    spark-research help               完整命令列表");
+  out("");
 }
 
 function info() {
@@ -350,6 +396,12 @@ function main() {
       });
       break;
     }
+    case "review": {
+      runReviewCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
     case "config": {
       const code = runConfigCommand(process.argv.slice(3));
       if (code !== 0) process.exitCode = code;
@@ -367,6 +419,12 @@ function main() {
       });
       break;
     }
+    case "ext": {
+      runExtCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
     case "mcp": {
       // stdio 传输：**绝不能往 stdout 写任何非协议内容**，否则客户端解析 JSON-RPC 会挂。
       // 提示信息一律走 stderr。
@@ -374,6 +432,51 @@ function main() {
       runMcpStdio().catch((error) => {
         console.error(`MCP server 启动失败: ${error instanceof Error ? error.message : String(error)}`);
         process.exitCode = 1;
+      });
+      break;
+    }
+    case "doctor": {
+      runDoctorCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    // W2-d：init 向导（建项目 → 探测 provider/本地 Ollama → 一次真实文献检索 →
+    // 证据图 → 下一步命令）。参数极简，全部可选：不传 slug 就用时间戳生成一个。
+    case "init": {
+      const initArgs = process.argv.slice(3);
+      const initFlags: Record<string, string> = {};
+      const initPositional: string[] = [];
+      for (let i = 0; i < initArgs.length; i++) {
+        const arg = initArgs[i]!;
+        if (arg.startsWith("--")) {
+          const name = arg.slice(2);
+          const next = initArgs[i + 1];
+          if (next !== undefined && !next.startsWith("--")) {
+            initFlags[name] = next;
+            i++;
+          }
+        } else {
+          initPositional.push(arg);
+        }
+      }
+      runInit({
+        slug: initPositional[0],
+        query: initFlags.query,
+        name: initFlags.name,
+        description: initFlags.description,
+      }).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    // W2-d：离线示例项目（零网络、零 API key，fixture 驱动的完整研究线索）。
+    case "demo": {
+      const demoArgs = process.argv.slice(3);
+      const outIndex = demoArgs.indexOf("--out");
+      const outFile = outIndex >= 0 ? demoArgs[outIndex + 1] : undefined;
+      runDemo({ outFile }).then((code) => {
+        if (code !== 0) process.exitCode = code;
       });
       break;
     }
@@ -404,10 +507,25 @@ function main() {
     case "-h":
       console.log(HELP);
       break;
+    // W1-d：单二进制/npx 分发的实测三条路径之一（另两条是 --help 与 capabilities --json）。
+    // 之前完全没有这个 case——裸 `--version` 会落进 default，打印整份 HELP 还 exitCode 1，
+    // 对脚本化探测（CI/安装脚本判断版本号）不友好。
+    case "--version":
+    case "-v":
+    case "version":
+      console.log(pkg.version);
+      break;
     default:
       console.log(HELP);
       process.exitCode = 1;
   }
 }
 
-main();
+// W1-d：`import.meta.main` 只在这个文件是真正的运行入口时为 true——被
+// tests/unit/cli_entry.test.ts `import` 来测 `welcome()` 时是 false，不会把
+// `main()`（含 `applyConfigEnvDefaults()`/`enforceConfigPermissions()` 这类真实
+// 文件系统副作用）在导入期间跑一遍。真实运行方式（`bun backend/src/index.ts` /
+// 编译产物 / npx）不受影响，行为与之前完全一致。
+if (import.meta.main) {
+  main();
+}

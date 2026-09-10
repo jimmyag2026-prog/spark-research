@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCapabilities } from "../../backend/src/capabilities";
+import { buildCapabilities, clearProbeCache, computeVenvFingerprint } from "../../backend/src/capabilities";
 import { runCapabilitiesCommand } from "../../backend/src/capabilities/cli";
 import { CONFIG_SETTINGS, saveConfig } from "../../backend/src/config";
 import { implementedProviders, LLMRouter, PROVIDER_MODELS } from "../../backend/src/llm/router";
@@ -123,6 +123,68 @@ describe("capabilities · 平台与后端双向一致", () => {
     for (const p of probed.simulationPlatforms) expect(["available", "unavailable"]).toContain(p.availability);
     for (const b of probed.wetBackends) expect(["available", "unavailable"]).toContain(b.availability);
   }, 120_000);
+});
+
+describe("capabilities · --probe 结果缓存（V18）", () => {
+  test("不带 --probe 时不产生 probeCache 字段（静态可用性路径零 IO，不该扯上缓存）", async () => {
+    for (const p of manifest.simulationPlatforms) expect(p.probeCache).toBeUndefined();
+    for (const b of manifest.wetBackends) expect(b.probeCache).toBeUndefined();
+  });
+
+  test("同一个 venv 指纹下，第二次 --probe 复用缓存（不重新 spawn 子进程）", async () => {
+    clearProbeCache();
+    const first = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+    const pyrefFirst = first.simulationPlatforms.find((p) => p.id === "pyref")!;
+    const mockFirst = first.wetBackends.find((b) => b.id === "mock_devices")!;
+    expect(pyrefFirst.probeCache).toBe("miss");
+    expect(mockFirst.probeCache).toBe("miss");
+
+    const second = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+    const pyrefSecond = second.simulationPlatforms.find((p) => p.id === "pyref")!;
+    const mockSecond = second.wetBackends.find((b) => b.id === "mock_devices")!;
+    expect(pyrefSecond.probeCache).toBe("hit");
+    expect(mockSecond.probeCache).toBe("hit");
+    // 缓存命中给出的结论必须和当初探测出来的一致——不是随便垫一个默认值。
+    expect(pyrefSecond.availability).toBe(pyrefFirst.availability);
+    expect(mockSecond.availability).toBe(mockFirst.availability);
+  }, 30_000);
+
+  test("venv 指纹是三段式：路径 / 解释器 mtime / site-packages mtime，同一进程内两次计算结果相同", () => {
+    const a = computeVenvFingerprint();
+    const b = computeVenvFingerprint();
+    expect(a).toEqual(b);
+    expect(a.python.length).toBeGreaterThan(0);
+  });
+
+  test("V18 核心判据：venv 变了（换了解释器路径 + mtime）→ 缓存整体作废，不撒谎报旧结果", async () => {
+    const prevPython = process.env.SPARK_PYTHON;
+    const workDir = mkdtempSync(join(tmpdir(), "spark-caps-altpy-"));
+    try {
+      clearProbeCache();
+      process.env.SPARK_PYTHON = "python3";
+      const first = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+      expect(first.simulationPlatforms.find((p) => p.id === "pyref")!.probeCache).toBe("miss");
+
+      const second = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+      expect(second.simulationPlatforms.find((p) => p.id === "pyref")!.probeCache).toBe("hit");
+
+      // 换一个不同路径、全新 mtime 的解释器——一个转发到真实 python3 的 wrapper 脚本。
+      // 探测结论（pyref 可用与否）本身不会变，但指纹的「解释器路径」与「解释器文件
+      // mtime」两段都变了：这正是判据要抓的「venv 变更」，不是探测结论变了才失效。
+      const wrapper = join(workDir, "python-alt");
+      writeFileSync(wrapper, '#!/bin/sh\nexec python3 "$@"\n');
+      chmodSync(wrapper, 0o755);
+      process.env.SPARK_PYTHON = wrapper;
+
+      const third = await buildCapabilities({ root: tmpRoot(), env: {}, probe: true });
+      // 核心判据：指纹变了必须重新探测（miss），不能偷懒复用上一个解释器缓存下来的结果。
+      expect(third.simulationPlatforms.find((p) => p.id === "pyref")!.probeCache).toBe("miss");
+    } finally {
+      if (prevPython === undefined) delete process.env.SPARK_PYTHON;
+      else process.env.SPARK_PYTHON = prevPython;
+      clearProbeCache();
+    }
+  }, 30_000);
 });
 
 describe("capabilities · 技能与规则双向一致", () => {

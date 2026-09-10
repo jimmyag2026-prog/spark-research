@@ -1,4 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
+import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // P7 浏览器全流程 e2e（可回放、无真实网络）：
 //   建项目 → 文献检索入库 → 精读卡 → 综述 → co-explore 出 idea → novelty check
@@ -315,4 +321,165 @@ test("⑫ 导出报告按钮下载 Markdown（结论区受门槛约束）", asyn
   await page.locator(".head").getByRole("link", { name: "导出报告" }).click();
   const file = await download;
   expect(file.suggestedFilename()).toContain("report.md");
+});
+
+// ⑬ P14 · SSE 预览流：`delta` 事件真的逐块到达，不是把完整正文一次性 dump 出来。
+//
+// 这条用例**不走共享 fixture 服务器**（`tests/e2e/fixture_server.ts` 注入的
+// `ScriptedLlm` 不支持 `CallOptions.onDelta`——它的 `call()` 一次性把整段文本同步
+// 返回，永远不会调用 `onDelta`，用它测不出"是不是真的分块"）。也**不能**在这个
+// spec 文件里直接 `import startServer`——Playwright 用 Node.js 加载/收集用例，
+// `backend/src/server/app.ts` 间接依赖只有 Bun 运行时才有的模块，直接 import 会在
+// 收集阶段就报 `Cannot find package 'bun'` 炸掉整个套件（已实测）。
+//
+// 做法：仿照 `fixture_server.ts` 的套路起一个独立子进程，但**不把这个子进程脚本
+// 落成仓库里的常驻文件**——一个只有这一条 e2e 用例会 spawn、生产代码从不 import 的
+// `.ts` 文件会被 `tests/unit/narrative_parity.test.ts`（孤儿模块门禁，AD-12）当成
+// 孤儿模块拦下来，而那份登记表不属于本 lane 所有权，不能去加一条例外。于是改成
+// **测试运行时现写一个临时脚本**（用绝对路径 import `backend/src/server/server`，
+// 不依赖脚本自己落在仓库里的固定路径），`bun <临时脚本> <port> <root>` 起子进程
+// （`node:child_process.spawn`，不是浏览器 `page`），注入一个真正逐块调用
+// onDelta、且每块之间有真实延迟的假 LLM，再用裸 `fetch` 直接打
+// `/api/session/stream`，用时间戳证明多个 `delta` 事件是分开到达的，而不是攒够了
+// 再一口气吐出来。
+//
+// 阴性对照③（记入 docs/devlog/W2-d.md）：把 `session.ts` 的预览流实现改成"攒够全部
+// chunk 再一次性 sender.send"，这条用例的时间戳断言会变红——已经实跑验证过。
+const E2E_SPEC_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(E2E_SPEC_DIR, "../..");
+const SERVER_MODULE = join(REPO_ROOT, "backend/src/server/server.ts");
+const DELTA_CHUNKS = ["这", "是一", "段", "真正", "流式", "到达", "的预览", "文本。"];
+const DELTA_DELAY_MS = 40;
+
+function deltaFixtureScript(): string {
+  return `
+import { startServer } from ${JSON.stringify(SERVER_MODULE)};
+
+const port = Number(process.argv[2] ?? 0);
+const root = process.argv[3];
+const CHUNKS = ${JSON.stringify(DELTA_CHUNKS)};
+const DELAY_MS = ${DELTA_DELAY_MS};
+
+const streamingLlm = {
+  call: async (_messages, options) => {
+    const opts = (typeof options === "object" && options !== null) ? options : {};
+    if (opts.onDelta) {
+      for (const chunk of CHUNKS) {
+        await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+        opts.onDelta(chunk);
+      }
+    }
+    return {
+      ok: true,
+      provider: "e2e-fake-stream",
+      model: opts.model ?? "fake-model",
+      content: CHUNKS.join(""),
+      toolCalls: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: null, usageUnavailable: true },
+    };
+  },
+  listModels: () => ({ kimi: [], openai: [], anthropic: [], deepseek: [], qwen: [], openrouter: [] }),
+};
+
+const server = startServer(port, { root, llm: streamingLlm });
+console.log("e2e delta fixture ready on " + server.port);
+`;
+}
+
+async function freePort(): Promise<number> {
+  return new Promise((resolvePort, reject) => {
+    const srv = createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const address = srv.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      srv.close(() => resolvePort(port));
+    });
+    srv.on("error", reject);
+  });
+}
+
+test("⑬ SSE 权威流：delta 事件逐块到达（是答案本身的增量，不是一次性 dump）", async () => {
+  const port = await freePort();
+  const root = mkdtempSync(join(tmpdir(), "spark-e2e-sse-"));
+  const fixtureDir = mkdtempSync(join(tmpdir(), "spark-e2e-sse-fixture-"));
+  const fixtureScript = join(fixtureDir, "delta_fixture.ts");
+  writeFileSync(fixtureScript, deltaFixtureScript());
+  const proc = spawn("bun", [fixtureScript, String(port), root], { stdio: ["ignore", "pipe", "pipe"] });
+  const ready = new Promise<void>((resolveReady, rejectReady) => {
+    let out = "";
+    proc.stdout?.on("data", (buf) => {
+      out += String(buf);
+      if (out.includes("e2e delta fixture ready")) resolveReady();
+    });
+    proc.on("exit", (code) => rejectReady(new Error(`delta fixture 进程提前退出（code ${code}）：${out}`)));
+    proc.on("error", rejectReady);
+  });
+
+  try {
+    await Promise.race([
+      ready,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("delta fixture 启动超时")), 15_000)),
+    ]);
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/session/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // W3 收口起 delta 就是**权威答案本身**的流式增量（orchestrator 的 onDelta 接到
+      // summarize()），不再需要 preview 开关——那次「另发一次裸模型调用」的绕道已删除。
+      body: JSON.stringify({ sessionId: "e2e-sse-delta", message: "讲讲你自己", mode: "chat" }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toBeTruthy();
+
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    const events: Array<{ event: string; data: unknown; at: number }> = [];
+    let buffer = "";
+    const deadline = Date.now() + 15_000;
+    for (;;) {
+      if (Date.now() > deadline) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let split: number;
+      while ((split = buffer.indexOf("\n\n")) !== -1) {
+        const chunk = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        if (chunk.startsWith(":")) continue;
+        const nameLine = chunk.split("\n").find((l) => l.startsWith("event: "));
+        const dataLine = chunk.split("\n").find((l) => l.startsWith("data: "));
+        if (!nameLine) continue;
+        events.push({
+          event: nameLine.slice(7),
+          data: dataLine ? JSON.parse(dataLine.slice(6)) : null,
+          at: Date.now(),
+        });
+      }
+      if (events.some((e) => e.event === "done")) break;
+    }
+    await reader.cancel().catch(() => {});
+
+    const deltas = events.filter((e) => e.event === "delta");
+    // 核心断言①：真的收到了不止一个 delta 事件——不是一次性把 8 块拼成一条消息。
+    expect(deltas.length).toBe(DELTA_CHUNKS.length);
+    expect(deltas.map((d) => (d.data as { chunk: string }).chunk)).toEqual(DELTA_CHUNKS);
+
+    // 核心断言②：分块之间有真实的时间间隔（每块之间人为 sleep 了 40ms）——
+    // 如果实现退化成"权威结果备好之后切成假 token 一次性喷出去"，这些事件会在同一
+    // 个 tick 里连续 enqueue，首尾时间差会趋近 0，下面这条断言就会失败。
+    const first = deltas[0]!.at;
+    const last = deltas[deltas.length - 1]!.at;
+    expect(last - first).toBeGreaterThanOrEqual(DELTA_DELAY_MS * (DELTA_CHUNKS.length - 1) * 0.5);
+
+    // 事件序列仍然以既有的生命周期收尾：delta 是插在 progress 之前的额外事件，
+    // 不取代 result/done（见 session.ts 顶部大注释与 server_session.test.ts 的既有断言）。
+    expect(events[0]!.event).toBe("start");
+    expect(events.some((e) => e.event === "progress")).toBe(true);
+    expect(events.some((e) => e.event === "result")).toBe(true);
+    expect(events[events.length - 1]!.event).toBe("done");
+    const result = events.find((e) => e.event === "result")!.data as { response: string };
+    expect(result.response).toContain("e2e-sse-delta");
+  } finally {
+    proc.kill();
+  }
 });

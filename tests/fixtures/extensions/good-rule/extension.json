@@ -1,0 +1,7 @@
+{
+  "kind": "rule",
+  "name": "good-rule",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "示例纯函数规则扩展（强度②），供 ext verify 正向用例使用：零 IO、确定性。"
+}

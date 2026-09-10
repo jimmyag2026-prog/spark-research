@@ -13,7 +13,12 @@ const PROTOCOL_A = "取样品50µL加入96孔板，37°C孵育1小时，600nm读
 const PROTOCOL_B = "配制5000uL稀释液，对样品做6个梯度的连续稀释，每步转移100uL并混匀3次";
 const UNSAFE = "加入10uL盐酸，加入10uL次氯酸钠";
 
-function cli() {
+// V19：默认把 approve/reject 模拟成「真人坐在一个真实交互终端前，敲了 yes」——
+// 这是这份文件里绝大多数既有测试真正要验的场景（CLI 层的命令语义/状态机流转），
+// 不是 V19 门本身；V19 门自己的正/负路径测试在下面单独的 describe 里，会显式覆盖
+// 这两个默认值。不给这个默认值的话，bun test 的子进程里 stdin/stdout 从来不是 TTY，
+// 每一条调用 approve/reject 的既有测试都会被 V19 挡在门外——那不是这些测试想验的东西。
+function cli(overrides: { approvalIsInteractiveTty?: () => boolean; approvalConfirm?: (p: string) => Promise<string | null> } = {}) {
   const root = mkdtempSync(join(tmpdir(), "lab-cli-"));
   const manager = new ProjectManager(root);
   manager.create("lab-proj");
@@ -26,6 +31,8 @@ function cli() {
       actor: "测试员",
       out: (l) => out.push(l),
       err: (l) => err.push(l),
+      approvalIsInteractiveTty: overrides.approvalIsInteractiveTty ?? (() => true),
+      approvalConfirm: overrides.approvalConfirm ?? (async () => "yes"),
     });
   return {
     manager,
@@ -239,5 +246,108 @@ describe("lab CLI · status / backends / help", () => {
     c.reset();
     expect(await c.run(["frobnicate"])).toBe(1);
     expect(c.errText()).toContain("未知的 lab 子命令");
+  });
+});
+
+// ── V19（BACKLOG）：审批动作要求可交互终端 ────────────────────────────────────
+//
+// AD-9 的推论：MCP 层挡的是默认路径，不是技术上的绕道——「agent 用 Bash 调
+// `lab approve --actor 自己编的名字`」必须在 CLI 层被真正堵住。上面所有既有测试都把
+// `cli()` 的默认值设成「模拟真人在真实终端里敲了 yes」，验的是命令语义；这里单独验
+// 终端门本身：非交互环境默认拒绝、CI 旁路必须三样齐全且留痕、交互终端里没收到 yes
+// 同样拒绝。
+describe("lab CLI · V19 审批终端门", () => {
+  const TOKEN_ENV = "SPARK_LAB_CI_BYPASS_TOKEN";
+
+  // 非交互场景：显式把 approvalIsInteractiveTty 钉成 false，不依赖「bun test 的子进程
+  // 本来就没有 tty」这件事本身是否总是成立。compile 与 approve/reject 必须用同一个
+  // cli() 实例（同一个 ProjectManager），否则 approve 找不到 compile 出来的那条实验。
+  function nonInteractiveCli() {
+    return cli({ approvalIsInteractiveTty: () => false });
+  }
+
+  test("非交互环境、未配置 SPARK_LAB_CI_BYPASS_TOKEN：approve 默认拒绝（不是静默放行）", async () => {
+    delete process.env[TOKEN_ENV];
+    const c = nonInteractiveCli();
+    const { id } = await compiled(c);
+    expect(await c.run(["approve", id])).toBe(1);
+    expect(c.errText()).toContain("[V19]");
+    expect(c.errText()).toContain("SPARK_LAB_CI_BYPASS_TOKEN");
+  });
+
+  test("非交互环境、配置了 token 但 --ci-bypass-token 不给/不匹配：拒绝", async () => {
+    process.env[TOKEN_ENV] = "correct-token";
+    try {
+      const c = nonInteractiveCli();
+      const { id } = await compiled(c);
+      expect(await c.run(["approve", id])).toBe(1);
+      expect(c.errText()).toContain("缺少 --ci-bypass-token");
+
+      c.reset();
+      expect(
+        await c.run(["approve", id, "--ci-bypass-token", "wrong-token", "--ci-bypass-reason", "测试"]),
+      ).toBe(1);
+      expect(c.errText()).toContain("不匹配");
+    } finally {
+      delete process.env[TOKEN_ENV];
+    }
+  });
+
+  test("非交互环境、token 匹配但缺 --ci-bypass-reason：拒绝（旁路必须写明理由）", async () => {
+    process.env[TOKEN_ENV] = "correct-token";
+    try {
+      const c = nonInteractiveCli();
+      const { id } = await compiled(c);
+      expect(await c.run(["approve", id, "--ci-bypass-token", "correct-token"])).toBe(1);
+      expect(c.errText()).toContain("--ci-bypass-reason");
+    } finally {
+      delete process.env[TOKEN_ENV];
+    }
+  });
+
+  test("非交互环境、token + reason 齐全：放行，且旁路事实写进 decision record（留痕，不是静默通过）", async () => {
+    process.env[TOKEN_ENV] = "correct-token";
+    try {
+      const c = nonInteractiveCli();
+      const { id } = await compiled(c);
+      expect(
+        await c.run([
+          "approve",
+          id,
+          "--ci-bypass-token",
+          "correct-token",
+          "--ci-bypass-reason",
+          "CI 集成测试需要跑通湿实验闭环",
+          "--json",
+        ]),
+      ).toBe(0);
+      const payload = JSON.parse(c.text());
+      expect(payload.approval.note).toContain("V19 CI 旁路");
+      expect(payload.approval.note).toContain("CI 集成测试需要跑通湿实验闭环");
+    } finally {
+      delete process.env[TOKEN_ENV];
+    }
+  });
+
+  test("交互终端里确认输入不是 'yes'：approve 被取消，退出码 1", async () => {
+    const c = cli({ approvalConfirm: async () => "no" });
+    const { id } = await compiled(c);
+    expect(await c.run(["approve", id])).toBe(1);
+    expect(c.errText()).toContain("[V19]");
+    expect(c.errText()).toContain("没有收到 'yes'");
+  });
+
+  test("交互终端里没有任何输入（null）：同样按未确认处理", async () => {
+    const c = cli({ approvalConfirm: async () => null });
+    const { id } = await compiled(c);
+    expect(await c.run(["approve", id])).toBe(1);
+  });
+
+  test("reject 同样受终端门约束（非交互默认拒绝）", async () => {
+    delete process.env[TOKEN_ENV];
+    const c = nonInteractiveCli();
+    const { id } = await compiled(c);
+    expect(await c.run(["reject", id, "--reason", "样品量不足"])).toBe(1);
+    expect(c.errText()).toContain("[V19]");
   });
 });

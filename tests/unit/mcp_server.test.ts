@@ -3,6 +3,33 @@ import { MCP_TOOLS, MCP_WITHHELD, toolByName } from "../../backend/src/mcp/tools
 import { MCP_INSTRUCTIONS } from "../../backend/src/mcp/server";
 import { callTool, connectClient, makeMcp } from "../helpers/mcp_scenario";
 import { ScriptedLlm } from "../helpers/ideation_scenario";
+import { llmExtras } from "../../backend/src/llm/types";
+import type { ChatMessage, LlmResponse } from "../../backend/src/llm/router";
+
+// 轮询一个条件直到为真或超时——用于等「进度通知真的经协议送达了」这类异步断言，
+// 比固定 sleep 更快也更不脆：条件一满足立刻返回，不会白等。
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000, stepMs = 5): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`waitFor 超时（${timeoutMs}ms）`);
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+}
+
+// 一个「按需放行」的 LLM：call() 挂起在一个可以从外部触发的 gate 上，让测试能精确控制
+// 「进度通知①已经送达」与「任务真正完成」之间的时间窗口，从而证明进度是**中途**推送的，
+// 不是结束时补发的一条。
+function gatedLlm(content: string): { llm: { call: (messages: ChatMessage[], model?: string) => Promise<LlmResponse> }; release: () => void } {
+  let releaseFn: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseFn = resolve;
+  });
+  const call = async (_messages: ChatMessage[], model = "moonshotai/kimi-k2.6"): Promise<LlmResponse> => {
+    await gate;
+    return { ok: true, provider: "kimi", model, content, ...llmExtras() };
+  };
+  return { llm: { call }, release: releaseFn };
+}
 
 // P9 · MCP server。三组测试：
 //   ① 工具定义的**写法标准**（判断二：LLM 第一次见就会用）
@@ -223,6 +250,78 @@ describe("MCP · 长任务同步语义（判断三）", () => {
     const { ok, payload } = await fx.call<{ error: string }>("lit_review_draft", {});
     expect(ok).toBe(false);
     expect(payload.error).toContain("精读卡");
+  });
+});
+
+describe("MCP · 长任务进度回传（V17）", () => {
+  test("进度经 notifications/progress 中途送达，不是结束时才补发一条", async () => {
+    // idea_coexplore 的 run() 在真正调 LLM 之前就先 task.progress(0,1,"...")——
+    // gatedLlm 卡住 LLM 调用，制造一个「第一条进度已经产生、任务却还没落定」的窗口，
+    // 用来证明进度通知是在这个窗口内送达的，不是等任务完成后才一次性补上。
+    const { llm, release } = gatedLlm(
+      JSON.stringify({
+        critique: "库里没有可引用文献，以下都是推断（inferred）。",
+        hypothesis: "用互信息找隐藏变构口袋",
+        supporting: [{ inferred: true, note: "凭经验推断" }],
+        contradicting: [{ inferred: true, note: "也可能不成立（inferred）" }],
+        openQuestions: ["先把相关文献入库"],
+      }),
+    );
+    const { client, close } = await connectClient({ llm, pollIntervalMs: 5, timeoutMs: 30_000 });
+    try {
+      const progressEvents: Array<{ progress: number; total?: number; message?: string }> = [];
+      const callPromise = client.callTool(
+        { name: "idea_coexplore", arguments: { message: "用互信息找隐藏变构口袋" } },
+        undefined,
+        { onprogress: (p) => progressEvents.push(p) },
+      );
+
+      // 第一条进度（0/1「文献库为空」）必须在 LLM 放行（任务真正完成）**之前**就送达——
+      // 这正是要跟「只在结束时补发一次」区分开的判据。
+      await waitFor(() => progressEvents.length > 0);
+      expect(progressEvents[0]).toMatchObject({ progress: 0, total: 1 });
+      // 此时任务显然还没完成——callPromise 不应该已经落定。
+      const stillPending = await Promise.race([callPromise.then(() => "settled"), Promise.resolve("pending")]);
+      expect(stillPending).toBe("pending");
+
+      release();
+      const result = (await callPromise) as { isError?: boolean };
+      expect(result.isError).toBeFalsy();
+
+      // 完成前后加起来至少两条不同的进度（0/1 与 1/1），且顺序不倒——不是「事后一次性补发」。
+      await waitFor(() => progressEvents.some((p) => p.progress === 1 && p.total === 1));
+      expect(progressEvents.length).toBeGreaterThanOrEqual(2);
+      expect(progressEvents[0]).toMatchObject({ progress: 0 });
+    } finally {
+      await close();
+    }
+  });
+
+  test("客户端没有请求 progressToken 时不发通知，行为与 V17 之前一致", async () => {
+    const llm = new ScriptedLlm([
+      (user) =>
+        user.includes("可用引用 key 白名单")
+          ? JSON.stringify({
+              critique: "库里没有可引用文献，以下都是推断（inferred）。",
+              hypothesis: "无进度订阅的一轮",
+              supporting: [{ inferred: true, note: "凭经验推断" }],
+              contradicting: [{ inferred: true, note: "也可能不成立（inferred）" }],
+              openQuestions: ["先把相关文献入库"],
+            })
+          : null,
+    ]);
+    const { client, close } = await connectClient({ llm });
+    try {
+      // 不传 onprogress —— SDK 不会给这次请求带 _meta.progressToken，
+      // 服务端因此不会构造 sendNotification 回调（见 createMcpServer 的判断）。
+      const result = (await client.callTool({
+        name: "idea_coexplore",
+        arguments: { message: "无进度订阅的一轮" },
+      })) as { isError?: boolean };
+      expect(result.isError).toBeFalsy();
+    } finally {
+      await close();
+    }
   });
 });
 

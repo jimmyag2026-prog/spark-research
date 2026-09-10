@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.3.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.4.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -129,7 +129,7 @@ spark-research mcp    # stdio 传输
 
 ## 证据图
 
-- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact
+- record 类型：idea / decision / experiment / observation / reading / conclusion / paper / artifact / agent_run
 - 边类型：supports / contradicts / derives_from / cites / supersedes
 - 证据标签：observed / sourced / computed / inferred
 - 边方向按语义读：`paper --supports--> idea`（查一条 idea 的支撑文献看它的 incoming 边）；`cites` 是新产物 → 被引论文；`derives_from` 是产物 → 来源。
@@ -160,6 +160,11 @@ spark-research mcp    # stdio 传输
 - `SPARK_LOCAL_LLM_BASE_URL`（默认 —，env `SPARK_LOCAL_LLM_BASE_URL`）：本地/自建 OpenAI 兼容 LLM 端点的 baseUrl（ollama / vLLM / 任意自建服务）
 - `SPARK_LOCAL_LLM_API_KEY`（默认 （凭据），env `SPARK_LOCAL_LLM_API_KEY`）：本地/自建 LLM 端点的 API key（很多本地服务不校验，允许留空）
 - `llmPricingOverridesJson`（默认 —，env `SPARK_LLM_PRICING_JSON`）：覆盖 llm/providers/registry.ts 内置单价表的 JSON（`{"<provider>:<model>": {inputPerMillionUsd, outputPerMillionUsd}}`）
+- `subAgentModel_explore`（默认 —，env `SPARK_SUBAGENT_MODEL_EXPLORE`）：子代理类型 'explore' 的独立模型覆盖（不填则退回 defaultModel）
+- `subAgentModel_literature`（默认 —，env `SPARK_SUBAGENT_MODEL_LITERATURE`）：子代理类型 'literature' 的独立模型覆盖（不填则退回 defaultModel）
+- `subAgentModel_execute`（默认 —，env `SPARK_SUBAGENT_MODEL_EXECUTE`）：子代理类型 'execute' 的独立模型覆盖（不填则退回 defaultModel）
+- `subAgentModel_lab`（默认 —，env `SPARK_SUBAGENT_MODEL_LAB`）：子代理类型 'lab' 的独立模型覆盖（不填则退回 defaultModel）
+- `subAgentModel_review`（默认 —，env `SPARK_SUBAGENT_MODEL_REVIEW`）：子代理类型 'review' 的独立模型覆盖（不填则退回 defaultModel）
 
 ## 用这个工作台时必须知道的几条
 

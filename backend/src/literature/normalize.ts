@@ -319,15 +319,109 @@ export function extractAMinerList(payload: unknown): unknown[] {
   return [];
 }
 
+
+// ── arXiv / PubMed（v0.4 W3 收口接线）─────────────────────────────────────────
+//
+// 这两个源的 connector 在 W3-d 落地（XML 解析走 TS 扩展——manifest 的 normalize DSL
+// 假定响应已是解析好的 JSON 对象树，喂原始 XML 会**每个字段静默为 undefined**，
+// 详见 docs/devlog/W3-d.md）。但 connector 做好之后归一化表还桩着空数组，
+// 于是统一检索仍然看不到它们——这是本版第六个「建好但没人喂」，收口一并接上。
+
+export function extractArxivList(payload: unknown): unknown[] {
+  // ArxivFeed { entries: ArxivEntry[] }（W3-d 的 parseArxivFeed 产出）。
+  return asArray(asObject(payload)?.entries);
+}
+
+export function fromArxiv(raw: unknown): Paper | null {
+  const entry = asObject(raw);
+  if (!entry) return null;
+  const title = asString(entry.title);
+  if (!title) return null;
+  const paper = emptyPaper();
+  // arXiv 的 title/summary 里带换行与多空格（XML 排版），压平再用。
+  paper.title = title.replace(/\s+/g, " ").trim();
+  paper.sources = ["arxiv"];
+  paper.authors = authorsOf(
+    asArray(entry.authors)
+      .map((a) => asString(asObject(a)?.name) ?? "")
+      .filter(Boolean),
+  );
+  paper.year = yearOf(entry.published) ?? yearOf(entry.updated);
+  paper.venue = asString(entry.journalRef);
+  paper.doi = normalizeDoi(entry.doi);
+  const summary = asString(entry.summary);
+  paper.abstract = summary ? summary.replace(/\s+/g, " ").trim() : null;
+  const shortId = asString(entry.shortId);
+  if (shortId) paper.ids.arxiv = shortId;
+  paper.url = asString(entry.id);
+  // pdf 直链在 links[] 里：rel=related & title=pdf（arXiv 的 Atom 约定）。
+  for (const link of asArray(entry.links)) {
+    const l = asObject(link);
+    if (!l) continue;
+    if (asString(l.title) === "pdf" || asString(l.type) === "application/pdf") {
+      paper.pdfUrl = asString(l.href);
+      break;
+    }
+  }
+  return paper;
+}
+
+export function extractPubMedList(payload: unknown): unknown[] {
+  // NCBI esummary：{ result: { uids: ["1","2"], "1": {...}, "2": {...} } }。
+  // 空结果时 W3-d 的 search() 原样返回 esearch 响应（没有 result 段）——这里自然得到 []。
+  const result = asObject(asObject(payload)?.result);
+  if (!result) return [];
+  const uids = asArray(result.uids)
+    .map((u) => asString(u))
+    .filter((u): u is string => Boolean(u));
+  return uids.map((uid) => result[uid]).filter((v) => v !== undefined);
+}
+
+export function fromPubMed(raw: unknown): Paper | null {
+  const doc = asObject(raw);
+  if (!doc) return null;
+  const title = asString(doc.title);
+  if (!title) return null;
+  const paper = emptyPaper();
+  paper.title = title.replace(/\.$/, "");
+  paper.sources = ["pubmed"];
+  paper.authors = authorsOf(
+    asArray(doc.authors)
+      .map((a) => asString(asObject(a)?.name) ?? "")
+      .filter(Boolean),
+  );
+  paper.year = yearOf(doc.pubdate) ?? yearOf(doc.epubdate) ?? yearOf(doc.sortpubdate);
+  paper.venue = asString(doc.fulljournalname) ?? asString(doc.source);
+  // esummary 的 DOI 藏在 articleids[] 里（idtype === "doi"）。
+  for (const item of asArray(doc.articleids)) {
+    const a = asObject(item);
+    if (!a) continue;
+    const kind = asString(a.idtype);
+    const value = asString(a.value);
+    if (!value) continue;
+    if (kind === "doi") paper.doi = normalizeDoi(value);
+    if (kind === "pubmed") paper.ids.pmid = value;
+    if (kind === "pmc") paper.ids.pmcid = value;
+  }
+  const pmid = paper.ids.pmid ?? asString(doc.uid);
+  if (pmid) {
+    paper.ids.pubmed = pmid;
+    paper.ids.pmid = pmid;
+    paper.url = `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
+  }
+  // esummary 不含摘要（那要 efetch）——如实留 null，不编造。
+  return paper;
+}
+
 const NORMALIZERS: Record<LiteratureSource, { extract: (p: unknown) => unknown[]; map: (r: unknown) => Paper | null }> = {
   openalex: { extract: extractOpenAlexList, map: fromOpenAlex },
   crossref: { extract: extractCrossRefList, map: fromCrossRef },
   europepmc: { extract: extractEuropePMCList, map: fromEuropePMC },
   semanticscholar: { extract: extractSemanticScholarList, map: fromSemanticScholar },
   aminer: { extract: extractAMinerList, map: fromAMiner },
-  // arxiv / pubmed 是 XML 响应，P2 不进统一检索的默认源，留占位保持类型完备。
-  arxiv: { extract: () => [], map: () => null },
-  pubmed: { extract: () => [], map: () => null },
+  // v0.4 W3 收口：W3-d 的 connector 落地后接上（此前是 P2 留的空占位）。
+  arxiv: { extract: extractArxivList, map: fromArxiv },
+  pubmed: { extract: extractPubMedList, map: fromPubMed },
 };
 
 // 统一入口：给定源与原始响应，吐出归一化后的 Paper 列表。

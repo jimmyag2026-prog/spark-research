@@ -1,0 +1,40 @@
+{
+  "id": "good-connector",
+  "baseUrl": "https://api.example.org",
+  "description": "示例第三方 connector：GET+query / GET+path / POST+enum，供 ext verify 正向用例使用。",
+  "tools": [
+    {
+      "name": "search",
+      "description": "全文检索",
+      "endpoint": "/v1/search",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "query": { "type": "string", "required": true, "mapTo": "q" },
+        "limit": { "type": "number", "default": 10 }
+      },
+      "defaults": { "format": "json" }
+    },
+    {
+      "name": "getById",
+      "description": "按 ID 获取单条记录",
+      "endpoint": "/v1/records/{id}",
+      "method": "GET",
+      "responseType": "json",
+      "params": {
+        "id": { "type": "string", "required": true }
+      }
+    },
+    {
+      "name": "createThing",
+      "description": "创建一条记录（POST body，枚举参数）",
+      "endpoint": "/v1/things",
+      "method": "POST",
+      "responseType": "json",
+      "params": {
+        "kind": { "type": "enum", "enum": ["a", "b", "c"], "default": "a" }
+      }
+    }
+  ],
+  "metadata": { "domain": "api.example.org", "apiKeyRequired": false }
+}

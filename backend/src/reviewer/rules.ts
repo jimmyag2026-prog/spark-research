@@ -218,18 +218,39 @@ export async function citationIntegrity(input: CitationIntegrityInput): Promise<
 
   // ② 库内 key 但陈述与精读卡冲突 → soft（判定结果是 inferred）。
   if (input.judge && input.baselines) {
-    for (const citation of citations) {
-      const baseline = input.baselines.get(citation.key);
-      if (!known.has(citation.key) || !baseline) continue;
-      // 参考文献条目（`- [@key] 标题. 作者...`）不是对该文献的陈述，只是条目本身：
-      // 拿它去判「陈述是否与卡片冲突」既浪费一次模型调用，也容易凭空造出误报。
-      // key 是否在库仍然要查（上面 ① 已覆盖），这里只跳过语义判定。
-      if (isReferenceEntry(citation.sentence, citation.key)) continue;
-      judgedCount++;
-      let judgement: CitationJudgement;
-      try {
-        judgement = await input.judge.judge({ key: citation.key, statement: citation.sentence, baseline });
-      } catch {
+    // v0.4 W4 收口：这里原本是串行 `for ... await judge()`——30 引用的综述 = 30 次串行往返。
+    // W4-b 在 `LlmCitationJudge` 内部做了两件事：按 `(key, sha256(statement))` 去重
+    // （对串行链也直接生效），以及一个默认上限 4 的并发闸。但**并发闸在串行调用方下从不触发**，
+    // 所以降速那一半收益一直没兑现（W4-b 如实报告过：rules.ts 不在它的文件所有权内）。
+    //
+    // 这里把循环改成一次性发起、并发执行、按原序处理结果：
+    //   - 限流由判定器内部的闸兜（调用方不重复实现一套）
+    //   - findings 的顺序、judgedCount / judgeErrors 的语义与串行时逐条一致
+    //   - 单个判定失败仍然只计入 judgeErrors 并跳过该条，不影响其它条
+    const judgeable = citations.filter((citation) => {
+      const baseline = input.baselines!.get(citation.key);
+      if (!known.has(citation.key) || !baseline) return false;
+      return !isReferenceEntry(citation.sentence, citation.key);
+    });
+    judgedCount += judgeable.length;
+    const settled = await Promise.all(
+      judgeable.map(async (citation) => {
+        try {
+          return {
+            citation,
+            judgement: await input.judge!.judge({
+              key: citation.key,
+              statement: citation.sentence,
+              baseline: input.baselines!.get(citation.key)!,
+            }),
+          };
+        } catch {
+          return { citation, judgement: null };
+        }
+      }),
+    );
+    for (const { citation, judgement } of settled) {
+      if (!judgement) {
         judgeErrors++;
         continue;
       }

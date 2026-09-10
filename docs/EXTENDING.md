@@ -525,7 +525,7 @@ tests/unit/lab_safety.test.ts      对抗矩阵
 
 `backend/src/llm/router.ts` 的 `LLMRouter` 是模型无关的：支持 kimi / openai / anthropic / deepseek / qwen / openrouter，provider 由模型名推断，BYOK。
 
-每个子代理可以配独立模型（`SubAgentConfig.model`，默认全部落到 `LLMRouter.DEFAULT_MODEL`）：重任务用强模型、检索摘要用快模型。**这一层目前是代码内配置**，暴露成用户配置项已登记为 BACKLOG（与 V7 Agent Swarm 一起评估）。
+每个子代理可以配独立模型：重任务用强模型、检索摘要用快模型。**v0.4（W4-a）起已是用户配置项**——`spark-research config set subAgentModel_explore <model>`（五类各一条，也可用环境变量 `SPARK_SUBAGENT_MODEL_<TYPE>`）。解析顺序：显式 override > 按类配置 > 全局 `defaultModel` > 代码常量。
 
 ### 用户配置面
 
@@ -604,7 +604,232 @@ MCP 客户端配置（以 Claude Code 为例）：
 
 ---
 
-## 8. 提交前自查
+## 8. 扩展装载（第三方 extension，不改仓库源码）
+
+上面 1–6 节讲的是"往仓库里加一个模块"（你有仓库写权限，改完提 PR）。本节讲另一条路：
+**不改仓库**，把扩展放进 `~/.spark-research/extensions/<name>/`，运行时装载——
+面向不想 fork 仓库的第三方开发者，或者想按用户/环境动态开关的能力。
+
+### 目录布局
+
+```
+~/.spark-research/extensions/<name>/
+  extension.json      manifest：kind / name / version / entry / requires（必需）
+  connector.json       kind=connector 时：声明式 connector 定义（见第 2 节的契约，
+                        直接复用同一套 schema——backend/src/connectors/manifest.ts）
+  index.ts              kind=skill|platform|backend|rule 时：TS 实现
+  SKILL.md               kind=skill 时：同第 1 节的 frontmatter 契约
+  mcp.json               kind=mcp_client 时：外部 MCP server 的启动配置（数据，见下）
+  tests/                 配套验证
+```
+
+### 三种装载强度
+
+| 强度 | 形态 | 是否执行代码 | 需要 `--trust` |
+|---|---|---|---|
+| ① 声明式 connector | `connector.json` | 否——只是数据，编译成受限的 URL 拼装 + 受限的响应字段抽取（第 2 节 DSL 的边界原样适用） | 否 |
+| ② TS 扩展 | `skill` / `platform` / `backend` / `rule` 的 `index.ts` | 是——与宿主进程同 UID、同权限，跟仓库里写的代码没有区别 | **是** |
+| ③ 外部 MCP client | `mcp.json` + 一个外部可执行文件 | 不 `import` 任意 TS 代码，但会**启动一个子进程**并用 stdio 跟它说 MCP 协议——本地任意命令执行的风险面不比②低 | **是**（指纹覆盖 `mcp.json`，不是某个 TS 文件） |
+
+`extension.json` 的形状：
+
+```ts
+interface ExtensionManifest {
+  kind: "connector" | "skill" | "platform" | "backend" | "rule" | "mcp_client";
+  name: string;        // kebab-case，须与目录名一致
+  version: string;      // "0.1.0" 这类
+  description: string;
+  entry?: string;        // kind !== "connector" 时用，默认 "index.ts"（mcp_client 不用这个字段）
+  requires?: {
+    credentials?: string[]; // 想访问哪些 connector 的凭据（申报，不等于拿到）
+    tools?: string[];        // 想调用哪些 ToolBus 工具（同上）
+  };
+}
+```
+
+### `--trust`：TOFU 信任模型
+
+TS 扩展与仓库代码同权限执行——`--trust` 不是沙箱开关，是"未经确认的静默执行"的
+开关。模型是 trust-on-first-use（同 SSH `known_hosts`）：
+
+```bash
+spark-research ext load ~/.spark-research/extensions/my-rule
+# ✗ 扩展 "my-rule"（kind 需要代码执行）尚未信任，拒绝装载。
+#   入口文件指纹：sha256:3f9c...
+#   确认这段代码可信后，重新执行并加上 --trust。
+
+spark-research ext load ~/.spark-research/extensions/my-rule --trust
+# ✓ 已装载扩展 "my-rule"（kind=rule）
+```
+
+指纹记在扩展目录旁的 `.trust.json`（不是直接改写 `extension.json`——那是用户手写/
+版本控制的文件，静默重写它风险大于收益）。第二次装载**不需要**再传 `--trust`，
+只要入口文件内容没变；内容一旦变化（哪怕只改一个字符），指纹跟着变，下一次装载
+又会回到"未信任"状态，必须重新确认。
+
+**这不是沙箱**：`--trust` 挡的是"没看一眼指纹就被动执行"，挡不住"确认了之后代码
+干了什么"——被信任的扩展能做任何仓库代码能做的事（读写文件、发网络请求、…）。
+真正的边界在下一段。
+
+### 凭据 / ToolBus 访问：声明 + 授权缺一不可
+
+扩展**默认拿不到任何凭据或 ToolBus 工具**，即使 `extension.json` 里声明了
+`requires.credentials` / `requires.tools`——声明只是申报，用户要显式批准：
+
+```bash
+spark-research ext grant my-rule --credential paidsource
+spark-research ext grant my-rule --tool lit_search
+```
+
+装载器构造的 `ExtensionContext`（`backend/src/extensions/context.ts`）在
+**声明过 且 被授权过**的交集之外一律拒绝——manifest 没声明的 id/工具名，授权了也没用；
+声明过但没被授权的，同样没用。凭据值本体依然只经过 `CredentialStore`（AD-2 原有边界
+不变），扩展代码永远看不到"这个值是怎么存的"，只能通过 context 拿到已授权项的值。
+
+### 装载后出现在 `capabilities` 里
+
+扩展的能力位由 `backend/src/extensions/capabilities.ts` 的 `listExtensionCapabilities()`
+产出（`available` / `needs_grant` / `unverified` / `stale_verify` / `failed` 五档），
+**不执行任何扩展代码**——只读 `extension.json`（数据）+ 授权记录 + 上一次 `ext verify`
+的缓存结论，理由与主 capabilities 模块"静态可用性 vs 探测可用性"的分档一致：一个会被
+频繁调用的只读自描述端点，不应该顺手把每个扩展的 `index.ts` 都 import 一遍。
+
+### 强度③详解：外部 MCP client（相对 OpenScience 的净增益点，v0.4 W4-d）
+
+OpenScience 有 MCP client，但外部工具调用不进 provenance。spark 因为统一的 ToolBus
+审计，外部工具的每次调用**结构性地**落进一条执行记录——不是文档里的承诺，是
+`ExternalMcpSession.call()`（`backend/src/extensions/mcp_client.ts`）的实现方式：
+无论调用成功、失败、超时、还是工具名压根不存在，返回结果之前都会先落一条记录，
+调用方没有绕过这一步的合法路径（除非绕开这个模块本身直接用 SDK——那属于"不通过
+spark 提供的通道"，与 TS 扩展绕过 `ExtensionContext` 直接 `import` 拿凭据是同一类
+已知边界，见下方"不挡什么"）。
+
+**`mcp.json` 的形状：**
+
+```ts
+interface McpClientConfig {
+  command: string;        // 启动外部 MCP server 的可执行文件，不经过 shell
+  args?: string[];
+  cwd?: string;
+  env?: string[];          // 显式白名单：允许透传的宿主环境变量**名**（不是值的拷贝）
+  credentials?: Array<{ id: string; field: string; env: string }>; // 凭据 → 子进程 env 的映射
+  startupTimeoutMs?: number; // 默认 8000
+  callTimeoutMs?: number;    // 默认 30000
+  verifySample?: { tool: string; args?: Record<string, unknown> }; // ext verify 用，可选
+}
+```
+
+**接入一个外部 MCP server：**
+
+```bash
+spark-research ext add-mcp my-server --cmd "node path/to/server.js" --trust
+# ✓ 已写入扩展目录 ~/.spark-research/extensions/my-server（kind=mcp_client）
+# 扩展 "my-server" 信任指纹已记录：sha256:...
+# ✓ 发现 3 个外部工具：search, fetch, summarize
+```
+
+带凭据的例子（`ext grant` 批准之后，值才会被注入子进程）：
+
+```bash
+spark-research ext add-mcp paid-search \
+  --cmd "npx some-mcp-server" \
+  --credential paidsource:apiKey:UPSTREAM_KEY \
+  --trust
+spark-research ext grant paid-search --credential paidsource
+```
+
+`--cmd` 是朴素的空白切分，**不是**完整 shell 解析——带引号/转义的复杂命令行需要
+自己把 `command` 与单个 `args` 拆开（与 `StdioClientTransport` 本身 `shell:false`
+的边界一致，不假装支持任意 shell 语法）。
+
+**安全边界（挡什么 / 不挡什么，照 W2-c 的标准写）：**
+
+- **它拿得到什么**：一个独立的子进程，同 UID，但**不与宿主进程共享 V8 堆**——宿主
+  不 `import` 它的代码。环境变量默认只有 SDK 自带的最小安全集合
+  （`HOME`/`LOGNAME`/`PATH`/`SHELL`/`TERM`/`USER`），**不会**继承宿主进程完整的
+  `process.env`；`mcp.json` 的 `env` 白名单可以额外放行具名变量，`credentials`
+  映射可以额外注入**已被 `ext grant` 批准过**的凭据值——两条都是显式加法，不是
+  默认继承。
+- **凭据默认拿不到**（AD-2 在"另一个进程"这个边界上的落点）：manifest 声明过
+  **且**被 `ext grant --credential` 批准过的 id，才会被解析出值、注入子进程 env；
+  少一个条件都不会。唯一的取值路径是 `ExtensionContext`（同 TS 扩展），
+  `resolveMcpChildEnv()` 没有第二条"直接问 CredentialStore"的路。
+- **它挂了 / 超时 / 返回垃圾**：`connectExternalMcp()` 与 `ExternalMcpSession.call()`
+  一律把异常吞成结构化的 `{ok:false, reason}` / `{ok:false, payload:{error}}`，
+  绝不向上抛出未捕获异常——主进程不会被一个失控的外部进程拖垮。`capabilities`
+  会把"上一次尝试连接失败"反映成 `status: "failed"`（`ext add-mcp`/`ext verify`
+  跑一次发现步骤后写进 `.mcp_discovery.json`，`capabilities --json` 只读这份
+  缓存，不会为了回答"这个扩展有哪些工具"而顺手再起一个子进程）。
+- **要出现在 `capabilities --json` 里，标明来源**：`kind="mcp_client"` 的条目带
+  `origin: "external_mcp_server"` 字段，以及上一次发现到的 `mcpTools` 清单——
+  一眼能看出这份能力不是仓库代码，是外部进程提供的。
+- **不挡什么（如实写）**：
+  - **子进程一旦启动，它能做任何该 UID 能做的事**——读写文件、发网络请求、
+    `fork` 更多进程。`stdio` transport 本身不是沙箱，只是一条通信管道；
+    `--trust` 挡的是"未经确认的静默执行"，不是"确认后代码干了什么"，与②的边界
+    完全一致。
+  - **执行记录的"必然落盘"只覆盖经过 `ExternalMcpSession.call()` 这条路径的调用**。
+    如果收口方在别处直接 `new Client(...)` + `StdioClientTransport` 连接同一个
+    外部 server，绕开这个模块自己发起调用，那次调用不会被记录——这和"扩展绕开
+    `ExtensionContext` 直接 `import` 拿凭据"是同一类边界：结构性保证覆盖"遵守
+    约定的调用方"，不是运行时隔离。
+  - **`mcp.json` 的 `--cmd` 解析是朴素空白切分，不是 shell 解析**，也不会对
+    `command` 本身做白名单校验——`command` 可以是任意本地可执行文件，这正是
+    "启动任意 command 等价于本地任意命令执行"的字面意思，`--trust` 挡的是
+    "没看一眼就被动执行"，不是"这个命令能不能被信任"这个判断本身（那是人的责任）。
+  - **`ext verify`（kind=mcp_client）不是沙箱**——它验证"外部 server 是否符合
+    最基本的 MCP 契约、声明的 `verifySample` 能否真的往返"，往返调用本身就需要
+    真的执行外部代码，不提供执行隔离。且它**没有**接入真实的 CredentialStore
+    （`ext verify` 是独立 CLI 调用，不经过 daemon）——如果 manifest 声明了
+    `requires.credentials`，verify 时那些变量不会被注入子进程，这是已知限制。
+
+**接进 ToolBus 的方式**（`backend/src/agents/toolbus.ts` 不在本节涉及的 lane 名下，
+只读复用）：`mcp_client.ts` 导出 `ExternalToolRegistry`（工具名 `mcp:<extension>:<tool>`
+的路由表）与 `createExternalToolRunner()`（一个 `async` 工厂，返回"`McpToolRunner`
+的实例，但外部工具名路由给 registry"）。daemon 接线时，把构造 `AgentToolBus` 用的
+`options.runner` 从 `new McpToolRunner(...)` 换成
+`await createExternalToolRunner(sameOptions, registry)`——`AgentToolBus` 已有的
+授权 / 预算 / 审计三层不需要改一行代码，就对外部工具名同样生效。
+
+## 9. `ext verify`：能装上不等于装好了（AD-11）
+
+```bash
+spark-research ext verify ~/.spark-research/extensions/<name>
+```
+
+四类扩展各自跑什么、直接复用了哪套既有投资：
+
+| kind | 跑什么 | 复用的既有投资 |
+|---|---|---|
+| `connector` | 100 并发参数映射一致性（串行 vs 并行逐位比对）+ 凭据不进出站请求 + 错误消息不回显响应体 | `tests/concurrency/connector_race.test.ts` 的手法（v0.3.0 修 P0 竞态的第二次回本）+ W1-c 的 SSRF 白名单（装载路径真的会走到 `assertOutboundUrlAllowed`） |
+| `platform` | 生成一个临时 `*.test.ts`，原样 `import { describeSimulationContract }` 并喂给扩展提供的 `contract.json`（`okSpec`/`equivalentSpec`/…/`runTimeoutMs`），spawn 一次 `bun test` 跑完整 13 条契约断言 | `tests/helpers/simulation_contract.ts`（AD-4"两个实现验证接口"的投资在这里第二次回本，跑的断言逻辑一个字都没重写） |
+| `rule` | 静态扫描源码有没有明显的 IO / 非确定性原语（`node:fs`/`fetch`/`Math.random()`…）+ 用扩展声明的 `VERIFY_SAMPLE_INPUT` 调用 `evaluate()` 两次比对结果 | —— |
+| `skill` | `SKILL.md` frontmatter schema 校验（`backend/src/skills/frontmatter.ts`，P9 真源）+ `validation[]` 声明的 e2e 文件实际存在且 `bun test` 能跑通 | P9 的 frontmatter 校验器 |
+| `backend`（WetLabBackend） | **已知限制**：只做结构检查（能 import、导出 `{id, description, available(), execute()}`），不跑 `backend/src/lab/` 的完整契约测试——那套依赖真实 `opentrons.simulate` 且不在本节所有权范围内 | —— |
+| `mcp_client` | `mcp.json` 校验 + 真实连接一次外部 server 并 `listTools()`（工具清单非空、名字合法）+ 如果声明了 `verifySample`，真实调用一次并确认往返成功、且 `.mcp_calls.jsonl` 确实新增了一条执行记录（provenance 差异化点的契约化验收） | —— （这一档没有可复用的既有投资：连接一次外部进程是这类扩展契约测试无法绕开的必然要求，与 platform/skill verify"必须执行扩展代码"是同一类必然性） |
+
+`ext verify` 的结论会缓存（扩展目录下的 `.verify.json`，记录结论 + 被校验对象的
+sha256），`ext load` 装载时会拿当前内容的指纹跟缓存比对：**从未验证过**、
+**验证过但内容已变化**、**上次没通过**，三种情况都会在装载时打印一条不阻断装载的
+`⚠️` 警告——AD-11 的字面意思是"能装上不算装好"，所以装载器选择"仍然装上，但把
+这件事大声告诉你"，而不是替你做"要不要用一个没验证过的扩展"这个决定。
+
+### 安全边界的准确表述（不重蹈评审 S-3"沙箱一行逃逸"）
+
+- **`ext verify` 不是沙箱，是契约测试**。跑 `platform`/`rule`/`skill` 的 verify 本身
+  就需要执行扩展代码（这是运行时契约测试的本质要求），它验证的是"这段代码的行为
+  符不符合契约"，不提供任何执行隔离。
+- **`--trust` 挡的是"未经确认的静默执行"，不是代码本身的行为**。信任了的扩展与
+  仓库代码同权限、同 UID，能读写文件、发任意网络请求。
+- **声明式 connector（强度①）不执行任意代码，这是它比 TS 扩展更安全的地方**——
+  但它的 SSRF 防护是字面量白名单，不防 DNS rebinding（继承自 W1-c 的已知限制，
+  见 `backend/src/connectors/manifest.ts` 头部注释）。
+- **`ExtensionContext` 挡得住"扩展代码规规矩矩地"通过 context 访问凭据/工具时
+  越界的请求**（声明外的 id/工具名会被拒绝），**挡不住**扩展绕过 context、直接
+  `import` 其它模块自己拿凭据/发请求——TS 扩展与仓库代码同权限，这条防线是
+  "对遵守约定的代码的结构性约束"，不是运行时隔离。
+
+## 10. 提交前自查
 
 ```bash
 bun run typecheck

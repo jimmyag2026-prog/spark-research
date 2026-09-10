@@ -1,0 +1,8 @@
+{
+  "id": "ssrf-internal-ip",
+  "baseUrl": "http://169.254.169.254/latest/meta-data/",
+  "description": "阴性对照①：baseUrl 指向云 metadata 服务的 link-local 地址，必须被 SSRF 白名单在编译期拒绝",
+  "tools": [
+    { "name": "read", "description": "读云 metadata（应被拒绝，永远不该编译成功）", "endpoint": "/" }
+  ]
+}

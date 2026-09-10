@@ -8,10 +8,18 @@ import { jsonBody, optionalString, queryNumber, queryString, requireString } fro
 
 // 会话端点（chat / coexplore）与任务流。
 //
-// **关于「流式」的诚实口径**：orchestrator 目前不是 token 级流式的（模型调用一次性返回）。
-// 所以 SSE 上跑的是**生命周期事件**：start → progress（阶段）→ result（完整正文）→ done。
-// 传输层已经就位，将来 agent 支持增量输出时直接往 `delta` 事件里塞即可，
-// 不会因此改变前端的连接方式。把已完成的正文切成假 token 往外吐是自欺，不做。
+// **关于「流式」的诚实口径（W1 期）**：orchestrator.chat() 本身不是 token 级流式的——
+// `processRequest` 内部做任务分解 + 执行，往往是不止一次模型调用，`chat()` 也没有
+// 接受 onDelta 回调的口子（backend/src/agents/** 不属于本 lane 所有权，这条 lane
+// 不能替它加）。所以**权威回答**仍然只能是 start → progress → result → done 这条
+// 生命周期事件链，`result` 依旧是一次性给完整正文——这一点没有变，也是
+// `tests/unit/server_session.test.ts` 里「依次发 start → progress → result → done」
+// 那条既有断言继续成立的原因（下面新加的 `delta` 事件只在真的发生流式调用时才会出现，
+// 现有的 fake LLM 从不触发 onDelta，序列不受影响）。
+//
+// **W3 收口**：`chat()` 接受可选 `onDelta`（W3-a 交付），接到 `summarize()`——
+// 唯一产出用户可见 `summary` 的 LLM 调用点。于是 `delta` 事件吐的就是**权威答案本身**
+// 的增量。W2-d 当初那次「另发一次裸模型调用做预览」的绕道已删除（见下方 POST 处理器）。
 
 function parseMode(raw: string | undefined): SessionMode | undefined {
   if (raw === undefined) return undefined;
@@ -58,6 +66,23 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     const message = requireString(body, "message");
     const mode = parseMode(optionalString(body, "mode")) ?? "chat";
     const model = optionalString(body, "model");
+    // 预览流默认开；调用方可显式 `{"preview": false}` 关掉（省一次模型调用——见上面
+    // 大注释的代价说明）。只在 chat 模式尝试：coexplore 的 prompt/grounding 装配更复杂
+    // （CoExploreSession，见 agents/orchestrator.ts），本 lane 不重新拼一份。
+    // **W2 收口裁定：预览流默认关闭（`preview: true` 才开）。**
+    //
+    // **W3 收口：预览流已删除，改用 orchestrator 自己的 onDelta。**
+    //
+    // W2-d 当初为了做 SSE，在权威调用之外**另发一次裸模型调用**做「预览流」——
+    // 那次调用发的是 `[{role:"user", content: message}]`（无 system prompt、无技能上下文、
+    // 无 plan），跟走完整 orchestrator 管线（plan → execute → review）的权威答案
+    // **是两个不同的回答**，不是同一个回答的两个阶段。用户会把先出现的那段读成答案，
+    // 然后它被换掉；附带每次 chat 多花一次模型调用。W2 收口先把它默认关闭，
+    // 根治留给 W3-a——现在 W3-a 已经让 `chat()` 接受可选的 `onDelta`，
+    // 接到 `summarize()` 那一个 LLM 调用点（唯一产出用户可见 `summary` 的地方）。
+    //
+    // 于是这里吐出去的 `delta` **就是权威答案本身**在生成过程中的增量，
+    // 不再需要「先给一段别的、再整体替换」。前端相应地改成累加即最终文本。
 
     return sseResponse(
       (sender) => {
@@ -65,7 +90,17 @@ export function sessionRoutes(ctx: ServerContext): Hono {
         void (async () => {
           try {
             sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" });
-            const result = await ctx.agent.chat({ sessionId, message, model, mode });
+            const result = await ctx.agent.chat({
+              sessionId,
+              message,
+              model,
+              mode,
+              // 权威答案的流式增量。provider 不支持流式、或注入的 fake LLM 不调 onDelta 时，
+              // 这里就是从不触发——SSE 退化成「只有 result」，与接线前行为一致，不报错。
+              onDelta: (chunk: string) => {
+                if (!sender.closed) sender.send("delta", { chunk });
+              },
+            });
             sender.send("result", {
               sessionId,
               mode,

@@ -98,6 +98,18 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V24 | `RecordIntegrityError` 没有恢复路径 | P10 lane D-d 新增的 record 完整性哈希校验，检测到被篡改的记录只能拒绝信任，没有「人工确认后修复」的入口，只能用 `RecordStore` 原始接口手工处理 |
 | V25 | `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」
 | V26 | connector 限速按 host 合池 | **2026-09-10 新登记**（来源：v0.5 connector 扩展调研）。现状：connector 层只有礼貌头（`politeness.ts`），**没有任何限速器**。pubmed 与 ncbi 已共享 NCBI eutils 的主机级预算，v0.5 计划新增的 ClinVar / GEO 也打同一主机——四个 connector 各自为政会集体被 429。限速器若做必须按 host 键控合池，不按 connector。去向：v0.5 集成 eutils 系新 connector 时同批做 |
+| V27 | **单二进制里 `import.meta.dir` 全线失效（阻塞 npx 分发）** | v0.4 W1 收口实测：`bun build --compile` 的产物里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，**任何靠它拼路径的代码在二进制里都读不到文件**。现状 **23 处、17 个文件**（`kernels/manager.ts` 找 python 脚本、`lab/wet_backend.ts` 找 `opentrons_backend.py`、`agents/*` 找 prompt `.txt`、`simulation/*` 找适配器脚本、`skills/frontmatter.ts`、`scaffold/templates.ts`、`server/app.ts` 找前端产物…）。已修两处（`index.ts` 与 `version.ts` 改静态 import，并加了版本号一致性断言）；**其余未修，后果是二进制里干湿实验 / prompt 加载 / 脚手架 / 前端托管大概率全坏**。**W1 收口实测（比初判严重）**：`bun build --compile` **不嵌入非 JS 资产**（`.sql` / `.py` / prompt `.txt`），于是二进制里凡是要读资产的命令全部 ENOENT——
+```
+$ ./dist/spark-research project new x   → ENOENT: /$bunfs/root/schema.sql
+$ ./dist/spark-research doctor          → /$bunfs/root/opentrons_backend.py: No such file
+$ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
+```
+也就是说**二进制能列连接器，却建不了项目**——干不了任何实事。<br>**这是 v0.4「一条 npx 命令」交付的硬阻塞**，发 v0.4.0 前必须解决，或明确降级承诺（只发 npm 包、不发单二进制）。修法方向：Bun 的 embedded files、资产改静态 import、或运行期解包到可写目录。 |
+| V28 | 二进制产物没有冒烟测试 | W1-d 的测试全部跑在 `bun backend/src/index.ts` 上，**二进制是另一个运行时**，于是 V27 那类问题测不出来（版本号不一致是主会话手工跑二进制才发现的）。构建只要约 300ms，值得加一条 CI 冒烟：构建 → `--version` / `capabilities --json` / `doctor` 三条路径 → 断言版本号三处一致且不为 `0.0.0`。 |
+| V29 | npm 打包字段未完成 | W1-d 原计划做 `package.json` 的 `files` / `engines` / `prepublishOnly`，但主会话在额度中断后把它的剩余范围收窄成「只补文档」，于是这部分**既没做完也没被静默丢掉**——W1-d 如实记进了 `docs/INSTALL.md` 的 TODO。`npx spark-research` 这条路径要真跑通需要补上。 |
+| V30 | **删除论文这条路今天不可达，孤儿对账扫描也只被测试调用** | W4-b 按 E-6 交付了 `retractOrphanRecords()`（把指向已删论文的 record 标 `retracted`），但收口核查发现两件事：① `LibraryStore.remove()` **零生产调用方**——用户today根本删不掉论文，所以「删论文留孤儿」这个场景不可达；② `retractOrphanRecords()` 也只被测试引用。叙事门禁看不见它，因为孤儿检测是**文件粒度**而 `reading.ts` 整体有生产调用方（W3-c 标过的表达力上限）。**处置：将来加删除入口时必须同时接上这个对账扫描**；或把它做成一条维护命令让它可达。发布前不加新入口——那属于没有 lane 测试纪律兜底的仓促改动。 |
+| V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 |
+| V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 

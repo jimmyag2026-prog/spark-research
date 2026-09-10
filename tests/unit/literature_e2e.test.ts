@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ConnectorRegistry } from "../../backend/src/connectors/registry";
+import type { FixtureMode } from "../../backend/src/http/fixture";
 import { exportLibrary } from "../../backend/src/literature/export";
 import { LibraryStore, paperFrom } from "../../backend/src/literature/library";
+import { LiteratureSearcher } from "../../backend/src/literature/search";
 import { PdfDownloader } from "../../backend/src/literature/pdf";
 import { runLitCommand } from "../../backend/src/literature/cli";
 import { ProjectManager } from "../../backend/src/project/manager";
@@ -18,6 +21,26 @@ import {
   fixtureHttp,
   searcherWith,
 } from "../helpers/literature_scenario";
+
+// E-4 之后 Semantic Scholar 需要凭据才会真的发起请求（无 key 直接判 skipped，
+// 不再白撞 429）。下面两个用例要复现的是 fixture 里真实录到的状态——「配置了
+// 凭据、但 S2 仍然 429」——所以本地建一个带假 S2 凭据的 registry，而不是用共享
+// helper 的 `searcherWith()`（那个不带凭据，会让 S2 直接被判 skipped，永远不会
+// 打到 fixture 里那条 429 录制，把这两个用例原本要测的「失败源如实标注」这件事
+// 悄悄测没了）。`literature_scenario.ts` 是跨 lane 共享文件，不在本 lane 的文件
+// 所有权内，所以在这里（本文件是 literature*.test.ts，本 lane 拥有）本地实现，
+// 不去改那个共享 helper。
+function searcherWithS2Credentials(cassette: string, mode: FixtureMode): LiteratureSearcher {
+  return new LiteratureSearcher(
+    new ConnectorRegistry({
+      http: fixtureHttp(cassette, mode),
+      credentials: {
+        has: (id) => id === "semanticscholar",
+        get: (id) => (id === "semanticscholar" ? { api_key: "fixture-test-key" } : null),
+      },
+    }).registerBuiltins(),
+  );
+}
 
 // e2e 回放（无网络，CI 常驻）：跨源检索 → 去重合并 → 入库 → 引文边 → PDF → 导出。
 // 所有响应来自 tests/fixtures/literature/*.json，由 tests/integration/literature_record.test.ts
@@ -42,7 +65,7 @@ function newProject(slug = "e2e") {
 
 describe("e2e 回放 · 检索 → 去重 → 入库 → 导出", () => {
   test("跨源检索回放：三源成功、Semantic Scholar 429 被如实标注为 failed", async () => {
-    const result = await searcherWith(CASSETTES.search, "replay").search(SEARCH_QUERY, {
+    const result = await searcherWithS2Credentials(CASSETTES.search, "replay").search(SEARCH_QUERY, {
       sources: SEARCH_SOURCES,
       perSource: PER_SOURCE,
     });
@@ -194,7 +217,7 @@ describe("e2e 回放 · 检索 → 去重 → 入库 → 导出", () => {
       manager,
       out: (l: string) => out.push(l),
       err: (l: string) => err.push(l),
-      searcher: searcherWith(CASSETTES.search, "replay"),
+      searcher: searcherWithS2Credentials(CASSETTES.search, "replay"),
     };
 
     expect(await runLitCommand(["search", SEARCH_QUERY, "--limit", String(PER_SOURCE), "--add", "--tag", "bg"], deps)).toBe(0);

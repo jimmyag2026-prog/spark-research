@@ -5,6 +5,7 @@ import { ArtifactStore } from "../artifacts/store";
 import { RecordStore } from "./records";
 import { assertSlug, isValidSlug, ProjectError, slugify } from "./slug";
 import type { ProjectMeta, ProjectPaths, ProjectStatus, WorkspaceState } from "./models";
+import { FindingsStore } from "../reviewer/findings_store";
 
 export const DEFAULT_PROJECT_SLUG = "default";
 export const PROJECT_SCHEMA_VERSION = 1;
@@ -23,6 +24,7 @@ export class Project {
   private metaCache: ProjectMeta;
   private recordStore?: RecordStore;
   private artifactStore?: ArtifactStore;
+  private findingsStore?: FindingsStore;
 
   constructor(meta: ProjectMeta, paths: ProjectPaths) {
     this.slug = meta.slug;
@@ -46,6 +48,15 @@ export class Project {
       });
     }
     return this.artifactStore;
+  }
+
+  /**
+   * v0.4 W3 收口：findings 状态机的存储（W1-b 交付）。
+   * 与 records.db 同级的独立 db——W1-b 刻意不与 RecordStore 共表共连接。
+   */
+  findings(): FindingsStore {
+    this.findingsStore ??= new FindingsStore(join(this.paths.root, "findings.db"));
+    return this.findingsStore;
   }
 
   // 关闭已打开的存储句柄，便于测试中做「关闭 → 重开」的持久化往返。

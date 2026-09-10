@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ArtifactVersion } from "../artifacts/models";
+import type { Usage } from "../llm/types";
 import {
   EDGE_TYPES,
   EVIDENCE_LABELS,
@@ -65,6 +66,64 @@ export class RecordValidationError extends Error {
     super(`RecordValidation: ${message}`);
     this.name = "RecordValidationError";
   }
+}
+
+// ── W3-b · 第 9 类 record：`agent_run`（帧级记账，DEVELOPMENT_PLAN_v0.4.md §4.3） ──
+//
+// `RECORD_TYPES`/`RecordType`（`./models`）是跨多条 lane 共享的文件，本 lane
+// （W3-b，文件所有权只到 `records.ts`）不持有它的编辑权——同一波次里其他 lane
+// 也在并行改代码，抢着改共享常量表只会造成合并冲突。所以这里不把 "agent_run" 塞进
+// `RECORD_TYPES` 数组，而是让它走一条**平行窄口** `createAgentRun()`：校验规则单独写，
+// 但落库复用与 `create()` 完全相同的一段 INSERT（见下面私有的 `insertRow()`，
+// `create()` 自己也改造成调它）——同一张表、同一套默认 `rev`、同一次 `get()` 回读，
+// 不是分叉出第二套写入路径。等收口时主会话把 "agent_run" 并入 `RECORD_TYPES`，
+// 这条窄口可以原样合并回 `create()` 的 type 分支，调用方（`agents/ledger.ts`）的
+// 接口不需要跟着变。
+export const AGENT_RUN_RECORD_TYPE = "agent_run" as const;
+
+// usage 的形状直接复用 `llm/types.ts` 的 `Usage`——不重新定义一遍
+// `{inputTokens, outputTokens, costUsd, usageUnavailable?}`，那正是 P13 帧级账本
+// 要求的形状，两处定义迟早漂移。诚实铁律（拿不到 usage/单价就是 `costUsd: null`，
+// 绝不填 0）由 `Usage` 类型自己的注释钉住，本文件只做「形状对不对」的运行时校验。
+export interface AgentRunRecordInput {
+  agent: string;
+  model: string;
+  provider: string;
+  systemHash: string;
+  promptHash: string;
+  usage: Usage;
+  toolCalls: number;
+  stopReason: string;
+  /** 顶层 run 传 `null`/不传；子代理 run 挂父 run 的 record id（边由调用方另建，见 ledger.ts）。 */
+  parentRunId?: string | null;
+  /** 调用方（`AgentRunLedger`）算好的额外字段，目前只有 `integrityHash`。浅合并进 metadata。 */
+  extraMetadata?: Record<string, unknown>;
+  title?: string;
+  content?: string;
+  evidence?: EvidenceLabel;
+  origin?: RecordOrigin;
+  createdAt?: string;
+}
+
+function validateAgentRunInput(input: AgentRunRecordInput): void {
+  if (!input.agent) throw new RecordValidationError("agent_run 记录需要非空 'agent'");
+  if (!input.model) throw new RecordValidationError("agent_run 记录需要非空 'model'");
+  if (!input.provider) throw new RecordValidationError("agent_run 记录需要非空 'provider'");
+  if (!input.systemHash) throw new RecordValidationError("agent_run 记录需要非空 'systemHash'");
+  if (!input.promptHash) throw new RecordValidationError("agent_run 记录需要非空 'promptHash'");
+  if (!input.usage) throw new RecordValidationError("agent_run 记录需要 'usage'");
+  if (typeof input.usage.inputTokens !== "number" || typeof input.usage.outputTokens !== "number") {
+    throw new RecordValidationError("agent_run 记录的 usage.inputTokens/outputTokens 必须是 number");
+  }
+  if (input.usage.costUsd !== null && typeof input.usage.costUsd !== "number") {
+    throw new RecordValidationError(
+      "agent_run 记录的 usage.costUsd 必须是 number 或 null（诚实铁律：拿不到就是 null，不许填 0 冒充免费）",
+    );
+  }
+  if (!Number.isInteger(input.toolCalls) || input.toolCalls < 0) {
+    throw new RecordValidationError("agent_run 记录的 toolCalls 必须是非负整数");
+  }
+  if (!input.stopReason) throw new RecordValidationError("agent_run 记录需要非空 'stopReason'");
 }
 
 function mapRow(row: RecordRow): ResearchRecord {
@@ -157,8 +216,32 @@ export class RecordStore {
       throw new RecordValidationError("record type 'artifact' requires artifactId");
     }
 
+    return this.insertRow({
+      type,
+      title: input.title ?? "",
+      content: input.content ?? "",
+      evidence,
+      origin,
+      artifactId,
+      metadata: input.metadata ?? {},
+      createdAt: input.createdAt,
+    });
+  }
+
+  // W3-b：`create()` 与 `createAgentRun()` 共用的底层写入——同一张表、同一段 INSERT、
+  // 同一个 `get()` 回读，两条窄口只在**校验**上分叉，落库路径永远是这一处。
+  private insertRow(row: {
+    type: string;
+    title: string;
+    content: string;
+    evidence: EvidenceLabel;
+    origin: RecordOrigin;
+    artifactId: string | null;
+    metadata: Record<string, unknown>;
+    createdAt?: string;
+  }): ResearchRecord {
     const id = randomUUID();
-    const createdAt = input.createdAt ?? new Date().toISOString();
+    const createdAt = row.createdAt ?? new Date().toISOString();
     this.db
       .query(
         `INSERT INTO records
@@ -169,19 +252,56 @@ export class RecordStore {
       .run(
         id,
         this.project,
-        type,
-        input.title ?? "",
-        input.content ?? "",
-        evidence,
-        origin.kind,
-        origin.ref ?? null,
-        origin.connector ?? null,
-        origin.sessionId ?? null,
-        artifactId,
-        JSON.stringify(input.metadata ?? {}),
+        row.type,
+        row.title,
+        row.content,
+        row.evidence,
+        row.origin.kind,
+        row.origin.ref ?? null,
+        row.origin.connector ?? null,
+        row.origin.sessionId ?? null,
+        row.artifactId,
+        JSON.stringify(row.metadata),
         createdAt,
       );
     return this.get(id)!;
+  }
+
+  // W3-b · 第 9 类 record 的写入窄口——见上面 `AGENT_RUN_RECORD_TYPE` 大注释：
+  // 不动 `RECORD_TYPES`，校验在 `validateAgentRunInput()` 单独做，落库走
+  // 与 `create()` 完全相同的 `insertRow()`（同一套 rev 默认值、同一张表）。
+  createAgentRun(input: AgentRunRecordInput): ResearchRecord {
+    validateAgentRunInput(input);
+    const evidence = input.evidence ?? "observed";
+    if (!EVIDENCE_LABELS.includes(evidence)) {
+      throw new RecordValidationError(`unknown evidence label '${evidence}'`);
+    }
+    const origin: RecordOrigin = input.origin ?? { kind: "session" };
+    if (!ORIGIN_KINDS.includes(origin.kind)) {
+      throw new RecordValidationError(`unknown origin kind '${origin.kind}'`);
+    }
+    const metadata: Record<string, unknown> = {
+      agent: input.agent,
+      model: input.model,
+      provider: input.provider,
+      systemHash: input.systemHash,
+      promptHash: input.promptHash,
+      usage: input.usage,
+      toolCalls: input.toolCalls,
+      stopReason: input.stopReason,
+      parentRunId: input.parentRunId ?? null,
+      ...(input.extraMetadata ?? {}),
+    };
+    return this.insertRow({
+      type: AGENT_RUN_RECORD_TYPE,
+      title: input.title ?? `agent_run:${input.agent}`,
+      content: input.content ?? `${input.agent} · ${input.provider}/${input.model} · stop=${input.stopReason}`,
+      evidence,
+      origin,
+      artifactId: null,
+      metadata,
+      createdAt: input.createdAt,
+    });
   }
 
   // 便捷入口：把一个 artifact 版本登记成证据图上的 artifact record。
