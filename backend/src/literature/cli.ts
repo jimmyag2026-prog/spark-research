@@ -4,8 +4,9 @@ import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
 import { LLMRouter } from "../llm/router";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
+import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
 import { LlmCitationJudge } from "../reviewer/citation_judge";
-import { citationIntegrity, type CitationJudge } from "../reviewer/rules";
+import { CITATION_RULE, citationIntegrity, type CitationJudge } from "../reviewer/rules";
 import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
 import { LibraryStore, type LibraryPaper } from "./library";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, type LiteratureSource, type Paper } from "./models";
@@ -374,6 +375,42 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         for (const finding of check.findings) {
           out(`  ${finding.severity === "hard" ? "⛔" : "⚠️ "} ${finding.message}`);
         }
+
+        // W3-c：把这次核验落成一条 observation record——W2-b 的 literature-review 契约
+        // （agents/contract.ts，只读）的 citations_verified stage 判据是「存在
+        // metadata.kind === CITATION_INTEGRITY_REVIEW_KIND 的 observation record，且最近一次
+        // hardFindingCount === 0」；此前这条命令只把结果打印到 stdout，不落证据图，该 stage
+        // 因此在生产里永远过不了（详见 docs/devlog/W2-b.md「citations_verified 的已知缺口」
+        // 一节留下的交接快照，本 lane 原样接上）。
+        // metadata 直接内联在 records.create() 调用里，不拆一个中间变量——这不只是风格
+        // 选择：tests/unit/narrative_parity.test.ts 新增的「存储层生产写入方」门禁核实的
+        // 就是「.create({ ... kind: CITATION_INTEGRITY_REVIEW_KIND ... }) 是不是同一次调用」，
+        // 拆成中间变量会让这条结构性核实变得脆弱（regex 分不清「变量造出来了」和「变量真的
+        // 被传给了 create()」），直接内联让「构造」与「落库」在源码里是同一个不可分割的
+        // 调用表达式，判据不需要做变量流追踪就能可靠核实。
+        const citationReviewRecord = records.create({
+          type: "observation",
+          title: `citation-integrity 核验：${draft.recordId ?? draft.artifactId ?? "草稿未入库"}`,
+          content:
+            `解析引用 ${check.citations.length} 处，判定 ${check.judgedCount} 处，` +
+            `${hard.length} 条 hard finding，${soft.length} 条 soft finding`,
+          evidence: "computed",
+          origin: { kind: "session", sessionId: flagString(flags.session) ?? null, ref: draft.artifactId ?? null },
+          // RecordInput.metadata 是 Record<string, unknown>（schema 不区分 record 类型）；
+          // 用 `satisfies` 先按 CitationIntegrityReviewMetadata 做一次结构校验（少个字段/
+          // 类型错了在这里就编译不过），再降级成落库用的宽类型，不丢字段也不绕开类型检查。
+          metadata: ({
+            kind: CITATION_INTEGRITY_REVIEW_KIND,
+            checker: CITATION_RULE,
+            // draft.recordId 在这条路径上必然存在：本命令固定传了 records + artifacts 给
+            // ReviewDraftGenerator（见上面的构造），只有两者都缺失时 persist() 才会留空。
+            targetRecordId: draft.recordId ?? "",
+            hardFindingCount: hard.length,
+            softFindingCount: soft.length,
+          } satisfies CitationIntegrityReviewMetadata) as unknown as Record<string, unknown>,
+        });
+        out(`  citation-integrity record: ${citationReviewRecord.id}`);
+
         if (hard.length > 0) {
           err(`⛔ Review vetoed: ${hard.length} 条 hard finding（伪造/库外引用），草稿不可用于交付`);
         } else {
