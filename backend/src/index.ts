@@ -43,6 +43,9 @@ import { runInit } from "./onboarding/init";
 import { runDemo } from "./onboarding/demo";
 // W2-c（P15）：扩展装载与 ext verify。所有权在 backend/src/extensions/**。
 import { runExtCommand } from "./extensions/cli";
+// V45：外部 MCP 扩展的运行时接线。`./extensions/cli` 上面那一行本来就已经把
+// `extensions/loader.ts` 拉进模块图了，这里没有引入新的子图。
+import { ExternalMcpRuntime } from "./extensions/loader";
 // W1-d（B-a 打包分发）：原先是 `await Bun.file(join(import.meta.dir, "../../package.json")).json()`——
 // `bun build --compile` 产出的单二进制里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，
 // 运行期拼路径读不到真实的 package.json（ENOENT，`--version`/`--help`/`capabilities` 全部炸）。
@@ -327,6 +330,34 @@ function info() {
   daemon.kernelManager.dispose();
 }
 
+// ── V45：CLI 侧的外部 MCP 接线 ────────────────────────────────────────────────
+//
+// **构造这个对象是零 I/O 的**（见 `ExternalMcpRuntime` 的构造函数注释）：不 readdir、
+// 不 spawn。真正的发现与连接只发生在 agent 真的开跑的时候（`processRequest()` /
+// `runResearchLoop()`），而 `lit search`、`ext list`、`report export` 这些命令压根
+// 不会走到 `interactive()`/`chatOnce()`——它们连 `OrchestratorAgent` 都不构造。
+// 一个没装任何 `kind="mcp_client"` 扩展的用户，为这条流程付出的全部代价是：
+// 敲 `spark-research chat` 时多一次 `readdir(~/.spark-research/extensions)`。
+//
+// 凭据（AD-2）：用 daemon 自己持有的那一个 `CredentialStore` 实例的**引用**。
+// 取值路径没有变——仍然是 `resolveMcpChildEnv()` → `buildExtensionContext()`，
+// 「manifest 声明过 **且** `ext grant` 批准过」的交集才可能被解析出值，这里既没有
+// 拷贝任何凭据值，也没有绕过那道结构性拒绝。
+function externalMcpFor(daemon: SparkResearchDaemon): ExternalMcpRuntime {
+  return new ExternalMcpRuntime({
+    contextDeps: { credentials: daemon.credentials },
+    // 失败隔离的「可见记录」：坏扩展被跳过时，用户在终端上看得见，不是无声消失。
+    // （orchestrator 那边同时会往 session 执行日志里落一条，见 attachExternalMcp()。）
+    onEvent: (event) => {
+      if (event.phase === "failed") {
+        console.warn(`⚠️  外部 MCP 扩展 "${event.extension}" 连接失败，本轮跳过它：${event.reason}`);
+      } else if (event.phase === "skipped") {
+        console.warn(`⚠️  外部 MCP 扩展 "${event.extension}" 未装配：${event.reason}`);
+      }
+    },
+  });
+}
+
 async function interactive() {
   const auth = getApiKey();
   if (!auth) {
@@ -337,7 +368,7 @@ async function interactive() {
 
   const projects = new ProjectManager();
   const daemon = new SparkResearchDaemon({ projects });
-  const orch = new OrchestratorAgent(daemon, { projects });
+  const orch = new OrchestratorAgent(daemon, { projects, externalMcp: externalMcpFor(daemon) });
   const sessionId = `cli_${Date.now()}`;
   const project = orch.projectForSession(sessionId);
 
@@ -386,7 +417,7 @@ async function chatOnce(message: string) {
 
   const projects = new ProjectManager();
   const daemon = new SparkResearchDaemon({ projects });
-  const orch = new OrchestratorAgent(daemon, { projects });
+  const orch = new OrchestratorAgent(daemon, { projects, externalMcp: externalMcpFor(daemon) });
   const sessionId = `oneshot_${Date.now()}`;
   try {
     const result = await orch.chat({ sessionId, message });

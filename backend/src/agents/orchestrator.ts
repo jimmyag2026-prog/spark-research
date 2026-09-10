@@ -28,7 +28,20 @@ import { McpToolRunner, type McpServerOptions } from "../mcp/server";
 // `./types`/`./grants`/`./context`/`./paths`；它对 `../mcp/server` 的依赖是**动态**
 // import（见该文件头注释，理由与这里的 `McpToolRunner` 静态导入本身无关——那是
 // mcp_client.ts 自己为了不参与 capabilities/index.ts 那个环而做的选择）。
-import { createExternalToolRunner, type ExternalToolRegistry } from "../extensions/mcp_client";
+// V45：`emptyExternalMcpAttachment` 是值导入（"这一轮没有外部 MCP"的空句柄），其余三个
+// 是**纯类型**（`import type`，编译期擦除）。真正的实现 `ExternalMcpRuntime` 在
+// `extensions/loader.ts`，本文件**刻意不 import 它**——orchestrator 只认
+// `ExternalMcpProvider` 这个接口，于是 V45 没有给 orchestrator 的模块图添加**任何**
+// 新的运行时边（loader.ts 会把 connectors/manifest 等一串东西拖进来）。谁来 new 那个
+// 实现，是生产接线点（`index.ts` / `server/context.ts`）的事。
+import {
+  createExternalToolRunner,
+  emptyExternalMcpAttachment,
+  type ExternalToolRegistry,
+  type ExternalMcpProvider,
+  type ExternalMcpAttachment,
+  type EvidenceRecordSink,
+} from "../extensions/mcp_client";
 // V27/V33：prompt 内嵌副本 + 数据目录解析。dataDir() 是仓库既有的单一真源
 // （env SPARK_RESEARCH_DATA_DIR > ~/.spark-research），不另起一套。
 import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
@@ -152,6 +165,24 @@ export interface OrchestratorDeps {
    * 本 lane 的文件所有权范围内，本 lane 只交付"注入了就能用"这一半。
    */
   externalTools?: ExternalToolRegistry;
+  /**
+   * V45：外部 MCP 扩展的运行时提供方（生产实现是 `extensions/loader.ts` 的
+   * `ExternalMcpRuntime`）。注入之后，**每次 `runResearchLoop()`** 会：
+   *   开跑前 `attach()`：发现已装且已 --trust 的 `kind="mcp_client"` 扩展 → 各起一个
+   *   子进程 → 注册进 `ExternalToolRegistry` → 把**本 session 所属 project 的
+   *   RecordStore** 作为 `recordSink` 绑下去（V31 真正生效的那一刻）；
+   *   跑完（含抛异常的路径，走 `finally`）`close()`：把这一轮开的子进程全部收掉。
+   *
+   * **不注入 = 这条流程整个不存在**，行为与 v0.4 逐字节一致：零 `readdir`、零子进程。
+   * 这是惰性策略的第一层——`lit search` 之类的 CLI 根本不构造 orchestrator，
+   * 更走不到这里。上面那条"已知缺口"到此为止：`externalTools` 现在有生产调用方了，
+   * 就是下面的 `attachExternalMcp()`。
+   *
+   * 失败隔离：`attach()` 内部逐个扩展隔离，一个连不上只产生一条 `failed` 记录；
+   * 就算 provider 整个抛了，`attachExternalMcp()` 也会兜住并退回"这一轮没有外部工具"，
+   * **绝不**让一个坏扩展带走整轮 agent 运行。
+   */
+  externalMcp?: ExternalMcpProvider;
 }
 
 // skills 目录尚无正式实现，这里用内置目录作为 MVP stub；后续 skill 模块落地后替换。
@@ -248,6 +279,15 @@ export class OrchestratorAgent {
   private toolRunner?: McpToolRunner;
   // V32：注入了就在惰性构造工具面时改用 createExternalToolRunner()，见 getToolRunner()。
   private externalTools?: ExternalToolRegistry;
+  // V45：外部 MCP 的运行时提供方；不注入就整条流程不存在（见 OrchestratorDeps.externalMcp）。
+  private externalMcp?: ExternalMcpProvider;
+  // toolRunner 是调用方**显式注入**的还是本类惰性构造的。attachExternalMcp() 需要区分：
+  // 自己造的那一个可以为了接上新到手的 registry 而丢掉重造，别人注入的不能动
+  // （那是调用方指定的工具面，悄悄换掉它会让"注入 toolRunner"这个注入点失效）。
+  private readonly toolRunnerInjected: boolean;
+  // 一轮 agent 运行（= 一个 attachment 句柄）对应一个带外部工具的 runner。用 WeakMap
+  // 而不是实例字段：句柄被丢掉后条目自动消失，且并发的两轮各查各的，互不干扰。
+  private readonly runnerByAttachment = new WeakMap<ExternalMcpAttachment, Promise<McpToolRunner>>();
 
   constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
     this.daemon = daemon;
@@ -260,7 +300,11 @@ export class OrchestratorAgent {
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
     this.projects = deps.projects;
     this.toolRunner = deps.toolRunner;
+    this.toolRunnerInjected = deps.toolRunner !== undefined;
     this.externalTools = deps.externalTools;
+    // 只是记住这个引用——**不**在构造函数里 attach()。惰性策略 L0：构造一个
+    // OrchestratorAgent 不该产生任何文件系统扫描，更不该起子进程。
+    this.externalMcp = deps.externalMcp;
     // V33：默认值原本是 `join(import.meta.dir, "../../../workspaces")`。在 `bun build --compile`
     // 产物里 `import.meta.dir` 是 `/$bunfs/root`，往上跳三层被 node:path 归一化钉在文件系统
     // 真实的根——结果是 `/workspaces`，而下一行紧接着 `mkdirSync(..., {recursive:true})`。
@@ -303,6 +347,83 @@ export class OrchestratorAgent {
   }
 
   /**
+   * V45：一次 agent 运行的外部 MCP「开场」。返回的句柄必须在 `finally` 里 `close()`。
+   *
+   * 这个方法是**整条流程唯一的触发点**——惰性策略的第二层：没有它被调用，
+   * `ExternalMcpRuntime` 不会 readdir，更不会 spawn 任何东西。
+   *
+   * 三件事，顺序有意义：
+   *   1. 没注入 provider → 立刻返回空句柄。**零 I/O**，这是绝大多数调用方（所有测试、
+   *      所有没装 mcp_client 扩展的用户走的 CLI 路径）会走到的分支。
+   *   2. `attach()` 抛了 → 兜住，退回空句柄。provider 是外部实现（生产的那个自己已经
+   *      逐扩展隔离过一层，但接口不保证别的实现也这么老实），"坏扩展不许拖垮整轮"
+   *      这条要求在**接口边界**上也得成立，不能只指望实现方守规矩。
+   *
+   * **不改任何实例状态**（不动 `this.externalTools`、不动 `this.toolRunner`）：一个
+   * `OrchestratorAgent` 实例在 HTTP 服务下被多个 session 并发使用，把"这一轮连上了
+   * 哪些外部工具"写进实例字段会让并发的两轮互相污染。这一轮的外部工具面通过返回的
+   * 句柄逐层传参往下走，见 `runnerFor()`。
+   */
+  private async attachExternalMcp(sessionId: string, sink?: EvidenceRecordSink): Promise<ExternalMcpAttachment> {
+    if (!this.externalMcp) return emptyExternalMcpAttachment();
+
+    let attachment: ExternalMcpAttachment;
+    try {
+      attachment = await this.externalMcp.attach({ recordSink: sink });
+    } catch (error) {
+      this.record(
+        sessionId,
+        "external_mcp",
+        "attach-failed",
+        `外部 MCP 装配整体失败，本轮不带外部工具继续：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return emptyExternalMcpAttachment();
+    }
+
+    // 失败隔离的「可见记录」那一半：连不上/跳过的扩展逐条进执行日志。
+    // （另一半在证据图里——`recordSink` 让**调用**留痕；连接失败还没有调用可留痕，
+    //   所以它只能落在这里。这是一个如实记录的不对称，见 devlog。）
+    for (const failed of attachment.failed) {
+      this.record(sessionId, "external_mcp", "failed", `扩展 "${failed.extension}" 连接失败，已跳过：${failed.reason}`);
+    }
+    for (const skipped of attachment.skipped) {
+      this.record(sessionId, "external_mcp", "skipped", `扩展 "${skipped.extension}" 未装配：${skipped.reason}`);
+    }
+    if (attachment.connected.length > 0) {
+      this.record(sessionId, "external_mcp", "connected", `已连接外部 MCP 扩展：${attachment.connected.join(", ")}`);
+    }
+
+    return attachment;
+  }
+
+  /**
+   * V45 ③ 的落点：这一轮 agent 运行该用哪个工具面。
+   *
+   * - 这一轮没连上任何外部扩展（绝大多数情况）→ 原样走 `getToolRunner()`，包括它的
+   *   跨调用缓存。**没装扩展的用户这条路径与 v0.4 逐字节一致。**
+   * - 调用方显式注入了 `toolRunner` → 用它，不替换。注入 toolRunner 的语义是"工具面
+   *   由我指定"，为了塞外部工具把它换掉会让这个注入点失效（既有测试就靠它）。
+   * - 这一轮有外部扩展 → 现造一个 `createExternalToolRunner()`，把**这一轮自己那张**
+   *   registry 闭包进去。按句柄记忆（WeakMap），所以一轮里派多个子代理不会造多个
+   *   Hono app；不同轮各自独立，没有共享可变状态可污染。
+   */
+  private async runnerFor(external: ExternalMcpAttachment): Promise<McpToolRunner | null> {
+    if (!external.registry) return this.getToolRunner();
+    if (this.toolRunnerInjected && this.toolRunner) return this.toolRunner;
+    const cached = this.runnerByAttachment.get(external);
+    if (cached) return cached;
+    if (!this.projects) return null;
+    const pending = createExternalToolRunner({ projects: this.projects, agent: this }, external.registry);
+    this.runnerByAttachment.set(external, pending);
+    return pending;
+  }
+
+  /** 这一轮该额外授权给（非只读）子代理的外部工具名，见 `runResearchLoopWithProject()` 的长注释。 */
+  private externalGrantsOf(external: ExternalMcpAttachment): string[] {
+    return external.registry?.specs().map((s) => s.name) ?? [];
+  }
+
+  /**
    * `SubAgentDeps.llm` 要求 `Pick<LLMRouter, "call" | "capabilitiesFor">`（W2-a 的硬性
    * 依赖：不支持 tool calling 的模型必须走显式降级，见 sub_agent.ts 的 `runDegraded`），
    * 但 `OrchestratorDeps.llm` 的公开类型仍然只承诺 `"call" | "listModels"`——**刻意不
@@ -335,13 +456,41 @@ export class OrchestratorAgent {
     const project = this.projectForSession(sessionId);
     if (project) this.record(sessionId, "project", "bind", `session 归属 project '${project.slug}'`);
 
+    // ── V45：这条才是生产里真正的 agent 运行路径 ────────────────────────────
+    //
+    // 追查 V45 时发现的第二件事（写进 devlog）：`runResearchLoop()` 本身**也**没有
+    // 生产调用方——CLI 的 `chat`/交互模式、HTTP 的 `/session`、SSE 三条路走的全是
+    // `chat()` → `processRequest()`。只把外部 MCP 接在研究循环上，等于把一条已建好
+    // 的流程接到另一条同样没人走的流程上，V45 会以"接了但仍然没有生产调用方"的形式
+    // 复现它自己要解决的那个病。所以两条路都接：这里是生产路径，`runResearchLoop()`
+    // 是契约化研究循环。
+    //
+    // `recordSink` 用 `project?.records()`——session 没绑定 project 时传 undefined：
+    // 没有证据图可落，外部调用仍会照常落 `.mcp_calls.jsonl` 审计记录（W4-d 的行为），
+    // 不会因为"没有图"而静默不审计。
+    const external = await this.attachExternalMcp(sessionId, project?.records());
+    try {
+      return await this.processRequestWithTools(userMessage, sessionId, project, external, options);
+    } finally {
+      // 收尾（含中途抛异常的路径）：本轮开的子进程全部收掉，不留孤儿进程。
+      await external.close();
+    }
+  }
+
+  private async processRequestWithTools(
+    userMessage: string,
+    sessionId: string,
+    project: Project | null,
+    external: ExternalMcpAttachment,
+    options: { onDelta?: (chunk: string) => void } = {},
+  ): Promise<OrchestrationResult> {
     const skills = this.identifySkills(userMessage);
     const skillContext = this.loadSkillContext(skills);
     const plan = await this.plan(sessionId, userMessage, skills, skillContext);
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
-      execution.push(await this.executeTask(sessionId, task));
+      execution.push(await this.executeTask(sessionId, task, external));
     }
 
     // onDelta 只接到 summarize()——它是唯一产出「用户最终会看到的正文」的调用点
@@ -357,7 +506,7 @@ export class OrchestratorAgent {
       this.record(sessionId, "reviewer", "correct", `${hard} hard finding(s); planning corrections`);
       const fixes = this.planCorrections(review);
       for (const fix of fixes) {
-        execution.push(await this.executeTask(sessionId, fix));
+        execution.push(await this.executeTask(sessionId, fix, external));
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
       // 已知的、如实记录的简化，见 devlog（根治需要一个「本轮作废，重新开始」的边界信号，
@@ -488,7 +637,11 @@ export class OrchestratorAgent {
     return [{ id: "t1", kind: "analysis", description: "explore and analyze the request" }];
   }
 
-  private async executeTask(sessionId: string, task: PlannedTask): Promise<ExecutionOutcome> {
+  private async executeTask(
+    sessionId: string,
+    task: PlannedTask,
+    external: ExternalMcpAttachment,
+  ): Promise<ExecutionOutcome> {
     try {
       switch (task.kind) {
         case "analysis": {
@@ -546,13 +699,21 @@ export class OrchestratorAgent {
         }
         case "subagent": {
           const type = (task.params?.subagent ?? "execute") as SubAgentType;
-          const runner = await this.getToolRunner();
+          // V45 ③：连上了外部扩展就拿到带外部工具路由的 runner，否则原样走既有缓存。
+          const runner = await this.runnerFor(external);
           if (runner) {
             // W3-a 接线：走 W2-a 的真 tool loop（buildSubAgentSpec + runSubAgent），
             // 不再是裸 `llm.call` 零工具的旧路径——explore 真能检索，execute 真能跑
             // 工具。旧路径只在没有真实工具面（没注入 projects/toolRunner）时才退回，
             // 见下方 else 分支与 getToolRunner() 的注释。
-            const spec = buildSubAgentSpec(type);
+            // 外部工具名进 grants（口径与 runResearchLoopWithProject() 里那段长注释同源：
+            // 用户 --trust 过才连得上、名字带 mcp: 前缀不撞车、只读子代理不给）。
+            const externalGrants = this.externalGrantsOf(external);
+            const base = buildSubAgentSpec(type);
+            const spec =
+              externalGrants.length > 0 && !base.readOnly
+                ? buildSubAgentSpec(type, { grants: [...base.grants, ...externalGrants] })
+                : base;
             const result = await runSubAgent(spec, task.description, { llm: this.subAgentLlm(), runner });
             this.record(
               sessionId,
@@ -841,16 +1002,45 @@ export class OrchestratorAgent {
     }
     this.record(sessionId, "research", "start", `goal: ${goal.slice(0, 120)}`);
 
+    // ── V45：这一轮 agent 运行的外部 MCP 生命周期 ──────────────────────────────
+    //
+    // ④ 绑定：`recordSink` 就是**本 session 所属 project 的证据图**。V31 从"机制建好了
+    //    但没有生产调用方"变成"生产里真的会落"就是这一行——从这里往下，子代理每调
+    //    一次外部 MCP 工具，这个项目的证据图里就多一条 `external_tool_call` observation
+    //    （成功/失败/超时/未知工具四个分支都落，见 mcp_client.ts 的 `record()`）。
+    //    它是**审计**不是**进展**：`agents/contract.ts` 把这个 kind 排除出证据集合，
+    //    所以它不会让 `NoProgressGuard` 永远看到"有新增"——P12 那次 `agent_run` 事故
+    //    （停止条件被静默废掉、测试却全绿）的教训在这里不许重演，这条排除**不许动**。
+    //
+    // ⑤ 收尾：`finally`，不是正常返回路径。研究循环中途抛异常（planner 炸了、
+    //    contract 抛了、预算守卫抛了…）同样必须把子进程收掉，否则一次失败的 agent run
+    //    会在机器上留下一串没人收的孤儿进程。
+    const external = await this.attachExternalMcp(sessionId, project.records());
+    try {
+      return await this.runResearchLoopWithProject(sessionId, goal, project, external, options);
+    } finally {
+      await external.close();
+    }
+  }
+
+  private async runResearchLoopWithProject(
+    sessionId: string,
+    goal: string,
+    project: Project,
+    external: ExternalMcpAttachment,
+    options: ResearchLoopOptions,
+  ): Promise<ResearchLoopResult> {
     const q: EvidenceQuery = new RecordStoreEvidenceQuery(project.records());
     const contract: ResearchContract = (options.contract ?? createLiteratureReviewContract)(q);
     const guard = new NoProgressGuard(q.snapshot(), options.noProgressThreshold ?? 2);
     const maxRounds = options.maxRounds ?? DEFAULT_RESEARCH_MAX_ROUNDS;
 
-    const runner = await this.getToolRunner();
+    // V45 ③：这一轮如果连上了外部扩展，拿到的是把那张 registry 闭包进去的 runner。
+    const runner = await this.runnerFor(external);
     if (!runner) {
       throw new Error(
         `session '${sessionId}' 绑定了 project '${project.slug}'，但未能构造 McpToolRunner` +
-          `（这不应该发生——getToolRunner() 只在没有 projects 时才返回 null）。`,
+          `（这不应该发生——runnerFor()/getToolRunner() 只在没有 projects 时才返回 null）。`,
       );
     }
     const sessionBudget = new BudgetLedger(options.budget ?? {});
@@ -875,11 +1065,27 @@ export class OrchestratorAgent {
       stopReason: "done",
     });
 
+    // V45 ③ 的下游：已连上的外部工具名（`mcp:<扩展>:<工具>`）要进子代理的 grants 白名单，
+    // 否则 `AgentToolBus` 会以 `not_granted` 结构性拒绝——"连上了但一个都调不动"。
+    //
+    // 授权口径（明确的取舍，不是顺手放行）：能出现在这张表里的扩展，用户都已经
+    // 显式 `--trust` 过它的 `mcp.json`（TOFU，指纹变了要重新确认）——"启动这个外部
+    // 命令"这件事本身就是用户批准的。工具名带 `mcp:` 前缀，不可能与内置工具名撞车，
+    // 也不会顶替任何内置工具。`AgentToolBus` 的预算与审计两层照旧对它生效。
+    //
+    // 但**只给非只读子代理**：`review` 类子代理 `readOnly: true`，`sub_agent.ts` 的
+    // `assertReadOnlyGrants()` 会对不在只读白名单里的工具名直接抛错拒绝构造。外部工具
+    // 的副作用我们一无所知，把它当只读工具塞进去既过不了那道断言、本身也是错的判断。
+    const externalGrants = this.externalGrantsOf(external);
+
     const execute: RoundExecutor = async (plan) => {
       const outcomes: RoundOutcome[] = [];
       for (const item of plan) {
         const deps: SubAgentDeps = { llm: this.subAgentLlm(), runner, parentBudget: sessionBudget };
-        const result = await runSubAgentOfType(item.subagentType, item.task, deps);
+        const spec = buildSubAgentSpec(item.subagentType);
+        const overrides =
+          externalGrants.length > 0 && !spec.readOnly ? { grants: [...spec.grants, ...externalGrants] } : undefined;
+        const result = await runSubAgentOfType(item.subagentType, item.task, deps, overrides);
         // usage 直接透传子代理的实测值——AgentRunLedger 不重算 token/价格，只记账落图。
         // 拿不到 usage 时传 undefined，落成 UNKNOWN_USAGE（costUsd:null），**不是 0**。
         runLedger?.record({
@@ -887,7 +1093,7 @@ export class OrchestratorAgent {
           // SubAgentResult 不带 model/provider（W2-a 的形状）——用该类子代理的配置模型，
           // provider 留 "subagent"：真实 provider 在 LlmResponse 里，但子代理没把它透出来。
           // 这是已知的精度损失，比编造一个具体 provider 名诚实。
-          model: buildSubAgentSpec(item.subagentType).model,
+          model: spec.model,
           provider: "subagent",
           systemPrompt: item.subagentType,
           prompt: item.task,

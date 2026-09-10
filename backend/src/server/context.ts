@@ -22,6 +22,7 @@ import {
 import { DEFAULT_WET_BACKEND, wetBackend, type WetLabBackend } from "../lab/wet_backend";
 import { WetLabLoop } from "../lab/wet_loop";
 import type { ArtifactStore } from "../artifacts/store";
+import { ExternalMcpRuntime } from "../extensions/loader";
 import { TaskRegistry } from "./tasks";
 import { dataDir } from "../config";
 
@@ -121,10 +122,28 @@ export class ServerContext {
       })();
     this.agent =
       deps.agent ??
-      new OrchestratorAgent(new SparkResearchDaemon({ projects: this.projects }), {
-        projects: this.projects,
-        ...(deps.llm ? { llm: withListModels(deps.llm) } : {}),
-      });
+      (() => {
+        const daemon = new SparkResearchDaemon({ projects: this.projects });
+        return new OrchestratorAgent(daemon, {
+          projects: this.projects,
+          ...(deps.llm ? { llm: withListModels(deps.llm) } : {}),
+          // V45：HTTP 侧的外部 MCP 接线。构造是零 I/O 的——发现/连接只发生在
+          // `/session` 真的驱动一次 agent 运行的时候（`processRequest()`），
+          // `/lit/search` 之类的只读端点走不到这里。
+          //
+          // `pathOptions.root` 跟着 `deps.root` 走，与上面 TaskRegistry 同一条纪律
+          // （W4-c 在 devlog 里专门警告过的陷阱）：测试助手用 mkdtemp 传进来的临时
+          // 目录必须优先，否则 server_scenario/mcp_scenario 那一大票测试会去扫**用户
+          // 真实的** `~/.spark-research/extensions`——那里可能真的装着 mcp_client
+          // 扩展，测试就会在开发者的机器上 spawn 真实的外部进程。
+          externalMcp: new ExternalMcpRuntime({
+            pathOptions: deps.root ? { root: deps.root } : {},
+            // 凭据（AD-2）：daemon 持有的那一个 CredentialStore 的引用；取值路径不变
+            // （resolveMcpChildEnv → buildExtensionContext 的声明∩授权交集）。
+            contextDeps: { credentials: this.credentials() },
+          }),
+        });
+      })();
     this.sseHeartbeatMs = deps.sseHeartbeatMs ?? 15_000;
   }
 
