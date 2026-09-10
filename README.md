@@ -59,7 +59,19 @@ UI 上出现的每个动作在 CLI/API 里都有对应入口，反之亦然（�
 
 ## 安装
 
-需要 [Bun](https://bun.sh) ≥ 1.3 与 Python ≥ 3.11。
+三条路径的完整对比见 **[docs/INSTALL.md](docs/INSTALL.md)**。要点先说清楚：
+
+> ⚠️ **三条路径都需要预装 Bun。** 代码用了 `bun:sqlite`（整个持久层）、`Bun.spawn`、`Bun.serve`，
+> **在 node 下跑不起来**——所以 npm 包也只是把「clone 仓库」换成「npm install」，
+> 该装的 Bun 一样得装。
+>
+> 唯一不需要预装运行时的是单二进制，但它**目前只有浅层命令可用**：
+> `bun build --compile` 不嵌入 `.sql` / `.py` 这类非 JS 资产，于是
+> `spark-research project new` 直接 `ENOENT: /$bunfs/root/schema.sql`。
+> `--version` / `--help` / `capabilities` / `lit sources` 能跑，**建不了项目就干不了实事**。
+> 已登记 BACKLOG **V27**，v0.5 处理。**这一版不要把单二进制当主力分发形态。**
+
+下面是推荐路径（源码）。需要 [Bun](https://bun.sh) ≥ 1.3 与 Python ≥ 3.11。
 
 ```bash
 git clone <repo> && cd spark-research

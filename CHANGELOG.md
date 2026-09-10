@@ -5,7 +5,100 @@
 
 ---
 
-## [未发布] — v0.4.0 开发中
+## [0.4.0] — 2026-09-10
+
+**把「agent」这两个字变成真的。** v0.3 还清了并发与超时的债，v0.4 补运行时与生态这条最短的板：
+子代理真的会用工具、任务完成由证据图判定、模型中立从声称变成事实、扩展从「改仓库源码」
+变成「写一个 manifest 并过契约测试」。
+
+分五个波次并行开发（P11 + W1–W4，共 20 条 lane），单元测试 **905 → 1396**。
+
+### ⚠️ 发布时如实说明的三件事
+
+1. **单二进制只有浅层命令可用**（BACKLOG V27）。`bun build --compile` 不嵌入 `.sql` / `.py`
+   资产，`project new` 直接 `ENOENT: /$bunfs/root/schema.sql`。三条安装路径**都需要预装 Bun**
+   （代码用 `bun:sqlite` 等，node 跑不起来），npm 包只是换个装法。见 `docs/INSTALL.md`。
+2. **外部 MCP 工具调用的记录没进证据图**（V31/V32）。审计记录有了（四个分支都落，
+   对照钉死），但写在 `extensions/<name>/.mcp_calls.jsonl`——「外部工具调用天然进 provenance」
+   这个相对 OpenScience 的差异化点**只兑现了一半**。
+3. **湿实验安全门的两条规则仍在主管线上空转**（V25，v0.3 起未变）。
+   `concentration_limit` / `biosafety` 所需字段编译器从不产生，兜底是 `unconsumedWarnings`
+   强制告警。**对接物理设备的硬前置仍未满足。**
+
+### 新增
+
+**Agent Runtime（主线 A）**
+- **`AgentToolBus`**：授权 / 预算 / 审计三层，套在 P9 已有的进程内工具总线外，与 30 个 MCP 工具同源。
+  **AD-14 红线**：`MCP_WITHHELD` 的五个危险动作在 ToolBus 层硬拒，**子代理永远不能自批准**
+  （实测：把五个全塞进 grants 仍全部 denied，且它们不出现在给模型的工具清单里）
+- **真子代理 tool loop**：`SubAgentSpec`（每类独立模型 / grants / 预算 / readOnly）+ 真实工具调用循环。
+  `stopReason` 如实回流——**预算耗尽 ≠ 完成**。不支持 tool calling 的模型走显式降级路径
+- **Research Contract（AD-10）**：**完成判定由确定性代码对证据图查询得出，不由模型自报**。
+  `check(q: EvidenceQuery)` 的签名根本没有入口接收「模型怎么说」，`EvidenceQuery` 的类型是
+  `Pick<RecordStore, "list"|"get"|"edgesOf">`——写图在类型层不可能。
+  **两个参照系（Claude Science / OpenScience）都没有等价物**
+- **replan 循环**：观察结构化回流（不再是 200 字符截断）+ 三条并行停机条件
+  （`allDone` / `noProgress` / `budget`）
+- **`agent_run` 帧级记账**（第 9 类 record）：model / provider / systemHash / promptHash /
+  usage / toolCalls / stopReason，落进证据图 → report / lineage / UI 时间线免费获得。
+  同时补上 OpenScience 的 harness 指纹缺口
+- **findings 状态机**：`open → addressed → resolved → reflagged` + 复核闭环 + CLI
+  `review findings --open`（Claude Science 的 `host.findings()` 等价物）
+- **删除 `swarm`**（330 行，v0.1 遗留、生产零调用方、评审判定虚标）
+
+**模型中立（P11）**
+- 实装 provider **由 2 个增至 6 个**（openrouter / kimi / anthropic / openai / deepseek / qwen）
+  **+ 任意 OpenAI 兼容本地端点**。v0.3.1 实测缺口是「声明 6 个、`call()` 里只有 2 个」
+- **tool calling · 流式 · JSON 模式 · token 用量与成本核算**（单价表每条附来源与核实日期）
+- **provider 能力位进 `capabilities --json`**——外部 agent 选模型**之前**就知道能不能跑 tool loop
+
+**扩展性（主线 C）**
+- **扩展装载三强度**：声明式 connector manifest（不执行代码 + SSRF 白名单）/ TS 扩展（`--trust` + 指纹）
+  / **外部 MCP client**
+- **`ext verify`（AD-11）**：扩展「能装上」不算装好，**过得了对应契约测试**才算。
+  connector 复用 100 并发参数映射不变式，platform 直接复用 P5 的契约测试套件
+- **arXiv / PubMed 接入**（BACKLOG V1）——XML 解析走 TS 扩展
+
+**上手性（主线 B）**
+- `init` 向导 · **`demo` 离线示例（零网络零 key）** · `doctor` 环境诊断 · 依赖三档分层
+- **SSE 流式**：`delta` 是**权威答案本身**的增量
+- 长任务句柄落盘（V11）· MCP 进度回传（V17）· probe 缓存带 venv 失效判据（V18）
+
+**可信度基建**
+- **技能可达性门禁**：每个技能必须至少有一条可达入口（CLI / HTTP / MCP），登记表逐条去三处真源对账
+- **存储层写入方门禁**：新建的存储层必须有生产写入方——补孤儿检测的文件粒度盲区
+- **版本号单一真源断言** · **审批要求可交互终端（V19）**：`isTTY` 是内核层属性，
+  piping 一个 `yes` 进 stdin 绕不过去；CI 旁路默认拒绝，需 token + reason 且折进 decision record
+
+### 变更
+
+- **`LlmResponse` 改为可辨识联合（AD-13）**：`ok:false` 分支 `content` 是字面量 `""`、`error` 必填。
+  「失败但带内容」与「失败但没说原因」在编译期都不可能
+- 失败类型机器可读（`error.kind`），调用方区分失败不再需要读文案
+- 湿实验 `unconsumedWarnings` 接进 Web 审批弹窗（此前只有 CLI）
+- `protein-analysis` 补齐 CLI / HTTP / MCP 三个入口——此前 `capabilities` 带 `triggers`
+  对外广播它，却没有任何调用路径
+
+### 修复
+
+- **`mergeAuthors` 按下标配对 affiliation**（跨源作者顺序不同时张冠李戴）
+- **citation judge 降本**：按 `(key, sentence hash)` 去重 + 并发限流 + `response_format: json_object`
+- S2「无 key 自动降级」承诺兑现（此前每次白撞 429）；CJK bibtex key 保 Unicode
+- orchestrator 四处读 `res.content` 当诊断——AD-13 之后恒为 `""`，**那四条日志从 P11 起一直是空的**
+- 循环模块初始化链导致真实 CLI 启动崩溃（单测测不出，靠 `cli_entry.test.ts` 的真实进程冒烟抓到）
+
+### 测试
+
+单元 **905 → 1396**（0 fail / 0 skip）· e2e 13 → **14** · concurrency + timeout 12 ·
+pytest 48 · `test:lab` 26。
+
+**两处「写下来之后从未跑过」的验证**（本版首次执行）：真实网络录制 `tests/integration/` 8 个用例
+——**上游零 schema 漂移**；v0.2.x 老 `records.db` 迁移演练——**无 bug**。
+
+---
+
+<details>
+<summary>v0.4.0 的分阶段明细（P11 · LLM Runtime v2 + 可达性闸门）</summary>
 
 ### P11 · LLM Runtime v2 + 可达性闸门
 
@@ -63,6 +156,8 @@
 
 单元 905 → **1018**（0 fail / 0 skip）· e2e 12 → **13** · concurrency + timeout 12 ·
 pytest 48 · `test:lab` 26。
+
+</details>
 
 ---
 
