@@ -1,4 +1,5 @@
-import { defaultHttp, type HttpClient } from "../http/client";
+import { defaultHttp, HttpTimeoutError, type HttpClient } from "../http/client";
+import { recordApiCall } from "../usage/api_ledger";
 
 export type ToolResponseType = "json" | "text";
 
@@ -156,18 +157,50 @@ export class HttpConnector {
       }
     }
 
-    const response = await this.http.request(url.toString(), {
-      method: tool.method ?? "GET",
-      headers,
-      body: isPost ? JSON.stringify(remaining) : undefined,
-    });
-    if (!response.ok) {
-      // 错误消息只带状态码，绝不回显响应体或请求头（可能含凭据）。
-      throw new Error(
-        `Connector "${this.name}" tool "${toolName}" failed: HTTP ${response.status}`,
-      );
+    // W6-1 α（v0.6）：调用台账埋点。这是全体 connector 唯一发出真实 HTTP 请求的
+    // 落地点（`call()` 要么走这里，要么走 handler 内部再调回这里，见类顶部注释）——
+    // 埋在这一处，所有 connector 自动覆盖，不需要逐个 connector 手写一份（V46「同一件
+    // 事两份手写副本」的教训）。落账只认 `host`（`url.host`，来自上面已经拼好的 URL
+    // 对象），**绝不把 `url` 本身传给台账**——query string 里可能混着凭据。
+    const host = url.host;
+    const startedAt = Date.now();
+    let status: number | string | undefined;
+    try {
+      const response = await this.http.request(url.toString(), {
+        method: tool.method ?? "GET",
+        headers,
+        body: isPost ? JSON.stringify(remaining) : undefined,
+      });
+      status = response.status;
+      if (!response.ok) {
+        // 错误消息只带状态码，绝不回显响应体或请求头（可能含凭据）。
+        throw new Error(
+          `Connector "${this.name}" tool "${toolName}" failed: HTTP ${response.status}`,
+        );
+      }
+      // 显式 await（而不是直接 `return response.text()/.json()`）：async 函数里
+      // `return somePromise` 会让下面的 finally 在 promise 落定**之前**就执行——
+      // 显式 await 才能保证台账记的 latencyMs 包含真正读完响应体的耗时。
+      return isText ? await response.text() : await response.json();
+    } catch (error) {
+      // status 还没被赋值 = 请求本身没有落地（fetch 抛错/超时），不是一个带状态码
+      // 的 HttpResponse——与「上游返回了 4xx/5xx」结构上不同（client.ts 顶部注释
+      // 的同一区分，在这里对台账的 status 字段做同样的区分）。
+      status ??= error instanceof HttpTimeoutError
+        ? "timeout"
+        : `error:${error instanceof Error ? error.constructor.name : "Unknown"}`;
+      throw error;
+    } finally {
+      recordApiCall({
+        connector: this.name,
+        host,
+        status: status ?? "error:Unknown",
+        latencyMs: Date.now() - startedAt,
+        // rateLimitWaitMs 恒为 0：见 usage/api_ledger.ts 的 ApiCallEntry 字段注释——
+        // 这一层只看到 HttpClient 接口，看不到 RateLimitedHttp 内部令牌桶等了多久。
+        rateLimitWaitMs: 0,
+      });
     }
-    return isText ? response.text() : response.json();
   }
 
   listTools(): HttpTool[] {

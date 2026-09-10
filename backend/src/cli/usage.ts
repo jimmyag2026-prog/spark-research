@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { ProjectManager, ProjectError } from "../project/manager";
 import { UsageStore } from "../usage/ledger";
+import { ApiCallStore, apiCallStorePath, type ApiCallAgg } from "../usage/api_ledger";
 
 // G-3（v0.6）：`spark-research usage`——用量台账的人类/机器出口。
 //
@@ -16,13 +17,18 @@ export interface UsageCliDeps {
 }
 
 const HELP = `用法: spark-research usage [--project <slug>] [--json]
+       spark-research usage api [--json]
 
-  显示本项目的 LLM 用量台账（usage.jsonl）：调用数、tokens、已知花费（下界）、
-  按命令/模型的归因。成本未知的调用单独计数——**未知不等于免费**，
+  不带子命令：显示本项目的 LLM 用量台账（usage.jsonl）：调用数、tokens、已知花费
+  （下界）、按命令/模型的归因。成本未知的调用单独计数——**未知不等于免费**，
   有未知就不报确定总数。
 
   台账由 lit read / lit review / idea new / idea check 自动记录；
-  配合 --budget-usd 使用时，预算闸按「已知花费下界」判停。`;
+  配合 --budget-usd 使用时，预算闸按「已知花费下界」判停。
+
+  usage api：显示 connector 调用台账（api_calls.jsonl，全局，不分项目——connector
+  层没有项目概念）：按 connector / host 聚合的调用数、429/401 单列、其他非 2xx、
+  平均/最大延迟。由 connectors/base.ts 的每次 HTTP 调用自动记录。`;
 
 function flagString(value: string | true | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -62,8 +68,19 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
     out(HELP);
     return 0;
   }
+
+  // W6-1 α：`usage api`——connector 调用台账，全局、不分项目，所以在这里、
+  // 打开 ProjectManager **之前**分流，不走下面 --project 的解析路径。
+  if (positional[0] === "api") {
+    if (positional.length > 1) {
+      err(`❌ 未知参数 'usage api ${positional[1]}'。用法：spark-research usage api [--json]`);
+      return 1;
+    }
+    return runUsageApiCommand(flags.json === true, deps);
+  }
+
   if (positional.length > 0) {
-    err(`❌ 未知子命令 'usage ${positional[0]}'。当前只有默认视图；用 spark-research usage --help 看用法。`);
+    err(`❌ 未知子命令 'usage ${positional[0]}'。当前有 (默认视图) / api；用 spark-research usage --help 看用法。`);
     return 1;
   }
 
@@ -119,4 +136,56 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
   } finally {
     project.close();
   }
+}
+
+function fmtMs(v: number): string {
+  return `${Math.round(v)}ms`;
+}
+
+function printApiAggTable(out: (line: string) => void, label: string, rows: Record<string, ApiCallAgg>): void {
+  out(`  按${label}:`);
+  const names = Object.keys(rows);
+  if (names.length === 0) {
+    out("    (无记录)");
+    return;
+  }
+  for (const name of names) {
+    const agg = rows[name]!;
+    out(
+      `    ${name}: ${agg.calls} 次 · 429×${agg.count429} · 401×${agg.count401} · ` +
+        `其他非2xx×${agg.otherNon2xx} · 平均 ${fmtMs(agg.avgLatencyMs)} · 最大 ${fmtMs(agg.maxLatencyMs)}`,
+    );
+  }
+}
+
+// W6-1 α：`usage api` 的实现。**没有 --project**——connector 调用台账是全局的
+// （见 usage/api_ledger.ts 顶部注释：connector 层没有项目概念，不该在这一层猜）。
+// `deps.root` 只用于单测隔离，与 ProjectManager 的 root 是两回事，恰好复用同一个
+// 字段名——同 server/context.ts 的 TaskRegistry 那条「deps.root 替身 dataDir()」惯例。
+export function runUsageApiCommand(json: boolean, deps: UsageCliDeps = {}): number {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  const store = new ApiCallStore(apiCallStorePath(deps.root ? { root: deps.root } : {}));
+  const totals = store.totals();
+  const corrupt = store.corruptLines();
+
+  if (json) {
+    out(JSON.stringify({ ...totals, corruptLines: corrupt }, null, 2));
+    return 0;
+  }
+
+  out("📡 connector 调用台账（全局，不分项目）");
+  if (totals.calls === 0) {
+    out("  还没有 API 调用记录。任意 connector 发起的 HTTP 请求都会自动入账。");
+    return 0;
+  }
+  out(
+    `  调用 ${totals.calls} 次 · 429×${totals.count429} · 401×${totals.count401} · ` +
+      `其他非2xx×${totals.otherNon2xx} · 平均延迟 ${fmtMs(totals.avgLatencyMs)} · 最大延迟 ${fmtMs(totals.maxLatencyMs)}`,
+  );
+  printApiAggTable(out, "connector", totals.byConnector);
+  printApiAggTable(out, "host", totals.byHost);
+  if (corrupt > 0) {
+    out(`  ⚠️ 台账文件有 ${corrupt} 行无法解析（文件可能被手工改过），以上统计不含这些行。`);
+  }
+  return 0;
 }

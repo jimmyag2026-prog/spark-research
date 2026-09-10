@@ -21,6 +21,7 @@ import { projectRoutes } from "./routes/projects";
 import { proteinRoutes } from "./routes/proteins";
 import { chemRoutes } from "./routes/chem";
 import { computeRoutes } from "./routes/compute";
+import { usageRoutes } from "./routes/usage";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
 
@@ -253,6 +254,8 @@ export function createApp(deps: ServerDeps = {}): Hono {
   app.route("/api/report", reportRoutes(ctx));
   app.route("/api/session", sessionRoutes(ctx));
   app.route("/api/tasks", taskRoutes(ctx));
+  // W6-1 α/β：用量面板契约（G-3 的 usage.jsonl + lane α 的 api_calls.jsonl 只读出口）。
+  app.route("/api/usage", usageRoutes(ctx));
 
   // v0.1 遗留：按 session 取 artifact / 取 lineage。新代码用 /api/artifacts?session=。
   app.get("/api/artifacts/:sessionId", async (c) => {
