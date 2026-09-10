@@ -12,6 +12,8 @@ import { LiteratureSearcher } from "../literature/search";
 import { LLMRouter } from "../llm/router";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
 import type { CitationJudge } from "../reviewer/rules";
+import { runCliTask } from "../cli/progress";
+import type { TaskRegistry } from "../server/tasks";
 import { CoExploreError, CoExploreSession } from "./coexplore";
 import { renderIdeaCard, type NoveltyStatus, type StoredIdeaCard } from "./models";
 import { NoveltyChecker } from "./novelty";
@@ -43,6 +45,8 @@ export interface IdeaCliDeps {
   judge?: CitationJudge;
   // 交互式 `idea new` 的输入源；不注入时用 readline（测试一律注入或走 -m）。
   ask?: (prompt: string) => Promise<string | null>;
+  // V68：长任务句柄 registry（与 lit read/review 同一套；落盘到 <项目>/tasks/）。
+  taskRegistry?: TaskRegistry;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
@@ -192,7 +196,28 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
         }
 
         if (message) {
-          const result = await session.explore(message, { sessionId });
+          // V68：非交互 explore 是长活（多次 LLM 调用），接任务句柄——进程被杀后
+          // idea tasks/lit tasks 还查得到状态，不再 100% 丢工作零痕迹（R1-T1 发现）。
+          // 交互模式不包：readline 循环的生命周期由人掌控，包任务只会多噪音。
+          const exploreTask = await runCliTask({
+            kind: "idea-new",
+            label: `Co-explore：${message.slice(0, 40)}`,
+            project: project.slug,
+            root: project.paths.root,
+            registry: deps.taskRegistry,
+            out,
+            quiet: flags.json === true,
+            run: () => session.explore(message, { sessionId }),
+          });
+          const result = exploreTask.value;
+          if (!result) {
+            // 原始失败原因必须透出（V36）——任务包装不许吞掉「到底哪里错了」。
+            err(`❌ ${exploreTask.snapshot.error?.message ?? "Co-explore 任务异常终止"}（状态已落盘，spark-research lit tasks 可查）`);
+            printCoExploreNextSteps(err, { interactive: false });
+            library.close();
+            project.close();
+            return 1;
+          }
           if (flags.json === true) {
             out(JSON.stringify({ card: result.stored, grounding: result.grounding }, null, 2));
           } else {
@@ -312,7 +337,24 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
           perSource: Number(flagString(flags["per-source"]) ?? 5) || 5,
           judge: deps.judge,
         });
-        const result = await checker.check(idea, { sessionId: flagString(flags.session) ?? null });
+        // V68：novelty check 是长活（claim 提取 → 密集检索 → 逐 claim 判定），同接任务句柄。
+        const checkTask = await runCliTask({
+          kind: "idea-check",
+          label: `Novelty check：${idea.hypothesis.slice(0, 40)}`,
+          project: project.slug,
+          root: project.paths.root,
+          registry: deps.taskRegistry,
+          out,
+          quiet: flags.json === true,
+          run: () => checker.check(idea, { sessionId: flagString(flags.session) ?? null }),
+        });
+        const result = checkTask.value;
+        if (!result) {
+          err(`❌ ${checkTask.snapshot.error?.message ?? "Novelty check 任务异常终止"}（状态已落盘，spark-research lit tasks 可查）`);
+          library.close();
+          project.close();
+          return 1;
+        }
 
         const outFile = flagString(flags.out);
         if (outFile) writeFileSync(outFile, `${result.markdown}\n`);
