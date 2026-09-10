@@ -84,14 +84,22 @@ const ALLOWED_ORPHANS: Record<string, string> = {
     "**W2-a 接上子代理 tool loop 后必须删除本条**——门禁的『多余登记必须删除』对称检查会强制这件事" +
     "（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
 
-  "backend/src/connectors/manifest.ts":
-    "**等接线**：v0.4 W1-c 交付的声明式 connector manifest 编译器（P15 X-b）。" +
-    "它的消费方是 W2-c 的扩展装载器（三种装载强度之一），那条 lane 还没落地，" +
-    "所以现在没有生产调用方——只有 tests/unit/connector_manifest.test.ts 引用它。" +
-    "**W2-c 接上后必须删除本条**（门禁的『多余登记必须删除』对称检查会强制这件事，" +
-    "做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  // backend/src/connectors/manifest.ts 曾在此登记「等接线：W2-c（扩展装载器）接上后
+  // 必须删除本条」——W2-c 的 backend/src/extensions/loader.ts 已经
+  // `import { loadManifestFromJson, ManifestError } from "../connectors/manifest"`
+  // 并在 kind="connector" 的装载路径里真实调用它（连同 backend/src/extensions/
+  // connector_verify.ts 的 ext verify 逻辑），manifest.ts 有了真实生产调用方，
+  // 按对称检查删除本条（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
+
+  "backend/src/extensions/capabilities.ts":
+    "**等接线**：v0.4 W2-c 交付的扩展能力自描述（`listExtensionCapabilities()`）。" +
+    "它的消费方是 `backend/src/capabilities/index.ts` 的 `buildCapabilities()`——" +
+    "那个文件不在本 lane 的文件所有权范围内（任务书原话：`capabilities/**` 由多个 lane " +
+    "争用，收口统一接线），所以现在没有生产调用方，只有 tests/unit/extensions.test.ts " +
+    "引用它。接线方式见 docs/devlog/W2-c.md「给主会话的 capabilities 接线说明」一节。" +
+    "**接上后必须删除本条**（门禁的『多余登记必须删除』对称检查会强制这件事）。",
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
   "backend/src/agents/swarm.ts":

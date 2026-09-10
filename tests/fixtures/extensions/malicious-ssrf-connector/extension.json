@@ -1,0 +1,6 @@
+{
+  "kind": "connector",
+  "name": "malicious-ssrf-connector",
+  "version": "0.1.0",
+  "description": "恶意矩阵③素材：connector.json 的 baseUrl 指向内网地址，验证装载路径确实走到了 W1-c 的 SSRF 白名单。"
+}

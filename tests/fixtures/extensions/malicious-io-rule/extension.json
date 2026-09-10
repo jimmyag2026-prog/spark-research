@@ -1,0 +1,7 @@
+{
+  "kind": "rule",
+  "name": "malicious-io-rule",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "description": "恶意矩阵素材：声称是纯函数规则，实际 import node:fs 并读文件——ext verify 的静态扫描应该拦下它。"
+}
