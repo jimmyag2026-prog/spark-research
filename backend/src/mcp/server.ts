@@ -39,10 +39,33 @@ interface TaskEnvelope {
     state: "pending" | "running" | "succeeded" | "failed";
     result?: unknown;
     error?: { message: string } | null;
-    progress?: unknown;
+    progress?: { done: number; total: number | null; message: string | null } | null;
     kind?: string;
   };
 }
+
+// V17：长任务的中途进度回传。
+//
+// 之前：`runLongTask()` 提交任务拿句柄之后，只是干等——每 `pollIntervalMs` 轮一次
+// `GET /api/tasks/:id`，中间的 `progress`（P7 的 `handle.progress()`，各路由早就在报，
+// 比如 `lit_read` 每精读完一篇就 `task.progress(i, total, ...)`）**读到了但没往外传**，
+// 外部 agent 只在任务落定（或超时）那一刻才第一次看到任何反馈。
+//
+// MCP 协议本身有 progress notification 这条通道（`notifications/progress`，客户端在
+// 请求的 `_meta.progressToken` 里主动要）——接上它之后，外部 agent 能在等待期间持续看到
+// 「精读第 7/20 篇」这类中间态，而不是发出请求后陷入沉默直到结果或超时。
+//
+// 接口设计成回调（`onProgress`）而不是直接依赖 MCP SDK 的类型：`McpToolRunner` 本身
+// 不知道、也不该知道自己是不是被真实的 MCP `Server` 调用（`McpFixture.call()` 这条
+// 测试路径完全不经过协议层，见 tests/helpers/mcp_scenario.ts）——由 `createMcpServer()`
+// 在有 `progressToken` 时才构造这个回调、桥接到 `extra.sendNotification()`，
+// `McpToolRunner` 自己完全不 import `@modelcontextprotocol/sdk` 的通知类型。
+export interface TaskProgressPayload {
+  done: number;
+  total: number | null;
+  message: string | null;
+}
+export type TaskProgressCallback = (progress: TaskProgressPayload) => void;
 
 export class McpToolRunner {
   private readonly app: Hono;
@@ -82,7 +105,15 @@ export class McpToolRunner {
   }
 
   // 长任务：提交拿句柄 → 自己轮询到落定。判断三——不把 202 的复杂度甩给外部 agent。
-  private async runLongTask(tool: McpToolDef, args: Record<string, unknown>): Promise<ToolOutcome> {
+  //
+  // V17：`onProgress` 是可选的——只有真实 MCP 客户端在请求里带了 `progressToken`
+  // （见 `createMcpServer()` 的 CallTool handler）才会有值；`McpFixture.call()` 这条
+  // 测试路径（不经协议层）不传，行为与 V17 之前完全一致。
+  private async runLongTask(
+    tool: McpToolDef,
+    args: Record<string, unknown>,
+    onProgress?: TaskProgressCallback,
+  ): Promise<ToolOutcome> {
     const req = tool.request(args);
     // 显式 await:false：拿到句柄才能做超时控制。用 await:true 会让 HTTP 层无限等，
     // 超时就只能靠掐连接——那样任务状态在 MCP 侧就丢了。
@@ -94,12 +125,25 @@ export class McpToolRunner {
     const taskId = (submitted.payload as TaskEnvelope).task?.id;
     if (!taskId) return { ok: false, payload: submitted.payload };
 
+    // 去重：同一个 progress（done/total/message 全等）不重复通知——轮询间隔比任务实际
+    // 进展快很多时（`pollIntervalMs` 默认 400ms，多数子步骤耗时以秒计），大多数轮询
+    // tick 上 progress 根本没变，原样转发只会刷屏，掩盖真正有信息量的那几条。
+    let lastProgressKey: string | null = null;
+    const reportProgress = (progress: TaskProgressPayload | null | undefined) => {
+      if (!onProgress || !progress) return;
+      const key = JSON.stringify(progress);
+      if (key === lastProgressKey) return;
+      lastProgressKey = key;
+      onProgress(progress);
+    };
+
     const deadline = Date.now() + this.timeoutMs;
     let last: TaskEnvelope["task"] | undefined;
     while (Date.now() < deadline) {
       const polled = await this.fetchJson("GET", `/api/tasks/${encodeURIComponent(taskId)}`);
       last = (polled.payload as TaskEnvelope).task;
       if (!last) return { ok: false, payload: polled.payload };
+      reportProgress(last.progress ?? null);
       if (last.state === "succeeded") {
         return { ok: true, payload: tool.present ? tool.present(last.result, args) : last.result };
       }
@@ -124,7 +168,11 @@ export class McpToolRunner {
     };
   }
 
-  async call(name: string, args: Record<string, unknown> = {}): Promise<ToolOutcome> {
+  async call(
+    name: string,
+    args: Record<string, unknown> = {},
+    hooks: { onProgress?: TaskProgressCallback } = {},
+  ): Promise<ToolOutcome> {
     const withheld = MCP_WITHHELD.find((w) => w.name === name);
     if (withheld) {
       // 对抗面：即便调用方猜到了名字，这里也只回「为什么不给 + 人该怎么做」。
@@ -144,7 +192,7 @@ export class McpToolRunner {
         payload: { error: `未知工具 '${name}'`, available: MCP_TOOLS.map((t) => t.name) },
       };
     }
-    if (tool.longRunning) return this.runLongTask(tool, args);
+    if (tool.longRunning) return this.runLongTask(tool, args, hooks.onProgress);
 
     const req = tool.request(args);
     const { status, payload } = await this.fetchJson(req.method, req.path, req.body);
@@ -181,9 +229,29 @@ export function createMcpServer(options: McpServerOptions = {}): {
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const { name, arguments: args } = request.params;
-    const outcome = await runner.call(name, (args ?? {}) as Record<string, unknown>);
+    // V17：客户端只有在这次请求的 `_meta.progressToken` 里主动要进度通知时才接线——
+    // 协议本身把这标成 opt-in（"The receiver is not obligated to provide these
+    // notifications"），没要的客户端不该无谓地收到通知。
+    const progressToken = request.params._meta?.progressToken;
+    const onProgress: TaskProgressCallback | undefined =
+      progressToken === undefined
+        ? undefined
+        : (progress) => {
+            // sendNotification 失败（客户端已断开之类）不该拖垮整个工具调用——
+            // 进度通知本来就是尽力而为、非阻塞的旁路，不是结果的一部分。
+            void extra.sendNotification({
+              method: "notifications/progress",
+              params: {
+                progressToken,
+                progress: progress.done,
+                ...(progress.total !== null ? { total: progress.total } : {}),
+                ...(progress.message !== null ? { message: progress.message } : {}),
+              },
+            }).catch(() => {});
+          };
+    const outcome = await runner.call(name, (args ?? {}) as Record<string, unknown>, { onProgress });
     return {
       content: [{ type: "text" as const, text: JSON.stringify(outcome.payload, null, 2) }],
       isError: !outcome.ok,
