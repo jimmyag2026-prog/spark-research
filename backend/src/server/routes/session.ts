@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { SESSION_MODES, type SessionMode } from "../../agents/orchestrator";
 import { CoExploreError } from "../../ideation/coexplore";
+import type { CallOptions } from "../../llm/types";
 import { HttpError, type ServerContext } from "../context";
 import { sseResponse } from "../sse";
 import type { TaskEvent } from "../tasks";
@@ -8,10 +9,29 @@ import { jsonBody, optionalString, queryNumber, queryString, requireString } fro
 
 // 会话端点（chat / coexplore）与任务流。
 //
-// **关于「流式」的诚实口径**：orchestrator 目前不是 token 级流式的（模型调用一次性返回）。
-// 所以 SSE 上跑的是**生命周期事件**：start → progress（阶段）→ result（完整正文）→ done。
-// 传输层已经就位，将来 agent 支持增量输出时直接往 `delta` 事件里塞即可，
-// 不会因此改变前端的连接方式。把已完成的正文切成假 token 往外吐是自欺，不做。
+// **关于「流式」的诚实口径（W1 期）**：orchestrator.chat() 本身不是 token 级流式的——
+// `processRequest` 内部做任务分解 + 执行，往往是不止一次模型调用，`chat()` 也没有
+// 接受 onDelta 回调的口子（backend/src/agents/** 不属于本 lane 所有权，这条 lane
+// 不能替它加）。所以**权威回答**仍然只能是 start → progress → result → done 这条
+// 生命周期事件链，`result` 依旧是一次性给完整正文——这一点没有变，也是
+// `tests/unit/server_session.test.ts` 里「依次发 start → progress → result → done」
+// 那条既有断言继续成立的原因（下面新加的 `delta` 事件只在真的发生流式调用时才会出现，
+// 现有的 fake LLM 从不触发 onDelta，序列不受影响）。
+//
+// **W2-d（P14）新增的是一层「预览流」**：`mode === "chat"` 且请求没有显式关掉
+// （`preview !== false`）时，在权威调用之前，先用同一个 router 依赖发**一次独立的、
+// 真正流式的**模型调用（P11 的 `CallOptions.onDelta`，backend/src/llm/providers/*
+// 已经实现），逐块把 `delta` 事件吐给前端做「实时预览」——不是把权威结果切成假
+// token 回放（上面吐槽过这是自欺），是一次真实的、被前端明确标成"预览"的模型输出，
+// 权威 `result` 到达后前端会用它覆盖预览文本。
+//
+// 代价要如实说：这意味着 `mode === "chat"` 的一次 `/stream` 请求在配置了真实 provider
+// 时会发生**两次**模型调用（一次流式预览 + 一次权威 orchestrator 调用，后者内部可能
+// 还不止一次）。真正的根治是让 `processRequest` 自己支持 `onDelta` 并把预览与权威
+// 合而为一——那需要改 agents/orchestrator.ts，不在本 lane 所有权内，已经写进
+// docs/devlog/W2-d.md 交给主会话或 agents/** 的 owner。预览调用失败（没配 provider /
+// 网络问题 / 用于测试的 fake LLM 根本不支持 onDelta）一律安静地不发 delta，不影响
+// 权威流程——预览是锦上添花，不是必需品。
 
 function parseMode(raw: string | undefined): SessionMode | undefined {
   if (raw === undefined) return undefined;
@@ -58,12 +78,30 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     const message = requireString(body, "message");
     const mode = parseMode(optionalString(body, "mode")) ?? "chat";
     const model = optionalString(body, "model");
+    // 预览流默认开；调用方可显式 `{"preview": false}` 关掉（省一次模型调用——见上面
+    // 大注释的代价说明）。只在 chat 模式尝试：coexplore 的 prompt/grounding 装配更复杂
+    // （CoExploreSession，见 agents/orchestrator.ts），本 lane 不重新拼一份。
+    const wantsPreview = body["preview"] !== false && mode === "chat";
 
     return sseResponse(
       (sender) => {
         sender.send("start", { sessionId, mode, at: new Date().toISOString() });
         void (async () => {
           try {
+            if (wantsPreview) {
+              try {
+                await ctx.llm().call([{ role: "user", content: message }], {
+                  model,
+                  onDelta: (chunk) => {
+                    if (!sender.closed) sender.send("delta", { chunk });
+                  },
+                } satisfies CallOptions);
+              } catch {
+                // 预览失败不影响权威流程：没配 provider / 网络问题 / 注入的测试用
+                // fake LLM 根本不支持 onDelta（那种情况下 onDelta 从不会被调用，
+                // 这里的 catch 只兜真正抛出的异常，例如适配器内部错误）。
+              }
+            }
             sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" });
             const result = await ctx.agent.chat({ sessionId, message, model, mode });
             sender.send("result", {
