@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse, type ProviderCapabilities, type ToolCall } from "../../backend/src/llm/router";
 import type { McpToolRunner } from "../../backend/src/mcp/server";
 import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
@@ -9,10 +12,12 @@ import {
   SubAgentFactory,
   SubAgentGrantViolationError,
   SUB_AGENT_TOOL_CONCURRENCY,
+  SUB_AGENT_TYPE_NAMES,
   type SubAgentDeps,
   type SubAgentSpec,
   type SubAgentType,
 } from "../../backend/src/agents/sub_agent";
+import { SUB_AGENT_MODEL_CONFIG_TYPES, saveConfig } from "../../backend/src/config";
 
 // P12 · 子代理 tool loop（v0.4 方案 §4.2，波次 W2-a）。
 //
@@ -426,5 +431,83 @@ describe("runSubAgentOfType · 便捷入口", () => {
     const result = await runSubAgentOfType("explore", "task", { llm, runner });
     expect(result.stopReason).toBe("done");
     expect(result.finalText).toBe("ok");
+  });
+});
+
+// ── V16：子代理独立模型暴露成配置项 ──────────────────────────────────────────
+//
+// 改前：SUB_AGENT_DEFAULTS 里每类子代理的 model 都硬编码 LLMRouter.DEFAULT_MODEL，
+// 「重任务用强模型、检索摘要用快模型」这个旋钮压根不存在。这里验的是：
+//   ① 两张手写清单（sub_agent.ts 的 SUB_AGENT_TYPE_NAMES / config/index.ts 的
+//      SUB_AGENT_MODEL_CONFIG_TYPES）集合相等——谁漏改另一边立刻红；
+//   ② config 的 per-type 覆盖真的改了 buildSubAgentSpec()/SubAgentFactory.create()
+//      解出来的 model；
+//   ③ 解析优先级：显式 override > per-type config > 全局 defaultModel > 代码常量。
+// 全部用 { root, env } 隔离配置，不碰真实 ~/.spark-research（与 config.test.ts 同一套
+// 纪律），所以不依赖、也不污染跑测试这台机器的真实配置状态。
+describe("V16 · 子代理独立模型配置项", () => {
+  function isolatedRoot() {
+    return mkdtempSync(join(tmpdir(), "spark-subagent-model-"));
+  }
+
+  test("SUB_AGENT_TYPE_NAMES 与 CONFIG_SETTINGS 的 SUB_AGENT_MODEL_CONFIG_TYPES 集合相等", () => {
+    expect([...SUB_AGENT_TYPE_NAMES].sort()).toEqual([...SUB_AGENT_MODEL_CONFIG_TYPES].sort());
+  });
+
+  test("不配置任何东西时，解析出的默认模型仍是 LLMRouter.DEFAULT_MODEL（向后兼容基线）", () => {
+    const root = isolatedRoot();
+    for (const type of ALL_TYPES) {
+      const spec = buildSubAgentSpec(type, { configOptions: { root, env: {} } });
+      expect(spec.model).toBe(LLMRouter.DEFAULT_MODEL);
+    }
+  });
+
+  test("subAgentModel_<type> 覆盖只影响对应 type，不影响其它 type", () => {
+    const root = isolatedRoot();
+    saveConfig({ subAgentModel_review: "strong/review-model" }, { root });
+    const options = { root, env: {} };
+
+    expect(buildSubAgentSpec("review", { configOptions: options }).model).toBe("strong/review-model");
+    for (const type of ALL_TYPES) {
+      if (type === "review") continue;
+      expect(buildSubAgentSpec(type, { configOptions: options }).model).toBe(LLMRouter.DEFAULT_MODEL);
+    }
+  });
+
+  test("解析顺序：显式 overrides.model > per-type config > 全局 defaultModel > 代码常量", () => {
+    const root = isolatedRoot();
+    // 只配全局默认：没配 per-type 的类型都应该退到这个值。
+    saveConfig({ defaultModel: "global/cheap-model" }, { root });
+    const options = { root, env: {} };
+    expect(buildSubAgentSpec("explore", { configOptions: options }).model).toBe("global/cheap-model");
+
+    // 再叠加 per-type：只有该 type 改用更强的模型，其余仍退到全局默认。
+    saveConfig({ defaultModel: "global/cheap-model", subAgentModel_execute: "strong/exec-model" }, { root });
+    expect(buildSubAgentSpec("execute", { configOptions: options }).model).toBe("strong/exec-model");
+    expect(buildSubAgentSpec("explore", { configOptions: options }).model).toBe("global/cheap-model");
+
+    // 显式 overrides.model 优先级最高，盖过以上两层 config。
+    expect(
+      buildSubAgentSpec("execute", { model: "explicit-override", configOptions: options }).model,
+    ).toBe("explicit-override");
+  });
+
+  test("env 覆盖（SPARK_SUBAGENT_MODEL_<TYPE>）优先于 config.json（env > config > 默认，同 P9 纪律）", () => {
+    const root = isolatedRoot();
+    saveConfig({ subAgentModel_lab: "config-model" }, { root });
+    const options = { root, env: { SPARK_SUBAGENT_MODEL_LAB: "env-model" } };
+    expect(buildSubAgentSpec("lab", { configOptions: options }).model).toBe("env-model");
+  });
+
+  test("legacy SubAgentFactory.create() 走同一条解析链（第三参数 configOptions）", () => {
+    const root = isolatedRoot();
+    saveConfig({ subAgentModel_literature: "legacy-model" }, { root });
+    const options = { root, env: {} };
+    const factory = new SubAgentFactory();
+    const agent = factory.create("literature", {}, options);
+    expect(agent.model).toBe("legacy-model");
+    // 显式 overrides.model 同样盖过 config（legacy 路径的既有行为不受影响）。
+    const overridden = factory.create("literature", { model: "explicit" }, options);
+    expect(overridden.model).toBe("explicit");
   });
 });

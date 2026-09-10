@@ -50,6 +50,52 @@ export interface SettingSpec {
 // 默认值刻意在这里重新声明而不是 import 各模块常量：config 层不该反向依赖 lab/simulation/llm
 // （那会把整个后端拖进 `spark-research config` 这条本该零依赖的命令）。
 // 一致性由 `tests/unit/config.test.ts` 里的断言钉住——常量改了这里不改，测试会红。
+// ── V16（BACKLOG）：子代理独立模型暴露成配置项 ──────────────────────────────
+//
+// 现状（改前）：backend/src/agents/sub_agent.ts 的 SUB_AGENT_DEFAULTS 给每一类子代理
+// （explore/literature/execute/lab/review）都硬编码 `model: LLMRouter.DEFAULT_MODEL`——
+// 「重任务（execute/review）用强模型、检索/摘要（explore）用快模型」这个收益从代码写
+// 出来那天起就没兑现过，因为压根没有旋钮可以调。这里补的就是那个旋钮。
+//
+// 这张清单必须与 sub_agent.ts 里 `SubAgentType` 的成员集合一致，但 config 层不能反向
+// import agents/sub_agent.ts（config 要保持零依赖，见本文件顶部的收口纪律）——所以
+// 独立声明一份名字清单。一致性靠 tests/unit/sub_agent.test.ts 钉住：它同时 import
+// 这里的 `SUB_AGENT_MODEL_CONFIG_TYPES` 与 sub_agent.ts 实际导出的类型集合
+// （`SUB_AGENT_TYPE_NAMES`，从 SUB_AGENT_DEFAULTS 的 key 派生），两边必须是同一个集合，
+// 谁漏改另一边会立刻红——这正是 P11 收口踩过的坑（「加一个 provider 要改 N 个地方」）
+// 在这里的翻版：provider 那张表当时没法做成派生（config 不能依赖 llm），这里同理不能
+// 依赖 agents，只能退而求其次用测试钉死两份手写清单的一致性，而不是假装能自动派生。
+//
+// 命名规则只在这一处定义（key/envVar 的拼法），新增一类子代理只需要在下面数组里加
+// 一个名字——不需要手抄一整段 SettingSpec，那才是「能从一份清单派生的就别手抄第二份」
+// 真正要防的事。
+export const SUB_AGENT_MODEL_CONFIG_TYPES = ["explore", "literature", "execute", "lab", "review"] as const;
+export type SubAgentModelConfigType = (typeof SUB_AGENT_MODEL_CONFIG_TYPES)[number];
+
+export function subAgentModelSettingKey(type: SubAgentModelConfigType): string {
+  return `subAgentModel_${type}`;
+}
+
+function subAgentModelEnvVar(type: SubAgentModelConfigType): string {
+  return `SPARK_SUBAGENT_MODEL_${type.toUpperCase()}`;
+}
+
+const SUB_AGENT_MODEL_SETTINGS: readonly SettingSpec[] = SUB_AGENT_MODEL_CONFIG_TYPES.map((type) => ({
+  key: subAgentModelSettingKey(type),
+  type: "string" as const,
+  envVar: subAgentModelEnvVar(type),
+  defaultValue: null,
+  summary: `子代理类型 '${type}' 的独立模型覆盖（不填则退回 defaultModel）`,
+  effect:
+    `只影响 type=${type} 的子代理（sub_agent.ts 的 buildSubAgentSpec()/runSubAgentOfType()，` +
+    `以及 legacy 的 SubAgentFactory.create()）用哪个模型跑 tool loop；调用方显式传 ` +
+    `overrides.model 时这项不生效（override 优先级最高）。不填时退回 defaultModel（进而退回 ` +
+    `LLMRouter.DEFAULT_MODEL）。「重任务用强模型、检索/摘要用快模型」就是靠给不同 type ` +
+    `配不同的值实现——例如把 review/execute 配成更强的模型、把 explore 配成更快更便宜的模型。` +
+    `换成不支持 tool calling 的模型（capabilitiesFor(model).toolCalling === false）会让该类` +
+    `子代理整体走降级路径（见 sub_agent.ts 的 runDegraded：禁用全部工具，只做单轮文本生成）。`,
+}));
+
 export const CONFIG_SETTINGS: readonly SettingSpec[] = [
   {
     key: "defaultModel",
@@ -284,6 +330,7 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "input/output 数字）时整个覆盖被忽略、退回内置表——不会部分生效，也不会让 costUsd 变成" +
       "一个基于半解析数据算出的可疑数字。",
   },
+  ...SUB_AGENT_MODEL_SETTINGS,
 ];
 
 export function settingSpec(key: string): SettingSpec | undefined {
@@ -431,6 +478,17 @@ function stringOr(key: string, fallback: string, options: ConfigOptions): string
 
 export function configuredModel(fallback: string, options: ConfigOptions = {}): string {
   return stringOr("defaultModel", fallback, options);
+}
+
+// V16：子代理独立模型——`fallback` 应传 `configuredModel(...)` 的结果（而不是裸的
+// LLMRouter.DEFAULT_MODEL），这样解析链是 subAgentModel_<type> > defaultModel > 代码常量，
+// 而不是让每类子代理各自跳过用户配置的全局默认模型。
+export function configuredSubAgentModel(
+  type: SubAgentModelConfigType,
+  fallback: string,
+  options: ConfigOptions = {},
+): string {
+  return stringOr(subAgentModelSettingKey(type), fallback, options);
 }
 
 export function configuredWetBackend(fallback: string, options: ConfigOptions = {}): string {
