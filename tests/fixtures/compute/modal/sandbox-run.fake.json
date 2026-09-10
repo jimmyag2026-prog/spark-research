@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "provenance": "fake-gateway",
+  "recordedAt": "2026-09-10T00:00:00.000Z",
+  "note": "从脚本 gateway 录的确定性回放骨架。**不是**真实 Modal 流量：拿到 token 后必须补一份 provenance:'real-modal' 的录制。",
+  "entries": [
+    {
+      "seq": 0,
+      "method": "writeVolume",
+      "request": {
+        "volumeName": "spark-cj-fixture-0001",
+        "files": [
+          {
+            "path": ".spark/runner.sh",
+            "contentBase64": "IyEvYmluL3NoCiMg55SxIHNwYXJrLXJlc2VhcmNoIG1vZGFsIGNvbXB1dGUgYWRhcHRlciDnlJ/miJDjgILlhoXlrrnmmK/luLjph4/vvIzkuI3lkKvku7vkvZXooqvlrqHmibnnmoTlrZfnrKbkuLLjgIIKIiRAIgpjb2RlPSQ/CnByaW50ZiAnJXMnICIkY29kZSIgPiAiJFNQQVJLX0NPTVBVVEVfRVhJVF9GSUxFLnRtcCIgJiYgbXYgIiRTUEFSS19DT01QVVRFX0VYSVRfRklMRS50bXAiICIkU1BBUktfQ09NUFVURV9FWElUX0ZJTEUiCmV4aXQgJGNvZGUK",
+            "mode": 448
+          },
+          {
+            "path": "input.txt",
+            "contentBase64": "aGVsbG8gY29tcHV0ZQo=",
+            "mode": 384
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "seq": 1,
+      "method": "createSandbox",
+      "request": {
+        "appName": "spark-research",
+        "environment": null,
+        "image": null,
+        "command": [
+          "/bin/sh",
+          "/workspace/.spark/runner.sh",
+          "/usr/bin/tee",
+          "out.txt"
+        ],
+        "workdir": "/workspace",
+        "volumeName": "spark-cj-fixture-0001",
+        "volumeMountPath": "/workspace",
+        "env": {
+          "PYTHONUNBUFFERED": "1",
+          "SPARK_COMPUTE_EXIT_FILE": "/workspace/.spark/exit-code"
+        },
+        "gpu": null,
+        "cpus": 1,
+        "memoryGb": 1,
+        "timeoutSeconds": 300,
+        "network": "unrestricted",
+        "tags": {
+          "jobId": "cj-fixture-0001",
+          "planDigest": "b00264ecf5fae74eddcb46cdfa488bcb8b699a0a5de3bc09ef2fba2be83ae65c",
+          "app": "spark-research"
+        },
+        "secretEnv": {
+          "redactedKeys": []
+        }
+      },
+      "response": {
+        "sandboxId": "sb-fixture-0001",
+        "volumeName": "spark-cj-fixture-0001",
+        "startedAt": "2026-09-10T00:00:00.000Z"
+      },
+      "error": null
+    },
+    {
+      "seq": 2,
+      "method": "readLogs",
+      "request": {
+        "sandboxId": "sb-fixture-0001",
+        "fromOffset": 0
+      },
+      "response": {
+        "text": "hello compute\n",
+        "nextOffset": 14
+      },
+      "error": null
+    },
+    {
+      "seq": 3,
+      "method": "getSandbox",
+      "request": {
+        "sandboxId": "sb-fixture-0001"
+      },
+      "response": {
+        "sandboxId": "sb-fixture-0001",
+        "state": "succeeded",
+        "exitCode": 0,
+        "startedAt": "2026-09-10T00:00:00.000Z",
+        "finishedAt": "2026-09-10T00:00:02.000Z"
+      },
+      "error": null
+    },
+    {
+      "seq": 4,
+      "method": "readVolume",
+      "request": {
+        "volumeName": "spark-cj-fixture-0001",
+        "globs": [
+          ".spark/exit-code"
+        ]
+      },
+      "response": [
+        {
+          "path": ".spark/exit-code",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+          "contentBase64": "MA=="
+        }
+      ],
+      "error": null
+    },
+    {
+      "seq": 5,
+      "method": "readLogs",
+      "request": {
+        "sandboxId": "sb-fixture-0001",
+        "fromOffset": 0
+      },
+      "response": {
+        "text": "hello compute\n",
+        "nextOffset": 14
+      },
+      "error": null
+    },
+    {
+      "seq": 6,
+      "method": "readVolume",
+      "request": {
+        "volumeName": "spark-cj-fixture-0001",
+        "globs": [
+          "out.txt"
+        ]
+      },
+      "response": [
+        {
+          "path": "out.txt",
+          "bytes": 14,
+          "sha256": "96aba9fb73bd25dffc95e08f8af3ed1cd9f635e431e6b39f3895e86d819ca007",
+          "contentBase64": "aGVsbG8gY29tcHV0ZQo="
+        }
+      ],
+      "error": null
+    },
+    {
+      "seq": 7,
+      "method": "readVolume",
+      "request": {
+        "volumeName": "spark-cj-fixture-0001",
+        "globs": [
+          ".spark/exit-code"
+        ]
+      },
+      "response": [
+        {
+          "path": ".spark/exit-code",
+          "bytes": 1,
+          "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9",
+          "contentBase64": "MA=="
+        }
+      ],
+      "error": null
+    },
+    {
+      "seq": 8,
+      "method": "getSandbox",
+      "request": {
+        "sandboxId": "sb-fixture-0001"
+      },
+      "response": {
+        "sandboxId": "sb-fixture-0001",
+        "state": "succeeded",
+        "exitCode": 0,
+        "startedAt": "2026-09-10T00:00:00.000Z",
+        "finishedAt": "2026-09-10T00:00:02.000Z"
+      },
+      "error": null
+    }
+  ]
+}
