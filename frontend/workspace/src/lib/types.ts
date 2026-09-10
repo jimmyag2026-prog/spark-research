@@ -178,8 +178,12 @@ export interface TaskSnapshot {
   finishedAt: string | null;
   progress: { done: number; total: number | null; message: string | null } | null;
   result: unknown;
-  error: { message: string } | null;
+  error: { message: string; timeout?: boolean } | null;
   events: TaskEvent[];
+  // V11：进程重启后从磁盘 hydrate 回来、且仍非终态的快照才带这个字段——本进程没有
+  // 真实执行体在跑它，只是诚实地继续报 running（不是 failed 也不是 succeeded）。
+  // 见 backend/src/server/tasks.ts 顶部大注释。
+  recovered?: { at: string; reason: "no-terminal-record-on-disk" } | null;
 }
 
 export interface CitationFinding {
@@ -276,4 +280,130 @@ export interface ReportCounts {
   approvedConclusions: number;
   unverifiedConclusions: number;
   decisions: number;
+}
+
+// W6-1 β：工作台四面板契约类型。字段名与各自后端出口逐字段一致——
+// backend/src/usage/ledger.ts UsageTotals · backend/src/usage/api_ledger.ts ApiCallTotals ·
+// backend/src/compute/job_store.ts ComputeJobView · backend/src/compute/plan.ts ComputePlan/CostEstimate。
+// 手写而不是导入：与本文件顶部注释同一条纪律（前后端各自 tsconfig）。
+
+export interface UsageAgg {
+  calls: number;
+  knownCostUsd: number;
+  unknownCostCalls: number;
+}
+
+export interface UsageTotals {
+  project: string;
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** 已知成本之和——真实总花费的下界，绝不是「总花费」。 */
+  knownCostUsd: number;
+  unknownCostCalls: number;
+  byCommand: Record<string, UsageAgg>;
+  byModel: Record<string, UsageAgg>;
+  corruptLines: number;
+}
+
+export interface ApiCallAgg {
+  calls: number;
+  count429: number;
+  count401: number;
+  otherNon2xx: number;
+  avgLatencyMs: number;
+  maxLatencyMs: number;
+}
+
+export interface ApiCallTotals extends ApiCallAgg {
+  byConnector: Record<string, ApiCallAgg>;
+  byHost: Record<string, ApiCallAgg>;
+  corruptLines: number;
+}
+
+export type ComputeExecutionState =
+  | "planned"
+  | "awaiting_approval"
+  | "approved"
+  | "rejected"
+  | "queued"
+  | "starting"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "cancelled"
+  | "interrupted";
+export type ComputeDeliveryState = "none" | "pending" | "complete" | "rejected" | "failed";
+export type ComputeResourceState = "none" | "starting" | "active" | "closed" | "unknown";
+
+export interface ComputeLifecycle {
+  execution: ComputeExecutionState;
+  delivery: ComputeDeliveryState;
+  resource: ComputeResourceState;
+  recoverable: boolean;
+}
+
+export interface ComputeTargetRef {
+  kind: "local" | "modal" | "ssh";
+  environment?: string;
+}
+
+export interface ComputeCostEstimate {
+  unit: "computeSeconds";
+  quantity: number;
+  unitPriceUsd: number | null;
+  upperBoundUsd: number | null;
+  source: string | null;
+  verifiedDate: string | null;
+}
+
+export interface ComputePlanView {
+  digest: string;
+  target: ComputeTargetRef;
+  purpose: string;
+  command: string[];
+  env: Record<string, string>;
+  resources: { gpu: string | null; cpus: number; memoryGb: number; timeoutMinutes: number };
+  network: "none" | "unrestricted";
+  uploads: Array<{ path: string; size: number; sha256: string }>;
+  uploadBytes: number;
+  outputs: string[];
+  approvalRequired: boolean;
+  estimate: ComputeCostEstimate;
+  warning: string;
+}
+
+export interface ComputeApprovalMeta {
+  decisionRecordId: string;
+  actor: string;
+  actorSource: string;
+  at: string;
+  planDigest: string;
+  note: string | null;
+}
+
+// 只读投影（DESIGN V47 裁定）：这个类型故意不包含任何"派发/审批可以做什么"的
+// 前端推导——UI 只展示后端给的字段，不推断下一步动作按钮。
+export interface ComputeJobView {
+  jobId: string;
+  projectSlug: string;
+  experimentId: string | null;
+  target: ComputeTargetRef;
+  lifecycle: ComputeLifecycle;
+  rev: number;
+  approval: ComputeApprovalMeta | null;
+  consumedApproval: ComputeApprovalMeta | null;
+  supersededApproval: ComputeApprovalMeta | null;
+  rejection: (ComputeApprovalMeta & { reason: string }) | null;
+  adapterHandle: unknown;
+  createdAt: string;
+  dispatchedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+  message: string | null;
+  actualCostUsd: number | null;
+  jobDir: string;
+  plan: ComputePlanView;
+  next: string;
 }

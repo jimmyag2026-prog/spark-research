@@ -34,7 +34,13 @@ export type CenterView =
   | { kind: "cards" }
   | { kind: "ideas" }
   | { kind: "conclusions" }
-  | { kind: "artifacts" };
+  | { kind: "artifacts" }
+  // W6-1 β：三个新面板（长任务进度 / 算力只读 / 用量）。record/证据图浏览已经由
+  // 右栏时间线 + RecordDetail 覆盖（类型过滤 + 点开看入边出边），不再另建一个视图
+  // 重复同一件事——那正是 V37 教训（同一件事两份手写副本）在 UI 层的翻版。
+  | { kind: "tasks" }
+  | { kind: "compute" }
+  | { kind: "usage" };
 
 export interface StreamMessage {
   id: number;

@@ -185,6 +185,32 @@ export function LeftPanel(): JSX.Element {
         </div>
       </div>
 
+      {/* W6-1 β：长任务进度 / 算力只读 / 用量——CLI 已有、UI 补齐的三个面板。
+          record/证据图浏览沿用右栏时间线，不在这里重复一个导航项。 */}
+      <div class="section">
+        <h2 class="section-title">运维</h2>
+        <div class="col" style={{ gap: "1px" }}>
+          <NavItem
+            label="任务"
+            view="tasks"
+            current={ws.view().kind === "tasks"}
+            onSelect={() => ws.setView({ kind: "tasks" })}
+          />
+          <NavItem
+            label="算力"
+            view="compute"
+            current={ws.view().kind === "compute"}
+            onSelect={() => ws.setView({ kind: "compute" })}
+          />
+          <NavItem
+            label="用量"
+            view="usage"
+            current={ws.view().kind === "usage"}
+            onSelect={() => ws.setView({ kind: "usage" })}
+          />
+        </div>
+      </div>
+
       <div class="section">
         <h2 class="section-title">实验</h2>
         <dl class="kv">

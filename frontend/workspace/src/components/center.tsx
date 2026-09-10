@@ -1,9 +1,26 @@
-import { For, Show, createSignal, type JSX } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+  type JSX,
+} from "solid-js";
 import { api, streamChat } from "../lib/api";
-import type { ConclusionCard, NoveltyResult, ReviewResult, TaskSnapshot } from "../lib/types";
+import type {
+  ApiCallAgg,
+  ComputeJobView,
+  ConclusionCard,
+  NoveltyResult,
+  ReviewResult,
+  TaskSnapshot,
+  UsageAgg,
+} from "../lib/types";
 import { useWorkspace, withBusy } from "../state";
 import { IdeaCardView, NoveltyView, ReadingCardView, ReviewView } from "./cards";
-import { Async, Badge, Markdown, Spinner } from "./ui";
+import { Async, Badge, KeyValues, Markdown, Spinner } from "./ui";
 
 // 中栏：会话流（chat / coexplore，SSE 渲染）+ 各类富渲染视图。
 
@@ -565,6 +582,446 @@ function ConclusionsView(): JSX.Element {
   );
 }
 
+// W6-1 β · 面板①/③ 共用：长任务状态与算力 execution 状态的展示色阶。
+//
+// 刻意**不**往 ui.tsx 的 `BADGE_TONE` 表里加新键——`tests/unit/narrative_parity.test.ts`
+// 的 AD-12 门禁会扫那张表，凡是「看起来像状态」的键都必须能在后端的实验状态机
+// （WET_EXPERIMENT_STATES ∪ EXPERIMENT_STATES）并集里查到，任务/算力状态不在那两套
+// 状态机里，加进去就是制造一条假阳性、拖着门禁一起改（narrative_parity.test.ts 不在
+// 本 lane 的文件所有权内）。这里改用「复用既有色阶键，展示文案仍是真实状态名」的写法：
+// `<Badge>` 的 children 永远是后端给的原始状态字符串，`tone` 只借一个视觉上匹配的
+// 既有类别，不产生新的「状态名」语义。
+function taskTone(state: TaskSnapshot["state"]): string {
+  if (state === "failed") return "failed";
+  if (state === "running") return "executing";
+  if (state === "succeeded") return "concluded";
+  return "unchecked"; // pending
+}
+
+function computeTone(execution: string): string {
+  if (execution === "awaiting_approval") return "awaiting_approval";
+  if (execution === "approved") return "approved";
+  if (execution === "rejected") return "rejected";
+  if (execution === "running" || execution === "queued" || execution === "starting") return "executing";
+  if (execution === "succeeded") return "concluded";
+  if (execution === "failed" || execution === "timed_out" || execution === "cancelled" || execution === "interrupted") {
+    return "failed";
+  }
+  return "unchecked"; // planned
+}
+
+// W6-1 β · 面板①：长任务进度（CLI 对齐 `lit tasks`）。
+//
+// 数据来自 `GET /api/tasks`——任务快照落盘在 `<项目>/tasks/`（server/tasks.ts），
+// 不是前端状态：刷新整个页面、甚至重启服务进程，只要落盘还在，这里就还看得到同样的东西。
+// 运行中的任务（pending/running）定时轮询；全部落定就停表，不空转。
+
+const TASK_KIND_LABEL: Record<string, string> = {
+  "lit.search": "文献检索",
+  "lit.add": "文献入库",
+  "lit.pdf": "PDF 下载",
+  "lit.read": "精读卡生成",
+  "lit.review": "综述生成",
+  "idea.coexplore": "co-explore",
+  "idea.novelty": "novelty check",
+  "exp.run": "干实验闭环",
+  "lab.simulate": "湿实验执行",
+};
+
+function TaskRow(props: { task: TaskSnapshot }): JSX.Element {
+  const pct = createMemo(() => {
+    const p = props.task.progress;
+    if (!p || !p.total) return null;
+    return Math.min(100, Math.round((p.done / p.total) * 100));
+  });
+
+  return (
+    <article class="card" data-testid="task-row">
+      <div class="card-head">
+        <span>{TASK_KIND_LABEL[props.task.kind] ?? props.task.kind}</span>
+        <Badge tone={taskTone(props.task.state)}>{props.task.state}</Badge>
+        {/* recovered：进程重启后从磁盘恢复、但本进程没有真实执行体在跑它——
+            「查过没查出来」与「没查过」是两回事，这里同理，不能把它画成与真在跑的任务一样。 */}
+        <Show when={props.task.recovered}>
+          <Badge tone="inferred" title="进程重启后从磁盘恢复；本进程没有真实执行体在跑它，未必仍在真的运行">
+            recovered
+          </Badge>
+        </Show>
+        <span class="spacer" />
+        <span class="mono faint" style={{ "font-size": "11px" }}>
+          {props.task.id.slice(0, 8)}
+        </span>
+      </div>
+      <div class="card-body">
+        <Show when={props.task.progress}>
+          {(p) => (
+            <Show
+              when={pct() !== null}
+              fallback={<span class="faint">{p().message ?? `${p().done} 步`}</span>}
+            >
+              <div class="progress-track">
+                <div class="progress-fill" style={{ width: `${pct()}%` }} />
+              </div>
+              <div class="faint" style={{ "font-size": "11px", "margin-top": "2px" }}>
+                {p().done} / {p().total}
+                {p().message ? ` · ${p().message}` : ""}
+              </div>
+            </Show>
+          )}
+        </Show>
+        <Show when={props.task.state === "failed"}>
+          <div class="error-box" role="alert" style={{ "margin-top": "6px" }}>
+            {props.task.error?.message ?? "任务失败，未附带错误信息"}
+          </div>
+        </Show>
+        <div class="faint" style={{ "font-size": "11px", "margin-top": "6px" }}>
+          创建 {props.task.createdAt.replace("T", " ").slice(0, 19)}
+          <Show when={props.task.finishedAt}>
+            {" "}
+            · 完成 {props.task.finishedAt!.replace("T", " ").slice(0, 19)}
+          </Show>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function TasksView(): JSX.Element {
+  const ws = useWorkspace();
+  const [tick, setTick] = createSignal(0);
+  const [tasks, { refetch }] = createResource(
+    () => [ws.slug(), tick()] as const,
+    ([slug]) => api.tasks.list(slug, 50),
+  );
+
+  // 只要列表里还有 pending/running 就每 2 秒刷一次；全部落定就停表，不空转 poll。
+  let timer: ReturnType<typeof setInterval> | undefined;
+  createEffect(() => {
+    const list = tasks()?.tasks ?? [];
+    const active = list.some((t) => t.state === "pending" || t.state === "running");
+    if (active && timer === undefined) {
+      timer = setInterval(() => setTick((n) => n + 1), 2000);
+    } else if (!active && timer !== undefined) {
+      clearInterval(timer);
+      timer = undefined;
+    }
+  });
+  onCleanup(() => {
+    if (timer !== undefined) clearInterval(timer);
+  });
+
+  return (
+    <div class="stream">
+      <div class="row">
+        <button class="btn btn-sm btn-ghost" onClick={() => void refetch()}>
+          ↻ 刷新
+        </button>
+        <span class="faint" style={{ "font-size": "11.5px" }}>
+          运行中的任务每 2 秒自动刷新；任务快照落盘在项目 <span class="mono">tasks/</span>{" "}
+          目录，刷新整个页面后仍能看到（不是前端状态）。
+        </span>
+      </div>
+      <Async
+        state={{ loading: tasks.loading, error: tasks.error, data: tasks() }}
+        onRetry={() => void refetch()}
+        isEmpty={(data) => data.tasks.length === 0}
+        empty={{ title: "还没有长任务", hint: "跑一次检索、精读卡、综述、novelty check 或实验闭环就会出现在这里。" }}
+      >
+        {(data) => (
+          <div class="col" style={{ gap: "8px" }}>
+            <For each={data.tasks}>{(task) => <TaskRow task={task} />}</For>
+          </div>
+        )}
+      </Async>
+    </div>
+  );
+}
+
+// W6-1 β · 面板③：算力（只读，CLI 对齐 `compute list` / `compute status`）。
+//
+// **这个面板刻意不放任何派发/审批按钮**——不是漏做，是 V47 裁定：HTTP 面上没有
+// dispatch 路由（server/routes/compute.ts 顶部注释：MCP 是 HTTP 的一次投影，HTTP
+// 开的口子等于给外部 agent 多一条路），派发与审批只在有真实交互终端的地方发起
+// （`spark-research compute run` / `compute approve`）。`api.compute` 客户端本身
+// 也没有暴露这两个方法，UI 组件从代码层面就没有调用它们的手段。
+function ComputeView(): JSX.Element {
+  const ws = useWorkspace();
+  const [selected, setSelected] = createSignal<string | null>(null);
+  const [jobs] = createResource(ws.slug, (s) => api.compute.jobs(s));
+  const [detail] = createResource(
+    () => (selected() ? ([selected()!, ws.slug()] as const) : null),
+    ([id, slug]) => api.compute.job(id, slug),
+  );
+
+  const jobLabel = (job: ComputeJobView) => `${job.plan.purpose} · ${job.target.kind}`;
+
+  // 单独取一份 job 出来算 entries：避免在 JSX 里反复调用 `d()`——每次调用在 TS 看来
+  // 都是一次新的、可能返回不同结果的函数调用，链式访问 `d().job.approval.actor` 这类
+  // 深层可选字段时窄化不过去，会被判成「可能是 null」。
+  const jobEntries = (job: ComputeJobView): Array<[string, unknown]> => [
+    ["目的", job.plan.purpose],
+    ["执行地", job.target.kind],
+    ["execution", job.lifecycle.execution],
+    ["delivery", job.lifecycle.delivery],
+    ["resource", job.lifecycle.resource],
+    ["命令", JSON.stringify(job.plan.command)],
+    [
+      "资源",
+      `gpu=${job.plan.resources.gpu ?? "—"} · cpus=${job.plan.resources.cpus} · ` +
+        `mem=${job.plan.resources.memoryGb}GB · timeout=${job.plan.resources.timeoutMinutes}min`,
+    ],
+    [
+      "预估上限",
+      job.plan.estimate.upperBoundUsd !== null
+        ? `$${job.plan.estimate.upperBoundUsd}`
+        : "查不到单价（不是免费，只是未知）",
+    ],
+    ["实际花费", job.actualCostUsd !== null ? `$${job.actualCostUsd}` : job.finishedAt ? "查不到单价" : null],
+    ["批准", job.approval ? `${job.approval.actor} @ ${job.approval.at}` : null],
+    ["拒绝", job.rejection ? `${job.rejection.actor}：${job.rejection.reason}` : null],
+    ["exit", job.exitCode],
+    ["message", job.message],
+    ["创建", job.createdAt.replace("T", " ").slice(0, 19)],
+  ];
+
+  return (
+    <div class="stream">
+      <div
+        class="row wrap"
+        data-testid="compute-cli-only-note"
+        style={{
+          padding: "8px 10px",
+          "border-radius": "var(--radius)",
+          background: "var(--warn-soft)",
+          border: "1px solid var(--warn)",
+          color: "var(--warn)",
+        }}
+      >
+        <span>
+          派发与审批仅 CLI（安全设计，非缺功能）——这个面板只读；执行用{" "}
+          <span class="mono">spark-research compute run &lt;jobId&gt;</span>，审批用{" "}
+          <span class="mono">spark-research compute approve &lt;jobId&gt;</span>，
+          都需要在有真实交互终端的地方发起。
+        </span>
+      </div>
+
+      <Async
+        state={{ loading: jobs.loading, error: jobs.error, data: jobs() }}
+        isEmpty={(data) => data.jobs.length === 0}
+        empty={{ title: "还没有算力任务", hint: "CLI 跑一次 spark-research compute plan 会出现在这里。" }}
+      >
+        {(data) => (
+          <div class="col" style={{ gap: "2px" }}>
+            <For each={data.jobs}>
+              {(job) => (
+                <button
+                  class="nav-item"
+                  aria-current={selected() === job.jobId}
+                  onClick={() => setSelected(job.jobId)}
+                >
+                  <Badge tone={computeTone(job.lifecycle.execution)}>{job.lifecycle.execution}</Badge>
+                  <span class="tl-title">{jobLabel(job)}</span>
+                  <span class="nav-count mono">{job.jobId.slice(0, 8)}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        )}
+      </Async>
+
+      <Show when={detail()}>
+        {(d) => (
+          <article class="card">
+            <div class="card-head">
+              <span class="mono">{d().job.jobId.slice(0, 8)}</span>
+              <Badge tone={computeTone(d().job.lifecycle.execution)}>{d().job.lifecycle.execution}</Badge>
+              <span class="spacer" />
+              <button class="btn btn-sm btn-ghost" onClick={() => setSelected(null)}>
+                关闭
+              </button>
+            </div>
+            <div class="card-body">
+              <KeyValues entries={jobEntries(d().job)} />
+            </div>
+          </article>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+// W6-1 β · 面板④：用量（CLI 对齐 `usage` / `usage api`）。
+//
+// **只消费后端算好的数字，前端不做任何成本算术**——两处算同一数字是 V37 的形状。
+// unknownCostCalls>0 时的示警文案照抄 CLI 口径（backend/src/cli/usage.ts）：
+// 「总花费无法确定报出」。
+
+function fmtUsd(v: number): string {
+  return `$${v.toFixed(4)}`;
+}
+
+function UsageAggTable(props: { title: string; rows: Record<string, UsageAgg> }): JSX.Element {
+  const names = () => Object.keys(props.rows);
+  return (
+    <div>
+      <h3 class="section-title">{props.title}</h3>
+      <Show when={names().length > 0} fallback={<span class="faint">（无记录）</span>}>
+        <div class="table-scroll">
+          <table class="md" style={{ width: "100%", "border-collapse": "collapse" }}>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>调用</th>
+                <th>已知花费（下界）</th>
+                <th>未知成本调用</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={names()}>
+                {(name) => (
+                  <tr>
+                    <td class="mono">{name}</td>
+                    <td>{props.rows[name]!.calls}</td>
+                    <td>{fmtUsd(props.rows[name]!.knownCostUsd)}</td>
+                    <td>{props.rows[name]!.unknownCostCalls}</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function ApiAggTable(props: { title: string; rows: Record<string, ApiCallAgg> }): JSX.Element {
+  const names = () => Object.keys(props.rows);
+  return (
+    <div>
+      <h3 class="section-title">{props.title}</h3>
+      <Show when={names().length > 0} fallback={<span class="faint">（无记录）</span>}>
+        <div class="table-scroll">
+          <table class="md" style={{ width: "100%", "border-collapse": "collapse" }}>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>调用</th>
+                <th>429</th>
+                <th>401</th>
+                <th>其他非 2xx</th>
+                <th>平均延迟</th>
+                <th>最大延迟</th>
+              </tr>
+            </thead>
+            <tbody>
+              <For each={names()}>
+                {(name) => (
+                  <tr data-testid="connector-health-row">
+                    <td class="mono">{name}</td>
+                    <td>{props.rows[name]!.calls}</td>
+                    <td>{props.rows[name]!.count429}</td>
+                    <td>{props.rows[name]!.count401}</td>
+                    <td>{props.rows[name]!.otherNon2xx}</td>
+                    <td>{Math.round(props.rows[name]!.avgLatencyMs)}ms</td>
+                    <td>{Math.round(props.rows[name]!.maxLatencyMs)}ms</td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function UsageView(): JSX.Element {
+  const ws = useWorkspace();
+  const [usage, { refetch: refetchUsage }] = createResource(ws.slug, (s) => api.usage.get(s));
+  const [apiUsage, { refetch: refetchApi }] = createResource(() => api.usage.apiCalls());
+
+  return (
+    <div class="stream">
+      <div class="row">
+        <button
+          class="btn btn-sm btn-ghost"
+          onClick={() => {
+            void refetchUsage();
+            void refetchApi();
+          }}
+        >
+          ↻ 刷新
+        </button>
+      </div>
+
+      <Async
+        state={{ loading: usage.loading, error: usage.error, data: usage() }}
+        isEmpty={(data) => data.calls === 0}
+        empty={{ title: "还没有 LLM 用量记录", hint: "lit read / lit review / idea new / idea check 的调用会自动入账。" }}
+      >
+        {(data) => (
+          <article class="card" data-testid="llm-usage-card">
+            <div class="card-head">
+              <span>LLM 用量 · 项目 {data.project}</span>
+            </div>
+            <div class="card-body">
+              <p style={{ margin: "0 0 6px" }}>
+                调用 {data.calls} 次 · 输入 {data.inputTokens} tokens · 输出 {data.outputTokens} tokens
+              </p>
+              <p style={{ margin: "0 0 6px" }} data-testid="known-cost-usd">
+                已知花费（下界）{fmtUsd(data.knownCostUsd)}
+              </p>
+              {/* 口径照抄 CLI（backend/src/cli/usage.ts）：未知成本绝不当 0，
+                  有未知就不能报确定总数，只报已知下界。 */}
+              <Show when={data.unknownCostCalls > 0}>
+                <div class="error-box" role="alert" data-testid="unknown-cost-warning">
+                  ⚠️ 其中 {data.unknownCostCalls} 次调用成本未知（拿不到 usage 或查不到单价）——
+                  总花费无法确定报出，上面的数只是下界。
+                </div>
+              </Show>
+              <UsageAggTable title="按命令" rows={data.byCommand} />
+              <UsageAggTable title="按模型" rows={data.byModel} />
+              <Show when={data.corruptLines > 0}>
+                <p class="faint" style={{ margin: "8px 0 0", "font-size": "11.5px" }}>
+                  ⚠️ 台账文件有 {data.corruptLines} 行无法解析（文件可能被手工改过），以上统计不含这些行。
+                </p>
+              </Show>
+            </div>
+          </article>
+        )}
+      </Async>
+
+      <Async
+        state={{ loading: apiUsage.loading, error: apiUsage.error, data: apiUsage() }}
+        isEmpty={(data) => data.calls === 0}
+        empty={{ title: "还没有 connector 调用记录", hint: "任意 connector 发起的 HTTP 请求都会自动入账。" }}
+      >
+        {(data) => (
+          <article class="card">
+            <div class="card-head">
+              <span>connector 健康度（全局，不分项目）</span>
+            </div>
+            <div class="card-body">
+              <p style={{ margin: "0 0 6px" }}>
+                调用 {data.calls} 次 · 429×{data.count429} · 401×{data.count401} · 其他非2xx×{data.otherNon2xx} ·
+                平均延迟 {Math.round(data.avgLatencyMs)}ms · 最大延迟 {Math.round(data.maxLatencyMs)}ms
+              </p>
+              <ApiAggTable title="按 connector" rows={data.byConnector} />
+              <ApiAggTable title="按 host" rows={data.byHost} />
+              <Show when={data.corruptLines > 0}>
+                <p class="faint" style={{ margin: "8px 0 0", "font-size": "11.5px" }}>
+                  ⚠️ 台账文件有 {data.corruptLines} 行无法解析（文件可能被手工改过），以上统计不含这些行。
+                </p>
+              </Show>
+            </div>
+          </article>
+        )}
+      </Async>
+    </div>
+  );
+}
+
 export function CenterPanel(): JSX.Element {
   const ws = useWorkspace();
   return (
@@ -586,6 +1043,15 @@ export function CenterPanel(): JSX.Element {
       </Show>
       <Show when={ws.view().kind === "artifacts"}>
         <ArtifactsView />
+      </Show>
+      <Show when={ws.view().kind === "tasks"}>
+        <TasksView />
+      </Show>
+      <Show when={ws.view().kind === "compute"}>
+        <ComputeView />
+      </Show>
+      <Show when={ws.view().kind === "usage"}>
+        <UsageView />
       </Show>
     </main>
   );

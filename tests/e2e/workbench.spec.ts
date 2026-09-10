@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -516,4 +516,150 @@ test("⑭ C5-② depict → 产物列表出现 .svg → img.naturalWidth > 0", a
   await expect(img).toBeVisible();
   const naturalWidth = await img.evaluate((el: HTMLImageElement) => el.naturalWidth);
   expect(naturalWidth).toBeGreaterThan(0);
+});
+
+// ── W6-1 β：工作台四面板（CLI 已有、UI 补齐） ────────────────────────────────
+//
+// 这四条接在既有链路后面，复用同一个 "e2e-lab" 项目与同一个 fixture 服务器——
+// 面板②③需要的「record 有入边出边」「有一个算力 job」这类前提，靠上面 ①-⑭ 已经
+// 走过的真实业务动作（湿实验 approve、干实验 conclude）与本文件内直接 seed 的最小
+// HTTP 调用满足，不重新搭一个项目。
+
+test("⑮ 长任务面板：起一个检索任务能看到进度，刷新整个页面后任务仍在（面板①）", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /^文献库/ }).click();
+
+  // 复用 fixture 支持的检索式（DualCassetteSearcher 只认这一条），再检索一次是
+  // 幂等的（add:true 只会合并，不会重复入库两份）——这里只是要一个真实的长任务。
+  await page.getByPlaceholder(/跨源检索并入库/).fill("AlphaFold protein structure prediction");
+  await page.getByRole("button", { name: "检索并入库" }).click();
+
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  const taskRow = page.locator('[data-testid="task-row"]').first();
+  await expect(taskRow).toBeVisible({ timeout: 30_000 });
+  await expect(taskRow).toContainText("文献检索");
+  // 进度信息：done/total 或阶段文案至少要有一个渲染出来——不是空徽章。
+  await expect(taskRow.locator(".card-body")).not.toBeEmpty();
+  await waitIdle(page);
+  await expect(taskRow).toContainText(/succeeded|running/);
+  const taskId = (await taskRow.locator(".mono.faint").first().innerText()).trim();
+  expect(taskId).toHaveLength(8);
+
+  // 刷新**整个浏览器页面**（不是 SPA 内部导航）：数据要还在，因为它来自后端落盘
+  // 的任务快照（server/tasks.ts），不是这次 session 里攒出来的前端状态。
+  await page.reload();
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  await expect(page.locator('[data-testid="task-row"]', { hasText: taskId })).toBeVisible({ timeout: 15_000 });
+});
+
+test("⑯ record 详情：点开一条 record 能同时看到入边与出边（面板②）", async ({ page }) => {
+  await page.goto("/");
+  // 干实验的 computed 观察（来自 ⑥）在 ⑪ 里被一条结论 record 反向引用
+  // （conclusion --derives_from--> observation），同时它自己也 derives_from 那条
+  // 干实验——是这条链路里唯一同时有入边又有出边的 record，专门用来验证面板②
+  // 「入边出边都要看得到」，不是只有一边。
+  await filterByType(page, "观察");
+  const computedObservation = page.locator(".timeline .tl-item", { hasText: "computed" }).first();
+  await expect(computedObservation).toBeVisible();
+  await computedObservation.locator(".tl-btn").click();
+
+  await expect(page.locator(".right svg.graph")).toBeVisible();
+  const edgeButtons = page.locator(".right .col > button.nav-item");
+  await expect.poll(async () => edgeButtons.count()).toBeGreaterThan(1);
+  const labels = await edgeButtons.allInnerTexts();
+  expect(labels.some((t) => t.includes("→"))).toBe(true);
+  expect(labels.some((t) => t.includes("←"))).toBe(true);
+});
+
+test("⑰ 算力面板：只读展示 job，断言没有任何派发/审批按钮（面板③，V47 裁定）", async ({ page }) => {
+  await page.goto("/");
+
+  // compute plan 是零副作用的"建计划"——不建远端资源、不解析凭据，正好用来种一条
+  // 可展示的 job，不必真的跑一次算力。
+  const seeded = await page.evaluate(async () => {
+    const res = await fetch("/api/compute/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ purpose: "e2e-算力面板只读断言", command: ["echo", "hi"] }),
+    });
+    return { status: res.status, body: await res.json() };
+  });
+  expect(seeded.status).toBe(201);
+
+  await page.reload();
+  await page.getByRole("button", { name: "算力", exact: true }).click();
+
+  const note = page.locator('[data-testid="compute-cli-only-note"]');
+  await expect(note).toBeVisible();
+  await expect(note).toContainText("派发与审批仅 CLI");
+
+  const jobRow = page.locator(".center .nav-item").filter({ hasText: "e2e-算力面板只读断言" });
+  await expect(jobRow).toBeVisible();
+  await jobRow.click();
+  await expect(page.locator(".center article.card")).toBeVisible();
+
+  // 硬断言：整个算力面板（空态 + 列表 + 详情）里不存在任何派发/批准/拒绝类按钮——
+  // 不是"暂时没做"，是 HTTP 面刻意没开这个口子（server/routes/compute.ts 顶部注释）。
+  const forbidden = /派发|批准|拒绝|approve|reject|dispatch|^运行$|^执行$/i;
+  const buttons = page.locator(".center button");
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const text = (await buttons.nth(i).innerText()).trim();
+    expect(text).not.toMatch(forbidden);
+  }
+});
+
+test("⑱ 用量面板：往 usage.jsonl 写一行后刷新，面板数字随之变化（面板④）", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "用量", exact: true }).click();
+
+  // fixture 服务器的 LLM 全是脚本化假件、从不走 usageTrackingLlm，这个项目目前
+  // 还没有任何 usage.jsonl——面板应该诚实地显示空态，不是白屏。
+  await expect(page.locator('[data-testid="llm-usage-card"]')).toHaveCount(0);
+  await expect(page.getByText("还没有 LLM 用量记录")).toBeVisible();
+
+  const projectInfo = await page.evaluate(async () => {
+    const res = await fetch("/api/projects/current");
+    return (await res.json()) as { project: { paths: { root: string } } };
+  });
+  const usageFile = join(projectInfo.project.paths.root, "usage.jsonl");
+
+  // 不必真花钱：直接往台账文件追加两行——验的是"面板如实反映后端已经算好的数字"，
+  // 不是"这次调用真的花了钱"。其中一行 costUsd=null，专门验证 unknownCostCalls
+  // 的示警文案会出现（口径照抄 CLI：「总花费无法确定报出」，不能被当成 0）。
+  appendFileSync(
+    usageFile,
+    `${JSON.stringify({
+      ts: new Date().toISOString(),
+      command: "lit-read",
+      provider: "openrouter",
+      model: "z-ai/glm-5.3-flash",
+      ok: true,
+      inputTokens: 800,
+      outputTokens: 150,
+      costUsd: 0.0123,
+    })}\n${JSON.stringify({
+      ts: new Date().toISOString(),
+      command: "lit-review",
+      provider: "openrouter",
+      model: "z-ai/glm-5.3-flash",
+      ok: true,
+      inputTokens: 400,
+      outputTokens: 90,
+      costUsd: null,
+    })}\n`,
+  );
+
+  await page.reload();
+  await page.getByRole("button", { name: "用量", exact: true }).click();
+
+  const card = page.locator('[data-testid="llm-usage-card"]');
+  await expect(card).toBeVisible();
+  await expect(card.locator('[data-testid="known-cost-usd"]')).toContainText("0.0123");
+  const warning = page.locator('[data-testid="unknown-cost-warning"]');
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText("总花费无法确定报出");
+
+  const after = await page.evaluate(async () => (await fetch("/api/usage")).json());
+  expect((after as { calls: number }).calls).toBe(2);
 });
