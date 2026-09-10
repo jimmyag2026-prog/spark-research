@@ -392,13 +392,23 @@ describe("降级路径：capabilitiesFor(model).toolCalling === false", () => {
 
 describe("legacy 兼容：SubAgentFactory", () => {
   test("permission 字段现在是 MCP 工具名，与新 API 的默认 grants 同源（不再是 v0.1 抽象能力名）", () => {
-    const factory = new SubAgentFactory();
-    for (const type of ALL_TYPES) {
-      const agent = factory.create(type);
-      expect(agent.permission).toEqual(buildSubAgentSpec(type).grants);
-      expect(agent.prompt.length).toBeGreaterThan(0);
-      expect(agent.model).toBe(LLMRouter.DEFAULT_MODEL);
-      expect(agent.type).toBe(type);
+    // R1 实测暴露的隔离缺口：本断言里的 agent.model 解析链会读**真实用户**的
+    // ~/.spark-research/config.json——用户设过 defaultModel 这条测试就红。
+    // 环境变量指到空目录，测试只验「无配置时落代码默认」这层语义本身。
+    const previous = process.env.SPARK_RESEARCH_DATA_DIR;
+    process.env.SPARK_RESEARCH_DATA_DIR = mkdtempSync(join(tmpdir(), "spark-subagent-iso-"));
+    try {
+      const factory = new SubAgentFactory();
+      for (const type of ALL_TYPES) {
+        const agent = factory.create(type);
+        expect(agent.permission).toEqual(buildSubAgentSpec(type).grants);
+        expect(agent.prompt.length).toBeGreaterThan(0);
+        expect(agent.model).toBe(LLMRouter.DEFAULT_MODEL);
+        expect(agent.type).toBe(type);
+      }
+    } finally {
+      if (previous === undefined) delete process.env.SPARK_RESEARCH_DATA_DIR;
+      else process.env.SPARK_RESEARCH_DATA_DIR = previous;
     }
   });
 

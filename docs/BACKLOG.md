@@ -2,7 +2,7 @@
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11（v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、新增 V61–V63；
+> 最后更新：2026-09-11（v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
 > v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
 
@@ -150,6 +150,17 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V61 | **`existsSync("/$bunfs/…")` 的语义平台相关**（已修一处，登记形状） | v0.6 G-2 的首个 Linux CI 冒烟抓到：macOS 上对虚拟路径返回 false（内嵌兜底生效），Linux 上返回 true 但枚举拿不到内容——于是 Linux 二进制的技能索引**恒为 0 且不报错**，AD-12 最忌讳的安静错误答案。`skills/frontmatter.ts` 已改显式 `/$bunfs` 前缀判据。**登记是为了形状**：任何「用 existsSync 判断要不要走内嵌兜底」的代码在 Linux 上都可能悄悄走错分支；grep 过一遍，`agents/prompts.ts`（try/catch 兜底）与 server/index 的前端路径（materialize 后真实目录）均不受影响，当前无第二处。新增此类兜底时判据一律用 `/$bunfs` 前缀不用 existsSync |
 | V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫 |
 | V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线 |
+| V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项 |
+| V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没 |
+| V66 | **精读卡不吃已下载的 PDF 全文（仅摘要推理）** | R1-T1：10/10 张卡全部呈摘要级推理形态，含 PDF 已成功下载的论文。文献链路价值大头——精读的「读」目前名不副实。需查 reading.ts 的输入构造是否根本没接 PDF 文本抽取 |
+| V67 | 默认检索排序让里程碑论文沉底 | R1-T1：任务书检索式下召回 2/8，--limit 提到 50 才 5/8；3 篇里程碑（ESMFold/Foldseek/ProGen2）任何设置都不出现在检索结果但 DOI 直加秒中——**排序问题非覆盖问题**。方向：被引数加权 / 源侧排序参数 |
+| V68 | `idea new` / `idea check` 无任务句柄 | R1-T1：进程被杀 100% 丢工作、零痕迹——与 lit read/review（V35 已接任务句柄）能力不对等。照 runCliTask 同款接线 |
+| V69 | 项目 `--desc` 逐字注入每次 LLM prompt，污染报告正文 | R1 双课题都观察到：desc 文本渗入精读卡「与本项目关系」与报告「研究问题」。projectContext 注入时应显式框定为背景说明而非任务指令 |
+| V70 | 长任务进程被杀后快照僵死「running」 | R1-T3：kill 后 lit tasks 永久显示 running，无 liveness 判据（V3 的亲戚：缺 pid/start-time 交叉核验） |
+| V71 | `review findings` 不显示刚落的 citation-integrity soft finding | R1-T1：soft finding 刚写入证据图，review findings 却看不到——查询过滤面或类型映射有洞 |
+| V72 | 中文无作者论文的 BibTeX key 嵌入原始汉字 | R1-T3：key 应转拼音或降级 anonymous+年份；汉字 key 会破坏部分 BibTeX 工具链 |
+| V73 | AMiner 间歇 401（12%，100 调用中 12 次） | R1-T3 的 usage api 台账捕获；key 在有效期内。待查：限速的 401 表达？某类端点无权限？与 key 续期（10-07）一并处理 |
+| V74 | **测试套件对用户级 config 不完全隔离** | R1 连带发现：用户 `config set defaultModel` 后 sub_agent.test.ts 的 legacy 断言变红（读了真实 ~/.spark-research）。已修该测试（env 隔离）；**系统性方案待议**：bunfig preload 统一注入临时 SPARK_RESEARCH_DATA_DIR——但要先清点哪些测试有意读真实凭据（RECORDING 模式） |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 

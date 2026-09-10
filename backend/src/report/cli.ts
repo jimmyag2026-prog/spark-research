@@ -88,10 +88,16 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
   const { flags, positional } = parseArgs(rest);
 
   let project: Project | null = null;
+  // R1-P0：--project 显式覆盖（同 literature/ideation CLI——全局项目指针并发会话下
+  // 会互相改写）。四个 case 原来各写一遍 defaultProject()，这里收成单点。
+  const resolveProject = (): Project => {
+    const slug = flagString(flags.project);
+    return slug ? manager.open(slug) : manager.defaultProject();
+  };
   try {
     switch (sub) {
       case "export": {
-        project = manager.defaultProject();
+        project = resolveProject();
         const report = reportFor(project, { verbose: flags.verbose === true, now: deps.now });
         const target = flagString(flags.out);
         if (flags.json === true) {
@@ -129,7 +135,7 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
       }
 
       case "stats": {
-        project = manager.defaultProject();
+        project = resolveProject();
         const report = reportFor(project, { now: deps.now });
         if (flags.json === true) {
           out(JSON.stringify({ project: report.project, counts: report.counts }, null, 2));
@@ -146,7 +152,7 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
       // 既有只读 API（`backend/src/project/records.ts`，本 lane 不改它），
       // 只是之前没有 CLI 出口。
       case "records": {
-        project = manager.defaultProject();
+        project = resolveProject();
         const records = project.records();
         const typeFlag = flagString(flags.type);
         if (typeFlag !== undefined && !RECORD_TYPES.includes(typeFlag as RecordType)) {
@@ -202,7 +208,7 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
           err("用法: spark-research report show <recordId> [--json]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = resolveProject();
         const records = project.records();
         const record = records.get(recordId);
         if (!record) {

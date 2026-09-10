@@ -90,8 +90,10 @@ function parseSources(raw: string | undefined): LiteratureSource[] {
   return names as LiteratureSource[];
 }
 
-function openProject(manager: ProjectManager): { project: Project; library: LibraryStore } {
-  const project = manager.defaultProject();
+// R1-P0：--project 显式覆盖（同 literature/cli.ts 的 openLibrary——全局项目指针在
+// 并发会话下会互相改写，显式 flag 是并发可靠使用的最小机制）。
+function openProject(manager: ProjectManager, projectSlug?: string): { project: Project; library: LibraryStore } {
+  const project = projectSlug ? manager.open(projectSlug) : manager.defaultProject();
   const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
   return { project, library };
 }
@@ -157,7 +159,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   try {
     switch (sub) {
       case "new": {
-        const { project, library } = openProject(manager);
+        const { project, library } = openProject(manager, flagString(flags.project));
         const records = project.records();
         const budget = parseBudgetUsd(flags["budget-usd"], err);
         if (!budget.ok) {
@@ -253,7 +255,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
       }
 
       case "list": {
-        const { project, library } = openProject(manager);
+        const { project, library } = openProject(manager, flagString(flags.project));
         const store = new IdeaStore(project.records(), library);
         const cards = store.list({ status: flagString(flags.status) as NoveltyStatus | undefined });
         if (flags.json === true) {
@@ -275,7 +277,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
           err("用法: spark-research idea check <record-id>");
           return 1;
         }
-        const { project, library } = openProject(manager);
+        const { project, library } = openProject(manager, flagString(flags.project));
         const records = project.records();
         const store = new IdeaStore(records, library);
         const idea = store.get(target);
