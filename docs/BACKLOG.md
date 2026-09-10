@@ -110,6 +110,13 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V30 | **删除论文这条路今天不可达，孤儿对账扫描也只被测试调用** | W4-b 按 E-6 交付了 `retractOrphanRecords()`（把指向已删论文的 record 标 `retracted`），但收口核查发现两件事：① `LibraryStore.remove()` **零生产调用方**——用户today根本删不掉论文，所以「删论文留孤儿」这个场景不可达；② `retractOrphanRecords()` 也只被测试引用。叙事门禁看不见它，因为孤儿检测是**文件粒度**而 `reading.ts` 整体有生产调用方（W3-c 标过的表达力上限）。**处置：将来加删除入口时必须同时接上这个对账扫描**；或把它做成一条维护命令让它可达。发布前不加新入口——那属于没有 lane 测试纪律兜底的仓促改动。 |
 | V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 |
 | V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 |
+| V33 | **二进制里 `workspaceRoot` 默认值解析到文件系统根 `/workspaces`** | v0.5 闸门 F-c 调查时发现，主会话已核实：`agents/orchestrator.ts:223` 的 `join(import.meta.dir, "../../../workspaces")` 在编译产物里等于 `join("/$bunfs/root", ...)` → **`/workspaces`**，紧接着 `mkdirSync(workspaceRoot, { recursive: true })`。**这不是 ENOENT，是往文件系统根目录写**——macOS 被权限挡住，Linux 上以 root 跑会真建。属 V27 家族但性质更重（其余是读不到文件，这条是写错地方）。修 V27 时必须一并处理。 |
+| V34 | **`DEFAULT_SEARCH_SOURCES` 没跟上 W3-d 的 arxiv/pubmed 接通** | **零上下文外部验收（v0.5 闸门 F-1）实测发现，主会话已核实**：`literature/models.ts:16-21` 的默认源仍是 P2 时代的 `[openalex, crossref, europepmc, semanticscholar]`，**不含 arxiv / pubmed**。于是 `lit search --sources arxiv` 能用、`capabilities` 也报 arxiv 可用，但 `lit add <arxiv-id>` 走默认值查四个不含 arxiv 的源 → 报「未找到」。**能力做好了、默认值没跟着改。** AD-12 门禁抓不到这一类——它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。修默认值的同时应考虑给门禁加一条：**已实装的源必须在默认集里，或有显式排除理由**。 |
+| V35 | **长任务在 CLI 层完全不可见** | 外部验收的**头号卡点**：`lit read --all` 8 分钟零输出，无进度、无 job id、断开后无法查状态——验收者只能杀掉进程再用 `lit list` 反推它其实在工作。**而 MCP 层有 `task_status` 机制、W4-c 还做了长任务落盘与 MCP 进度回传（V17）**——CLI 是唯一没接的入口。这是 CLI/MCP 的能力不对等，不是缺功能。 |
+| V36 | 失败消息不给下一步 | 外部验收：`idea new` 的契约校验失败与 `lit add` 的未找到，**都只说哪里错了、不说该试什么**，验收者靠猜绕过去。对照：`lab approve` 的 V19 拒绝消息就给了完整的下一步指引，是好样板。 |
+| V37 | `auth` 与 `config list` / `doctor` 对同一把 key 报不同状态 | 外部验收：`sr auth` 把 `OPENROUTER_API_KEY` 报成未配置，而 `config list` / `doctor` 正确显示已配置。**三处读同一份配置却给出矛盾答案**——与 P11 收口修过的 `PROVIDER_API_KEY_ENV` 手工副本是同一类问题（真源没统一）。 |
+| V38 | BibTeX 导出把「Last F」形态的作者名解析错 | 外部验收发现，导致引用 key 生成错误。 |
+| V39 | `lit review --help` 直接执行而不是显示帮助 | 外部验收发现。帮助不可用是上手性问题。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
