@@ -283,16 +283,32 @@ export function buildReport(input: BuildReportInput): ResearchReport {
   }
 
   // ── 附录 ───────────────────────────────────────────────────────────────────
+  // S10（W5-3 δ 外部验收发现）：这张表只索引「正文（问题/思路/实验/结论/待验证）
+  // 点名引用过」的 record，不是项目全部 record 的目录——没被任何思路卡链接的论文、
+  // 没被任何结论引用的精读卡，都不会出现在这里，即便下面的统计行写着「论文 N·精读卡 N」。
+  // 这是刻意的语义（附录 A = 正文引用回链索引，不是全量目录），但空表 + 非零统计会让
+  // 读者以为报告坏了——所以无论表是否为空，都先把这句话钉在前面，并指去能看全量的命令。
   lines.push("## 附录 A · 证据索引");
   lines.push("");
-  lines.push("| record | 类型 | 证据标签 | 标题 |");
-  lines.push("|--------|------|---------|------|");
-  for (const id of recordIds) {
-    const record = records.get(id);
-    if (!record) continue;
-    lines.push(`| \`${id}\` | ${record.type} | ${record.evidence} | ${record.title.replace(/\|/g, "\\|")} |`);
-  }
+  lines.push(
+    "> 本表只索引正文里点名引用过的 record，不是项目全部 record 的目录——" +
+      "要看项目里的全部 record（含未被引用的论文/精读卡/artifact），用 `spark-research report records`；" +
+      "查单条详情（含入边/出边）用 `spark-research report show <recordId>`。",
+  );
   lines.push("");
+  if (recordIds.size === 0) {
+    lines.push("（正文暂无点名引用的证据——上面各节还没有 record 落进叙事里，不代表证据图是空的。）");
+    lines.push("");
+  } else {
+    lines.push("| record | 类型 | 证据标签 | 标题 |");
+    lines.push("|--------|------|---------|------|");
+    for (const id of recordIds) {
+      const record = records.get(id);
+      if (!record) continue;
+      lines.push(`| \`${id}\` | ${record.type} | ${record.evidence} | ${record.title.replace(/\|/g, "\\|")} |`);
+    }
+    lines.push("");
+  }
 
   if (keyIndex && input.papers && input.papers.length > 0) {
     lines.push("## 附录 B · 参考文献");
