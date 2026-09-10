@@ -5,13 +5,17 @@
 //      （backend/src/connectors/manifest.ts，本文件**只读复用**，不重造）。不执行任意代码。
 //   ② kind ∈ {skill, platform, backend, rule}：旁边一个 index.ts，同 UID 代码执行——
 //      装载需要显式 `--trust`（见 fingerprint.ts）。
-//   ③ 外部 MCP client：不在本 lane（W3-c 的活）。
+//   ③ kind === "mcp_client"：旁边一个 mcp.json（数据：command/args/env 白名单/凭据映射），
+//      装载器不执行任意 TS 代码，但会启动一个**外部进程**并用 stdio 跟它说 MCP 协议
+//      （backend/src/extensions/mcp_client.ts，W4-d 交付）。风险面不比②低——"启动任意
+//      command"本身就是本地任意命令执行——所以同样需要 `--trust`（指纹覆盖 mcp.json，
+//      而不是某个 TS 入口文件）。
 //
 // extension.json 本身不执行代码、不发网络请求——只是数据，装载器读它来决定走哪条路。
 
-export type ExtensionKind = "connector" | "skill" | "platform" | "backend" | "rule";
+export type ExtensionKind = "connector" | "skill" | "platform" | "backend" | "rule" | "mcp_client";
 
-export const EXTENSION_KINDS: readonly ExtensionKind[] = ["connector", "skill", "platform", "backend", "rule"];
+export const EXTENSION_KINDS: readonly ExtensionKind[] = ["connector", "skill", "platform", "backend", "rule", "mcp_client"];
 
 // 扩展声明「它想访问什么」——**声明不等于拿到**，用户还要显式 `ext grant` 批准
 // （见 grants.ts）。这是任务书安全边界的第一句话：「扩展默认拿不到任何凭据 /
@@ -105,6 +109,8 @@ export function loadExtensionManifest(json: string): ExtensionManifest {
 }
 
 // TS 代码执行强度（②）覆盖的 kind 集合——这些需要 --trust。
+// mcp_client（③）同样需要 --trust：启动任意 command 的风险面不比同 UID 执行 TS
+// 代码更小，见文件头注释。
 export function requiresTrust(kind: ExtensionKind): boolean {
   return kind !== "connector";
 }

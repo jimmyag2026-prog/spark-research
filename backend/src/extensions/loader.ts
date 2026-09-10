@@ -4,10 +4,13 @@
 //   kind="connector"                → 直接复用 W1-c 的 loadManifestFromJson，不执行代码。
 //   kind∈{skill,platform,backend,rule} → 需要 --trust（fingerprint.ts），
 //                                        通过后 dynamic import 扩展的 entry 文件。
+//   kind="mcp_client"                → 需要 --trust（指纹覆盖 mcp.json），通过后只解析
+//                                        配置——**不**在装载时启动子进程（见 mcp_client.ts
+//                                        头部注释：只读端点/装载动作不该顺手起进程）。
 //
 // 安全边界（恶意矩阵的落点，逐条标注）：
 //   ① manifest 声明 A 却调 B 工具        → context.ts 的 buildExtensionContext 结构性拒绝
-//   ② 未 grant 却取凭据                 → 同上
+//   ② 未 grant 却取凭据                 → 同上（mcp_client 同样经这条路径，见 mcp_client.ts 的 resolveMcpChildEnv）
 //   ③ 声明式 connector 塞 file:// / 内网 → loadManifestFromJson 内部的 assertOutboundUrlAllowed 拒绝
 //   ④ 扩展抛异常                       → 本文件的 try/catch，主进程不受影响，返回 status:"failed"
 //   ⑤ 未过 ext verify 装载时警告         → verify_cache.ts 的缓存比对
@@ -22,6 +25,7 @@ import { ExtensionGrantStore } from "./grants";
 import { buildExtensionContext, type ExtensionContext, type ExtensionContextDeps } from "./context";
 import { readVerifyCache, subjectPathFor } from "./verify_cache";
 import type { ExtensionPathOptions } from "./paths";
+import { loadMcpClientConfig, McpClientConfigError, type McpClientConfig } from "./mcp_client";
 
 export interface LoadExtensionOptions {
   // 装载 TS 扩展（强度②）的显式确认；connector 不需要。
@@ -40,6 +44,10 @@ export interface LoadedExtension {
   reason: string | null;
   warnings: string[];
   connector?: HttpConnector;
+  // kind="mcp_client"：解析后的 mcp.json（command/args/env 白名单/凭据映射）。
+  // **不含**已建立的连接——连接是有状态的（子进程句柄），装载器不替调用方决定
+  // "什么时候该连"，见 mcp_client.ts 的 connectExternalMcp()/discoverExternalMcpTools()。
+  mcpConfig?: McpClientConfig;
   context?: ExtensionContext;
   // TS 扩展的原始模块导出。装载器不猜它长什么样（platform 该导出 createPlatform，
   // rule 该导出 rule/VERIFY_SAMPLE_INPUT，backend 该导出 backend）——那是 verify.ts
@@ -107,6 +115,33 @@ export async function loadExtension(extensionDir: string, options: LoadExtension
       const reason = error instanceof ManifestError ? error.message : error instanceof Error ? error.message : String(error);
       return failure(manifest.name, "connector", reason, warnings);
     }
+  }
+
+  // ── 强度③：外部 MCP client ── 另一个进程，同样需要 --trust ──
+  if (manifest.kind === "mcp_client") {
+    const mcpJsonPath = join(extensionDir, "mcp.json");
+    if (!existsSync(mcpJsonPath)) {
+      return failure(manifest.name, "mcp_client", `找不到 ${mcpJsonPath}`, warnings);
+    }
+    let mcpConfig: McpClientConfig;
+    try {
+      mcpConfig = loadMcpClientConfig(readFileSync(mcpJsonPath, "utf8"));
+    } catch (error) {
+      const reason = error instanceof McpClientConfigError ? error.message : String(error);
+      return failure(manifest.name, "mcp_client", reason, warnings);
+    }
+
+    // 指纹覆盖 mcp.json 本身（不是某个 TS 文件）——command/args/env/凭据映射
+    // 任何一处变化都要求重新确认，理由与 TS 扩展的入口文件指纹完全一致。
+    const trust = checkTrust(manifest.name, mcpJsonPath, Boolean(options.trust), options.pathOptions);
+    if (!trust.trusted) {
+      return failure(manifest.name, "mcp_client", trust.message, warnings);
+    }
+    warnings.push(trust.message);
+
+    // 刻意不在这里 connectExternalMcp()：装载 ≠ 启动子进程。真正的连接由调用方
+    // （daemon 接线 / `ext verify` / `ext add-mcp` 的发现步骤）显式发起。
+    return { name: manifest.name, kind: "mcp_client", status: "loaded", reason: null, warnings, mcpConfig };
   }
 
   // ── 强度②：TS 扩展（skill / platform / backend / rule）── 同 UID 代码执行 ──
