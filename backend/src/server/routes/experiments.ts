@@ -1,8 +1,10 @@
 import { Hono } from "hono";
 import {
+  COMPUTE_TARGETS,
   EXPERIMENT_STATES,
   LEGAL_TRANSITIONS,
   TERMINAL_STATES,
+  isComputeTargetName,
   isExperimentState,
   type ExperimentState,
   type ExperimentView,
@@ -77,6 +79,12 @@ export function experimentRoutes(ctx: ServerContext): Hono {
     const params = (body.params ?? {}) as Record<string, unknown>;
     if (typeof params !== "object" || Array.isArray(params)) throw new HttpError(400, "params 必须是对象");
     const hypothesis = optionalString(body, "hypothesis");
+    // CB-6：执行地只是**透传**到 design——HTTP 这一层不做任何算力语义
+    //（审批门是 compute 那条路由的事，见 server/routes/compute.ts）。
+    const target = optionalString(body, "target") ?? null;
+    if (target !== null && !isComputeTargetName(target)) {
+      throw new HttpError(400, `未知执行地 '${target}'（可用：${COMPUTE_TARGETS.join(", ")}）`);
+    }
 
     return ctx.withProject(projectSlug(c), async (scope) => {
       const loop = scope.dryLoop();
@@ -88,7 +96,7 @@ export function experimentRoutes(ctx: ServerContext): Hono {
           if (kinds.length === 0) throw new Error(`平台 '${platform}' 没有可用的任务种类`);
           kind = kinds[0]!;
         }
-        const view = await loop.design({ title, platform, kind, params, hypothesis });
+        const view = await loop.design({ title, platform, kind, params, hypothesis, target });
         return c.json({ project: scope.project.slug, experiment: viewJson(view) }, 201);
       } catch (error) {
         // 参数写错/平台未知在 design 阶段就该被挡住（P5 纪律），并且是 400 不是 500。

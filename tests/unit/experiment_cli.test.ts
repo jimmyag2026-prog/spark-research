@@ -55,6 +55,33 @@ describe("exp CLI · new", () => {
     expect(await c.run(["new", "X", "--param"])).toBe(1);
   });
 
+  test("--target 写错在建 record 之前就被拒", async () => {
+    const c = cli();
+    expect(await c.run(["new", "X", ...FAST, "--target", "gpu-farm"])).toBe(1);
+    expect(c.errText()).toContain("未知执行地");
+    // 拒了就不该留下半条实验。
+    const list = cli();
+    expect(await c.run(["list", "--json"])).toBe(0);
+    expect(JSON.parse(c.text().split("\n").filter((l) => l.startsWith("["))[0]!)).toEqual([]);
+    void list;
+  });
+
+  test("--target local 落进 record，并在人类输出里说清楚「不会替你把钱花出去」", async () => {
+    const c = cli();
+    expect(await c.run(["new", "算力振子", ...FAST, "--target", "local"])).toBe(0);
+    expect(c.text()).toContain("执行地 local（算力层）");
+    // 「不会替你把钱花出去」必须在**建档那一刻**就说清楚，而不是等人 run 了才发现。
+    expect(c.text()).toContain("停下来等人审批");
+  });
+
+  test("不给 --target = 老路径，computeTarget 是 null（不是缺字段）", async () => {
+    const c = cli();
+    expect(await c.run(["new", "本机振子", ...FAST, "--json"])).toBe(0);
+    const view = JSON.parse(c.text());
+    expect(view.computeTarget).toBeNull();
+    expect(view.computeJobId).toBeNull();
+  });
+
   test("非法参数值在 new 阶段就被拒（不建半成品）", async () => {
     const c = cli();
     expect(await c.run(["new", "X", "--param", "steps=-5"])).toBe(1);

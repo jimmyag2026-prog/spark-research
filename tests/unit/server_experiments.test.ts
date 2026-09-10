@@ -96,6 +96,8 @@ describe("HTTP · experiments 生命周期", () => {
     try {
       expect((await fx.post("/api/experiments", { params: FAST })).status).toBe(400);
       expect((await fx.post("/api/experiments", { title: "X", platform: "nope" })).status).toBe(400);
+      // CB-6：执行地也一样，写错在 design 阶段就该被挡住（400，不是 500）。
+      expect((await fx.post("/api/experiments", { title: "X", params: FAST, target: "gpu-farm" })).status).toBe(400);
     } finally {
       await fx.stop();
     }
@@ -181,6 +183,31 @@ describe("HTTP · experiments 生命周期", () => {
       const designed = await design(fx);
       const res = await fx.post(`/api/experiments/${designed.id}/conclude`, { claim: "太早了" });
       expect(res.status).toBe(409);
+    } finally {
+      await fx.stop();
+    }
+  });
+});
+
+describe("HTTP · CB-6 执行地透传", () => {
+  test("POST /api/experiments 的 target 原样落进 experiment record", async () => {
+    const fx = makeServer();
+    try {
+      const res = await fx.post<{ experiment: DryView & { computeTarget: string | null; computeJobId: string | null } }>(
+        "/api/experiments",
+        { title: "算力上的振子", params: FAST, target: "local" },
+      );
+      expect(res.status).toBe(201);
+      expect(res.body.experiment.computeTarget).toBe("local");
+      // 还没建计划 → 还没有 jobId（design 阶段零副作用）。
+      expect(res.body.experiment.computeJobId).toBeNull();
+
+      // 不给 target = 老路径，字段是 null 而不是缺失（读图的人不用猜）。
+      const plain = await fx.post<{ experiment: DryView & { computeTarget: string | null } }>("/api/experiments", {
+        title: "本机振子",
+        params: FAST,
+      });
+      expect(plain.body.experiment.computeTarget).toBeNull();
     } finally {
       await fx.stop();
     }
