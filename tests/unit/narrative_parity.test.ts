@@ -224,6 +224,9 @@ interface SkillEntrypoints {
 
 // 每条登记必须写明「这是哪个入口」，理由见上面的大段注释。
 const SKILL_ENTRYPOINTS: Record<string, SkillEntrypoints> = {
+  // W5-3 β：C3 三件套复用 dry-experiment 的入口（`exp` CLI + exp_design/exp_run MCP），
+  // 它们是 SimulationPlatform 的新实现，不是新的命令组（§1.4.3 checklist 第 8 条）。
+  cobrapy: { cli: ["exp"], mcp: ["exp_design", "exp_run"] },
   "dry-experiment": { cli: ["exp"], mcp: ["exp_design", "exp_run", "exp_list"] },
   "idea-coexplore": { cli: ["idea"], mcp: ["idea_coexplore"] },
   "library-curation": { cli: ["lit"], mcp: ["lit_add", "lit_list"] },
@@ -235,7 +238,9 @@ const SKILL_ENTRYPOINTS: Record<string, SkillEntrypoints> = {
   "paper-download": { cli: ["lit"] },
   // R-d-2 补的入口：CLI `spark-research protein <query>` + MCP `protein_analyze`。
   "protein-analysis": { cli: ["protein"], mcp: ["protein_analyze"] },
+  pydeseq2: { cli: ["exp"], mcp: ["exp_design", "exp_run"] },
   "research-report": { cli: ["report", "conclusion"], mcp: ["report_export"] },
+  scanpy: { cli: ["exp"], mcp: ["exp_design", "exp_run"] },
   "wet-protocol": { cli: ["lab"], mcp: ["lab_compile", "lab_status"] },
 };
 

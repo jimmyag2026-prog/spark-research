@@ -82,7 +82,7 @@ spark-research mcp    # stdio 传输
 - `compute_plan`：任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后按 plan 的内容决定要不要人点头：**计费 / 联网 / 用到 secret 三者任一成立就停在 awaiting_approval**；都不成立（典型是 target=local + network=none + 无 secret）则直接 planned、可以直接 run——审批门是按后果开的，不是无条件开的。**返回体的 next 字段直接告诉你该走哪条**，别自己猜。
 - `compute_status`：plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
 - `compute_list`：想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
-- `compute_collect`：**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
+- `compute_collect`：**delivery 是 none / pending / failed 且 execution 已到终态时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
 - `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 
 **刻意不暴露的动作**（设计声明，不是未实现清单）：
@@ -108,16 +108,17 @@ spark-research mcp    # stdio 传输
 
 可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。
 
-### 干实验平台（2，默认 pyref）
+### 干实验平台（5，默认 pyref）
 
-- pyref / openmm
+- pyref / openmm / scanpy / pydeseq2 / cobrapy
 
 ### 湿实验后端（2，默认 opentrons_simulate）
 
 - opentrons_simulate / mock_devices
 
-### 技能（10）
+### 技能（13）
 
+- **cobrapy**（域 B）：敲掉这个基因还能不能长 / 跑一下 FBA / 厌氧条件下代谢会怎么变 / 代谢通量分析
 - **dry-experiment**（域 B）：先在计算机上验一遍 / 跑一个 MD 算例 / 设计一个仿真 / 实验跑挂了能不能续跑
 - **idea-coexplore**（域 A）：我有个想法 / 帮我挑毛病 / 这个方向值不值得做 / 陪我想清楚这个假设
 - **library-curation**（域 A）：把这篇加进文献库 / 整理文献库 / 导出 BibTeX / 标记已读 / 给这批论文打标签
@@ -126,7 +127,9 @@ spark-research mcp    # stdio 传输
 - **novelty-check**（域 D）：这个想法有没有人做过 / 我们相对已有工作新在哪 / 查一下新颖性 / 有没有撞车的论文
 - **paper-download**（域 A）：下载这篇论文 / 把 PDF 拿到本地 / 库里哪些论文有全文 / 补全文献库的 PDF
 - **protein-analysis**（域 B）：这个蛋白长什么样 / 有没有可用的结构 / AlphaFold 模型信得过吗 / 查一下这个 UniProt
+- **pydeseq2**（域 B）：处理组和对照组哪些基因有差异表达 / 跑一下 DESeq2 / 这批 RNA-seq 有哪些显著变化的基因 / 差异表达分析
 - **research-report**（域 C/E）：整理成一份报告 / 导出研究报告 / 评审这张结论卡 / 这个结论能不能写进论文
+- **scanpy**（域 B）：这个单细胞数据能分出几群细胞 / 跑一下单细胞聚类 / 这个基因是不是这群细胞的 marker / 单细胞降维聚类
 - **wet-protocol**（域 B）：把这个实验方案变成协议 / 先在模拟器上验一遍 / 编译成 Opentrons 脚本 / 这个协议安全吗
 
 ### 规则
@@ -1044,7 +1047,7 @@ spark-research new platform <name>
 - `triggers` 写「用户会怎么开口」（"这个想法有没有人做过"），不是能力名（"novelty check"）。agent 匹配的是用户的话。
 - `validation` 让 AD-5「技能必须有配套 e2e 才算完成」从口号变成一道门。写一个还不存在的测试文件路径，CI 立刻红。
 
-正文必须有 **反模式** 小节。说清什么时候**不**该用，比说清用法更能防止 agent 越界——现有 10 个技能全部遵守这条。
+正文必须有 **反模式** 小节。说清什么时候**不**该用，比说清用法更能防止 agent 越界——现有 13 个技能全部遵守这条。
 
 ### 最小可运行示例
 
@@ -1059,7 +1062,7 @@ spark-research new skill hello-source
 ### 怎么测
 
 ```bash
-bun test tests/unit/skill_frontmatter.test.ts     # schema 门：10 个技能逐个过
+bun test tests/unit/skill_frontmatter.test.ts     # schema 门：13 个技能逐个过
 bun test tests/unit/skill_hello_source.test.ts    # 你新技能的配套验证
 ```
 
@@ -2383,8 +2386,8 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V28 | 二进制产物没有冒烟测试 | W1-d 的测试全部跑在 `bun backend/src/index.ts` 上，**二进制是另一个运行时**，于是 V27 那类问题测不出来（版本号不一致是主会话手工跑二进制才发现的）。构建只要约 300ms，值得加一条 CI 冒烟：构建 → `--version` / `capabilities --json` / `doctor` 三条路径 → 断言版本号三处一致且不为 `0.0.0`。 |
 | V29 | npm 打包字段未完成 | W1-d 原计划做 `package.json` 的 `files` / `engines` / `prepublishOnly`，但主会话在额度中断后把它的剩余范围收窄成「只补文档」，于是这部分**既没做完也没被静默丢掉**——W1-d 如实记进了 `docs/INSTALL.md` 的 TODO。`npx spark-research` 这条路径要真跑通需要补上。 |
 | V30 | **删除论文这条路今天不可达，孤儿对账扫描也只被测试调用** | W4-b 按 E-6 交付了 `retractOrphanRecords()`（把指向已删论文的 record 标 `retracted`），但收口核查发现两件事：① `LibraryStore.remove()` **零生产调用方**——用户today根本删不掉论文，所以「删论文留孤儿」这个场景不可达；② `retractOrphanRecords()` 也只被测试引用。叙事门禁看不见它，因为孤儿检测是**文件粒度**而 `reading.ts` 整体有生产调用方（W3-c 标过的表达力上限）。**处置：将来加删除入口时必须同时接上这个对账扫描**；或把它做成一条维护命令让它可达。发布前不加新入口——那属于没有 lane 测试纪律兜底的仓促改动。 |
-| V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 <br><br>⚠️ **v0.5 W5-2 δ 做了机制，但没有生产接线**（δ 主动交代）：`mcp_client.ts` 的 `recordSink` 可选字段落 `observation`（`kind:"external_tool_call"`, `evidence:"sourced"`），四个分支（成功/失败/超时/未知工具）都落；`contract.ts` 把它排除出证据图（**AD-10 的硬要求**——外部调用是审计不是进展，算进证据会让 `noProgress` 停止条件失效，P12 的 `agent_run` 事故就是这个形状，δ 为它建了具名回归用例）。**但生产里没有任何调用方传 `recordSink`**。主会话追查发现比这更彻底：`connectExternalMcp()` **整条生产路径零调用方**，只有 `ext verify` 在用——「agent 运行时连接外部 MCP 扩展」这条流程**在生产里根本不存在**。见 V45。 |
-| V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 <br><br>⚠️ **同 V31，机制完成、生产未接线**：`orchestrator.ts` 的 `OrchestratorDeps.externalTools` 注入位已开，注入了就走 `createExternalToolRunner()`。但 `index.ts:339,388` 与 `server/context.ts:124` 三个构造点都没有传它。见 V45。 |
+| V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 <br><br>⚠️ **v0.5 W5-2 δ 做了机制，但没有生产接线**（δ 主动交代）：`mcp_client.ts` 的 `recordSink` 可选字段落 `observation`（`kind:"external_tool_call"`, `evidence:"sourced"`），四个分支（成功/失败/超时/未知工具）都落；`contract.ts` 把它排除出证据图（**AD-10 的硬要求**——外部调用是审计不是进展，算进证据会让 `noProgress` 停止条件失效，P12 的 `agent_run` 事故就是这个形状，δ 为它建了具名回归用例）。**但生产里没有任何调用方传 `recordSink`**。主会话追查发现比这更彻底：`connectExternalMcp()` **整条生产路径零调用方**，只有 `ext verify` 在用——「agent 运行时连接外部 MCP 扩展」这条流程**在生产里根本不存在**。见 V45。 <br><br>✅ **v0.5 W5-3 γ 已关闭**（一条不对称要交代：留痕只覆盖「调用发生了」；「连接失败了」没有工具调用可留痕，只进执行日志不进证据图）。 |
+| V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 <br><br>⚠️ **同 V31，机制完成、生产未接线**：`orchestrator.ts` 的 `OrchestratorDeps.externalTools` 注入位已开，注入了就走 `createExternalToolRunner()`。但 `index.ts:339,388` 与 `server/context.ts:124` 三个构造点都没有传它。见 V45。 <br><br>✅ **v0.5 W5-3 γ + 收口已关闭**。γ 接通执行链路后**自己戳破**：`AgentToolBus.specs()` 是 `MCP_TOOLS.filter(...)`，`mcp:` 前缀名永远进不了模型可见的 tools 列表——**真实模型不会自己想到调一个它从没被告知存在的工具**。收口补上 `externalSpecs` 传递链（`ExternalToolRegistry.specs()` 从 W4-d 起带着「供收口拼进」的注释**等了两个波次**）。外部工具同样过 grants 白名单；不给 = 与接线前逐字节同行为。 |
 | V33 | **[已完成]** **二进制里 `workspaceRoot` 默认值解析到文件系统根 `/workspaces`** | v0.5 闸门 F-c 调查时发现，主会话已核实：`agents/orchestrator.ts:223` 的 `join(import.meta.dir, "../../../workspaces")` 在编译产物里等于 `join("/$bunfs/root", ...)` → **`/workspaces`**，紧接着 `mkdirSync(workspaceRoot, { recursive: true })`。**这不是 ENOENT，是往文件系统根目录写**——macOS 被权限挡住，Linux 上以 root 跑会真建。属 V27 家族但性质更重（其余是读不到文件，这条是写错地方）。修 V27 时必须一并处理。 <br><br>✅ **v0.5 W5-1 ε 已做**：`workspaceRoot` 改挂 `join(dataDir(), "workspaces")`；另两处危险路径在编译产物里改成显式拒绝。实机验证：跑 `server` 后 `<dataDir>/workspaces` 建出来了，`/workspaces` 不存在。 |
 | V34 | **[已完成]** **`DEFAULT_SEARCH_SOURCES` 没跟上 W3-d 的 arxiv/pubmed 接通** | **零上下文外部验收（v0.5 闸门 F-1）实测发现，主会话已核实**：`literature/models.ts:16-21` 的默认源仍是 P2 时代的 `[openalex, crossref, europepmc, semanticscholar]`，**不含 arxiv / pubmed**。于是 `lit search --sources arxiv` 能用、`capabilities` 也报 arxiv 可用，但 `lit add <arxiv-id>` 走默认值查四个不含 arxiv 的源 → 报「未找到」。**能力做好了、默认值没跟着改。** AD-12 门禁抓不到这一类——它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。修默认值的同时应考虑给门禁加一条：**已实装的源必须在默认集里，或有显式排除理由**。 <br><br>✅ **v0.5 W5-1 ζ 已做**：默认集补上 arxiv/pubmed（现 6 个）。**重点是另一半**——新增 `tests/unit/literature_source_parity.test.ts`，**以连接器注册表为真源**（拿 `LITERATURE_SOURCES` 手写副本当真源等于自证自明），合法排除只认 `apiKeyRequired` 或 `placeholder`。门禁当场抓出两个没人想到的源（cnki/wanfang 在注册表里但不在联合类型里）。实机核验：`lit add 1706.03762` 不带 `--sources` 从「未找到」变成功入库。 |
 | V35 | **[已完成]** **长任务在 CLI 层完全不可见** | 外部验收的**头号卡点**：`lit read --all` 8 分钟零输出，无进度、无 job id、断开后无法查状态——验收者只能杀掉进程再用 `lit list` 反推它其实在工作。**而 MCP 层有 `task_status` 机制、W4-c 还做了长任务落盘与 MCP 进度回传（V17）**——CLI 是唯一没接的入口。这是 CLI/MCP 的能力不对等，不是缺功能。 <br><br>✅ **v0.5 W5-1 ζ 已做**：接线不新建——`server/tasks.ts` 的能力全都有，CLI 是唯一没接的入口。新增 `backend/src/cli/progress.ts`；`lit read --all` / `lit review` 走任务句柄，新增 `lit tasks [<id>] [--json]` 读落盘快照，断开/重启后查得回状态。两个刻意决定：**默认不设超时**（为可见性引入新失败路径方向是反的）、`--json` 静音进度。 |
@@ -2397,14 +2400,18 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V42 | **local 算力目标的 `network` 是声明不是强制** | v0.5 W5-1 α 如实记下：`adapters/local.ts` 的 `capabilities().network` 声明 `"none"` 时，本地进程事实上仍能联网（没有 sandbox / netns）。**名实不符**。α 选择记下而不是假装隔离。真远端 target（Modal）不受此影响。 |
 | V43 | **二进制里前端目录与脚手架仍不可用** | V27 的剩余项，ε 如实列出：① `server/app.ts:27` 前端目录在产物里解析到 `/frontend/workspace/dist`（只读且有 `existsSync` 门控，不会崩，但 `server` 起来没有 UI）；② `new skill|connector|platform` 与 `ext verify --kind platform` 在产物里已改成**显式拒绝**（而不是静默做错）——**`docs/INSTALL.md` 应明说这两条只在源码 checkout 可用**，ε 未改（不在足迹内）。 |
 | V44 | `semanticscholar` 标 `apiKeyRequired` 却留在默认集里（已裁定保留） | ζ 提出的口径问题，**主会话裁定：保留**。理由是它与 aminer 的差别有实质——`literature.ts:748` 记着「P2 实测：匿名请求持续 429」，即无 key 时它走 **`skipped`（带配置指引、可见）**，不是静默空结果；把它移出默认集，有 key 的用户反而少一个源。登记在此是**为了让下一个人知道这个不对称是有意的**，不是漏改。 |
-| V45 | **「agent 运行时连接外部 MCP 扩展」这条流程在生产里不存在**（V31/V32 的真正缺口） | **v0.5 W5-2 收口追查发现，比 δ 报告的更彻底**：`connectExternalMcp()` 与 `discoverExternalMcpTools()` 的调用方只有 `ext verify` / `ext` CLI，**agent 运行路径上一个都没有**。所以 V31/V32 补的两个可选参数（`recordSink` / `externalTools`）没有生产调用方，不是「忘了传」，而是**没有那条流程可传**。<br>要建的是完整生命周期：发现已装的 `mcp_client` 扩展 → agent 开跑时连接（**子进程**）→ 注册进 `ExternalToolRegistry` → 绑定项目的 `recordSink` → 结束时收掉 → **坏扩展不许拖垮整轮**。接线点：`extensions/loader.ts` · `daemon/daemon.ts` · `server/context.ts:124` · `index.ts:339,388`。<br>**主会话判断：这不是收口活，是一条 lane**——在收口里手搓子进程生命周期正是工程纪律第 13 条警告的那类跨层改动。**排进 W5-3**。在它做完之前，对外**不许**宣称「外部工具调用天然进 provenance」。 |
+| V45 | **「agent 运行时连接外部 MCP 扩展」这条流程在生产里不存在**（V31/V32 的真正缺口） | **v0.5 W5-2 收口追查发现，比 δ 报告的更彻底**：`connectExternalMcp()` 与 `discoverExternalMcpTools()` 的调用方只有 `ext verify` / `ext` CLI，**agent 运行路径上一个都没有**。所以 V31/V32 补的两个可选参数（`recordSink` / `externalTools`）没有生产调用方，不是「忘了传」，而是**没有那条流程可传**。<br>要建的是完整生命周期：发现已装的 `mcp_client` 扩展 → agent 开跑时连接（**子进程**）→ 注册进 `ExternalToolRegistry` → 绑定项目的 `recordSink` → 结束时收掉 → **坏扩展不许拖垮整轮**。接线点：`extensions/loader.ts` · `daemon/daemon.ts` · `server/context.ts:124` · `index.ts:339,388`。<br>**主会话判断：这不是收口活，是一条 lane**——在收口里手搓子进程生命周期正是工程纪律第 13 条警告的那类跨层改动。**排进 W5-3**。在它做完之前，对外**不许**宣称「外部工具调用天然进 provenance」。 <br><br>✅ **v0.5 W5-3 γ 已做**：六段生命周期（发现 → 连接 → 注册 → 绑定 recordSink → finally 收尾 → 逐扩展失败隔离），实现放 `loader.ts` 避免 `loader ⇄ mcp_client` 双向环（W4-d 被 TDZ 咬过一次）。惰性三层：没装 mcp_client 扩展的用户全部代价 = 敲 `chat` 时多一次 readdir。**追查中发现第二个「没人走的流程」**：`runResearchLoop()` 自己也零生产调用方，两条都接了。 |
 | V46 | **Modal 凭据字段名曾在两条 lane 间对不上**（已修，登记形状） | v0.5 W5-2 收口实测发现：β 照设计文档 §1.1.7 在配置指引里写 `token_id`/`token_secret`，α 照 Modal SDK 的 `ModalClientParams`（核过 `.d.ts`）读 `tokenId`/`tokenSecret`。**后果是用户照提示填完，adapter 永远报「未配置」，还会去反复检查自己的 token。**已改成从 adapter 的 `MODAL_REQUIRED_CREDENTIAL_KEYS` 派生并加门禁。<br>**登记是为了记住形状**：这是 V34（默认源）/ V37（auth 口径）之后**第三次**「同一件事两份手写副本」，而且这次是**两条并行 lane 各写一份**——单条 lane 的门禁看不见对方。并行开发要额外防这一类。 |
 | V47 | HTTP 面刻意没有 compute 的 dispatch / release 端点 | W5-2 β 的设计决定并写进 `/machine` 的 `httpWithheld`：MCP 是 HTTP 的投影，**没有 HTTP 路由 = 无论扣留表怎么写都没有路可走**，是 AD-14 的纵深防御。代价是 **Web 工作台点不了派发**——用户得回到 CLI。**主会话裁定 v0.5 保持现状**（算力刚落地、只有 local，保守方向是对的），但这是一处真实的 UI 断点，将来要加得重新论证（会同时给 MCP 开路）。 |
 | S1 | **`lit add` 把一种 id 形态降级成另一种去撞库**（✅ 已修） | **W5-2 末零上下文外部验收的头号发现，主会话实机复现**：`lit add 9999.99999`（不存在的 arXiv id）导入了一篇 1978 年的《Intravenous nitroglycerin》，**报 ✅、退出码 0**。pubmed 的 eutils 把它宽容解析成 PMID 9999。**不是「没查到」被报成「查了没有」，而是「没查到」被报成「查到了，给你另一篇」**——垃圾论文落进证据图、`lit read` 花真钱生成精读卡、并列进 `report export` 的参考文献，而 `citation-integrity` 全部放行（它们确实在库内）。<br>真因是**第四次「同一件事两份手写副本」**：`search.ts` 写死三源白名单，而 `cli.ts` 早有正确的 `SHAPE_SOURCES` 能力表只用于文案。已改为单一真源 + 门禁 + 阴性对照。<br>**阴性对照暴露的更要紧的事**：拆掉修复后这次导入的是 bioRxiv 的论文——**每加一个源，杀伤面就扩大一圈**。所以门禁必须钉在通用判定上，不能逐源打补丁。 |
-| S2 | **算力产出不进证据图** | 外部验收撞到主线最后一步走不通：`compute run` / `collect` 成功了，但 `report stats` 全零、`execution_records` 表空、收割的 `result.json` 只躺在 `jobs/<id>/harvest/` 没注册成 artifact。连锁后果：`conclusion` 的「结论引用的观察必须真实存在于执行记录」**对算力结果永远无法通过**——**现在无法基于一次算力运行写出任何一条能通过评审的结论**。<br>**这不是计划漏了**：设计 §1.1 本来就把它排给 **W5-3 α**（「一条 observation（`kind:"compute_output"`）+ harvest 文件各一条 artifact record」），验收撞到它是因为 W5-3 还没跑。README 已如实写明该限制。 |
-| S10 | `report export` 的「附录 A · 证据索引」是空表 | 同一份报告下面就写着「论文 5 · 精读卡 5」，而证据索引表是空的——读者只会认为报告坏了。要么填，要么在空的时候说明「本表只索引结论引用的证据」。归 W5-3 δ。 |
-| S11 | **没有任何 CLI 能看原始 record** | 验收者为回答「它到底进没进证据图」，试了 `report stats`（只有 9 个分类计数、不含 artifact）、`report export`（索引空，见 S10）、猜了 `records`/`record`/`graph` 三个命令名（都不是），**最后只能自己开 sqlite**。对一个把 `records.db` 当核心卖点的产品，这是个明显的洞。归 W5-3 δ。 |
-| S12 | 若干小的不一致 | `delivery` 状态与 `llms.txt` 描述不符（说只在 pending 时 collect，实际 none 也能且被提示这么做）· `rev` 编号跳变无解释 · local 任务收割完 `resource=active` 悬挂且从不提示 `release` · `chem depict` 人类输出不给文件路径（`--json` 里有 `path`）· `--gpu` 在 local 上的报错「（可选：无）」措辞怪且不给下一步。归 W5-3 δ。 |
+| S2 | **算力产出不进证据图** | 外部验收撞到主线最后一步走不通：`compute run` / `collect` 成功了，但 `report stats` 全零、`execution_records` 表空、收割的 `result.json` 只躺在 `jobs/<id>/harvest/` 没注册成 artifact。连锁后果：`conclusion` 的「结论引用的观察必须真实存在于执行记录」**对算力结果永远无法通过**——**现在无法基于一次算力运行写出任何一条能通过评审的结论**。<br>**这不是计划漏了**：设计 §1.1 本来就把它排给 **W5-3 α**（「一条 observation（`kind:"compute_output"`）+ harvest 文件各一条 artifact record」），验收撞到它是因为 W5-3 还没跑。README 已如实写明该限制。 <br><br>✅ **v0.5 W5-3 α 已做，主会话独立实证三件**：`observation|computed|compute_output`、`artifact|computed|compute_output_file`、两者间的 `derives_from` 边。写入点放 `broker` 不放 CLI——collect 有 CLI 与 HTTP 两个入口，写在任一入口另一条就会静默不落证据（V46 形状）。`runId=jobId` 作执行锚点是关键的另一半（`conclusion_rules` 的 `evidence_without_execution` 读它）。**验收者那句「无法基于一次算力运行写出任何一条能通过评审的结论」现在走通到 `✅ approved（0 hard / 0 soft）`。** |
+| S10 | `report export` 的「附录 A · 证据索引」是空表 | 同一份报告下面就写着「论文 5 · 精读卡 5」，而证据索引表是空的——读者只会认为报告坏了。要么填，要么在空的时候说明「本表只索引结论引用的证据」。归 W5-3 δ。 <br><br>✅ **v0.5 W5-3 δ 已做**，而且**没有盲目填表**：先诊断出附录 A 的语义本来就是「只索引正文引用过的 record」——表空不是坏了，是标签没说清（改语义会破坏既有测试对「recordIds == 正文引用集合」的断言）。保住语义 + 补上范围说明 + 指向 `report records`。 |
+| S11 | **没有任何 CLI 能看原始 record** | 验收者为回答「它到底进没进证据图」，试了 `report stats`（只有 9 个分类计数、不含 artifact）、`report export`（索引空，见 S10）、猜了 `records`/`record`/`graph` 三个命令名（都不是），**最后只能自己开 sqlite**。对一个把 `records.db` 当核心卖点的产品，这是个明显的洞。归 W5-3 δ。 <br><br>✅ **v0.5 W5-3 δ 已做**：`report records [--type] [--limit] [--json]` 与 `report show <id>`（含入边出边）。**刻意扩 `report` 而不是新建 `records` 命名空间**——一次消掉三处枢纽争用。主会话实证：输出与 `sqlite3` 直查逐条一致。 |
+| S12 | 若干小的不一致 | `delivery` 状态与 `llms.txt` 描述不符（说只在 pending 时 collect，实际 none 也能且被提示这么做）· `rev` 编号跳变无解释 · local 任务收割完 `resource=active` 悬挂且从不提示 `release` · `chem depict` 人类输出不给文件路径（`--json` 里有 `path`）· `--gpu` 在 local 上的报错「（可选：无）」措辞怪且不给下一步。归 W5-3 δ。 <br><br>⚠️ **v0.5 W5-3 收口做了 4/5**：文档说谎（`mcp/tools.ts` 说 collect 只在 delivery=pending，实际 none/pending/failed 三种）· collect 不提示下一步导致 `resource=active` 悬挂 · `chem depict` 人类输出缺 path · `--gpu` 在 local 上的报错不给下一步。**第 5 条 `rev` 跳变没修**——δ 诊断到 CAS 每次写自增的机制，但明说「没有把握的修法」，只给了两个候选方向。见 V50。 |
+| V48 | **local 算力的 handle 执行期间不落盘 → 设计里的 SIGKILL 验收路径今天走不通** | **v0.5 W5-3 α 如实交代（它修不了，不在足迹内）**：编排进程中途被杀 → `job.json.adapterHandle` 为 null → **既无法接回也无法收割**。原来那句「这个任务从未真正派发出去」**是假话**，且 `recoverable` 留 false 会让 `release` 删掉唯一一份产物——α 已把消息改诚实，但根治要动 `target.ts` / `adapters/local.ts`。**设计 §1.1.9 写的验收路径「SIGKILL → resume → 收割」在 local 上今天不成立**，对外不许宣称。 |
+| V49 | **`deterministic=true` 的口径待裁定**（用户 2026-09-11 决定推迟） | W5-3 β 实测：scanpy / pydeseq2 / cobrapy 三个平台**同机重跑逐字节一致**（runner 把 n_jobs/n_cpus 钉成 1、固定种子、cobrapy 默认 pFBA），但**不保证跨机器 / 跨 BLAS / 换求解器**。staged 设计稿原写 `false`，β 按实测改成 `true` 并配了每次重测的门禁。<br>**问题是口径而非事实**：如果「跨机器可复现」才配叫 deterministic，这三个标签要一起翻，而 `pyref`（唯一既有的 `deterministic=true`）也要重新审。这个标签是**确定性层的输入**，标错等于让模型的结论绕过约束。<br>**β 的第 4 条阴性对照还挖出一件更深的**：「deterministic 标错」在加 `embedding.csv` 之前**根本红不起来**——拿掉 PCA 种子后 clusters/markers 一个字节都不变。**产出里没有对随机性敏感的数据时，这个标签在测试层面不可观测。** |
+| V50 | `rev` 编号跳变无解释 | 外部验收 S12 的第 5 条。δ 诊断到根因是 CAS 每次写自增（`job_store.ts:170` + `broker.ts` 多个调用点），新 plan 出来就是 rev 2、run 完跳 5、collect 完跳 7。**δ 明说没有把握的修法**，只给了两个候选方向（对外只暴露单调计数 / 把内部写次数与用户可见 rev 分开）。属产品判断，留给下一版。 |
+| V51 | 共享 helper 位置别扭 + 三处探测仍是内联形状 | W5-3 β 交代：`probeCodeFor`/`datasetParam` 放在 `simulation/scanpy/probe.ts`，另两个平台 `import ../scanpy/probe`——**本该在 `simulation/` 顶层，是文件所有权逼出来的形状**，搬走是纯移动。另：`doctor.ts` / `pyref` / `openmm` 的探测仍是内联字符串形状（**「探测说可用、真提交任务却坏」的老形状**，V27 时期咬过一次），β 已把修法验证可复用，但不在其授权内。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2878,6 +2885,113 @@ vanilla JS 三栏 Web 界面。
 ==============================================================================
 # 技能手册（agent 的操作手册，按需加载）
 ==============================================================================
+
+------------------------------------------------------------------------------
+## 技能：cobrapy（backend/src/skills/cobrapy/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: cobrapy
+description: "基因组尺度代谢模型的通量平衡分析：以 dry-experiment 的仿真平台形态接入 cobrapy（FBA / pFBA / FVA，支持基因敲除与有氧-厌氧切换）。给定 SBML/JSON 模型，输出最大生长率与全反应通量分布，走 exp 状态机。用于「敲掉这个基因还能不能长」「厌氧条件下代谢会怎么变」。"
+category: experiment
+domain: B
+triggers: [敲掉这个基因还能不能长, 跑一下 FBA, 厌氧条件下代谢会怎么变, 代谢通量分析]
+connectors: []
+platforms: [cobrapy]
+validation: [tests/unit/cobrapy_contract.test.ts, tests/unit/cobrapy_e2e.test.ts, tests/sim/cobrapy_runner.test.py]
+allowed-tools: [Bash, Read, Write]
+---
+
+# cobrapy（代谢通量平衡分析）
+
+## 何时用这个技能
+
+- 有一个基因组尺度代谢模型（SBML / JSON），想算在给定培养基下的最大生长率
+- 想知道敲掉某个基因之后菌还能不能长、长多慢（单基因/多基因敲除）
+- 想比较有氧与厌氧条件下的通量重分布
+- 想知道某条反应的通量在最优解附近能有多大活动范围（FVA）
+
+**不适用**：动力学模型（需要酶动力学参数与时间演化）→ 本平台是稳态假设，给不了时间曲线；
+表达差异 → `pydeseq2`；单细胞 → `scanpy`。
+
+## 铁律（先读这段——本技能是 `dry-experiment` 的一个仿真平台形态）
+
+1. **入口是 `spark-research exp new --platform cobrapy`。** 理由同 `scanpy` / `pydeseq2`。
+2. **FBA 是稳态最优化，不是模拟。** 它回答的是「在这些约束下**能**长多快」，
+   不是「实际上长多快」。报告里把它写成预测上界，不要写成实验值。
+3. **最优解常常不唯一（alternate optima）。** 目标值唯一，通量向量往往不唯一。
+   本平台默认再跑一次 **pFBA**（在保住最优目标值的前提下最小化总通量）把解收敛到
+   「最省酶」的那一个；**要对某条具体反应的通量下结论，请开 `fluxVariability` 看区间**，
+   别拿单点通量当定论。
+4. **培养基是假设的一部分。** `medium=anaerobic` 改的是 `EX_o2_e` 的下界；
+   模型自带的交换反应边界决定了碳源与摄取速率上限。同一个模型换培养基能差好几倍生长率——
+   summary 里的 `medium` 必须进报告。
+5. **敲除的 id 写错必须报错，不许静默跳过。** 静默忽略一个敲不掉的基因，
+   等于报告一个「敲除后照常生长」的假结论。runner 会当场失败并把 id 打出来。
+6. **`deterministic: true` 是被测出来的**（LP 求解在同一模型/求解器/边界下走到同一个顶点，
+   加上 pFBA 收敛）。`tests/unit/cobrapy_e2e.test.ts` 每次跑两遍比字节。
+   **换求解器或换 cobra 版本，这个声称就要重测**。
+
+## 用法
+
+```bash
+spark-research exp platforms
+spark-research exp new "eno 敲除对生长的影响" --platform cobrapy \
+    --param modelPath=/abs/path/e_coli_core.xml \
+    --param knockouts=b2779 \
+    --hypothesis "敲掉烯醇化酶后有氧生长率归零（糖酵解断了）"
+spark-research exp run <id>
+spark-research exp iterate <id> --param medium=anaerobic     # 换培养基对照
+```
+
+## 任务种类 `fba`
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `modelPath` | 必填 | `.xml` / `.xml.gz` / `.sbml` / `.json` / `.yml` 代谢模型 |
+| `objective` | 空 = 模型自带目标（一般是生物量反应） | 覆盖目标函数的反应 id；写错会失败（prepare 不读模型，只能给警告） |
+| `medium` | `model-default` | 还可选 `aerobic` / `anaerobic`；后两者改 `EX_o2_e` 的下界 |
+| `knockouts` | 空 | 逗号分隔的基因 id；会去重 + 排序（`a,b` 与 `b,a,a` 是同一个算例） |
+| `parsimonious` | true | 目标值 > 0 时再跑一次 pFBA，把 alternate optima 收敛到最小总通量解 |
+| `fluxVariability` / `fvaFraction` | false / 0.9 | 开 FVA 时 `fluxes.csv` 多两列区间上下界 |
+
+产出：`fluxes.csv`（反应 → 通量 + 边界[+ FVA 区间]）· `solution.json`（目标值 / 状态 /
+培养基 / 敲除 / 总通量 / 活跃反应数）。
+
+**本平台目前的边界**：单目标 FBA/pFBA/FVA。**没有** OptKnock 类菌株设计、
+没有动力学/时序模拟、没有通量采样（flux sampling）、不做多组学数据整合。
+
+## 证据图
+
+```
+artifact record（fluxes.csv / solution.json）  --derives_from--> experiment
+observation（目标值、状态、培养基、敲除清单）    --derives_from--> experiment 与 artifact
+conclusion                                      --derives_from--> observation
+```
+
+- experiment 的 `evidence` 是 `inferred`，observation 是 `computed`
+- 结论卡一律 `review: "pending"`
+
+## 反模式
+
+- ❌ 把 FBA 的最大生长率当成实测生长率写进结论
+- ❌ 拿单点通量对某条反应下定论，不看 FVA 区间
+- ❌ 不说培养基就报生长率（有氧/厌氧差 4 倍以上）
+- ❌ 敲除一堆基因发现「生长没变」，却没核实那些 id 真的在模型里
+- ❌ LP 状态不是 `optimal` 时还去解读通量表（本平台会直接失败，别绕过它）
+- ❌ 换了求解器还沿用旧的 `deterministic` 声称
+
+## 验证方式（AD-5）
+
+- 契约测试：`tests/unit/cobrapy_contract.test.ts` —— 复用
+  `tests/helpers/simulation_contract.ts` 的参数化契约用例，外加「探测与真跑同一条路径」、
+  「依赖缺失报安装命令」、以及「探测必须查出 LP 求解器」（`import cobra` 成功 ≠ 能解 LP）
+- e2e：`tests/unit/cobrapy_e2e.test.ts` —— 用 e_coli_core 教科书模型断言四个**公开定值**：
+  有氧 0.873922 h⁻¹、厌氧 0.211663 h⁻¹、敲掉 eno（b2779）生长归零、
+  敲掉 nuoA（b2280）掉到厌氧那个值（呼吸链没了只能发酵——两条独立路径给出同一个数），
+  以及 deterministic 位与两次跑出来的字节一致性相符
+- Python 侧：`tests/sim/cobrapy_runner.test.py` —— 模型加载、培养基切换真的改到了边界、
+  未知目标/未知敲除基因的失败信封
 
 ------------------------------------------------------------------------------
 ## 技能：dry-experiment（backend/src/skills/dry-experiment/SKILL.md）
@@ -3743,6 +3857,117 @@ RCSB 搜索能用 `rows` 在**服务端**截断，`total_count` 仍如实返回�
   fixture 落 `tests/fixtures/proteins/protein-analysis.json`，**请求头永不落盘**
 
 ------------------------------------------------------------------------------
+## 技能：pydeseq2（backend/src/skills/pydeseq2/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: pydeseq2
+description: "批量 RNA-seq 差异表达分析：以 dry-experiment 的仿真平台形态接入 PyDESeq2（size factor → dispersion → Wald 检验 → FDR 校正）。给定计数矩阵与样本表，输出差异基因表与 size factor，走 exp 状态机（假设驱动、断点续跑）。用于「处理组和对照组哪些基因表达有显著差异」。"
+category: experiment
+domain: B
+triggers: [处理组和对照组哪些基因有差异表达, 跑一下 DESeq2, 这批 RNA-seq 有哪些显著变化的基因, 差异表达分析]
+connectors: []
+platforms: [pydeseq2]
+validation: [tests/unit/pydeseq2_contract.test.ts, tests/unit/pydeseq2_e2e.test.ts, tests/sim/pydeseq2_runner.test.py]
+allowed-tools: [Bash, Read, Write]
+---
+
+# pydeseq2（批量 RNA-seq 差异表达）
+
+## 何时用这个技能
+
+- 有一份批量 RNA-seq 计数矩阵（genes × samples）和样本表（哪些样本是处理组/对照组），
+  想知道哪些基因表达有统计显著差异
+- 已经跑过一次比较，想换对比水平或过滤阈值重跑并保留对照
+
+**不适用**：单细胞分辨率的比较 → `scanpy`（本技能没有细胞群概念，一个样本一个数）；
+代谢通量 → `cobrapy`。
+
+## 铁律（先读这段——本技能是 `dry-experiment` 的一个仿真平台形态）
+
+1. **入口是 `spark-research exp new --platform pydeseq2`。** 与 `scanpy` 同一个理由：
+   需要假设、需要保留「换参数重跑」的对照关系，状态机与证据图的规则直接复用。
+2. **对比（contrast）是假设的一部分，不是实现细节。** `treated vs control` 与
+   `control vs treated` 的 log2FC 差一个符号；`designFactor` / `testLevel` /
+   `referenceLevel` 三个参数必须完整写进假设，落库时它们在 summary 的 `contrast` 里。
+3. **显著（padj < 0.05）不等于生物学重要。** 报告必须同时给 log2FoldChange 与 padj。
+   极小的 fold change 在样本量够大时也能显著——那是统计功效的问题，不是效应量。
+4. **样本量过小时不要假装检验有效。** 每组 < 3 个重复时 DESeq2 的离散度估计不稳定；
+   summary 里的 `samples` 必须进报告，好让域 E2 的 `stats-plausibility` 检查器接得上。
+5. **`padj` 为空 ≠ 不显著。** 空值是「被独立过滤（independent filtering）剔除了」，
+   多半是表达量太低根本没进检验。把它当成「不显著」会把「没测」说成「测了没有」。
+6. **`deterministic: true` 是被测出来的。** runner 把 `DefaultInference` 的 `n_cpus`
+   钉成 1（joblib 多进程会让浮点尾数漂），`tests/unit/pydeseq2_e2e.test.ts` 每次跑两遍比字节。
+   保证的是同一台机器上重跑逐位一致，不保证跨机器。
+
+## 用法
+
+```bash
+spark-research exp platforms
+spark-research exp new "药物处理 vs 溶剂对照" --platform pydeseq2 \
+    --param countsPath=/abs/path/counts.csv \
+    --param metadataPath=/abs/path/metadata.csv \
+    --param designFactor=condition \
+    --param testLevel=treated --param referenceLevel=control \
+    --param minTotalCount=10 --param alpha=0.05 \
+    --hypothesis "≥50 个基因在 padj<0.05 且 |log2FC|>1 下显著差异表达"
+spark-research exp run <id>
+spark-research exp iterate <id> --param minTotalCount=50     # 换过滤阈值对照
+```
+
+## 任务种类 `bulk-de`
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `countsPath` | 必填 | genes × samples 的整数计数 CSV（第一列基因 id，表头样本名）。**不要传 TPM/FPKM** |
+| `metadataPath` | 必填 | samples × 因子 的样本表（第一列样本名，须与计数矩阵表头对得上） |
+| `designFactor` | `condition` | 样本表里当分组用的列名 |
+| `testLevel` / `referenceLevel` | 样本表里出现的头两个水平 | 对比的两端；`log2FC > 0` = 在 testLevel 里更高 |
+| `minTotalCount` | 10 | 低表达过滤：跨样本计数和低于它的基因不进检验 |
+| `alpha` | 0.05 | FDR 阈值，同时决定 independent filtering 的强度 |
+| `fitType` | `parametric` | dispersion 趋势拟合；拟合不收敛时 PyDESeq2 会自己退回 `mean` 并在 stderr 里说 |
+| `refitCooks` / `cooksFilter` / `independentFilter` | 全 true | DESeq2 的三道离群/功效处理，关掉要在假设里说明理由 |
+
+产出：`results.csv`（gene / baseMean / log2FoldChange / lfcSE / stat / pvalue / padj）·
+`size_factors.csv`（样本 → 分组 → size factor）。
+
+**本平台目前的边界**：只支持**单因子两水平**对比（`~<designFactor>`）。
+多因子设计（`~batch + condition`）、连续协变量、LFC shrinkage、火山图渲染**都没实现**——
+需要就进 BACKLOG，别在报告里假装做了。
+
+## 证据图
+
+```
+artifact record（results.csv / size_factors.csv）  --derives_from--> experiment
+observation（显著基因数、上调/下调数、contrast）    --derives_from--> experiment 与 artifact
+conclusion                                          --derives_from--> observation
+```
+
+- experiment 的 `evidence` 是 `inferred`，observation 是 `computed`
+- 结论卡一律 `review: "pending"`
+
+## 反模式
+
+- ❌ 把 TPM / FPKM / 已归一化的矩阵喂进来（DESeq2 要的是**原始整数计数**）
+- ❌ 只按 padj 排序报前 N 个基因，不给 log2FoldChange
+- ❌ 把 padj 为空当成「不显著」
+- ❌ 调 `minTotalCount` 直到显著基因数「好看」，再回头解释阈值
+- ❌ 每组 2 个重复也照常宣布「显著差异表达」
+- ❌ 反复重跑覆盖上一轮结果（要对照就 `iterate`）
+
+## 验证方式（AD-5）
+
+- 契约测试：`tests/unit/pydeseq2_contract.test.ts` —— 复用
+  `tests/helpers/simulation_contract.ts` 的参数化契约用例，外加「探测与真跑同一条路径」
+  与「依赖缺失报安装命令」两条
+- e2e：`tests/unit/pydeseq2_e2e.test.ts` —— 离线合成数据集（15 个基因上调 5 倍、
+  15 个下调 5 倍、270 个噪声），断言**全部 30 个 spike-in 基因方向正确且显著**，
+  同时**噪声基因的假阳性率 < 5%**（只测灵敏度不测特异性等于没测），
+  以及 deterministic 位与两次跑出来的字节一致性相符
+- Python 侧：`tests/sim/pydeseq2_runner.test.py` —— 计数矩阵转置与样本表对齐、
+  未知对比水平/过滤到空矩阵的失败信封
+
+------------------------------------------------------------------------------
 ## 技能：research-report（backend/src/skills/research-report/SKILL.md）
 ------------------------------------------------------------------------------
 
@@ -3876,6 +4101,122 @@ paper                      --supports/contradicts--> idea
   证据链接可回溯、能力位措辞、空项目不崩
 - 全链路：`tests/unit/demo_thread.test.ts`（`scripts/demo-research-thread.ts` 的可重放脚本）
   —— 文献 → idea → novelty → 干实验 → 结论 → review → 报告
+
+------------------------------------------------------------------------------
+## 技能：scanpy（backend/src/skills/scanpy/SKILL.md）
+------------------------------------------------------------------------------
+
+---
+name: scanpy
+description: "单细胞 RNA-seq 标准分析闭环：以 dry-experiment 的仿真平台形态接入。质控 → 归一化 → 高变基因 → PCA → Leiden 聚类 → marker 基因排名，全程走 exp 状态机（假设驱动、断点续跑、iterate 对照）。用于「这个单细胞数据能分出几群细胞」「这个基因是不是某个细胞群的 marker」。"
+category: experiment
+domain: B
+triggers: [这个单细胞数据能分出几群细胞, 跑一下单细胞聚类, 这个基因是不是这群细胞的 marker, 单细胞降维聚类]
+connectors: []
+platforms: [scanpy]
+validation: [tests/unit/scanpy_contract.test.ts, tests/unit/scanpy_e2e.test.ts, tests/sim/scanpy_runner.test.py]
+allowed-tools: [Bash, Read, Write]
+---
+
+# scanpy（单细胞 RNA-seq 标准分析）
+
+## 何时用这个技能
+
+- 有一个单细胞表达计数矩阵，想跑一遍标准流程看能分出几群细胞
+- 想知道某个基因在哪个细胞群里富集表达，判断它是不是候选 marker
+- 已经跑过一次，想换参数（分辨率、HVG 数量）重跑并保留两轮对照
+
+**不适用**：批量 RNA-seq（没有单细胞分辨率）的差异表达 → `pydeseq2`；
+代谢通量 → `cobrapy`；分子动力学 → `dry-experiment` 的 `openmm` 平台。
+
+## 铁律（先读这段——本技能是 `dry-experiment` 的一个仿真平台形态）
+
+1. **入口是 `spark-research exp new --platform scanpy`，不是新的 CLI 命令组。**
+   单细胞流程的形状（QC 参数会导致完全不同的下游结果、聚类分辨率是一个需要试错的超参数、
+   大数据集要跑几分钟）与 `dry-experiment` 现有平台完全吻合：需要假设、需要断点续跑、
+   需要「换分辨率重跑」时用 `iterate` 而不是覆盖。复用状态机是唯一说得通的做法。
+2. **先有可判定的假设，再跑聚类。** 「看看能分几群」不是假设。
+   分辨率、HVG 数量这些超参数要写进假设的前提里——同一份数据换个分辨率能分出完全不同的
+   群数，「分出了 8 群」这句话脱离参数是没有意义的。
+3. **QC 阈值要写进假设的前提，不能事后调整凑出「好看」的结果。**
+   `minGenesPerCell` / `minCellsPerGene` 决定了多少细胞与基因被保留——调阈值直到聚类
+   「看起来对」是本技能的头号失效模式（与 `dry-experiment` 铁律 2「改小 steps 直到跑通」
+   同一类问题）。summary 里的 `cellsFilteredOut` 必须进报告。
+4. **marker 基因的统计显著不等于生物学意义。** `markers.csv` 同时给 `score` / `log2fc` /
+   `padj`，报告里三者要一起给；只按 p 值排序前几名说事，在成千上万细胞的规模下毫无信息量。
+5. **`deterministic: true` 是被测出来的，不是声称的。** runner 把 `sc.settings.n_jobs`
+   钉成 1、PCA 用 arpack + 固定种子、leiden 传 `random_state`，`tests/unit/scanpy_e2e.test.ts`
+   每次都跑两遍比字节。**它保证的是同一台机器上重跑逐位一致**，不保证跨机器/跨 BLAS 版本
+   一致——跨机器复现请按数值区间对账。
+
+## 用法
+
+```bash
+spark-research exp platforms                                  # 确认 scanpy 平台可用
+spark-research exp new "PBMC 聚类" --platform scanpy \
+    --param countsPath=/abs/path/counts.csv \
+    --param minGenesPerCell=200 --param nTopGenes=2000 \
+    --param nPcs=50 --param resolution=1.0 --param randomSeed=0 \
+    --hypothesis "分辨率 1.0 下出现 ≥1 个 CD3D 高表达的独立细胞群"
+spark-research exp run <id>
+spark-research exp run <id> --resume                          # 进程被杀之后接上
+spark-research exp iterate <id> --param resolution=0.5        # 换分辨率对照，新实验 supersedes 旧的
+```
+
+退出码 1 = 算例失败或参数非法。**不要**把它当成「跑完了」。
+
+## 任务种类 `sc-cluster`
+
+| 阶段 | 关键参数 | 备注 |
+|------|---------|------|
+| 输入 | `countsPath`（必填） | cells × genes 的计数 CSV，第一列是细胞 id，表头是基因名 |
+| QC | `minGenesPerCell` / `minCellsPerGene` | 默认 200 / 3；过滤后不足 3×3 直接报错，不返回空结果 |
+| 归一化 | `targetSum` + log1p | 默认 1e4，与上游标准流程一致 |
+| 高变基因 | `nTopGenes` | 默认 2000 |
+| PCA + 邻居图 | `nPcs` / `nNeighbors` | 默认 50 / 15。`nPcs ≥ nTopGenes` 时 prepare 会警告：PCA 无解 |
+| Leiden 聚类 | `resolution` / `leidenIterations` / `randomSeed` | 默认 1.0 / 2 / 0，flavor=igraph |
+| Marker 排名 | `rankMethod` / `nMarkersPerCluster` | 默认 wilcoxon / 10 |
+| 降维坐标 | `computeUmap` / `nEmbeddingDims` | 默认 false / 5；false 时导出 PCA 坐标 |
+
+产出：`clusters.csv`（细胞 → 簇）· `markers.csv`（簇 → top 基因 + score/log2fc/padj）·
+`embedding.csv`（细胞 → 簇 + 降维坐标）。
+
+**本平台目前的边界**（不是缺陷，是没做的事，别在报告里假装做了）：
+只吃 CSV 计数矩阵，**不读 h5ad / 10X mtx**；**没有线粒体比例 QC**（`maxPctMt` 没实现）；
+没有批次校正、没有细胞类型自动注释。需要这些请在 BACKLOG 里提，不要在 SKILL 里想象。
+
+## 证据图
+
+```
+artifact record（clusters.csv / markers.csv / embedding.csv）  --derives_from--> experiment
+observation（聚类数、marker 表、QC 前后细胞数）                 --derives_from--> experiment 与 artifact
+conclusion                                                      --derives_from--> observation
+新 experiment                                                   --supersedes-->   旧 experiment（iterate）
+```
+
+- experiment 的 `evidence` 是 `inferred`（参数与假设是设计出来的）
+- observation 的 `evidence` 是 `computed`（结果是算出来的）
+- 结论卡一律 `review: "pending"` —— 干实验不给自己发通过证
+
+## 反模式
+
+- ❌ 调 QC 阈值或分辨率直到聚类结果「看起来对」，再回头解释参数选择
+- ❌ 只报 marker 基因的 p 值排序，不给 log2 fold change
+- ❌ 把「分出了 N 群」当结论，不说明这是哪个分辨率、哪个 HVG 数下的结果
+- ❌ 同一份数据反复重跑覆盖上一轮聚类结果（要对照就 `iterate`）
+- ❌ 把 UMAP 坐标图上的视觉聚集当成统计显著性的证据
+- ❌ 因为 `deterministic: true` 就以为跨机器也能逐位复现（它只保证同机重跑）
+
+## 验证方式（AD-5）
+
+- 契约测试：`tests/unit/scanpy_contract.test.ts` —— 复用 `tests/helpers/simulation_contract.ts`
+  的参数化契约用例（与 pyref / openmm 逐字节相同的断言），外加两条本平台特有的：
+  探测与真跑必须是同一条路径（V27）、依赖缺失必须报出安装命令
+- e2e：`tests/unit/scanpy_e2e.test.ts` —— 离线合成数据集（三种细胞类型各 5 个专属 marker），
+  断言**每组 marker 整组落在各自那一个 cluster 的 top-5 里**、聚类纯度 ≥ 95%，
+  以及 deterministic 位与两次跑出来的字节一致性相符
+- Python 侧：`tests/sim/scanpy_runner.test.py` —— probe() 的版本报告、输入校验的错误信息、
+  失败一律落成 `done.json` 的 failed 信封
 
 ------------------------------------------------------------------------------
 ## 技能：wet-protocol（backend/src/skills/wet-protocol/SKILL.md）
@@ -4619,6 +4960,7 @@ conclusion               --derives_from--> observation / experiment
 【何时不该用】不知道有哪些平台/kind/参数时——先 research_capabilities 看 simulationPlatforms（每个平台的 kinds 与 deterministic 位都在里面）。参数写错会在 design 阶段就被拒，不会让你跑完才发现。
 【典型链路】research_capabilities → exp_design → exp_run。
 【平台选择】pyref 零依赖、确定性（deterministic=true，结论可做逐位对账）；openmm 是真实 MD 但 CPU 上不逐位复现（deterministic=false，下游结论必须按「区间/趋势对账」措辞）。
+【执行地（target）】省略 = 本机跑，exp_run 一路跑到底。给了 target（local/modal）= 算例走算力层：exp_run 会停在「等人审批」，**你批不了**——派发是计费动作，只能由人在终端批（AD-6 同构）。
 
 参数 schema：
 ```json
@@ -4658,6 +5000,14 @@ conclusion               --derives_from--> observation / experiment
       "examples": [
         "2 nm 盒子在 5 ps 内可达到温度平衡"
       ]
+    },
+    "target": {
+      "type": "string",
+      "enum": [
+        "local",
+        "modal"
+      ],
+      "description": "算例的执行地（省略 = 本机子进程直接跑）。给了 target 之后 exp_run 不会直接开跑：它先建一份算力计划并停在人工审批，要人用 `spark-research compute approve <jobId> --run` 批准并派发（花钱的动作一律不经 MCP）。"
     },
     "project": {
       "type": "string",
@@ -5384,7 +5734,7 @@ conclusion               --derives_from--> observation / experiment
 
 ## compute_collect
 
-【何时调】**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
+【何时调】**delivery 是 none / pending / failed 且 execution 已到终态时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
 【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
 【何时不该用】① execution 还没到终态——会得到 409，不是「等一会再试」的意思，是「你调早了」。② delivery 已经是 complete——再调一次没有语义。
 【典型链路】compute_status 看到 execution=succeeded & delivery=pending → compute_collect → 产物落到 harvest/，之后才允许人 release 远端资源。

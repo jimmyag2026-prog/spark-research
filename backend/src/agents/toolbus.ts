@@ -130,6 +130,23 @@ export interface ToolBusOptions {
   audit: (entry: ToolAuditEntry) => void;
   /** 单次调用的硬超时（毫秒）。 */
   timeoutMs: number;
+  /**
+   * 收口(W5-3)：外部 MCP 工具的 spec（`ExternalToolRegistry.specs()` 的产物）。
+   *
+   * **为什么必须有这个**：W5-3 γ 把外部 MCP 的运行时接线做通了——工具能执行、
+   * 每次调用都进证据图。但它自己戳破了一件事：`specs()` 原本只返回
+   * `MCP_TOOLS.filter(...)` 一张固定表，**`mcp:` 前缀的外部工具永远进不了
+   * 模型可见的工具列表**。γ 的原话：「我的测试用 mock LLM 直接发出工具名，
+   * 证明的是『发出来就能执行』，不是『模型会发出来』——**真实模型不会自己想到
+   * 调一个它从没被告知存在的工具**。」
+   *
+   * 没有这一项，「agent 能自主使用外部 MCP 工具」就是一句谎话。
+   * `ExternalToolRegistry.specs()`（`extensions/mcp_client.ts:573`）从 W4-d 起就
+   * 带着注释「供收口拼进喂给模型的 tools 列表」等在那里——等了两个波次。
+   *
+   * 不给或给空数组 = 与接线前逐字节同行为（没装外部扩展的用户不受影响）。
+   */
+  externalSpecs?: ToolSpec[];
 }
 
 const MAX_ARGS_SUMMARY_LEN = 500;
@@ -186,6 +203,9 @@ export class AgentToolBus {
    */
   specs(): ToolSpec[] {
     const granted = new Set(this.options.grants);
+    // 收口(W5-3)：内建工具（同源于 MCP_TOOLS）+ 外部 MCP 工具（已授权的那些）。
+    // 外部工具**同样过 grants 白名单**——接线不等于放开授权，`call()` 的硬线检查照旧。
+    const external = (this.options.externalSpecs ?? []).filter((spec) => granted.has(spec.name));
     return MCP_TOOLS.filter((tool) => granted.has(tool.name)).map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -193,7 +213,7 @@ export class AgentToolBus {
       // （都是手写 JSON Schema），只是后者用 index signature 放宽了类型——同源数据，
       // 这里只是换一层类型外套，不是重新定义 schema。
       inputSchema: tool.inputSchema as unknown as Record<string, unknown>,
-    }));
+    })).concat(external);
   }
 
   async call(name: string, args: Record<string, unknown> = {}): Promise<ToolOutcome> {

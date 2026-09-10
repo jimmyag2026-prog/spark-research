@@ -54,3 +54,6 @@ frontmatter 复杂到需要真 YAML 解析器时，说明它已经不适合当�
 | dry-experiment | B | P5 落地 |
 | wet-protocol | B | P6 落地 |
 | research-report | C/E | P8 落地 |
+| scanpy | B | v0.5 W5-3 落地（`dry-experiment` 的仿真平台形态） |
+| pydeseq2 | B | v0.5 W5-3 落地（同上） |
+| cobrapy | B | v0.5 W5-3 落地（同上） |

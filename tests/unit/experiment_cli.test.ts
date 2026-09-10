@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXP_HELP, runExpCommand } from "../../backend/src/experiment/cli";
 import { ProjectManager } from "../../backend/src/project/manager";
+import { SIMULATION_PLATFORM_IDS } from "../../backend/src/simulation/registry";
 
 // P5 CLI 单测（风格同 project/cli、ideation/cli）：注入 out/err + 返回退出码，不打真实网络。
 // 仿真走 pyref（零依赖、秒级），所以这些用例是真跑，不是打桩。
@@ -53,6 +54,33 @@ describe("exp CLI · new", () => {
     expect(await c.run(["new", "X", "--param", "steps"])).toBe(1);
     expect(c.errText()).toContain("k=v");
     expect(await c.run(["new", "X", "--param"])).toBe(1);
+  });
+
+  test("--target 写错在建 record 之前就被拒", async () => {
+    const c = cli();
+    expect(await c.run(["new", "X", ...FAST, "--target", "gpu-farm"])).toBe(1);
+    expect(c.errText()).toContain("未知执行地");
+    // 拒了就不该留下半条实验。
+    const list = cli();
+    expect(await c.run(["list", "--json"])).toBe(0);
+    expect(JSON.parse(c.text().split("\n").filter((l) => l.startsWith("["))[0]!)).toEqual([]);
+    void list;
+  });
+
+  test("--target local 落进 record，并在人类输出里说清楚「不会替你把钱花出去」", async () => {
+    const c = cli();
+    expect(await c.run(["new", "算力振子", ...FAST, "--target", "local"])).toBe(0);
+    expect(c.text()).toContain("执行地 local（算力层）");
+    // 「不会替你把钱花出去」必须在**建档那一刻**就说清楚，而不是等人 run 了才发现。
+    expect(c.text()).toContain("停下来等人审批");
+  });
+
+  test("不给 --target = 老路径，computeTarget 是 null（不是缺字段）", async () => {
+    const c = cli();
+    expect(await c.run(["new", "本机振子", ...FAST, "--json"])).toBe(0);
+    const view = JSON.parse(c.text());
+    expect(view.computeTarget).toBeNull();
+    expect(view.computeJobId).toBeNull();
   });
 
   test("非法参数值在 new 阶段就被拒（不建半成品）", async () => {
@@ -185,11 +213,12 @@ describe("exp CLI · run / status / list", () => {
 });
 
 describe("exp CLI · platforms 与帮助", () => {
-  test("platforms 列出两个平台与可用性", async () => {
+  test("platforms 列出全部平台与可用性", async () => {
     const c = cli();
     const code = await c.run(["platforms", "--json"]);
     const list = JSON.parse(c.text()) as { id: string; ok: boolean; reason: string | null }[];
-    expect(list.map((p) => p.id)).toEqual(["pyref", "openmm"]);
+    // W5-3 β：C3 三件套（scanpy / pydeseq2 / cobrapy）进注册表后这里跟着长。
+    expect(list.map((p) => p.id)).toEqual([...SIMULATION_PLATFORM_IDS]);
     // pyref 必然可用（零依赖）；openmm 视本机环境而定，不可用时必须给出可操作的原因。
     expect(list.find((p) => p.id === "pyref")!.ok).toBe(true);
     const openmm = list.find((p) => p.id === "openmm")!;

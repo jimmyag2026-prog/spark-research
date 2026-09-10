@@ -616,6 +616,73 @@ export class ExternalToolRegistry {
  * `new McpToolRunner(sameOptions)` 换成
  * `await createExternalToolRunner(sameOptions, registry)`。
  */
+// ── V45：agent 运行时的外部 MCP 生命周期——**契约面** ────────────────────────
+//
+// 这一段只放类型 + 一个零依赖的空实现。真正的实现（发现已装扩展 → 连接 → 注册 →
+// 收尾）在 `loader.ts` 的 `ExternalMcpRuntime`，理由是**模块图方向**：`loader.ts`
+// 已经单向 import 本文件（`loadMcpClientConfig`），把实现放这边会变成
+// `loader ⇄ mcp_client` 双向环——本文件头部那段注释记的就是这个仓库被环咬过一次的
+// 真实事故（`McpToolRunner` 的 TDZ），教训不重演第二遍。
+//
+// 消费方（`agents/orchestrator.ts`）只需要 `ExternalMcpProvider` 这个**接口**，
+// 所以它对本文件是 `import type`（编译期擦除）+ 已有的 `createExternalToolRunner`
+// 值引用，**不需要**为了拿到运行时实现而去 import `loader.ts`——orchestrator 的
+// 模块图里不会因为 V45 多出任何一条新的运行时边。
+
+export interface ExternalMcpAttachFailure {
+  extension: string;
+  reason: string;
+}
+
+/**
+ * 一次 agent 运行期间"已连上的外部 MCP 扩展"的句柄。
+ *
+ * `registry` 是**可选**的，缺省语义很重要：`undefined` = 这一轮一个外部 session 都没有
+ * （没装 mcp_client 扩展、或全都连不上）。这时 orchestrator 不会把 `externalTools`
+ * 接上去，`getToolRunner()` 构造的仍然是裸 `McpToolRunner`——"没装扩展的用户，行为与
+ * v0.4 逐字节一致"这句话的可验证形式（约束二）。
+ */
+export interface ExternalMcpAttachment {
+  registry?: ExternalToolRegistry;
+  /** 本轮真的连上并注册进 registry 的扩展名。 */
+  connected: string[];
+  /** 试着连了但失败的扩展（失败隔离：记录下来，不抛给调用方）。 */
+  failed: ExternalMcpAttachFailure[];
+  /** 连都没试的扩展（manifest 坏了 / 没过 --trust / mcp.json 非法）。 */
+  skipped: ExternalMcpAttachFailure[];
+  /** 收尾：关掉本轮开的全部子进程并从 registry 摘掉。幂等，可以重复调用。 */
+  close(): Promise<void>;
+}
+
+export interface ExternalMcpAttachOptions {
+  /**
+   * V31 的绑定点：给了就把它一路传到 `connectExternalMcp()` 的 `recordSink`，
+   * 于是**本轮每一次外部工具调用**都会在这个项目的证据图里落一条 observation。
+   * 生产上传的是 `project.records()`（见 `orchestrator.runResearchLoop()`）。
+   */
+  recordSink?: EvidenceRecordSink;
+}
+
+/** orchestrator 侧只认这个接口——测试可以塞一个手写假件，不必起真子进程。 */
+export interface ExternalMcpProvider {
+  attach(options?: ExternalMcpAttachOptions): Promise<ExternalMcpAttachment>;
+}
+
+/**
+ * "这一轮没有任何外部 MCP"的空句柄。**每次调用返回新对象**（不是共享常量）——
+ * 共享一个带数组字段的常量，任何一个调用方 push 一下就会污染其它所有调用方。
+ */
+export function emptyExternalMcpAttachment(): ExternalMcpAttachment {
+  return {
+    connected: [],
+    failed: [],
+    skipped: [],
+    async close() {
+      /* 什么都没开，什么都不用关 */
+    },
+  };
+}
+
 export async function createExternalToolRunner(baseOptions: McpServerOptions, registry: ExternalToolRegistry): Promise<McpToolRunner> {
   const { McpToolRunner: RealMcpToolRunner } = await import("../mcp/server");
   class McpToolRunnerWithExternal extends RealMcpToolRunner {

@@ -43,6 +43,17 @@ export interface TransitionEntry {
 
 export type SummaryValue = string | number | boolean | null;
 
+// CB-6：干实验可以把算例送到别的执行地跑。**这不是一个新的实验状态**（设计 §1.1.9）——
+// 状态机一个字都不改，只多两个 metadata 字段；等待发生在 `dry_run` 内部，
+// 和「任务在别的进程里跑」是同一件事的推广。
+// 老 record 缺这两个字段 = 本机跑（`computeTarget: null`），不迁移。
+export const COMPUTE_TARGETS = ["local", "modal"] as const;
+export type ComputeTargetName = (typeof COMPUTE_TARGETS)[number];
+
+export function isComputeTargetName(value: unknown): value is ComputeTargetName {
+  return typeof value === "string" && (COMPUTE_TARGETS as readonly string[]).includes(value);
+}
+
 // experiment record 的 metadata 形态。写回一律走 RecordStore.update() 窄口
 //（P4 定的口径：状态是生命周期字段，身份字段不可变）。
 export interface ExperimentMeta {
@@ -67,6 +78,10 @@ export interface ExperimentMeta {
   observationId: string | null;
   conclusionId: string | null;
   lastError: string | null;
+  // CB-6：null = 老路径（本进程直接起子进程跑，SubprocessSimulationPlatform）；
+  // 非 null = 这条实验的算例经算力层执行（要过审批门），jobId 记在 computeJobId。
+  computeTarget: ComputeTargetName | null;
+  computeJobId: string | null;
 }
 
 export interface ExperimentView extends ExperimentMeta {
@@ -125,6 +140,10 @@ export function renderExperiment(view: Omit<ExperimentView, "record">): string {
   lines.push(`- 迭代：第 ${view.iteration} 轮 · 提交 ${view.attempts} 次`);
   if (view.runId) lines.push(`- run: \`${view.runId}\``);
   if (view.specHash) lines.push(`- specHash: \`${view.specHash}\``);
+  if (view.computeTarget) {
+    lines.push(`- 执行地：**${view.computeTarget}**（算力层）`);
+    if (view.computeJobId) lines.push(`- 算力 job: \`${view.computeJobId}\``);
+  }
   if (view.hypothesis) {
     lines.push("");
     lines.push(`## 假设`);

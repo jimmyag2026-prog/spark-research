@@ -69,7 +69,7 @@ spark-research new platform <name>
 - `triggers` 写「用户会怎么开口」（"这个想法有没有人做过"），不是能力名（"novelty check"）。agent 匹配的是用户的话。
 - `validation` 让 AD-5「技能必须有配套 e2e 才算完成」从口号变成一道门。写一个还不存在的测试文件路径，CI 立刻红。
 
-正文必须有 **反模式** 小节。说清什么时候**不**该用，比说清用法更能防止 agent 越界——现有 10 个技能全部遵守这条。
+正文必须有 **反模式** 小节。说清什么时候**不**该用，比说清用法更能防止 agent 越界——现有 13 个技能全部遵守这条。
 
 ### 最小可运行示例
 
@@ -84,7 +84,7 @@ spark-research new skill hello-source
 ### 怎么测
 
 ```bash
-bun test tests/unit/skill_frontmatter.test.ts     # schema 门：10 个技能逐个过
+bun test tests/unit/skill_frontmatter.test.ts     # schema 门：13 个技能逐个过
 bun test tests/unit/skill_hello_source.test.ts    # 你新技能的配套验证
 ```
 
