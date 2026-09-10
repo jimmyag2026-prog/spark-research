@@ -283,6 +283,10 @@ export KIMI_API_KEY=…
 带 key 的文献源（如 AMiner）走凭据服务，**凭据只在 daemon 进程内**，
 存在 `~/.spark-research/credentials.json`（0600），永不进入 kernel/env/prompt（AD-2）。
 
+**这些 key 一律自备（BYOK）**：仓库不附带任何可用凭据，AMiner 等源需要你自己去申请。
+没配 key 的源在检索结果里显示为 `skipped` 并附配置指引（**不是静默返回空**）；
+key 失效则上游 401 会如实报成 `failed`。
+
 ---
 
 ## 快速开始
@@ -334,7 +338,11 @@ bun scripts/demo-research-thread.ts
 ## 能力概览
 
 **文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
-AMiner（需 key）· CNKI / 万方（占位，无公开 API）
+AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
+
+> ⚠️ **默认只查其中四个**：`openalex` / `crossref` / `europepmc` / `semanticscholar`。
+> PubMed 与 arXiv 已实装但**不在默认集里**——要用得显式加 `--sources arxiv`（或 `pubmed`）。
+> 这意味着 `lit add <arxiv-id>` 目前会查不到。已登记为 BACKLOG **V34**，v0.5 修。
 **科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
 **仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
