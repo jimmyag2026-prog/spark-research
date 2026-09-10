@@ -661,6 +661,9 @@ function main() {
       console.log(pkg.version);
       break;
     default:
+      // V56①：外部验收抓到的低危——之前这里直接打一屏 HELP，从不提一句「你敲的是什么」，
+      // 打错字的人只能靠猜。退出码不变，只是在 HELP 前面把打错的那个词回显出来。
+      console.log(`未知命令 '${cmd}'`);
       console.log(HELP);
       process.exitCode = 1;
   }
