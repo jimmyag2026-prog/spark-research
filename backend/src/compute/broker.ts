@@ -640,15 +640,25 @@ export class ComputeBroker {
     hooks: RunHooks,
     origin: "dispatch" | "recover",
   ): Promise<ComputeJobView> {
-    const started = this.jobs.patch(job.jobId, {
+    // V50：resource_start → resource_active → start → run 这四步状态机转换原来分两次
+    // patch() 落盘（先落 start，再落 run），中间没有真正的异步边界——`specOf()` 只读
+    // jobId/plan/jobDir，不依赖 lifecycle 处于哪个中间态，纯粹是「先算出中间状态再算下
+    // 一步」的写法副作用，把 rev 在用户完全看不到中间态的情况下白白多跳一格（外部验收
+    // S12/V50：一次 dispatch 下来 rev 跳好几格，说不清哪一格对应什么）。这里在真正调用
+    // adapter.run()（本函数唯一有意义的异步边界）之前只落一次盘，四步转换在内存里连着算。
+    const running = this.jobs.patch(job.jobId, {
       lifecycle: this.step(
-        this.step(this.step(job.lifecycle, "resource_start", job.plan), "resource_active", job.plan),
-        "start",
+        this.step(
+          this.step(this.step(job.lifecycle, "resource_start", job.plan), "resource_active", job.plan),
+          "start",
+          job.plan,
+        ),
+        "run",
         job.plan,
       ),
     });
     const spec = {
-      ...this.specOf(started),
+      ...this.specOf(running),
       resolveSecret: (ref: string) => {
         const value = this.credentials.get(ref);
         if (!value) {
@@ -657,7 +667,6 @@ export class ComputeBroker {
         return value;
       },
     };
-    const running = this.jobs.patch(started.jobId, { lifecycle: this.step(started.lifecycle, "run", job.plan) });
     try {
       const result = await adapter.run(spec, hooks);
       return this.settle(running, result.exitCode, result.timedOut, result.handle, origin);

@@ -81,6 +81,12 @@ function firstParagraph(text: string, max = 240): string {
   const body = text
     .split("\n")
     .filter((line) => !line.startsWith("#") && !line.startsWith("- record:") && line.trim().length > 0);
+  // V56③：observation 的正文常常是一张 markdown 表格（renderWetObservation 产的
+  // `| 指标 | 值 |` 那种）。旧写法不分青红皂白把所有行 join(" ") 摊平成一句话，
+  // 表格会被压成一坨管道符（`| 指标 | 值 | |------|-----| | x | y |`），比原文本还难读。
+  // 含表格行时保留原始换行渲染成真表格，也不按字符数截断——截断只会把表格切成半行。
+  const hasTableRow = body.some((line) => line.trimStart().startsWith("|"));
+  if (hasTableRow) return body.join("\n").trim();
   const joined = body.join(" ").trim();
   return joined.length > max ? `${joined.slice(0, max)}…` : joined;
 }
@@ -213,6 +219,16 @@ export function buildReport(input: BuildReportInput): ResearchReport {
       const approval = m.approval as { actor?: string; at?: string; protocolHash?: string } | null;
       if (approval?.actor) {
         lines.push(`- 人工批准：${approval.actor} @ ${approval.at ?? "?"}（协议 hash \`${approval.protocolHash ?? "?"}\`）`);
+      }
+      // V56②：README 的口径是「CLI 编译与审批输出必须显示 unconsumedWarnings」——报告是
+      // 第三个面，之前是缺口。真源是 WetExperimentMeta.unconsumedWarnings（同一份数据，
+      // 与 lab/cli.ts 的 `🚨 未被安全门消费：` 是同一个字段，不是另算的）。
+      const unconsumedWarnings = Array.isArray(m.unconsumedWarnings)
+        ? (m.unconsumedWarnings as unknown[]).filter((w): w is string => typeof w === "string")
+        : [];
+      if (unconsumedWarnings.length > 0) {
+        lines.push(`- 🚨 未被安全门消费的告警（${unconsumedWarnings.length} 条，「用户写了但安全门没看见」）：`);
+        for (const warning of unconsumedWarnings) lines.push(`  - ${warning}`);
       }
     } else {
       lines.push(`- 平台：${str(m.platform) ?? "?"} / ${str(m.simKind) ?? "?"}`);

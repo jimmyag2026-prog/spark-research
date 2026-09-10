@@ -2477,6 +2477,24 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **算力任务的 rev 跳变收窄（BACKLOG V50，行为变更）**：`compute dispatch` 内部
+  `resource_start → resource_active → start → run` 四步状态机转换原来分两次落盘，
+  中间没有真正的异步边界，纯粹是写法副作用，会让用户看到的 `rev` 无解释地多跳一格。
+  现在这四步在真正调用执行后端之前合并成一次落盘。`rev` 仍是同一个字段、仍然是
+  每次 `job_store.patch()` 调用 +1 的写计数（CAS 语义不变），这次改动只减少了单次
+  `dispatch` 内部触发的 `patch()` 调用次数，让跳变的格数更接近「真的发生了几次状态
+  变化」。**未做到的部分**：`compute list/status` 展示的 rev 与 CAS 用的仍是同一个
+  内部写计数字段——没有做「用户可见 rev 与内部写计数」的字段级分离，因为该分离会
+  牵动 `backend/src/compute/approval.ts`（CAS 依赖 `job.rev` 每次写都变）与
+  `backend/src/compute/cli.ts`（展示层）两个不在本 lane 文件所有权内的文件，且会
+  破坏 `tests/unit/compute_job_store.test.ts` 里「patch 每次 rev+1」的既有断言。
+
+---
+
 ## [0.5.0] — 2026-09-11
 
 **把「远端算力」从一个假实现变成一条真链路，并把三次外部验收补齐。**

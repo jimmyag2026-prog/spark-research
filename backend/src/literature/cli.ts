@@ -199,12 +199,21 @@ function printLibraryPaper(paper: LibraryPaper, index: number, out: (line: strin
 function printSourceStatus(
   statuses: Array<{ source: string; outcome: string; count: number; error?: string; note?: string }>,
   out: (line: string) => void,
+  // V54：caveat 的真源是 connector 自己的 `metadata.caveat`（capabilities --json 消费的
+  // 同一个字段，见 backend/src/capabilities/index.ts:384）——这里只是查表转发，不手抄
+  // 第二份文案。只在源真的被查了（ok/failed）且带 caveat 时才提示；skipped 已经有自己的
+  // note 说明原因，不重复刷屏。
+  caveatOf?: (source: string) => string | null,
 ): void {
   out("各源结果:");
   for (const s of statuses) {
     const mark = s.outcome === "ok" ? "✅" : s.outcome === "skipped" ? "⏭️ " : "❌";
     const detail = s.outcome === "ok" ? `${s.count} 条` : (s.note ?? s.error ?? s.outcome);
     out(`  ${mark} ${s.source}: ${detail}`);
+    if (s.outcome !== "skipped") {
+      const caveat = caveatOf?.(s.source);
+      if (caveat) out(`      ⚠️  ${caveat}`);
+    }
   }
 }
 
@@ -368,6 +377,21 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
     );
   };
 
+  // V54：`lit search` 的人类入口要把源自己的 caveat（如 bioRxiv「search 不是真检索」）
+  // 亮出来，不能只显示 ✅。`LiteratureSearcher` 不对外暴露它内部的 registry（且测试常用
+  // `deps.searcher` 注入假实现绕开 registry），所以这里单独起一个只读 registry 查
+  // metadata——构造 registry 本身零副作用（不发请求），与 `deps.searcher` 是否被注入无关。
+  // 懒加载：只有 search/add 真的用到时才建，其余子命令不多付这份构造成本。
+  let caveatByName: Map<string, string | null> | null = null;
+  const caveatOf = (source: string): string | null => {
+    if (!caveatByName) {
+      const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
+      const registry = new ConnectorRegistry({ http: deps.http, credentials }).registerBuiltins();
+      caveatByName = new Map(registry.listAll().map((c) => [c.name, c.metadata?.caveat ?? null]));
+    }
+    return caveatByName.get(source) ?? null;
+  };
+
   try {
     switch (sub) {
       case "search": {
@@ -387,7 +411,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             `→ 剩 ${afterDedupe} 条` +
             (result.papers.length < afterDedupe ? `（--limit 截断后展示 ${result.papers.length} 条）` : ""),
         );
-        printSourceStatus(result.sources, out);
+        printSourceStatus(result.sources, out, caveatOf);
         out("");
         result.papers.forEach((paper, i) => printPaper(paper, i, out));
 
@@ -813,6 +837,12 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           const keyMark = needsKey ? (credentials.has(entry.name) ? "凭据已配置" : "凭据未配置") : "免 key";
           out(`  ${entry.name.padEnd(16)} ${keyMark.padEnd(12)} ${entry.description}`);
           out(`  ${" ".repeat(16)} 工具: ${entry.tools.map((t) => t.name).join(", ")}`);
+          // V54：免 key/✅ 不等于「毫无保留」——bioRxiv 的 search 是模拟出来的复合工具，
+          // 这条 caveat 之前只在 capabilities --json 里看得到，人类入口（这里）反而看不到。
+          // 真源是 connector 自己的 metadata.caveat，不在这里另写一份文案。
+          if (entry.metadata?.caveat) {
+            out(`  ${" ".repeat(16)} ⚠️  ${entry.metadata.caveat}`);
+          }
         }
         return 0;
       }
