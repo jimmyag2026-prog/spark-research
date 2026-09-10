@@ -112,6 +112,14 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // W2 收口已接（buildCapabilities() 里加了 extensions 字段），本条按对称检查删除。
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
+
+  // v0.5 W5-1 α（CB-1/CB-2）：算力层的编排入口与第一个 adapter 在本波交付，
+  // 但生产调用方（CLI `spark-research compute …`）是 W5-2 β 的所有权。
+  // 这两条是本波**唯一**的跨波「等接线」（DEVELOPMENT_PLAN_v0.5_MODULES.md §5.1）。
+  "backend/src/compute/broker.ts":
+    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
+  "backend/src/compute/adapters/local.ts":
+    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
