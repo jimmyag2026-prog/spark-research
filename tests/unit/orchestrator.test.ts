@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
@@ -12,7 +12,7 @@ import {
 import { SubAgentFactory, type SubAgentType } from "../../backend/src/agents/sub_agent";
 import { ResearchContract, type EvidenceQuery } from "../../backend/src/agents/contract";
 import type { McpToolRunner } from "../../backend/src/mcp/server";
-import { ProjectManager } from "../../backend/src/project/manager";
+import { ProjectManager, type Project } from "../../backend/src/project/manager";
 import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse, type ToolCall } from "../../backend/src/llm/router";
 import { llmExtras, llmFailure } from "../../backend/src/llm/types";
 // V32（W5-2 δ）：createExternalToolRunner() 接进 getToolRunner()。用真实 spawn 的
@@ -24,6 +24,15 @@ import { connectExternalMcp, ExternalToolRegistry } from "../../backend/src/exte
 import type { ExtensionManifest } from "../../backend/src/extensions/types";
 import type { ExtensionGrant } from "../../backend/src/extensions/grants";
 import { AgentToolBus } from "../../backend/src/agents/toolbus";
+// W5-3 γ（V45）：agent 运行时的外部 MCP 生命周期。用真的 ExternalMcpRuntime + 真的
+// 扩展目录 + 真的子进程——V45 的价值就在"生产里真的有这条流程"，拿假 provider 测
+// 等于又把 W5-2 δ 的机制测了一遍。
+import { ExternalMcpRuntime, loadExtension, type ExternalMcpLifecycleEvent } from "../../backend/src/extensions/loader";
+import { extensionDir } from "../../backend/src/extensions/paths";
+import {
+  EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
+  type ExternalToolCallObservationMetadata,
+} from "../../backend/src/agents/contract";
 import { BudgetLedger } from "../../backend/src/llm/budget";
 import { MCP_TOOLS } from "../../backend/src/mcp/tools";
 
@@ -785,4 +794,314 @@ describe("OrchestratorAgent · V32：getToolRunner() 惰性构造改用 createEx
 
     await session.close();
   });
+});
+
+// ── W5-3 γ · V45：「agent 运行时连接外部 MCP 扩展」这条流程在 orchestrator 上的接线 ──
+//
+// 与上面 V32 那一组的区别，一句话：V32 测的是「**注入**了 registry 之后 runner 认得
+// mcp: 前缀名」，本组测的是「**没人注入**，agent 自己发现、连接、注册、绑 recordSink、
+// 收尾」——V45 要建的正是那条"没人注入"时也存在的流程。
+//
+// 这一组刻意走**真**扩展目录 + **真**子进程（fixtures/mcp/good_server.ts），不用手搓的
+// 假 provider：V45 的整个价值就在于"生产里真的有这条流程"，用假件测等于又测了一遍机制。
+
+describe("OrchestratorAgent · V45：agent 运行时的外部 MCP 生命周期", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "spark-orch-v45-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** 在 `tmp` 下装一个已 --trust 的 mcp_client 扩展（生产上这一步是 `ext add-mcp` 干的）。 */
+  async function installFixtureMcpExtension(name: string, args: string[] = [MCP_GOOD_SERVER]): Promise<void> {
+    const dir = extensionDir(name, { root: tmp });
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "extension.json"),
+      JSON.stringify({ kind: "mcp_client", name, version: "0.1.0", description: "V45 测试扩展" }, null, 2),
+    );
+    writeFileSync(
+      join(dir, "mcp.json"),
+      JSON.stringify({ command: process.execPath, args, startupTimeoutMs: 5_000, callTimeoutMs: 3_000 }, null, 2),
+    );
+    const loaded = await loadExtension(dir, { trust: true, pathOptions: { root: tmp } });
+    expect(loaded.status).toBe("loaded");
+  }
+
+  /**
+   * 一个"永远完不成"的契约：用来验停止条件。三条并行停机条件里
+   * done 永不触发、budget 不设限，剩下的只有 no_progress——所以 `stopReason` 是
+   * `"no_progress"` 这件事本身就是「证据图的进展口径正确」的可观测证明。
+   */
+  const neverDoneContract = (_q: EvidenceQuery) =>
+    new ResearchContract("never-done", [
+      {
+        id: "impossible",
+        description: "永远完不成的 stage（用于验停止条件）",
+        check() {
+          return { done: false, evidence: [], reason: "故意永远不完成" };
+        },
+      },
+    ]);
+
+  /**
+   * planner 每轮派一个 explore 子代理；子代理的 tool loop 第一步调外部工具、第二步收工。
+   * `externalToolName` 给 null 时子代理什么都不调（用于"没有外部工具"的对照）。
+   */
+  function llmDrivingExternalTool(externalToolName: string | null) {
+    const toolCallNames: string[] = [];
+    let toolLoopStep = 0;
+    const llm: Pick<LLMRouter, "call" | "listModels" | "capabilitiesFor"> = {
+      call: async (messages, modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL) => {
+        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+        if (options.tools) {
+          toolLoopStep += 1;
+          if (externalToolName && toolLoopStep % 2 === 1) {
+            toolCallNames.push(externalToolName);
+            return toolCallResponse([{ id: `c${toolLoopStep}`, name: externalToolName, args: { text: "from-subagent" } }]);
+          }
+          return toolTextResponse("explore 子代理：本轮结束");
+        }
+        return toolTextResponse(JSON.stringify([{ id: "s1", subagent: "explore", task: "调用外部 MCP 工具看看" }]));
+      },
+      listModels: mockLlm.listModels,
+      capabilitiesFor: () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
+    };
+    return { llm, toolCallNames };
+  }
+
+  function externalToolCallRecords(project: Project) {
+    return project
+      .records()
+      .list({ type: "observation" })
+      .filter(
+        (r) =>
+          (r.metadata as Partial<ExternalToolCallObservationMetadata>).kind === EXTERNAL_TOOL_CALL_OBSERVATION_KIND,
+      );
+  }
+
+  test(
+    "端到端：发现 → 连接子进程 → 注册 → recordSink 绑到本 project → 子代理真的调到外部工具 → 收尾；" +
+      "且 external_tool_call 不算进展，停止条件照常触发",
+    async () => {
+      await installFixtureMcpExtension("v45-orch");
+      const manager = new ProjectManager(tmp);
+      const project = manager.create("v45-loop", { name: "V45 端到端", description: "" });
+      manager.bindSession("sess_v45", project.slug);
+
+      const events: ExternalMcpLifecycleEvent[] = [];
+      const runtime = new ExternalMcpRuntime({ pathOptions: { root: tmp }, onEvent: (e) => events.push(e) });
+      const { llm, toolCallNames } = llmDrivingExternalTool("mcp:v45-orch:echo");
+
+      const daemon = new SparkResearchDaemon({ projects: manager });
+      // 注意：**没有**传 toolRunner，也**没有**传 externalTools——这正是 V45 要建的那条
+      // "没人手工注入时也存在"的流程。
+      const orch = new OrchestratorAgent(daemon, { llm, projects: manager, externalMcp: runtime });
+
+      const result = await orch.runResearchLoop("sess_v45", "调外部工具", {
+        contract: neverDoneContract,
+        noProgressThreshold: 1,
+        maxRounds: 4,
+      });
+
+      // ① 子代理真的调到了外部工具（不是"被授权了但没调"）。
+      expect(toolCallNames).toContain("mcp:v45-orch:echo");
+
+      // ② V31 在**证据图**里生效：断言落在"图里查得到"，不是"某个函数被调用了"。
+      const observations = externalToolCallRecords(project);
+      expect(observations.length).toBeGreaterThanOrEqual(1);
+      const meta = observations[0]!.metadata as unknown as ExternalToolCallObservationMetadata;
+      expect(meta.extension).toBe("v45-orch");
+      expect(meta.tool).toBe("echo");
+      expect(meta.ok).toBe(true);
+
+      // ③ AD-10 不许被这条新记录废掉：external_tool_call 是审计不是进展，
+      //    所以"每轮都调了外部工具"依然算无进展，no_progress 照常触发。
+      //    （算进证据的话这里会变成跑满 maxRounds、stopReason="budget"——P12 的形状。）
+      expect(result.stopReason).toBe("no_progress");
+      expect(result.rounds).toBeLessThan(4);
+
+      // ④ 收尾：本轮开的子进程被收掉了。
+      expect(events.some((e) => e.phase === "connected" && e.extension === "v45-orch")).toBe(true);
+      expect(events.some((e) => e.phase === "closed" && e.extension === "v45-orch")).toBe(true);
+    },
+    60_000,
+  );
+
+  test(
+    "【阴性对照③的靶子】外部工具调用是审计不是进展：每轮都调外部工具，no_progress 依然照常触发",
+    async () => {
+      await installFixtureMcpExtension("v45-stopcond");
+      const manager = new ProjectManager(tmp);
+      const project = manager.create("v45-stopcond-proj", { name: "V45 停止条件", description: "" });
+      manager.bindSession("sess_v45_stop", project.slug);
+
+      const runtime = new ExternalMcpRuntime({ pathOptions: { root: tmp } });
+      const { llm, toolCallNames } = llmDrivingExternalTool("mcp:v45-stopcond:echo");
+      const daemon = new SparkResearchDaemon({ projects: manager });
+      const orch = new OrchestratorAgent(daemon, { llm, projects: manager, externalMcp: runtime });
+
+      const result = await orch.runResearchLoop("sess_v45_stop", "每轮都调外部工具", {
+        contract: neverDoneContract,
+        noProgressThreshold: 1,
+        maxRounds: 5,
+      });
+
+      // 前提：外部工具**真的**被调了（否则这条断言是空的，测的是"什么都没发生"）。
+      expect(toolCallNames.length).toBeGreaterThanOrEqual(1);
+      // 本体：AD-10 的 no_progress 这条停机条件没有被这些新 record 静默废掉。
+      // 一旦 external_tool_call 被算进证据，每轮都"有新增" ⇒ streak 永远归零 ⇒
+      // 跑满 maxRounds、stopReason 变成 "budget"。P12 的 agent_run 事故就是这个形状。
+      expect(result.stopReason).toBe("no_progress");
+      expect(result.rounds).toBeLessThan(5);
+    },
+    60_000,
+  );
+
+  test(
+    "【阴性对照②】同一条路径，但 provider 不把 recordSink 传下去：外部工具照样调得到，证据图里却什么都没有",
+    async () => {
+      await installFixtureMcpExtension("v45-nosink");
+      const manager = new ProjectManager(tmp);
+      const project = manager.create("v45-nosink-proj", { name: "V45 无 sink", description: "" });
+      manager.bindSession("sess_v45_nosink", project.slug);
+
+      // 真 runtime，但 attach 时刻意丢掉 recordSink——模拟"接线时忘了绑 sink"。
+      const runtime = new ExternalMcpRuntime({ pathOptions: { root: tmp } });
+      const provider = { attach: () => runtime.attach({}) };
+
+      const { llm, toolCallNames } = llmDrivingExternalTool("mcp:v45-nosink:echo");
+      const daemon = new SparkResearchDaemon({ projects: manager });
+      const orch = new OrchestratorAgent(daemon, { llm, projects: manager, externalMcp: provider });
+
+      await orch.runResearchLoop("sess_v45_nosink", "调外部工具", {
+        contract: neverDoneContract,
+        noProgressThreshold: 1,
+        maxRounds: 3,
+      });
+
+      // 工具确实被调到了……
+      expect(toolCallNames).toContain("mcp:v45-nosink:echo");
+      // ……但证据图里一条都没有。这正是上一个用例第 ② 条断言的反面：
+      // "调用发生了" ≠ "provenance 里留下了痕迹"，V31 的价值就在这条差里。
+      expect(externalToolCallRecords(project).length).toBe(0);
+    },
+    60_000,
+  );
+
+  test("不注入 externalMcp：整条流程不存在——零发现、零连接，行为与 v0.4 一致", async () => {
+    await installFixtureMcpExtension("v45-should-not-connect");
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-off", { name: "V45 未注入", description: "" });
+    manager.bindSession("sess_v45_off", project.slug);
+
+    const { llm } = llmDrivingExternalTool(null);
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, { llm, projects: manager });
+
+    const result = await orch.runResearchLoop("sess_v45_off", "什么都不调", {
+      contract: neverDoneContract,
+      noProgressThreshold: 1,
+      maxRounds: 3,
+    });
+    expect(result.stopReason).toBe("no_progress");
+    // 装了扩展、但没注入 provider —— 连接是唯一写这些文件的动作，它们不该出现。
+    const dir = extensionDir("v45-should-not-connect", { root: tmp });
+    expect(existsSync(join(dir, ".mcp_calls.jsonl"))).toBe(false);
+    expect(externalToolCallRecords(project).length).toBe(0);
+  }, 30_000);
+
+  test("坏扩展不拖垮整轮：连不上的那个只留一条可见记录，好扩展照常可用", async () => {
+    await installFixtureMcpExtension("v45-dead", [join(MCP_FIXTURES, "dead_on_arrival.ts")]);
+    await installFixtureMcpExtension("v45-alive");
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-mixed", { name: "V45 混装", description: "" });
+    manager.bindSession("sess_v45_mixed", project.slug);
+
+    const events: ExternalMcpLifecycleEvent[] = [];
+    const runtime = new ExternalMcpRuntime({ pathOptions: { root: tmp }, onEvent: (e) => events.push(e) });
+    const { llm, toolCallNames } = llmDrivingExternalTool("mcp:v45-alive:echo");
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, { llm, projects: manager, externalMcp: runtime });
+
+    // 整轮跑完（不抛）本身就是断言的一部分。
+    const result = await orch.runResearchLoop("sess_v45_mixed", "调外部工具", {
+      contract: neverDoneContract,
+      noProgressThreshold: 1,
+      maxRounds: 3,
+    });
+
+    expect(result.stopReason).toBe("no_progress");
+    expect(events.some((e) => e.phase === "failed" && e.extension === "v45-dead")).toBe(true);
+    expect(toolCallNames).toContain("mcp:v45-alive:echo");
+    expect(externalToolCallRecords(project).length).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+
+  test("provider 整个抛异常也不拖垮整轮（接口边界上的失败隔离）", async () => {
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-throwing-provider", { name: "V45 provider 抛", description: "" });
+    manager.bindSession("sess_v45_throw", project.slug);
+
+    const { llm } = llmDrivingExternalTool(null);
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, {
+      llm,
+      projects: manager,
+      externalMcp: {
+        attach: async () => {
+          throw new Error("boom：provider 实现自己炸了");
+        },
+      },
+    });
+
+    const result = await orch.runResearchLoop("sess_v45_throw", "照常跑", {
+      contract: neverDoneContract,
+      noProgressThreshold: 1,
+      maxRounds: 3,
+    });
+    expect(result.stopReason).toBe("no_progress");
+    expect(externalToolCallRecords(project).length).toBe(0);
+  }, 30_000);
+
+  test("processRequest（CLI/HTTP 走的那条生产路径）同样接上了外部 MCP", async () => {
+    await installFixtureMcpExtension("v45-proc");
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-proc-proj", { name: "V45 processRequest", description: "" });
+    manager.bindSession("sess_v45_proc", project.slug);
+
+    let toolLoopStep = 0;
+    const llm: Pick<LLMRouter, "call" | "listModels" | "capabilitiesFor"> = {
+      call: async (messages, modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL) => {
+        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+        if (options.tools) {
+          toolLoopStep += 1;
+          if (toolLoopStep === 1) {
+            return toolCallResponse([{ id: "c1", name: "mcp:v45-proc:echo", args: { text: "via-processRequest" } }]);
+          }
+          return toolTextResponse("子代理收工");
+        }
+        // plan()：给一个 subagent 任务。
+        return toolTextResponse(
+          JSON.stringify([{ id: "t1", kind: "subagent", description: "调外部工具", params: { subagent: "explore" } }]),
+        );
+      },
+      listModels: mockLlm.listModels,
+      capabilitiesFor: () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
+    };
+
+    const events: ExternalMcpLifecycleEvent[] = [];
+    const runtime = new ExternalMcpRuntime({ pathOptions: { root: tmp }, onEvent: (e) => events.push(e) });
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, { llm, projects: manager, externalMcp: runtime });
+
+    await orch.processRequest("请调用外部工具", "sess_v45_proc");
+
+    expect(events.some((e) => e.phase === "connected" && e.extension === "v45-proc")).toBe(true);
+    expect(events.some((e) => e.phase === "closed" && e.extension === "v45-proc")).toBe(true);
+    const observations = externalToolCallRecords(project);
+    expect(observations.length).toBeGreaterThanOrEqual(1);
+    expect((observations[0]!.metadata as unknown as ExternalToolCallObservationMetadata).tool).toBe("echo");
+  }, 60_000);
 });
