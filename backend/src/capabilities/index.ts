@@ -9,14 +9,15 @@ import { CONCLUSION_RULES } from "../reviewer/conclusion_rules";
 import { RATING_VIOLATION_CODES } from "../ideation/novelty";
 import { EDGE_TYPES, EVIDENCE_LABELS, RECORD_TYPES } from "../project/models";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
+import { resolvePython } from "../simulation/platform";
 import { loadSkills, type SkillEntry } from "../skills/frontmatter";
 import { MCP_TOOLS, MCP_WITHHELD } from "../mcp/tools";
 import { LLMRouter, PROVIDER_MODELS, implementedProviders, type ProviderCapabilities } from "../llm/router";
 import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { PACKAGE_VERSION } from "../version";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // 能力自描述（P9 交付物 3）。
 //
@@ -63,6 +64,9 @@ export interface PlatformCapability {
   isDefault: boolean;
   availability: Availability;
   reason: string | null;
+  // V18：这次 --probe 的结论是刚 spawn 子进程问出来的（"miss"），还是复用了同一个
+  // venv 指纹下已经问过的结果（"hit"）。只在 probe 时才有值——静态可用性不涉及缓存。
+  probeCache?: "hit" | "miss";
 }
 
 export interface WetBackendCapability {
@@ -71,6 +75,7 @@ export interface WetBackendCapability {
   isDefault: boolean;
   availability: Availability;
   reason: string | null;
+  probeCache?: "hit" | "miss";
 }
 
 export interface SkillCapability {
@@ -185,6 +190,106 @@ export interface CapabilityOptions extends ConfigOptions {
   skillsRoot?: string;
 }
 
+// V18：`capabilities --probe` 结果缓存。
+//
+// 之前：`simulationPlatforms`/`wetBackends` 每次 `probe: true` 都各自 spawn 一次子进程
+// （openmm 探测要 `import openmm`、opentrons 探测要起模拟器，秒级），外部 agent 反复调
+// `research_capabilities(probe=true)` 就要反复等这几秒。
+//
+// 缓存生命周期是**模块级、进程内存**——不是磁盘缓存。这不是为了让「一次性 CLI 调用」
+// 变快（`spark-research capabilities --probe` 每次都是全新进程，模块级缓存跨进程无效，
+// 也没打算跨进程：一次性 CLI 调用本来就只探测一次，缓存对它没有意义）；真正受益的是
+// 长驻的 MCP stdio 会话——外部 agent 在**同一个进程**里反复调
+// `research_capabilities(probe=true)`，第二次起不用再等子进程。
+//
+// 失效判据（BACKLOG V18 原话：「缓存必须带失效条件（venv 变更），否则它会撒谎」）：
+// **venv 指纹变了就整批作废**，不是「时间久了就过期」（没有 TTL）。三段指纹：
+//   1. 解释器路径本身（`SPARK_PYTHON` 换了 / 有没有 `.venv`——即 `resolvePython()` 的返回值）。
+//   2. 解释器文件的 mtime（`.venv` 整个被重建，`python` 这个文件本身会是新的）。
+//   3. 解释器所在 venv 的 `lib/python*/site-packages` 目录 mtime（同一个解释器，pip
+//      install/uninstall 了包——site-packages 新增/删除顶层条目通常会推进这个目录自己
+//      的 mtime，这是检测「同一个解释器但装的包变了」唯一不需要真的 spawn 子进程问一遍
+//      `pip list` 的办法）。
+// 三段任一变了就判定「venv 变了」，**整个缓存清空**（不是只清被动到的那一条）——venv
+// 是所有 python 子进程共享的运行时环境，一旦变了没有理由继续信任其它条目的旧结论。
+//
+// 为什么不加 TTL 兜底：TTL 只会在指纹没变时制造无意义的重新探测（违背这个缓存本身要
+// 解决的问题——白等子进程），而它能多防住的场景（指纹判据的已知局限：不落在
+// `<venvroot>/bin/python` 布局里的解释器——系统 python、pyenv shim、PEP 668
+// externally-managed 环境——这些情况下 site-packages 目录探测不到，指纹退化成只有
+// 「解释器路径 + 解释器文件 mtime」两段，装/卸包不会让缓存失效）本身就是指纹判据要
+// 单独承认、而不是用一个任意时长的 TTL 掩盖的局限，见 devlog。
+export interface VenvFingerprint {
+  python: string;
+  resolved: string | null;
+  pythonMtimeMs: number | null;
+  sitePackagesMtimeMs: number | null;
+}
+
+export function computeVenvFingerprint(): VenvFingerprint {
+  const pythonSpec = resolvePython();
+  let resolved: string | null = null;
+  try {
+    resolved = Bun.which(pythonSpec);
+  } catch {
+    resolved = null;
+  }
+  if (!resolved) {
+    // Bun.which 只解析 PATH；`resolvePython()` 也可能直接返回一个绝对路径
+    // （`.venv/bin/python` 或用户显式设的 `SPARK_PYTHON`），这种情况 which 找不到但
+    // 路径本身是合法的文件，直接 stat 它。
+    try {
+      statSync(pythonSpec);
+      resolved = pythonSpec;
+    } catch {
+      resolved = null;
+    }
+  }
+  let pythonMtimeMs: number | null = null;
+  let sitePackagesMtimeMs: number | null = null;
+  if (resolved) {
+    try {
+      pythonMtimeMs = statSync(resolved).mtimeMs;
+    } catch {
+      pythonMtimeMs = null;
+    }
+    // venv 布局假设：`<venvroot>/bin/python` → site-packages 在
+    // `<venvroot>/lib/python*/site-packages`。不是这个布局（比如系统 python）时
+    // readdirSync 会抛，捕获后指纹的这一段就是 null——已知局限，见上面大注释。
+    const venvRoot = dirname(dirname(resolved));
+    const libDir = join(venvRoot, "lib");
+    try {
+      const pyDirs = readdirSync(libDir).filter((n) => n.startsWith("python"));
+      for (const d of pyDirs) {
+        try {
+          const mtime = statSync(join(libDir, d, "site-packages")).mtimeMs;
+          sitePackagesMtimeMs = sitePackagesMtimeMs === null ? mtime : Math.max(sitePackagesMtimeMs, mtime);
+        } catch {
+          // 这个 python 版本目录下没有 site-packages，忽略。
+        }
+      }
+    } catch {
+      // 不是 venv 布局，没有 lib/ 目录，忽略。
+    }
+  }
+  return { python: pythonSpec, resolved, pythonMtimeMs, sitePackagesMtimeMs };
+}
+
+interface ProbeCacheEntry {
+  status: { ok: boolean; reason: string | null };
+}
+
+// 模块级状态——见上面大注释「缓存生命周期」。key 是 `sim:<id>` / `wet:<id>`。
+let probeCacheFingerprintKey: string | null = null;
+const probeResultCache = new Map<string, ProbeCacheEntry>();
+
+// 测试用：显式清空（避免一个测试文件里的多个用例互相污染这个模块级缓存）。
+// 生产代码不需要调它——venv 指纹检查本身就是失效机制。
+export function clearProbeCache(): void {
+  probeCacheFingerprintKey = null;
+  probeResultCache.clear();
+}
+
 function connectorAvailability(
   apiKeyRequired: boolean,
   status: string,
@@ -234,6 +339,17 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     };
   });
 
+  // V18：探测前先核对 venv 指纹——变了（或者这是本进程第一次探测）就把整批缓存作废。
+  // 只在 probe 模式下算这个指纹：静态可用性路径零 IO，不该为了一个用不上的缓存去
+  // stat 文件系统。
+  if (options.probe) {
+    const currentFingerprintKey = JSON.stringify(computeVenvFingerprint());
+    if (currentFingerprintKey !== probeCacheFingerprintKey) {
+      probeResultCache.clear();
+      probeCacheFingerprintKey = currentFingerprintKey;
+    }
+  }
+
   const simRoot = options.simulationRoot ?? mkdtempSync(join(tmpdir(), "spark-caps-"));
   const simRegistry = new SimulationRegistry({ root: simRoot });
   const simulationPlatforms: PlatformCapability[] = [];
@@ -246,8 +362,13 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     };
     let availability: Availability = "unknown";
     let reason: string | null = options.probe ? null : "未探测（用 --probe 真去问一次本地环境）";
+    let probeCache: "hit" | "miss" | undefined;
     if (options.probe) {
-      const status = await platform.available();
+      const cacheKey = `sim:${id}`;
+      const cached = probeResultCache.get(cacheKey);
+      const status = cached ? cached.status : await platform.available();
+      if (!cached) probeResultCache.set(cacheKey, { status });
+      probeCache = cached ? "hit" : "miss";
       availability = status.ok ? "available" : "unavailable";
       reason = status.reason;
     }
@@ -259,6 +380,7 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
       isDefault: id === DEFAULT_SIMULATION_PLATFORM,
       availability,
       reason,
+      ...(options.probe ? { probeCache } : {}),
     });
   }
 
@@ -267,8 +389,13 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
     const backend = wetBackend(id);
     let availability: Availability = "unknown";
     let reason: string | null = options.probe ? null : "未探测（用 --probe 真去问一次本地环境）";
+    let probeCache: "hit" | "miss" | undefined;
     if (options.probe) {
-      const status = await backend.available();
+      const cacheKey = `wet:${id}`;
+      const cached = probeResultCache.get(cacheKey);
+      const status = cached ? cached.status : await backend.available();
+      if (!cached) probeResultCache.set(cacheKey, { status });
+      probeCache = cached ? "hit" : "miss";
       availability = status.ok ? "available" : "unavailable";
       reason = status.reason;
     }
@@ -278,6 +405,7 @@ export async function buildCapabilities(options: CapabilityOptions = {}): Promis
       isDefault: id === DEFAULT_WET_BACKEND,
       availability,
       reason,
+      ...(options.probe ? { probeCache } : {}),
     });
   }
 
