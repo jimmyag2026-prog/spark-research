@@ -25,6 +25,13 @@ import {
   collectUploads,
 } from "./uploads";
 import { LocalComputeAdapter } from "./adapters/local";
+// 收口(W5-2)：接上 lane α 的 Modal adapter（β 写这段时它还不存在）。
+import {
+  MODAL_CONNECTOR_ID,
+  MODAL_REQUIRED_CREDENTIAL_KEYS,
+  ModalComputeAdapter,
+  type ModalStatusReport,
+} from "./adapters/modal";
 import {
   ApprovalGateError,
   COMPUTE_APPROVAL_GATE,
@@ -116,21 +123,47 @@ export interface ComputeScope {
 /**
  * 默认 adapter 注册表。
  *
- * **只有 local**：Modal adapter（`compute/adapters/modal.ts`）是 W5-2 α 的所有权，
- * 本分支里还不存在。这不是遗漏，是如实——注册表里没有它，`targets` / `capabilities`
- * 就不会说「modal 可用」（AD-12 明令禁止的形状）。α 落地后在这里加一行即可，
- * 判定仍然只来自运行期读配置（§三·补.7 约束一）。
+ * **收口(W5-2)接上了 modal**：β 与 α 并行，β 写这段时 `compute/adapters/modal.ts`
+ * 还不存在，所以它只注册了 local 并留言「α 落地后在这里加一行即可」。这里就是那一行。
+ *
+ * ⚠️ 但**不能只加这一行**：β 原来的判定是「有 adapter + 配了凭据 → available」，
+ * 而 α 的 adapter 因为真实 gateway 还没实现，`status().transport` 是 `not_wired`。
+ * 只注册不改判定 → 配了 token 就会报「modal 可用」，**正是 AD-12 禁止的形状**。
+ * 所以 `computeTargetViews()` 改成**问 adapter 自己的 status()**，不再自己猜。
+ * 两条 lane 各自都对，合起来才会说谎——这类缺陷只在收口暴露。
+ *
+ * 判定仍然只来自运行期读凭据与 config（§三·补.7 约束一）：没有任何编译期常量参与。
  */
-export function defaultComputeAdapters(): Partial<Record<TargetKind, ComputeAdapter>> {
-  return { local: new LocalComputeAdapter() };
+export function defaultComputeAdapters(deps: {
+  credentials?: CredentialProvider;
+  root?: string;
+  env?: Record<string, string | undefined>;
+} = {}): Partial<Record<TargetKind, ComputeAdapter>> {
+  const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
+  return {
+    local: new LocalComputeAdapter(),
+    modal: new ModalComputeAdapter({
+      credentials,
+      config: () => ({ environment: configuredModalEnvironment(null, { root: deps.root, env: deps.env }) }),
+    }),
+  };
 }
 
-/** Modal 凭据在 `credentials.json` 的 `connectors.modal`（设计 §1.1.10，复用 CredentialStore）。 */
-export const MODAL_CREDENTIAL_ID = "modal";
+/**
+ * Modal 凭据在 `credentials.json` 的 `connectors.modal`（设计 §1.1.10，复用 CredentialStore）。
+ *
+ * 收口(W5-2)：改成从 adapter 那边 re-export，**不再在这里另写一份**。
+ * 原因是收口时真抓到了：β 照设计文档写 `token_id`/`token_secret`，
+ * α 照 Modal SDK 的 `ModalClientParams` 写 `tokenId`/`tokenSecret`——两边对不上，
+ * 后果是**用户照提示填完，adapter 永远报「未配置」**。
+ * 同一件事两份手写副本，这是 V34/V37 同一种病，所以按同样的办法治：只留一个真源。
+ */
+export const MODAL_CREDENTIAL_ID = MODAL_CONNECTOR_ID;
 
 export const MODAL_SETUP_HINT =
-  "把 Modal token 写进 ~/.spark-research/credentials.json 的 connectors.modal " +
-  "（token_id / token_secret，文件 0600），再 `spark-research config set computeTarget modal`。" +
+  `把 Modal token 写进 ~/.spark-research/credentials.json 的 connectors.${MODAL_CONNECTOR_ID} ` +
+  // 字段名从 adapter 的真源派生：手写一份就会和真正读它的代码漂开（收口实测踩到过）。
+  `（${MODAL_REQUIRED_CREDENTIAL_KEYS.join(" / ")}，文件 0600），再 \`spark-research config set computeTarget modal\`。` +
   "凭据永不进 plan/job/record。";
 
 export type ComputeTargetAvailability = "available" | "needs_credential" | "placeholder" | "unavailable";
@@ -206,6 +239,21 @@ export function computeTargetViews(options: {
             "凭据已配置，但本版本没有装载 Modal adapter——算力抽象层与审批链已落地并有 local 实现，" +
             "Modal adapter 的契约已立、真实链路未验证（不要读成「支持 Modal 远端算力」）",
           setupHint: null,
+        };
+      }
+      // 收口(W5-2)：**问 adapter 自己**，不要在这里猜「有 adapter + 有凭据 = 可用」。
+      // α 的 Modal adapter 在真实 gateway 落地前 `transport === "not_wired"`，
+      // 此时即使凭据齐全也**不可用**——猜出来的 available 就是 AD-12 禁止的那种谎。
+      const report = typeof (adapter as { status?: unknown }).status === "function"
+        ? (adapter as unknown as { status: () => ModalStatusReport }).status()
+        : null;
+      if (report && report.availability !== "available") {
+        return {
+          ...base,
+          credentialConfigured: report.credentialConfigured,
+          availability: report.availability,
+          reason: report.reason,
+          setupHint: report.howToConfigure.length > 0 ? report.howToConfigure.join(" ") : MODAL_SETUP_HINT,
         };
       }
       return { ...base, availability: "available" as const, reason: null, setupHint: null };

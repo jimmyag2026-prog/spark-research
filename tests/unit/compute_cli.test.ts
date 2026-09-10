@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MODAL_REQUIRED_CREDENTIAL_KEYS } from "../../backend/src/compute/adapters/modal";
 import {
   COMPUTE_HELP,
   MODAL_CREDENTIAL_ID,
+  MODAL_SETUP_HINT,
   computeTargetViews,
   defaultComputeAdapters,
   runComputeCommand,
@@ -441,20 +443,43 @@ describe("compute CLI · targets 与「未配置」口径", () => {
     expect(targets.find((t) => t.kind === "ssh")!.availability).toBe("placeholder");
   });
 
-  test("配了凭据但注册表里没有 adapter → 仍然**不许**报 available（AD-12）", () => {
+  test("凭据齐全 + adapter 已装载，但真实 gateway 未实现 → 仍然**不许**报 available（AD-12）", () => {
+    // 收口(W5-2)：β 与 α 并行，β 写这条时注册表里还没有 modal，所以原断言检查的是
+    // 「没装载 adapter」那条理由。收口把 α 的 adapter 接上之后，**这条测试的意图更要紧了**：
+    // 现在是「装载了、凭据也齐、但传输层不存在」——最容易被误报成 available 的情形。
+    // 判定必须来自 adapter 自己的 status()（transport === "not_wired"），不许由视图猜。
     const withToken: CredentialProvider = {
       has: (id) => id === MODAL_CREDENTIAL_ID,
-      get: () => ({ token_id: "x", token_secret: "y" }),
+      get: () => ({ tokenId: "x", tokenSecret: "y" }),
     };
-    const views = computeTargetViews({ adapters: defaultComputeAdapters(), credentials: withToken });
+    const views = computeTargetViews({
+      adapters: defaultComputeAdapters({ credentials: withToken }),
+      credentials: withToken,
+    });
     const modal = views.find((t) => t.kind === "modal")!;
     expect(modal.credentialConfigured).toBe(true);
     expect(modal.availability).not.toBe("available");
-    expect(modal.reason).toContain("没有装载 Modal adapter");
+    // 理由必须说清楚是**代码没写**，不是用户配置问题——否则用户会去反复检查自己的 token。
+    expect(`${modal.reason} ${modal.setupHint}`).toContain("gateway");
   });
 
-  test("默认注册表只有 local——modal adapter 是 W5-2 α 的交付，这里如实反映", () => {
-    expect(Object.keys(defaultComputeAdapters())).toEqual(["local"]);
+  // 收口(W5-2) 抓到的真实缺陷：β 照设计文档在 setup hint 里写 `token_id`/`token_secret`，
+  // 而 α 的 adapter 照 Modal SDK 读 `tokenId`/`tokenSecret`——**用户照提示填完，
+  // adapter 永远报「未配置」**。已改成从 adapter 的真源派生；这条门禁盯着它别再长回来。
+  test("配置指引里的字段名必须与 adapter 真正读取的字段一致（不许再出现手写副本）", () => {
+    for (const key of MODAL_REQUIRED_CREDENTIAL_KEYS) {
+      expect(MODAL_SETUP_HINT).toContain(key);
+    }
+    // 反向：旧的 snake_case 名字不许再出现在任何面向用户的指引里。
+    expect(MODAL_SETUP_HINT).not.toContain("token_id");
+    expect(MODAL_SETUP_HINT).not.toContain("token_secret");
+  });
+
+  test("默认注册表含 local 与 modal（收口把 α 的 adapter 接上了）", () => {
+    // 原断言是 `["local"]`——那是 β 单独跑时的事实（α 并行开发，modal.ts 当时不存在）。
+    // 收口接上后事实变了，**改断言而不是改代码**：注册它才不会让 α 的交付变成死代码，
+    // 而「装了 ≠ 可用」由上面那条 AD-12 测试守着。
+    expect(Object.keys(defaultComputeAdapters()).sort()).toEqual(["local", "modal"]);
   });
 
   test("plan --target modal 在没有 adapter 时明确失败（不假装排到队里了）", async () => {

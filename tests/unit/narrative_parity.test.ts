@@ -141,8 +141,18 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // `tests/unit/compute_modal.test.ts` 的「约束三」用例盯着本条：只要还没有真实录制，
   // 「等真实录制」这五个字就必须留在本文件里（哪怕 ① 已经完成、本条已按对称检查移出
   // 本表，也要照本仓库既有做法以「曾在此登记」的注释形式把这笔债留下）。
-  "backend/src/compute/adapters/modal.ts":
-    "等接线：W5-2 β 的 `compute/cli.ts` 接上后删；**等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制并删本条",
+  //
+  // **收口(W5-2)：① 已完成**——`compute/cli.ts` 的 `defaultComputeAdapters()` 已经把
+  // `ModalComputeAdapter` 注册进 adapter 表，modal.ts 有了真实的生产调用方，
+  // 按对称检查从本表移出（在册但已不是孤儿会红）。
+  // **但 ② 还欠着**：真实 gateway 仍未实现，`status().transport === "not_wired"`。
+  // 按 α 的交代与本仓库既有做法（见下面 swarm.ts / anthropic.ts 两例），
+  // 条目移出、**债以注释形式留在本文件里**——`tests/unit/compute_modal.test.ts` 的
+  // 「约束三」用例盯着「等真实录制」这五个字，删掉它测试就红。
+  //   **等真实录制**：拿到 Modal token 后必须补一次真实 gateway 录制
+  //   （`tests/fixtures/compute/modal/` 里出现 `provenance: "real-modal"` 的那份），
+  //   并把「真实 gateway 未实现」这件事从 `modal.ts` 的口径里去掉。
+  //   在此之前对外**不许**宣称「支持 Modal 远端算力」。
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
