@@ -486,3 +486,46 @@ describe("manifest connector 并发不变式复现（同 connector_race.test.ts 
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// W3-d · 判断证据：arXiv/PubMed 走 manifest 还是 TS 扩展的实测
+//
+// 两条互为对照的 fixture（tests/fixtures/manifests/pubmed-esearch-only.manifest.json
+// 与 arxiv-xml-normalize-probe.manifest.json）+ 下面两组测试，具体验证 docs/devlog/W3-d.md
+// 的判断依据：manifest 能表达"单次请求、JSON 响应"的那一半，但表达不了"响应是 XML"
+// 或"需要串两次请求"的部分——这两个缺口都比 W1-c 当初标出的字符串前缀映射更根本。
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("W3-d 判断证据 · manifest 表达力边界（arXiv/PubMed 实测）", () => {
+  test("正向：PubMed esearch 单独一跳（query→term 纯改名 + defaults）manifest 完全够用", async () => {
+    const manifest = parseFixture("pubmed-esearch-only.manifest.json");
+    const http = echoHttp();
+    const connector = compileManifest(manifest, { http });
+    const echo = (await connector.call("search", { query: "alphafold", retmax: 5 })) as Echo;
+    expect(echo.url).toContain("term=alphafold");
+    expect(echo.url).toContain("db=pubmed");
+    expect(echo.url).toContain("retmode=json");
+    expect(echo.url).toContain("retmax=5");
+    expect(echo.url).not.toContain("query=alphafold");
+  });
+
+  test("反向：XML(text) 响应喂给 normalize，每个字段都拿到 undefined——不是路径写错了，是 DSL 没有『XML→对象树』这一步", async () => {
+    const manifest = parseFixture("arxiv-xml-normalize-probe.manifest.json");
+    const xmlBody =
+      '<?xml version="1.0"?><feed><entry><title>Attention Is All You Need</title></entry><totalResults>1</totalResults></feed>';
+    const http = new StubHttp(async () => {
+      return new BufferedResponse({
+        status: 200,
+        headers: { "content-type": "application/atom+xml" },
+        body: new TextEncoder().encode(xmlBody),
+      });
+    });
+    const connector = compileManifest(manifest, { http });
+    const result = await connector.call("search", { search_query: "all:test" });
+    // 响应体里明明真的有 <title>Attention Is All You Need</title>，但 normalize 的
+    // "feed.entry.title" 路径求值时第一步 objGet(rawXmlString, "feed") 就因为
+    // `typeof cur !== "object"` 直接返回 undefined——问题不在路径语法，在这个 DSL
+    // 压根没有"先把 XML 解析成对象树"这一步。
+    expect(result).toEqual({ title: undefined, totalResults: undefined });
+  });
+});
