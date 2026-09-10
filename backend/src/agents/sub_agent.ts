@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { LLMRouter, type CallOptions, type ChatMessage, type ToolCall, type Usage } from "../llm/router";
 import { BudgetLedger } from "../llm/budget";
@@ -11,6 +10,8 @@ import {
 import { MCP_WITHHELD } from "../mcp/tools";
 import type { McpToolRunner } from "../mcp/server";
 import { AgentToolBus, isDenied, type ToolAuditEntry, type ToolOutcome } from "./toolbus";
+// V27：prompt 的编译期内嵌副本（见 ./prompts.ts）。
+import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
 
 // P12 · 子代理 tool loop（v0.4 方案 §4.2；波次调度 W2-a）。
 //
@@ -157,12 +158,11 @@ function assertReadOnlyGrants(name: string, type: SubAgentType, readOnly: boolea
   }
 }
 
+// V27：原来是裸 `readFileSync(join(dir, filename))`——单二进制里 DEFAULT_PROMPT_DIR 是
+// `/$bunfs/root/prompt`，五个子代理的 system prompt 全部读不到。readPromptText 保留
+// "调用方传的 dir 优先"，只在读不到时落编译期内嵌副本（见 ./prompts.ts）。
 function loadPromptFile(dir: string, filename: string): string | null {
-  try {
-    return readFileSync(join(dir, filename), "utf8");
-  } catch {
-    return null;
-  }
+  return readPromptText(dir, filename);
 }
 
 interface SubAgentDefaults {
@@ -235,7 +235,7 @@ export const SUB_AGENT_TYPE_NAMES: readonly SubAgentType[] = Object.keys(
   SUB_AGENT_DEFAULTS,
 ) as SubAgentType[];
 
-const DEFAULT_PROMPT_DIR = join(import.meta.dir, "prompt");
+const DEFAULT_PROMPT_DIR = PROMPT_DIR;
 
 // V16：单一真源——`buildSubAgentSpec()` 与 legacy 的 `SubAgentFactory.create()` 都
 // 通过这一处解析「这个 type 该用哪个模型」，不各自手写一份解析链。

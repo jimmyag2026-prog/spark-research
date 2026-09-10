@@ -25,6 +25,12 @@
 // 由 `server.ts` 用同一个 Hono app 在进程内 fetch。MCP 层不重实现任何业务逻辑——
 // 重实现意味着 CLI / HTTP / MCP 三套口径，迟早对不上。
 
+// 收口(W5-1)：源清单从 `DEFAULT_SEARCH_SOURCES` 派生，不再手写。
+// 这里原本写死「并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar」，
+// V34 修完默认集变成 6 个之后，这段给外部 agent 看的能力声明就低报了实际行为——
+// 手写副本本身就是 V34 的病根，所以改的不是数字，是取值方式。
+import { DEFAULT_SEARCH_SOURCES } from "../literature/models";
+
 export interface JsonSchema {
   type: "object";
   properties: Record<string, unknown>;
@@ -150,7 +156,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 
   {
     name: "lit_search",
-    description: `【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+    description: `【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。${DEFAULT_SEARCH_SOURCES.length} 个源并发检索（${DEFAULT_SEARCH_SOURCES.join(" / ")}；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 【参数示例】{"query": "allosteric site prediction molecular dynamics GPCR", "limit": 20, "add": true, "tags": ["background"]}
 【何时不该用】① 已经拿到确定的 DOI/arXiv id 只想入库 → 用 lit_add。② 不要把用户的一整句话直接当 query——先拆成 2-4 个核心概念，每个概念查一次。③ 不要 add: true 一次灌几百条，入库是显式动作。
 【典型链路】lit_search(add=false) 先看候选 → 挑选后 lit_search(add=true) 或 lit_add → lit_read_cards → lit_review_draft。
@@ -160,7 +166,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
       type: "object",
       properties: {
         query: str("检索式。用英文关键词组合，不要整句自然语言", "allosteric site prediction molecular dynamics"),
-        sources: strList("限定文献源；不给则用默认组合", ["openalex", "crossref", "europepmc"]),
+        sources: strList("限定文献源；不给则用全部默认源", [...DEFAULT_SEARCH_SOURCES].slice(0, 3)),
         limit: num("每源返回上限", 20),
         add: { type: "boolean", description: "是否直接把结果入项目文献库（默认 false，先看后入）" },
         tags: strList("入库时打的标签（仅 add=true 时生效）", ["background"]),
@@ -666,6 +672,28 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
       method: "GET",
       path: withProject(`/api/report?format=json${args.verbose === true ? "&verbose=1" : ""}`, args),
     }),
+  },
+
+  {
+    name: "chem_depict",
+    description: `【何时调】要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
+【参数示例】{"smiles": "CCO", "name": "ethanol"} —— name 可省略（省略时按 canonical SMILES 的短 hash 生成文件名，重复 depict 同一个分子会稳定落到同一个 artifact 并递增版本号）。
+【何时不该用】① 只是想核对 SMILES 语法是否合法而不需要图——直接本地跑 RDKit 更快。② 需要 3D 构象/对接姿态——这个工具只画 2D 结构图，不算 3D 坐标，也不做对接。
+【典型链路】lit_search / idea_coexplore 聊到某个具体分子 → chem_depict 生成结构图存进证据图 → 结构图的 artifactId 可以在报告里引用。
+【常见错误】SMILES 语法不合法（括号不配对、化合价超限等）会返回失败而不是一张空图——错误信息里带了具体该查哪里（元素符号/化合价/环闭合编号/括号），不是「解析失败」四个字了事。`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        smiles: str("要绘制的分子 SMILES 表达式", "CCO"),
+        name: str("产物文件名（不含扩展名）。省略则按 canonical SMILES 的短 hash 自动生成", "ethanol"),
+        width: num("SVG 宽度（像素），默认 400", 400),
+        height: num("SVG 高度（像素），默认 300", 300),
+        project: PROJECT_ARG,
+      },
+      required: ["smiles"],
+      additionalProperties: false,
+    },
+    request: (args) => ({ method: "POST", path: withProject("/api/chem/depict", args), body: args }),
   },
 
   {

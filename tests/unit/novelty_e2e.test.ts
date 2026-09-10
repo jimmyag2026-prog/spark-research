@@ -3,12 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CoExploreSession } from "../../backend/src/ideation/coexplore";
-import { HIGH_AFFINITY, NoveltyChecker } from "../../backend/src/ideation/novelty";
+import { HIGH_AFFINITY, NoveltyChecker, type Embedder } from "../../backend/src/ideation/novelty";
 import { IdeaStore } from "../../backend/src/ideation/store";
 import { libraryKeyIndex } from "../../backend/src/literature/export";
 import { LibraryStore } from "../../backend/src/literature/library";
 import { ProjectManager } from "../../backend/src/project/manager";
 import type { ChatMessage } from "../../backend/src/llm/router";
+import { fixtureModeFromEnv } from "../../backend/src/http/fixture";
+import { CALIBRATED_MODEL, fixtureEmbeddingRouter } from "../helpers/embedding_scenario";
 import { CASSETTES, PER_SOURCE, SEARCH_QUERY, SEARCH_SOURCES, searcherWith } from "../helpers/literature_scenario";
 import {
   FABRICATED_CLAIM,
@@ -100,6 +102,7 @@ async function runScenario(
   claim: { statement: string; queries: string[] },
   hypothesis: string,
   rate: Parameters<typeof scriptedFor>[0]["rate"],
+  embedder: Embedder | null = null,
 ) {
   const { project, library, keys } = await seedProject(slug);
   const records = project.records();
@@ -111,6 +114,10 @@ async function runScenario(
   )).stored;
 
   const checker = new NoveltyChecker({
+    // 显式关掉语义口径（这些用例检的是词面基线；不传的话开发机上配了
+    // SPARK_RESEARCH_EMBEDDING_MODEL 就会让 e2e 偷偷打真实网络）。
+    embedder,
+    semanticThresholds: SEMANTIC_THRESHOLDS_UNDER_TEST,
     llm,
     searcher: noveltySearcher("replay"),
     library,
@@ -316,6 +323,7 @@ describe("P4 e2e · fake 模型无法引用没检索到的文献", () => {
     const before = records.count();
 
     const checker = new NoveltyChecker({
+      embedder: null,
       llm,
       searcher: noveltySearcher("replay"),
       library,
@@ -388,5 +396,106 @@ describe("P4 e2e · orchestrator co-explore 会话模式", () => {
     lib.close();
     reopened.close();
     daemon.kernelManager.dispose();
+  });
+});
+
+// ── v0.5 C4 · 语义口径的双向对照（embedding 同样走 fixture 回放，零网络） ──────
+//
+// 这一段与上面 (a)/(b) 是**同一组场景、同一批检索响应**，只把相似度口径换成
+// 已标定的 `local/bge-m3` 语义余弦（向量来自 tests/fixtures/embeddings/，
+// 用 `FIXTURE_MODE=record` 对着本机 Ollama 真实录制过一次）。
+//
+// 它要证明的正是本 lane 最要紧的那件事：**语义化之后，确定性层照样把模型的
+// 「novel」判定按检索证据纠正回来**（AD-8）——判据的量纲换了，判据本身一条没少。
+
+const SEMANTIC_CASSETTE = "novelty-e2e-local-bge-m3";
+
+// 生产的 SEMANTIC_THRESHOLDS 是**空表**（bge-m3 标定过但没赢过词面 —— 见
+// backend/src/llm/embeddings/calibration.ts 顶部的实测数字）。这里注入本 lane 实测出来的
+// 「零假阳性」阈值 0.665，好让语义约束这条分支在真实向量下被完整走一遍。
+const SEMANTIC_THRESHOLDS_UNDER_TEST = {
+  [CALIBRATED_MODEL]: {
+    high: 0.665,
+    calibratedOn: "2026-09-10",
+    sampleSize: 30,
+    source: "tests/fixtures/novelty/calibration.json",
+  },
+};
+
+function semanticEmbedder() {
+  return fixtureEmbeddingRouter(CALIBRATED_MODEL, fixtureModeFromEnv(), SEMANTIC_CASSETTE);
+}
+
+describe("P4 × C4 · 语义口径下的双向对照（fixture 回放）", () => {
+  test("(a) 已发表工作：模型硬说 novel → 语义口径下确定性层仍升级为 existing", async () => {
+    const { result } = await runScenario(
+      "p4c4-published",
+      PUBLISHED_CLAIM,
+      "自注意力可以完全替代循环结构做序列转导",
+      (candidates) => ({
+        rating: "novel",
+        nearestWorks: candidates.slice(0, 1).map((c) => ({ key: c.key, sameness: "同为序列转导", difference: "（模型自称的差异）" })),
+      }),
+      semanticEmbedder(),
+    );
+
+    // 口径确实是语义，且用的是标定过的阈值
+    expect(result.embedding.basis).toBe("semantic");
+    expect(result.embedding.modelId).toBe(CALIBRATED_MODEL);
+    expect(result.embedding.calibrated).toBe(true);
+    expect(result.embedding.degradedReason).toBeNull();
+
+    const assessment = result.assessments[0]!;
+    // 模型原判与校正后都留（AD-8 原样成立）
+    expect(assessment.declaredRating).toBe("novel");
+    expect(assessment.rating).toBe("existing");
+    expect(assessment.violations.map((v) => v.code)).toContain("novel_despite_high_affinity");
+    expect(assessment.affinityBasis).toBe("semantic");
+    expect(assessment.affinityThreshold).toBe(result.embedding.threshold);
+    expect(assessment.topAffinity).toBeGreaterThanOrEqual(result.embedding.threshold);
+
+    // 最近邻确实是原文，而且报告两列相似度都在
+    const top = result.retrievals[0]!.candidates[0]!;
+    expect(top.paper.title.toLowerCase()).toContain(PUBLISHED_CLAIM.expectTitle);
+    expect(top.semanticAffinity).not.toBeNull();
+    expect(result.markdown).toContain("本次评级约束按「语义」口径");
+    expect(result.markdown).toContain("最高相似度（词面）");
+    expect(result.markdown).toContain("最高相似度（语义）");
+  });
+
+  test("(b) 杜撰组合：语义口径下最近邻都够不着阈值，novel 得以保留", async () => {
+    const { result } = await runScenario(
+      "p4c4-fabricated",
+      FABRICATED_CLAIM,
+      "量子退火采样的构象系综可以用来预训练蛋白质语言模型",
+      (candidates) => ({
+        rating: "novel",
+        nearestWorks: candidates.slice(0, 1).map((c) => ({ key: c.key, sameness: "同样涉及蛋白质建模", difference: "没有量子退火采样这一步" })),
+      }),
+      semanticEmbedder(),
+    );
+
+    expect(result.embedding.basis).toBe("semantic");
+    const assessment = result.assessments[0]!;
+    expect(assessment.rating).toBe("novel");
+    expect(assessment.violations).toEqual([]);
+    // 关键：**不是因为没检到**才判 novel——候选是有的，只是语义上都够不着阈值
+    expect(result.retrievals[0]!.candidates.length).toBeGreaterThan(0);
+    expect(assessment.topAffinity).toBeLessThan(result.embedding.threshold);
+    expect(assessment.conclusive).toBe(true);
+  });
+
+  test("语义口径不会把「检索为空」变成 novel：R1 的语义版本", async () => {
+    // 检索为空 ⇒ 没有候选 ⇒ 没有语义分数可言 ⇒ 口径退回词面，且结论一律不可用。
+    const { result } = await runScenario(
+      "p4c4-empty",
+      { statement: "一个检索不到任何东西的 claim", queries: ["zzzz-no-such-query-aaaa", "zzzz-no-such-query-bbbb"] },
+      "检索不到的假设",
+      () => ({ rating: "novel", nearestWorks: [] }),
+      semanticEmbedder(),
+    );
+    expect(result.assessments[0]!.conclusive).toBe(false);
+    expect(result.assessments[0]!.violations.map((v) => v.code)).toContain("no_candidates");
+    expect(result.aggregate.status).toBe("unchecked");
   });
 });

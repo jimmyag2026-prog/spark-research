@@ -224,10 +224,14 @@ test("⑨b 未消费告警在批准弹窗里必须可见（V23）", async ({ pag
   await panel.getByRole("tab", { name: /湿实验/ }).click();
   await panel.getByRole("button", { name: "＋ 新建" }).click();
   await panel.getByPlaceholder("标题（可选）").fill("未消费告警协议");
-  // 「配制10%次氯酸钠溶液」：安全门四条规则全过（体积正常，浓度字段不在编译器的
-  // 解析范围内），但 10% 这个浓度描述本身应该被人看见——这正是 unconsumedWarnings
-  // 存在的理由，见 tests/unit/wet_loop.test.ts 的 D-8 用例（同一条协议文本）。
-  await panel.getByPlaceholder(/自然语言协议/).fill("配制10%次氯酸钠溶液200uL");
+  // V25（W5-1 δ）：「配制10%次氯酸钠溶液」这种「浓度 + 同句唯一试剂」的写法**现在会被
+  // 编译器消费**（挂到 ReagentSpec.concentration），不再产生未消费告警——这条 e2e 原先
+  // 用它当"永远看不见"的例子，V25 之后那个前提不成立了。
+  //
+  // 换成同句出现两种试剂的归属歧义场景：10% 到底是谁的浓度无法从句法上确定，编译器
+  // **拒绝瞎猜**（安全门上唯一正确的取向），所以仍然落 unconsumedWarnings。
+  // 与 tests/unit/wet_loop.test.ts 的 D-8 用例保持同一条协议文本。
+  await panel.getByPlaceholder(/自然语言协议/).fill("配制10%次氯酸钠和乙醇的混合液200uL");
   await panel.getByRole("button", { name: "编译 + 过安全门" }).click();
   await waitIdle(page);
 
@@ -482,4 +486,34 @@ test("⑬ SSE 权威流：delta 事件逐块到达（是答案本身的增量，
   } finally {
     proc.kill();
   }
+});
+
+test("⑭ C5-② depict → 产物列表出现 .svg → img.naturalWidth > 0", async ({ page }) => {
+  await page.goto("/");
+
+  // 种子数据直接打 HTTP（/api/chem/depict 是 chem.ts 自己的路由 + app.ts 一行接线），
+  // 不经过 CLI/`backend/src/index.ts` 的 `case "chem"`——那一行按 §三·补.3 归了 lane η，
+  // 由收口接（见 docs/devlog/W5-1-c.md「收口接线清单」）。这条用例只验 HTTP → artifact
+  // → 前端渲染这条链路，所以能在收口前就真的跑绿；CLI 入口本身的验证在
+  // tests/unit/chem_cli.test.ts。
+  const seeded = await page.evaluate(async () => {
+    const res = await fetch("/api/chem/depict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ smiles: "CCO", name: "e2e-ethanol" }),
+    });
+    return { status: res.status, body: await res.json() };
+  });
+  expect(seeded.status).toBe(200);
+
+  // 产物列表用 Solid createResource(slug, ...) 拉取，不会因为别的入口写了新数据自动重拉；
+  // reload 触发一次新的 mount 取到最新列表（与真实用户刷新页面看到新产物是同一路径）。
+  await page.reload();
+  await page.locator(".left").getByRole("button", { name: /^产物/ }).click();
+  await page.locator(".center .nav-item").filter({ hasText: "e2e-ethanol.svg" }).first().click();
+
+  const img = page.locator(".center article.card img");
+  await expect(img).toBeVisible();
+  const naturalWidth = await img.evaluate((el: HTMLImageElement) => el.naturalWidth);
+  expect(naturalWidth).toBeGreaterThan(0);
 });

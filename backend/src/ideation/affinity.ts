@@ -68,6 +68,23 @@ export function paperText(paper: Paper): string {
   return [paper.title, paper.abstract ?? "", paper.venue ?? ""].join(" ");
 }
 
+// ── 语义口径（v0.5 C4） ─────────────────────────────────────────────────────
+//
+// 词面口径与语义口径**用的不是同一段文本**，这是有意的：
+//   - 词面（paperText）把 venue 也算进去：期刊名里的领域词是词面覆盖率的有效信号。
+//   - 语义（paperEmbedText）刻意**不要** venue：「Nature」「bioRxiv」这类词对句向量
+//     只是噪声，会把同一本刊上两篇毫不相干的论文拉近。
+//
+// 截断长度是**标定的一部分**：阈值是在「标题 + 前 1000 字符摘要」这条规则下测出来的。
+// 改了这个常量或下面的拼法，`tests/fixtures/novelty/calibration.json` 的分布就变了，
+// `SEMANTIC_THRESHOLDS` 必须重新标定（`novelty_calibration.test.ts` 会因为余量断言变红）。
+export const EMBED_ABSTRACT_CHARS = 1000;
+
+export function paperEmbedText(paper: Paper): string {
+  const abstract = (paper.abstract ?? "").replace(/\s+/g, " ").trim().slice(0, EMBED_ABSTRACT_CHARS);
+  return abstract ? `${paper.title}\n${abstract}` : paper.title;
+}
+
 // 覆盖率：query 的去重内容词有多少比例出现在 target 里。0~1。
 export function coverage(query: string, target: string): number {
   const queryTokens = new Set(contentTokens(query));

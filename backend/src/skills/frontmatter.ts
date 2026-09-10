@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { EMBEDDED_SKILLS } from "./embedded";
 import { join } from "node:path";
 
 // SKILL.md frontmatter 规范化（P9）。
@@ -201,7 +202,11 @@ export function parseSkillFrontmatter(source: string, options: ParseOptions = {}
 }
 
 export function skillDirs(root: string = SKILLS_DIR): string[] {
-  if (!existsSync(root)) return [];
+  // V27 收口：单二进制里 SKILLS_DIR 是 `/$bunfs/root`，existsSync 为假 → 原本返回 []，
+  // `capabilities --json` 于是平静地报「技能 0 个」。**安静的错误答案比响亮的失败更糟**，
+  // 而且正是 AD-12 要防的形状。内嵌副本只在「默认根 + 磁盘上没有」时兜底：
+  // 显式传了 root 的调用方（测试、扩展目录）行为一个字不变。
+  if (!existsSync(root)) return root === SKILLS_DIR ? Object.keys(EMBEDDED_SKILLS).sort() : [];
   return readdirSync(root)
     .filter((entry) => {
       const dir = join(root, entry);
@@ -214,9 +219,11 @@ export function skillDirs(root: string = SKILLS_DIR): string[] {
 // 静默跳过等于让一个坏掉的技能永远不被发现。
 export function loadSkills(options: ParseOptions & { root?: string } = {}): SkillEntry[] {
   const root = options.root ?? SKILLS_DIR;
+  const embedded = root === SKILLS_DIR && !existsSync(root);
   return skillDirs(root).map((name) => {
     const path = join(root, name, SKILL_FILE);
-    const frontmatter = parseSkillFrontmatter(readFileSync(path, "utf8"), { ...options, path });
+    const raw = embedded ? EMBEDDED_SKILLS[name]! : readFileSync(path, "utf8");
+    const frontmatter = parseSkillFrontmatter(raw, { ...options, path });
     if (frontmatter.name !== name) {
       throw new SkillFrontmatterError(`frontmatter.name='${frontmatter.name}' 与目录名 '${name}' 不一致`, path);
     }

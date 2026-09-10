@@ -11,7 +11,10 @@ import type { LiteratureSearcher, SourceStatus } from "../literature/search";
 import type { ChatMessage, LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
 import { citationIntegrity, type CitationIntegrityResult, type CitationJudge } from "../reviewer/rules";
-import { claimAffinity, paperIdentity } from "./affinity";
+import { EmbeddingRouter } from "../llm/embeddings/router";
+import { isCalibrated, semanticHighAffinity, type SemanticThreshold } from "../llm/embeddings/calibration";
+import { cosine } from "../llm/embeddings/types";
+import { claimAffinity, paperEmbedText, paperIdentity } from "./affinity";
 import {
   NOVELTY_RATINGS,
   NOVELTY_REPORT_KIND,
@@ -39,14 +42,36 @@ import { IdeaStore } from "./store";
 export const MAX_CLAIMS = 5;
 export const MIN_QUERIES_PER_CLAIM = 2;
 export const MAX_QUERIES_PER_CLAIM = 3;
-// 「高相似候选」的门槛：候选的标题+摘要要覆盖 claim（或它某条检索式）**3/4 以上**的内容词。
-// 这个值是在 P4 的真实检索样本上标定的，不是拍的——标定表见 devlog P4：
-//   (a) 已发表 claim 的原文 = 1.00，同领域邻近工作 = 0.86 / 0.86 / 0.57…
-//   (b) 杜撰组合 claim 的最近邻 = 0.67，其余 ≤ 0.56
-// 0.75 把「就是这件事」与「同一个领域」分开，两侧都留了余量。
-// 注意这是**词面覆盖率**不是语义相似度：它会把用词高度重合的邻近工作judge得偏高，
+// 「高相似候选」的门槛：候选的标题+摘要要覆盖 claim（或它某条检索式）足够多的内容词。
+//
+// **v0.5 W5-1 收口重标定：0.75 → 0.70。** 原值是 P4 在**2 条样本**上定的；
+// W5-1 β 为标定语义阈值录了一份 68 样本的真实语料（`tests/fixtures/novelty/calibration.json`，
+// 论文全部来自 P2/P4 真实录制的检索响应），顺带量出 0.75 连自己的最优区间都不在。
+//
+// 在那份语料上用生产函数 `claimAffinity()` 扫阈值：
+//   0.75  → 错分 2：假阴 1（e07 → adversarial-mutations，0.714）+ 假阳 1（h01 → attend-and-diagnose，0.857）
+//   0.70  → 错分 1：假阴 0 + 假阳 1（**同一条**，那条降阈值修不掉——要修得把阈值抬到 0.857 以上，
+//                    代价是大批假阴）
+// 所以 0.70 严格优于 0.75。最优点其实是 0.714，但它正压在一个样本上、零余量；
+// 0.70 落在最大负样本（0.667）与最小正样本（0.714）之间，两侧都有余量。
+//
+// **方向也是安全的那边**：阈值降低 → R5 更常触发 → 更多「novel」被降级为 existing。
+// novelty checker 宁可错说「已存在」（用户一看就能反驳），也不该错发一张新颖性通行证。
+//
+// 这个值**不许再当魔数改**：`tests/unit/novelty_threshold.test.ts` 在同一份语料上
+// 用生产函数重算最优区间并断言 HIGH_AFFINITY 落在里面。改了 `affinity.ts` 的打分规则
+// 而没重标定，那条测试会当场变红。
+//
+// 注意这是**词面覆盖率**不是语义相似度：它会把用词高度重合的邻近工作 judge 得偏高，
 // 所以它只用来做「不许在有高相似候选时说 novel」这类**约束**，不用来直接下结论。
-export const HIGH_AFFINITY = 0.75;
+export const HIGH_AFFINITY = 0.7;
+
+// v0.5 C4：**词面口径的阈值就到此为止**。语义口径（embedding 余弦）是完全不同的量纲，
+// 阈值另标一套，登记在 `llm/embeddings/calibration.ts` 的 SEMANTIC_THRESHOLDS 里——
+// 那里有实测分布与标定方法。把 0.75 套到余弦上会让确定性层的 R5 永不触发（实测最高正样本才 0.746）。
+
+/** 相似度口径。语义口径只有在「模型已标定」时才会真的被用来做评级约束（K-4）。 */
+export type AffinityBasis = "semantic" | "lexical";
 
 export class NoveltyError extends Error {
   readonly validationErrors: string[];
@@ -160,8 +185,15 @@ export interface NoveltyCandidate {
   // 引用 key：库内论文用它在 P3 里的 bibtex key，库外候选按同一规则新分配。
   key: string;
   paper: Paper;
-  // 与该 claim 的确定性相似度（affinity.ts），0~1。
+  // 与该 claim 的**词面**确定性相似度（affinity.ts 的内容词覆盖率），0~1。恒有值。
   affinity: number;
+  // 与该 claim 的**语义**相似度（embedding 余弦），0~1。
+  // null = 本次没有可用向量（未配置 embedding / 调用失败）——**不是 0**，
+  // 0 是「算过了，确实不相似」，null 是「没算成」，两者绝不能混。
+  semanticAffinity: number | null;
+  // 本条候选在**评级约束**里按哪个口径计分。语义向量算出来了但模型未标定时，
+  // 这里仍是 "lexical"：向量只在报告里作参考列，不参与约束（K-4）。
+  affinityBasis: AffinityBasis;
   inLibrary: boolean;
   libraryPaperId: string | null;
   libraryRecordId: string | null;
@@ -237,9 +269,13 @@ function candidateBlock(candidate: NoveltyCandidate): string {
   const paper = candidate.paper;
   const bits = [paper.year ?? "n.d.", paper.venue ?? "未知 venue"].join(", ");
   const gist = paper.abstract ? paper.abstract.replace(/\s+/g, " ").slice(0, 300) : "（无摘要）";
+  const similarity =
+    candidate.semanticAffinity !== null
+      ? `词面相似度 ${candidate.affinity.toFixed(2)} · 语义相似度 ${candidate.semanticAffinity.toFixed(2)}`
+      : `词面相似度 ${candidate.affinity.toFixed(2)}`;
   return (
     `- [@${candidate.key}] ${paper.title} (${bits})` +
-    `${paper.doi ? ` doi:${paper.doi}` : ""} · 相似度 ${candidate.affinity.toFixed(2)}` +
+    `${paper.doi ? ` doi:${paper.doi}` : ""} · ${similarity}` +
     `${candidate.inLibrary ? " · 已在项目文献库" : ""}\n  摘要: ${gist}`
   );
 }
@@ -377,8 +413,14 @@ export interface ConstrainedAssessment extends DeclaredAssessment {
   // false = 这条 claim 本次**没能得出可用结论**（不是「新颖」，是没查出来）。
   conclusive: boolean;
   violations: RatingViolation[];
+  // 本次约束真正使用的口径与门槛（报告与 record metadata 都要写清楚，AD-12）。
+  affinityBasis: AffinityBasis;
+  affinityThreshold: number;
+  // **按 affinityBasis 计的**最高候选相似度。
   topAffinity: number;
-  citedAffinities: Array<{ key: string; affinity: number }>;
+  // 词面口径下的最高相似度，恒有值——语义口径生效时它仍然留着做对照（AD-8 的「两个都留」再加一层）。
+  topLexicalAffinity: number;
+  citedAffinities: Array<{ key: string; affinity: number; semanticAffinity: number | null }>;
 }
 
 // 五条规则，全部是纯函数、零 IO，可以单独喂任意 assessment 来测。
@@ -391,9 +433,19 @@ export interface ConstrainedAssessment extends DeclaredAssessment {
 export function constrainRating(
   declared: DeclaredAssessment,
   candidates: NoveltyCandidate[],
-  options: { highAffinity?: number } = {},
+  options: RatingConstraintOptions = {},
 ): ConstrainedAssessment {
-  const high = options.highAffinity ?? HIGH_AFFINITY;
+  const basis = constraintBasis(candidates);
+  if (basis === "semantic" && (options.semanticHighAffinity === undefined || options.semanticHighAffinity === null)) {
+    // 语义分数配词面阈值 = 拿摄氏度去卡华氏度。这是编程错误，当场炸而不是算出一个像模像样的数——
+    // 管线（applySemanticAffinity）只在「模型已标定」时才把候选标成 semantic，走不到这里。
+    throw new NoveltyError(
+      "候选标着语义口径（affinityBasis=semantic）却没有传语义阈值 semanticHighAffinity；" +
+        "绝不允许拿词面阈值去卡语义分数",
+    );
+  }
+  const high = basis === "semantic" ? options.semanticHighAffinity! : (options.highAffinity ?? HIGH_AFFINITY);
+  const score = (c: NoveltyCandidate): number => (basis === "semantic" ? c.semanticAffinity! : c.affinity);
   const byKey = new Map(candidates.map((c) => [c.key, c]));
   const violations: RatingViolation[] = [];
   let conclusive = true;
@@ -426,26 +478,28 @@ export function constrainRating(
     conclusive = false;
   }
 
-  const topAffinity = candidates.reduce((max, c) => Math.max(max, c.affinity), 0);
+  const topAffinity = candidates.reduce((max, c) => Math.max(max, score(c)), 0);
+  const topLexicalAffinity = candidates.reduce((max, c) => Math.max(max, c.affinity), 0);
+  const label = basis === "semantic" ? "语义相似度" : "词面相似度";
   let rating = declared.rating;
 
-  if (declared.rating === "existing" && !cited.some((c) => c.affinity >= high)) {
+  if (declared.rating === "existing" && !cited.some((c) => score(c) >= high)) {
     violations.push({
       code: "existing_without_high_affinity",
       message:
-        `评级 existing 但引用的最近邻相似度都低于 ${high}` +
-        `（最高 ${cited.reduce((m, c) => Math.max(m, c.affinity), 0).toFixed(2)}）；` +
+        `评级 existing 但引用的最近邻${label}都低于 ${high}` +
+        `（最高 ${cited.reduce((m, c) => Math.max(m, score(c)), 0).toFixed(2)}）；` +
         "已按检索证据降级为 incremental",
     });
     rating = "incremental";
   }
 
   if (declared.rating === "novel" && topAffinity >= high) {
-    const top = candidates.find((c) => c.affinity === topAffinity)!;
+    const top = candidates.find((c) => score(c) === topAffinity)!;
     violations.push({
       code: "novel_despite_high_affinity",
       message:
-        `评级 novel 但检索到高相似候选 [@${top.key}]（相似度 ${topAffinity.toFixed(2)} ≥ ${high}）；` +
+        `评级 novel 但检索到高相似候选 [@${top.key}]（${label} ${topAffinity.toFixed(2)} ≥ ${high}）；` +
         "已按检索证据升级为 existing",
     });
     rating = "existing";
@@ -457,9 +511,40 @@ export function constrainRating(
     rating,
     conclusive,
     violations,
+    affinityBasis: basis,
+    affinityThreshold: high,
     topAffinity,
-    citedAffinities: cited.map((c) => ({ key: c.key, affinity: c.affinity })),
+    topLexicalAffinity,
+    citedAffinities: cited.map((c) => ({
+      key: c.key,
+      affinity: c.affinity,
+      semanticAffinity: c.semanticAffinity,
+    })),
   };
+}
+
+export interface RatingConstraintOptions {
+  /** 词面口径的门槛（既有注入位）。语义口径生效时这项不参与判定。 */
+  highAffinity?: number;
+  /**
+   * 语义口径的门槛。**必须来自 `SEMANTIC_THRESHOLDS`**（该模型标定过的值）。
+   * null / 不传 = 没有标定阈值：此时候选也不该被标成 semantic，标了就是 bug，见上面的抛错。
+   */
+  semanticHighAffinity?: number | null;
+}
+
+/**
+ * 一条 claim 的候选清单按哪个口径约束。
+ *
+ * **要么全语义、要么全词面，不许混**：两个量纲的数混在同一次 max/比较里，
+ * 算出来的「最高相似度」没有任何意义。只要有一条候选没有可用语义分数
+ * （embedding 失败、或该模型未标定被降级），整条 claim 一律退回词面。
+ */
+export function constraintBasis(candidates: NoveltyCandidate[]): AffinityBasis {
+  if (candidates.length === 0) return "lexical";
+  return candidates.every((c) => c.affinityBasis === "semantic" && c.semanticAffinity !== null)
+    ? "semantic"
+    : "lexical";
 }
 
 export interface NoveltyAggregate {
@@ -483,6 +568,7 @@ export interface NoveltyReportInput {
   assessments: ConstrainedAssessment[];
   aggregate: NoveltyAggregate;
   sources: LiteratureSource[];
+  embedding?: EmbeddingState;
   generatedAt?: string;
 }
 
@@ -535,13 +621,20 @@ export function renderNoveltyReport(input: NoveltyReportInput): string {
   );
   lines.push("");
 
-  lines.push("| claim | 校正后评级 | 模型评级 | 候选数 | 最高相似度 | 结论可用 |");
-  lines.push("|-------|-----------|---------|-------|-----------|---------|");
+  lines.push("| claim | 校正后评级 | 模型评级 | 候选数 | 最高相似度（词面） | 最高相似度（语义） | 判据口径 | 结论可用 |");
+  lines.push("|-------|-----------|---------|-------|------------------|------------------|---------|---------|");
   for (const a of assessments) {
     const retrieval = byId.get(a.claimId);
+    const semanticTop = retrieval
+      ? retrieval.candidates.reduce<number | null>(
+          (max, c) => (c.semanticAffinity === null ? max : Math.max(max ?? 0, c.semanticAffinity)),
+          null,
+        )
+      : null;
     lines.push(
       `| ${a.claimId} | ${a.rating} | ${a.declaredRating} | ${retrieval?.candidates.length ?? 0} | ` +
-        `${a.topAffinity.toFixed(2)} | ${a.conclusive ? "是" : "否"} |`,
+        `${a.topLexicalAffinity.toFixed(2)} | ${semanticTop === null ? "n/a" : semanticTop.toFixed(2)} | ` +
+        `${a.affinityBasis} | ${a.conclusive ? "是" : "否"} |`,
     );
   }
   lines.push("");
@@ -570,7 +663,11 @@ export function renderNoveltyReport(input: NoveltyReportInput): string {
         ? `${paper.year ?? "n.d."}, ${paper.venue ?? "未知 venue"}${paper.doi ? `, doi:${paper.doi}` : ""}`
         : "（该 key 不在候选清单里）";
       lines.push(`- **[@${work.key}]** ${paper?.title ?? "未知标题"} — ${meta}`);
-      lines.push(`  - 相似度（确定性计算）：${candidate ? candidate.affinity.toFixed(2) : "n/a"}`);
+      lines.push(
+        `  - 相似度（确定性计算）：词面 ${candidate ? candidate.affinity.toFixed(2) : "n/a"} · ` +
+          `语义 ${candidate?.semanticAffinity != null ? candidate.semanticAffinity.toFixed(2) : "n/a"}` +
+          `（本条按 ${a.affinityBasis} 口径判定）`,
+      );
       lines.push(`  - 相同点：${work.sameness}`);
       lines.push(`  - 不同点：${work.difference}`);
     }
@@ -584,7 +681,10 @@ export function renderNoveltyReport(input: NoveltyReportInput): string {
     if (rest.length > 0) {
       lines.push(`其余候选（相似度前 ${rest.length} 条，未被列为最近邻）：`);
       for (const c of rest) {
-        lines.push(`- [@${c.key}] ${c.paper.title}（相似度 ${c.affinity.toFixed(2)}）`);
+        lines.push(
+          `- [@${c.key}] ${c.paper.title}（词面 ${c.affinity.toFixed(2)} · ` +
+            `语义 ${c.semanticAffinity === null ? "n/a" : c.semanticAffinity.toFixed(2)}）`,
+        );
       }
       lines.push("");
     }
@@ -603,10 +703,28 @@ export function renderNoveltyReport(input: NoveltyReportInput): string {
   lines.push(
     "- 本报告里的每条「已有工作」都来自本次真实检索返回的结果，引用 key 与项目文献库（`lit export --format bibtex`）同一套规则分配。",
   );
-  lines.push("- 相似度是确定性计算（claim/检索式与候选标题摘要的内容词覆盖率），不是模型给的分。");
+  const embedding = input.embedding;
+  const basis = embedding?.basis ?? "lexical";
+  const threshold = embedding?.threshold ?? HIGH_AFFINITY;
   lines.push(
-    `- 评级由模型给出后经评级校验层校正：评 existing 必须引到相似度 ≥ ${HIGH_AFFINITY} 的候选，` +
-      "存在高相似候选时不许评 novel，任何评级都必须列出最近邻。",
+    "- 相似度是**确定性计算**，不是模型给的分。两列都留：" +
+      "「词面」= claim/检索式与候选标题摘要的内容词覆盖率；" +
+      "「语义」= 同样这些文本的 embedding 余弦（没配 embedding 或本次没算成时为 n/a）。",
+  );
+  lines.push(
+    `- **本次评级约束按「${basis === "semantic" ? "语义" : "词面"}」口径**，门槛 ${threshold}` +
+      (basis === "semantic"
+        ? `（模型 \`${embedding!.modelId}\`，标定见 backend/src/llm/embeddings/calibration.ts）。`
+        : "（backend/src/ideation/novelty.ts 的 HIGH_AFFINITY）。"),
+  );
+  if (embedding?.degradedReason) {
+    // 不静默降级：为什么没按语义判，必须写在读者看得见的地方。
+    lines.push(`- ⚠️ **本次未能按语义口径判定，已退回词面**：${embedding.degradedReason}`);
+  }
+  lines.push(
+    `- 评级由模型给出后经评级校验层校正：评 existing 必须引到相似度 ≥ ${threshold} 的候选，` +
+      "存在高相似候选时不许评 novel，任何评级都必须列出最近邻。" +
+      "**语义相似度只是这层校验的输入，不是结论本身**——确定性层的降级/升级规则一条不少（AD-8）。",
   );
   lines.push("- 检索覆盖面 = 结论的边界。检索不到不等于新颖，只等于这几条检索式没查到。");
   return lines.join("\n");
@@ -628,6 +746,47 @@ export interface NoveltyDeps {
   limitPerQuery?: number;
   highAffinity?: number;
   judge?: CitationJudge;
+  /**
+   * 语义相似度来源（v0.5 C4）。
+   *   - 不传（undefined）：按 config 的 `embeddingModel` 自动构造一个 EmbeddingRouter；
+   *     没配这项时它 `configured()===false`，**一次网络请求都不会发**，行为与 v0.4 完全一致。
+   *   - 传 null：**显式关掉**语义口径，强制词面（单测用，免得开发机上的
+   *     SPARK_RESEARCH_EMBEDDING_MODEL 让测试偷偷打真实网络）。
+   *   - 传对象：注入自己的实现（回放 fixture 的 router、或假实现）。
+   */
+  embedder?: Embedder | null;
+  /**
+   * 语义阈值登记表的注入位。生产路径不传 = 用 `SEMANTIC_THRESHOLDS`（当前为空 ⇒ 强制词面）。
+   * 测试注入一张表，是为了让**语义约束这条分支**被完整测到——否则它会变成
+   * 「哪天真登记了阈值才第一次被执行」的死角。
+   */
+  semanticThresholds?: Readonly<Record<string, SemanticThreshold>>;
+}
+
+/** novelty 只需要 EmbeddingRouter 的这两个方法（§1.2.2 的注入位）。 */
+export type Embedder = Pick<EmbeddingRouter, "embed" | "modelId">;
+
+/**
+ * 本次核验的相似度口径**状态**。它会同时进报告的「口径说明」与 record metadata——
+ * 「这次到底是按词面还是按语义判的、为什么」必须是外部可读的事实，不能只活在日志里。
+ */
+export interface EmbeddingState {
+  /** 配置的 embedding 模型 id；null = 没配（本次纯词面，不算降级）。 */
+  modelId: string | null;
+  /** 评级约束真正使用的口径。 */
+  basis: AffinityBasis;
+  /** 该口径下的门槛。 */
+  threshold: number;
+  /** modelId 是否登记过标定阈值。 */
+  calibrated: boolean;
+  /** 向量是否真的算出来了（报告里的「语义」参考列有没有值）。 */
+  vectorsAvailable: boolean;
+  /**
+   * 配了 embedding 却仍然按词面判的原因。
+   * **不静默降级**（feedback_silent_fallback_logging 同一纪律）：这里非 null 时，
+   * 报告的「口径说明」必须把它原样打出来。
+   */
+  degradedReason: string | null;
 }
 
 export interface NoveltyCheckOptions {
@@ -645,6 +804,7 @@ export interface NoveltyCheckResult {
   aggregate: NoveltyAggregate;
   markdown: string;
   citation: CitationIntegrityResult;
+  embedding: EmbeddingState;
   path: string | null;
   artifactId: string | null;
   recordId: string | null;
@@ -657,16 +817,20 @@ export class NoveltyChecker {
   async check(idea: StoredIdeaCard, options: NoveltyCheckOptions = {}): Promise<NoveltyCheckResult> {
     const sources = this.deps.sources ?? DEFAULT_SEARCH_SOURCES;
     const { claims, attempts: claimAttempts } = await this.extractClaims(idea);
-    const retrievals = await this.retrieve(claims, sources);
+    const lexicalOnly = await this.retrieve(claims, sources);
+    // ④ 之前先定口径：语义分数是**输入**，不是最终判据——确定性层照样在下面跑，
+    //    只是它比较的那个数换了口径（AD-8 不因语义化而变松，见 constrainRating）。
+    const { retrievals, embedding } = await this.applySemanticAffinity(lexicalOnly);
     const { assessments: declared, attempts: compareAttempts } = await this.compare(retrievals);
 
     const assessments = declared.map((d) =>
       constrainRating(d, retrievals.find((r) => r.claim.id === d.claimId)?.candidates ?? [], {
         highAffinity: this.deps.highAffinity,
+        semanticHighAffinity: embedding.basis === "semantic" ? embedding.threshold : null,
       }),
     );
     const aggregate = aggregateNovelty(assessments);
-    const markdown = renderNoveltyReport({ idea, retrievals, assessments, aggregate, sources });
+    const markdown = renderNoveltyReport({ idea, retrievals, assessments, aggregate, sources, embedding });
 
     // ⑤ 引用核验：报告里的每个 [@key] 都必须落在「库内论文 ∪ 本次检索候选」上。
     const knownKeys = new Set<string>([
@@ -686,7 +850,7 @@ export class NoveltyChecker {
     const persisted =
       options.persist === false
         ? { path: null, artifactId: null, recordId: null, idea }
-        : this.persist(idea, markdown, retrievals, assessments, aggregate, options);
+        : this.persist(idea, markdown, retrievals, assessments, aggregate, embedding, options);
 
     return {
       idea: persisted.idea,
@@ -696,6 +860,7 @@ export class NoveltyChecker {
       aggregate,
       markdown,
       citation,
+      embedding,
       path: persisted.path,
       artifactId: persisted.artifactId,
       recordId: persisted.recordId,
@@ -811,6 +976,9 @@ export class NoveltyChecker {
           key: keyByIdentity.get(identity)!,
           paper,
           affinity: claimAffinity(texts, paper),
+          // 语义分数在 applySemanticAffinity() 里补；检索这一步只出词面口径。
+          semanticAffinity: null,
+          affinityBasis: "lexical" as const,
           inLibrary: match !== null,
           libraryPaperId: match?.id ?? null,
           libraryRecordId: match?.recordId ?? null,
@@ -825,6 +993,134 @@ export class NoveltyChecker {
         sources: statusByClaim.get(claim.id) ?? [],
       };
     });
+  }
+
+  // ②-b 语义相似度（v0.5 C4）
+  //
+  // 一次批量 embed 覆盖「全部 claim 文本 + 全部候选文本」，去重后发出去（同一篇论文被多条
+  // claim 命中只嵌一次）。任何一步不成立就**整体退回词面并把原因带出去**——
+  // 不静默降级，报告的「口径说明」会原样打出这条原因。
+  private async applySemanticAffinity(
+    retrievals: ClaimRetrieval[],
+  ): Promise<{ retrievals: ClaimRetrieval[]; embedding: EmbeddingState }> {
+    const lexical = (degradedReason: string | null, modelId: string | null, calibrated: boolean, vectorsAvailable = false): EmbeddingState => ({
+      modelId,
+      basis: "lexical",
+      threshold: this.deps.highAffinity ?? HIGH_AFFINITY,
+      calibrated,
+      vectorsAvailable,
+      degradedReason,
+    });
+
+    // undefined = 按 config 自动接线；null = 调用方显式关掉。
+    const embedder: Embedder | null =
+      this.deps.embedder === undefined ? new EmbeddingRouter() : this.deps.embedder;
+    if (embedder === null) return { retrievals, embedding: lexical(null, null, false) };
+
+    const modelId = embedder.modelId();
+    if (modelId === null) return { retrievals, embedding: lexical(null, null, false) };
+
+    const thresholds = this.deps.semanticThresholds;
+    const calibrated = thresholds ? isCalibrated(modelId, thresholds) : isCalibrated(modelId);
+    const threshold = thresholds ? semanticHighAffinity(modelId, thresholds) : semanticHighAffinity(modelId);
+
+    // 去重的文本清单。顺序确定（claim 在前、候选按出现序），fixture 回放才对得上。
+    const texts: string[] = [];
+    const indexOf = new Map<string, number>();
+    const intern = (text: string): number => {
+      const hit = indexOf.get(text);
+      if (hit !== undefined) return hit;
+      const idx = texts.length;
+      texts.push(text);
+      indexOf.set(text, idx);
+      return idx;
+    };
+    const claimTextIdx = new Map<string, number[]>();
+    const paperTextIdx = new Map<string, number>();
+    for (const retrieval of retrievals) {
+      claimTextIdx.set(
+        retrieval.claim.id,
+        [retrieval.claim.statement, ...retrieval.claim.queries].map((t) => intern(t)),
+      );
+      for (const candidate of retrieval.candidates) {
+        paperTextIdx.set(`${retrieval.claim.id}:${candidate.key}`, intern(paperEmbedText(candidate.paper)));
+      }
+    }
+    if (texts.length === 0) {
+      return { retrievals, embedding: lexical(null, modelId, calibrated) };
+    }
+
+    const response = await embedder.embed(texts);
+    if (!response.ok) {
+      // AD-13：失败就是失败，**不许静默退回词面还报成功**。词面结果照样能出报告，
+      // 但「本次是降级跑的、因为什么降级」必须写进报告，调用方也能从 result.embedding 读到。
+      return {
+        retrievals,
+        embedding: lexical(
+          `embedding 调用失败（${response.error.kind}）：${response.error.message}`,
+          modelId,
+          calibrated,
+        ),
+      };
+    }
+    if (response.vectors.length !== texts.length) {
+      return {
+        retrievals,
+        embedding: lexical(
+          `embedding 返回 ${response.vectors.length} 条向量，与请求的 ${texts.length} 条不符`,
+          modelId,
+          calibrated,
+        ),
+      };
+    }
+
+    // K-4：模型没标定过 → 向量照算、报告里作参考列，但**不拿来做评级约束**。
+    const basis: AffinityBasis = calibrated ? "semantic" : "lexical";
+    const vectors = response.vectors;
+    const withSemantic = retrievals.map((retrieval) => {
+      const claimVectors = (claimTextIdx.get(retrieval.claim.id) ?? []).map((i) => vectors[i]!);
+      const candidates = retrieval.candidates.map((candidate) => {
+        const paperVector = vectors[paperTextIdx.get(`${retrieval.claim.id}:${candidate.key}`)!]!;
+        // 与 claimAffinity 同一个取法：陈述 + 各检索式里最高的那个。
+        const semantic = claimVectors.reduce((max, v) => Math.max(max, cosine(v, paperVector)), -1);
+        return {
+          ...candidate,
+          semanticAffinity: Math.round(semantic * 1000) / 1000,
+          affinityBasis: basis,
+        };
+      });
+      // 排序换成生效口径：报告与 prompt 里的「按相似度排序」得跟判据是同一个数。
+      candidates.sort((a, b) => {
+        const av = basis === "semantic" ? a.semanticAffinity! : a.affinity;
+        const bv = basis === "semantic" ? b.semanticAffinity! : b.affinity;
+        return bv - av || a.paper.title.localeCompare(b.paper.title);
+      });
+      return { ...retrieval, candidates };
+    });
+
+    if (!calibrated) {
+      return {
+        retrievals: withSemantic,
+        embedding: lexical(
+          `模型 '${modelId}' 没有登记标定阈值（llm/embeddings/calibration.ts 的 SEMANTIC_THRESHOLDS）；` +
+            "语义相似度只作参考列，评级约束仍按词面",
+          modelId,
+          false,
+          true,
+        ),
+      };
+    }
+    return {
+      retrievals: withSemantic,
+      embedding: {
+        modelId,
+        basis: "semantic",
+        threshold: threshold!,
+        calibrated: true,
+        vectorsAvailable: true,
+        degradedReason: null,
+      },
+    };
   }
 
   // ③ 对比评级
@@ -870,6 +1166,7 @@ export class NoveltyChecker {
     retrievals: ClaimRetrieval[],
     assessments: ConstrainedAssessment[],
     aggregate: NoveltyAggregate,
+    embedding: EmbeddingState,
     options: NoveltyCheckOptions,
   ): { path: string | null; artifactId: string | null; recordId: string | null; idea: StoredIdeaCard } {
     const filename = options.filename ?? `novelty-${idea.recordId.slice(0, 8)}-${new Date().toISOString().slice(0, 10)}.md`;
@@ -897,6 +1194,11 @@ export class NoveltyChecker {
         ideaRecordId: idea.recordId,
         status: aggregate.status,
         conclusive: aggregate.conclusive,
+        // AD-12：口径是事实的一部分，外部 agent 读 record 就该知道这份报告是怎么判出来的。
+        affinityBasis: embedding.basis,
+        affinityThreshold: embedding.threshold,
+        embeddingModel: embedding.modelId,
+        embeddingDegradedReason: embedding.degradedReason,
         claims: retrievals.map((r) => ({
           id: r.claim.id,
           statement: r.claim.statement,
@@ -908,7 +1210,9 @@ export class NoveltyChecker {
           rating: a.rating,
           declaredRating: a.declaredRating,
           conclusive: a.conclusive,
+          affinityBasis: a.affinityBasis,
           topAffinity: a.topAffinity,
+          topLexicalAffinity: a.topLexicalAffinity,
           violations: a.violations,
           nearestWorks: a.nearestWorks,
         })),

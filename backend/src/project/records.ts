@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// V27：schema 从静态 import 拿内容，不再 `readFileSync(join(import.meta.dir, "schema.sql"))`——
+// `bun build --compile` 不把 `.sql` 打进产物，那条路径在单二进制里必然
+// `ENOENT: /$bunfs/root/schema.sql`，而 `project new` 一开局就会踩到它（见 docs/devlog/W5-1-e.md）。
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 import type { ArtifactVersion } from "../artifacts/models";
 import type { Usage } from "../llm/types";
 import {
@@ -172,8 +174,7 @@ export class RecordStore {
   }
 
   initSchema(): void {
-    const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
-    this.db.exec(schema);
+    this.db.exec(SCHEMA_SQL);
     this.migrateRevColumn();
   }
 

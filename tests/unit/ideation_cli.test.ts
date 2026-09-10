@@ -145,7 +145,7 @@ describe("idea CLI", () => {
     expect(s.err.join("\n")).toContain("项目文献库为空");
   });
 
-  test("生成失败时返回 1 并如实报错", async () => {
+  test("生成失败时返回 1 并如实报错，且给出可操作的下一步（V36：不能只说错在哪）", async () => {
     const w = workspace("cli-fail");
     const s = sink();
     const code = await runIdeaCommand(["new", "-m", "想法"], {
@@ -154,7 +154,13 @@ describe("idea CLI", () => {
       llm: new FakeLlm(["不是 JSON"]),
     });
     expect(code).toBe(1);
-    expect(s.err.join("\n")).toContain("CoExplore");
+    const errText = s.err.join("\n");
+    expect(errText).toContain("CoExplore");
+    // V36 样板是 lab approve 的 V19 拒绝消息：不止说错了什么，还给出具体能敲的下一步命令。
+    expect(errText).toContain("下一步");
+    expect(errText).toContain("spark-research idea new -m");
+    expect(errText).toContain("spark-research auth");
+    expect(errText).toContain("spark-research lit list");
   });
 
   test("交互式：/card 之前不落库，/card 之后入库", async () => {
@@ -193,6 +199,24 @@ describe("idea CLI", () => {
     expect(new IdeaStore(project.records(), library).list()).toHaveLength(0);
     library.close();
     project.close();
+  });
+
+  test("交互式：本轮生成失败也给下一步指引，且不退出会话（V36）", async () => {
+    const w = workspace("cli-interactive-fail");
+    const s = sink();
+    const script = ["坏想法", "exit"];
+    const code = await runIdeaCommand(["new"], {
+      ...s.deps,
+      root: w.root,
+      llm: new FakeLlm(["不是 JSON"]),
+      ask: async () => script.shift() ?? null,
+    });
+    expect(code).toBe(0); // 交互式失败不退出会话——用户接着输入了 exit 正常收尾
+    const errText = s.err.join("\n");
+    expect(errText).toContain("CoExplore");
+    expect(errText).toContain("下一步");
+    // 交互式路径不该重复建议敲 `idea new -m`（用户已经在会话里）——提示改说法重输这轮。
+    expect(errText).toContain("换个说法");
   });
 
   test("idea list 空库与有内容两种输出 + 状态过滤", async () => {

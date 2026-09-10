@@ -9,7 +9,7 @@ import { LiteratureSearcher } from "../literature/search";
 import { LLMRouter } from "../llm/router";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
 import type { CitationJudge } from "../reviewer/rules";
-import { CoExploreSession } from "./coexplore";
+import { CoExploreError, CoExploreSession } from "./coexplore";
 import { renderIdeaCard, type NoveltyStatus, type StoredIdeaCard } from "./models";
 import { NoveltyChecker } from "./novelty";
 import { IdeaStore } from "./store";
@@ -98,6 +98,29 @@ function printCard(card: StoredIdeaCard, out: (line: string) => void): void {
   out(
     `    novelty ${card.noveltyStatus} · 支持 ${card.supporting.length} · 反对 ${card.contradicting.length}` +
       ` · 待验证 ${card.openQuestions.length}${card.checkedAt ? ` · 查于 ${card.checkedAt.slice(0, 10)}` : ""}`,
+  );
+}
+
+// V36：`idea new` 的契约校验失败（CoExploreError，见 coexplore.ts）之前只把原始错误
+// 打印出来——外部验收者靠猜才绕过去。样板是 `lab approve` 的 V19 拒绝消息
+// （backend/src/lab/cli.ts 的 requireApprovalGate）：不止说错在哪，还给出具体能敲的
+// 下一步命令。这里不区分「模型调用失败」与「schema 校验失败」两种子情形——两者都
+// 已经在 CoExploreError.message 里带了具体原因（校验失败原因 / 模型两次都没内容），
+// 这段只补「拿到这条错误之后该做什么」，覆盖两种子情形都成立的三条路：重试
+// （LLM 结构化输出本身非确定性）、查 key（doctor/auth）、查文献库（常见的库外引用 /
+// 空库导致 contradicting 给不出反面证据）。
+function printCoExploreNextSteps(err: (line: string) => void, options: { interactive: boolean }): void {
+  err("下一步：");
+  err(
+    options.interactive
+      ? "  · 多数情况下是 LLM 结构化输出的偶发问题（非确定性）：换个说法把这轮想法重新输入一次，通常就能过"
+      : '  · 多数情况下是 LLM 结构化输出的偶发问题（非确定性）：重试一次通常就能过——' +
+          'spark-research idea new -m "<同样的思路>"',
+  );
+  err("  · 反复失败：先确认 API Key 已配置——spark-research auth（或 spark-research doctor 看 provider 一节）");
+  err(
+    "  · 反复失败且提示引用了库外 key / 给不出反对证据：先确认文献库不是空的——" +
+      'spark-research lit list（为空就 spark-research lit search "<关键词>" --add）',
   );
 }
 
@@ -196,7 +219,12 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
             out("");
             out(`（候选假设：${pending.card.hypothesis}；反对证据 ${pending.card.contradicting.length} 条。/card 定卡）`);
           } catch (error) {
-            err(`❌ ${error instanceof Error ? error.message : String(error)}`);
+            if (error instanceof CoExploreError) {
+              err(`❌ ${error.message}`);
+              printCoExploreNextSteps(err, { interactive: true });
+            } else {
+              err(`❌ ${error instanceof Error ? error.message : String(error)}`);
+            }
           }
         }
         library.close();
@@ -322,6 +350,11 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   } catch (error) {
     if (error instanceof ProjectError) {
       err(`❌ ${error.message}`);
+      return 1;
+    }
+    if (error instanceof CoExploreError) {
+      err(`❌ ${error.message}`);
+      printCoExploreNextSteps(err, { interactive: false });
       return 1;
     }
     err(`❌ ${error instanceof Error ? error.message : String(error)}`);

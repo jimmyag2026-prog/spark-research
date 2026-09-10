@@ -108,10 +108,25 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
+  // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
+  // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，
+  // tsc 靠 tsconfig 的 include 自动收进程序，不靠任何人 import 它。
+  // 孤儿检测查的是「运行期有没有调用方」，对声明文件这个判据在语义上不适用。
+  "backend/src/assets/assets.d.ts":
+    "TypeScript ambient 声明（*.sql / *.txt / *.py 的静态 import 类型），按语言规则由 tsconfig include 收录，不存在也不该存在 import 边",
+
   // backend/src/extensions/capabilities.ts 曾在此登记「等接线：capabilities 接上后删除」——
   // W2 收口已接（buildCapabilities() 里加了 extensions 字段），本条按对称检查删除。
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
+
+  // v0.5 W5-1 α（CB-1/CB-2）：算力层的编排入口与第一个 adapter 在本波交付，
+  // 但生产调用方（CLI `spark-research compute …`）是 W5-2 β 的所有权。
+  // 这两条是本波**唯一**的跨波「等接线」（DEVELOPMENT_PLAN_v0.5_MODULES.md §5.1）。
+  "backend/src/compute/broker.ts":
+    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
+  "backend/src/compute/adapters/local.ts":
+    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——

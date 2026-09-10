@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// V27：prompt 的编译期内嵌副本（见 ../agents/prompts.ts）。
+import { DEFAULT_PROMPT_DIR, readPromptText } from "../agents/prompts";
 import { libraryKeyIndex } from "../literature/export";
 import type { LibraryPaper, LibraryStore } from "../literature/library";
 import { extractJsonObject } from "../literature/reading";
@@ -32,12 +32,11 @@ export class CoExploreError extends Error {
 
 export const COEXPLORE_PROMPT_FILE = "coexplore.txt";
 
-export function loadCoExplorePrompt(promptDir = join(import.meta.dir, "..", "agents", "prompt")): string {
-  try {
-    return readFileSync(join(promptDir, COEXPLORE_PROMPT_FILE), "utf8");
-  } catch {
-    return `[prompt missing: ${COEXPLORE_PROMPT_FILE}]`;
-  }
+// V27：默认 promptDir 在单二进制里是 `/$bunfs/root/../agents/prompt`，读不到 →
+// co-explore 的 system prompt 静默变成 `[prompt missing: coexplore.txt]`。
+// readPromptText 先读真目录（调用方显式传的 promptDir 依然优先），再落内嵌副本。
+export function loadCoExplorePrompt(promptDir = DEFAULT_PROMPT_DIR): string {
+  return readPromptText(promptDir, COEXPLORE_PROMPT_FILE) ?? `[prompt missing: ${COEXPLORE_PROMPT_FILE}]`;
 }
 
 // ── grounding 检查 ──────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import type { ArtifactStore } from "../artifacts/store";
@@ -21,6 +21,10 @@ import {
 // 模块初始化阶段互相读对方尚未求值的绑定就没问题，`server/app.ts` 的 `ServerContext`
 // 构造函数本来就已经是这个模式（`new OrchestratorAgent(...)` 在方法体里，不在顶层）。
 import { McpToolRunner } from "../mcp/server";
+// V27/V33：prompt 内嵌副本 + 数据目录解析。dataDir() 是仓库既有的单一真源
+// （env SPARK_RESEARCH_DATA_DIR > ~/.spark-research），不另起一套。
+import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
+import { dataDir } from "../config";
 import { BudgetLedger } from "../llm/budget";
 import {
   createLiteratureReviewContract,
@@ -173,11 +177,11 @@ const SKILL_CATALOG: SkillDef[] = [
 ];
 
 function loadPrompt(filename: string): string {
-  try {
-    return readFileSync(join(import.meta.dir, "prompt", filename), "utf8");
-  } catch {
-    return `[prompt missing: ${filename}]`;
-  }
+  // V27：`readFileSync(join(import.meta.dir, "prompt", filename))` 在单二进制里读的是
+  // `/$bunfs/root/prompt/core.txt`，永远 catch → system prompt 静默变成
+  // `[prompt missing: core.txt]`（不崩溃，只是降智）。readPromptText 先读真目录、
+  // 读不到才用编译期内嵌的副本，源码模式行为不变。
+  return readPromptText(PROMPT_DIR, filename) ?? `[prompt missing: ${filename}]`;
 }
 
 // F-a（F-5 的顺手修）：这里曾经用 `if (!TASK_KINDS.includes(kind)) return null`
@@ -228,7 +232,13 @@ export class OrchestratorAgent {
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
     this.projects = deps.projects;
     this.toolRunner = deps.toolRunner;
-    this.workspaceRoot = deps.workspaceRoot ?? join(import.meta.dir, "../../../workspaces");
+    // V33：默认值原本是 `join(import.meta.dir, "../../../workspaces")`。在 `bun build --compile`
+    // 产物里 `import.meta.dir` 是 `/$bunfs/root`，往上跳三层被 node:path 归一化钉在文件系统
+    // 真实的根——结果是 `/workspaces`，而下一行紧接着 `mkdirSync(..., {recursive:true})`。
+    // 这不是"读不到文件"，是**往文件系统根目录写**：普通用户跑会因权限崩，用 root 跑会把
+    // 会话工作区静默建在 `/workspaces`。改成挂在数据目录下（与 projects/config.json 同一个根），
+    // 二进制/源码/npm 三条安装路径下都指向同一个用户可写、可预期的位置。
+    this.workspaceRoot = deps.workspaceRoot ?? join(dataDir(), "workspaces");
     mkdirSync(this.workspaceRoot, { recursive: true });
     this.corePrompt = loadPrompt("core.txt");
     this.researchPrompt = loadPrompt("research.txt");
@@ -717,7 +727,7 @@ export class OrchestratorAgent {
         records: project.records(),
         model: req.model,
         projectContext: project.meta.description || undefined,
-        promptDir: join(import.meta.dir, "prompt"),
+        promptDir: PROMPT_DIR,
       });
       const turn = await session.turn(req.message, { sessionId: req.sessionId });
       const stored =

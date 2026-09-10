@@ -12,12 +12,57 @@ export const LITERATURE_SOURCES = [
 ] as const;
 export type LiteratureSource = (typeof LITERATURE_SOURCES)[number];
 
-// 免 key 的默认检索源；aminer 需凭据，按需显式加入。
+// 默认检索源。
+//
+// V34（v0.5 闸门 F 的零上下文外部验收发现）：这张表在 W3-d 把 arxiv / pubmed 真正接通
+// 之后**没有跟着改**，仍是 P2 时代的四个源。后果不是「少查两个源」这么轻——
+// `lit add <arxiv-id>` 不带 --sources 时走的就是这张表，于是
+// `lit search --sources arxiv` 能用、`capabilities --json` 也报 arxiv 可用，
+// 唯独 `lit add 1706.03762` 报「未找到」。**能力做好了、默认值没跟着改。**
+//
+// 结构性教训写在 `DEFAULT_SOURCE_EXCLUSIONS` 上：光改这一行还会复发，
+// 因为 AD-12 门禁核的是「源在不在注册表」，核不了「默认值有没有包含它」。
 export const DEFAULT_SEARCH_SOURCES: LiteratureSource[] = [
   "openalex",
   "crossref",
   "europepmc",
   "semanticscholar",
+  "arxiv",
+  "pubmed",
+];
+
+// V34 的门禁面：**已实装的文献源要么在 `DEFAULT_SEARCH_SOURCES` 里，要么在这张表里带理由。**
+//
+// 断言本身在 `tests/unit/literature_source_parity.test.ts`，它以 ConnectorRegistry 的
+// literature 域清单为真源（不是这里的 `LITERATURE_SOURCES` 常量——那本身也是一份手写副本，
+// 拿它当真源就等于自证自明，抓不到「注册表里加了源、这两张表都没跟上」这一类）。
+//
+// 排除**不是**随手写个理由就行：门禁只承认两类合法排除——
+//   1. `apiKeyRequired: true`（默认集里放一个必然 skipped 的源，只会让每次检索多一行噪音）；
+//   2. `status: "placeholder"`（占位实现，调用必然失败）。
+// 换句话说，一个免 key、状态 available 的源**没有**合法的排除理由，只能进默认集。
+// arxiv / pubmed 正是这一类，所以上面那张表必须包含它们。
+export interface DefaultSourceExclusion {
+  // 连接器注册表里的源名。类型故意是 string 而不是 LiteratureSource：
+  // cnki / wanfang 是占位实现，本来就不该能被 `--sources` 选中（所以不在那个联合类型里），
+  // 但它们**确实在注册表里**，门禁要求它们在这张表里给出理由。
+  source: string;
+  reason: string;
+}
+
+export const DEFAULT_SOURCE_EXCLUSIONS: readonly DefaultSourceExclusion[] = [
+  {
+    source: "aminer",
+    reason: "apiKeyRequired：AMiner 要自备 key，未配置时整源 skipped；需要中文文献时显式 --sources aminer",
+  },
+  {
+    source: "cnki",
+    reason: "placeholder：知网无公开 API 渠道（官方开放平台需申请），调用必然失败；中文文献主路径是 aminer",
+  },
+  {
+    source: "wanfang",
+    reason: "placeholder：万方官方 Web API 需企业授权，调用必然失败；中文文献主路径是 aminer",
+  },
 ];
 
 export interface PaperAuthor {
@@ -102,12 +147,34 @@ export function titleSimilarity(a: unknown, b: unknown): number {
   return shared / (setA.size + setB.size - shared);
 }
 
+// V38：「Last F」形态的作者名。
+//
+// Europe PMC / PubMed 归一化出来的作者名是 `"Jumper J"` / `"Varadi MG"` 这种
+// **姓在前、名缩写在后**的形态（OpenAlex / CrossRef 给的是 `"John Jumper"`，姓在后）。
+// 旧实现无条件取最后一段当姓，于是 `"Jumper J"` 的姓被解析成 `"j"`：
+//   - BibTeX key 变成 `j2021highly` 而不是 `jumper2021highly`（外部验收发现的那一条）；
+//   - 跨源去重的姓氏比对也跟着错位（同一篇论文，openalex 侧姓 "jumper"、europepmc 侧姓 "j"）。
+//
+// 判据：最后一段**只由 1~3 个大写字母（可带点）组成**就判为名缩写，姓取它前面的部分。
+// 只认大写是关键——`"Jan van der Berg"` 的 "Berg"、`"Xu Li"` 的 "Li" 都含小写字母，
+// 不会被误判；而真正的缩写（"J" / "JA" / "J.A." / "MG"）一定是全大写。
+const INITIALS = /^(?:[A-Z]\.?){1,3}$/;
+
 export function authorSurname(name: string): string {
   const cleaned = name.trim().replace(/\s+/g, " ");
   if (!cleaned) return "";
   if (cleaned.includes(",")) return titleKey(cleaned.split(",")[0]);
   const parts = cleaned.split(" ");
+  if (parts.length > 1 && INITIALS.test(parts[parts.length - 1]!)) {
+    return titleKey(parts.slice(0, -1).join(" "));
+  }
   return titleKey(parts[parts.length - 1] ?? "");
+}
+
+// 「最后一段是名缩写吗」——export.ts 的 CSL 姓名解析要用同一条判据，
+// 两处各写一份正则就是 V34 那类问题的翻版（同一判据两份手写副本，改一处漏一处）。
+export function isInitialsToken(token: string): boolean {
+  return INITIALS.test(token);
 }
 
 export function firstAuthorSurname(paper: Paper): string {

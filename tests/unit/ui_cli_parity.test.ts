@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runChemCommand } from "../../backend/src/chem/cli";
 import { runConclusionCommand } from "../../backend/src/conclusion/cli";
 import { ConclusionStore } from "../../backend/src/conclusion/store";
 import { runExpCommand } from "../../backend/src/experiment/cli";
@@ -289,6 +290,50 @@ describe("UI ↔ CLI 行为对照", () => {
       } finally {
         httpAgain.close();
         cliAgain.close();
+      }
+    } finally {
+      await fx.stop();
+    }
+  });
+
+  // C5-②（v0.5 W5-1-c）：SMILES depict 的 CLI 与 HTTP 入口落同形状的 artifact record。
+  // 不对照 SVG 内容本身（rdkit 渲染同一分子两次的坐标/id 属性未必逐字节相同），
+  // 对照的是「落进证据图的东西一样」——类型、evidence、metadata.kind、分子式/canonical
+  // SMILES，与 fingerprint() 的口径一致。
+  test("SMILES depict：CLI 与 HTTP 两边落同形状的 artifact record", async () => {
+    const cli = cliWorkspace("parity-chem");
+    expect(await runChemCommand(["depict", "CCO", "--name", "ethanol"], { manager: cli.manager, ...cli.sink })).toBe(
+      0,
+    );
+
+    const fx = makeServer({ slug: "parity-chem" });
+    try {
+      const res = await fx.post<{ result: { canonicalSmiles: string; formula: string; recordId: string } }>(
+        "/api/chem/depict",
+        { smiles: "CCO", name: "ethanol" },
+      );
+      expect(res.status).toBe(200);
+
+      const httpProject = fx.manager.open(fx.project.slug);
+      const cliProject = cli.manager.open("parity-chem");
+      try {
+        const httpRecord = httpProject.records().get(res.body.result.recordId)!;
+        const cliRecord = cliProject.records().list({ type: "artifact" })[0]!;
+        expect(fingerprint(httpRecord)).toEqual(fingerprint(cliRecord));
+        expect((httpRecord.metadata as Record<string, unknown>).canonicalSmiles).toBe(
+          (cliRecord.metadata as Record<string, unknown>).canonicalSmiles,
+        );
+        expect((httpRecord.metadata as Record<string, unknown>).formula).toBe(
+          (cliRecord.metadata as Record<string, unknown>).formula,
+        );
+        // 两边都真的落了一份 image/svg+xml artifact。
+        const httpArtifact = httpProject.artifacts().get(httpRecord.artifactId!);
+        const cliArtifact = cliProject.artifacts().get(cliRecord.artifactId!);
+        expect(httpArtifact?.contentType).toBe("image/svg+xml");
+        expect(cliArtifact?.contentType).toBe("image/svg+xml");
+      } finally {
+        httpProject.close();
+        cliProject.close();
       }
     } finally {
       await fx.stop();

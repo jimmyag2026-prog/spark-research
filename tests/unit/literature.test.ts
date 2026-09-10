@@ -40,7 +40,7 @@ import {
   titleFirstWord,
 } from "../../backend/src/literature/export";
 import { LibraryStore, paperFrom, toPaper } from "../../backend/src/literature/library";
-import { normalizeDoi, titleKey, titleSimilarity, type Paper } from "../../backend/src/literature/models";
+import { normalizeDoi, titleKey, titleSimilarity, type LiteratureSource, type Paper } from "../../backend/src/literature/models";
 import { retractOrphanRecords } from "../../backend/src/literature/reading";
 import {
   fromCrossRef,
@@ -1136,6 +1136,12 @@ describe("跨源检索编排", () => {
       body: new TextEncoder().encode(JSON.stringify(payload)),
     });
 
+  // V34 之后 DEFAULT_SEARCH_SOURCES 含 6 个源（补进了 arxiv / pubmed）。下面两个用例测的是
+  // **四源编排/去重/失败传播**，源集合是被测行为的一部分，不该跟着默认值漂移——所以显式钉住
+  // 这四个源。（钉住之前它们隐式吃默认值，V34 一改就红；红得对：stub 只会答 JSON，
+  // arxiv 的 Atom 解析必然失败。这正是「默认值扇出到消费方」该被看见的地方。）
+  const FOUR: LiteratureSource[] = ["openalex", "crossref", "europepmc", "semanticscholar"];
+
   test("并发查询四源 → 归一化 → 去重合并", async () => {
     const registry = registryWith((url) => {
       if (url.includes("openalex")) {
@@ -1149,7 +1155,7 @@ describe("跨源检索编排", () => {
       }
       return json({ data: [{ paperId: "s2", title: "Unique S2 Paper", year: 2020 }] });
     });
-    const result = await new LiteratureSearcher(registry).search("test");
+    const result = await new LiteratureSearcher(registry).search("test", { sources: FOUR });
     expect(result.totalBeforeDedupe).toBe(4);
     expect(result.papers.length).toBe(3);
     expect(result.mergedCount).toBe(1);
@@ -1165,7 +1171,7 @@ describe("跨源检索编排", () => {
         ? json({ error: "rate limited" }, 429)
         : json({ results: [{ display_name: "OK Paper", doi: "10.1/ok" }] }),
     );
-    const result = await new LiteratureSearcher(registry).search("test");
+    const result = await new LiteratureSearcher(registry).search("test", { sources: FOUR });
     const failed = result.sources.find((s) => s.source === "semanticscholar")!;
     expect(failed.outcome).toBe("failed");
     expect(failed.error).toContain("HTTP 429");

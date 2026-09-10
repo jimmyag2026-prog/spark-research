@@ -2,6 +2,8 @@ import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
 import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+// V27：同 project/records.ts —— schema 走静态 import，编译期进二进制。
+import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 import type {
   ArtifactVersion,
   DependencyEdge,
@@ -144,8 +146,7 @@ export class ArtifactStore {
   }
 
   initSchema(): void {
-    const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
-    this.db.exec(schema);
+    this.db.exec(SCHEMA_SQL);
     this.migrate();
   }
 

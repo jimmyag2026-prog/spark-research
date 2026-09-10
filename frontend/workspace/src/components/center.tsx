@@ -354,11 +354,11 @@ function IdeasView(): JSX.Element {
 
 function ArtifactsView(): JSX.Element {
   const ws = useWorkspace();
-  const [content, setContent] = createSignal<{ filename: string; body: string } | null>(null);
+  const [content, setContent] = createSignal<{ filename: string; body: string; contentType: string } | null>(null);
 
   const open = async (id: string, filename: string) => {
     const result = await withBusy(ws, "读取产物", () => api.artifacts.get(id, ws.slug()));
-    if (result) setContent({ filename, body: result.artifact.content });
+    if (result) setContent({ filename, body: result.artifact.content, contentType: result.artifact.contentType });
   };
 
   return (
@@ -393,14 +393,27 @@ function ArtifactsView(): JSX.Element {
             </div>
             <div class="card-body">
               <Show
-                when={file().filename.endsWith(".md")}
+                when={file().contentType === "image/svg+xml"}
                 fallback={
-                  <pre class="md" style={{ margin: 0 }}>
-                    <code>{file().body.slice(0, 20000)}</code>
-                  </pre>
+                  <Show
+                    when={file().filename.endsWith(".md")}
+                    fallback={
+                      <pre class="md" style={{ margin: 0 }}>
+                        <code>{file().body.slice(0, 20000)}</code>
+                      </pre>
+                    }
+                  >
+                    <Markdown source={file().body} knownKeys={ws.knownKeys()} />
+                  </Show>
                 }
               >
-                <Markdown source={file().body} knownKeys={ws.knownKeys()} />
+                {/* data: URI + <img>（不 innerHTML）：SVG 里即便混入 <script> 也不会执行——
+                    后端 assertSafeSvg 已校验过一道，这是第二道（AD-7：不引入前端依赖）。 */}
+                <img
+                  src={"data:image/svg+xml;utf8," + encodeURIComponent(file().body)}
+                  alt={file().filename}
+                  style={{ "max-width": "100%" }}
+                />
               </Show>
             </div>
           </article>

@@ -626,13 +626,21 @@ describe("list / 过滤", () => {
 // 这条链路（compile() → WetExperimentMeta.unconsumedWarnings → renderWetExperiment）
 // 才是"用户写了但安全门没看见"真正会被人看到的地方，不是只在 protocol.ts 单测里存在。
 describe("D-8 · unconsumed 信号接到湿实验 view / 正文", () => {
-  test("浓度描述编译进去后：安全门四条全过，但 view 与正文里都能看到未消费告警", () => {
+  // V25（W5-1 δ）：`配制10%次氯酸钠溶液` 这类「浓度 + 单一试剂同句」的写法，编译器现在
+  // 会把浓度解析出来挂到 ReagentSpec.concentration 上，不再报未消费——见
+  // backend/src/lab/protocol.ts 的 extractConcentration()。这条测试原先拿它当「永远看不见」
+  // 的例子，V25 之后那个前提不成立了，换成同句出现两种试剂的歧义场景：浓度归谁没法从
+  // 句法上确定，编译器仍然拒绝瞎猜，所以这条链路仍然是有效的「unconsumed 信号会透传」样例。
+  test("浓度描述归属歧义（同句多种试剂）时：安全门四条全过，但 view 与正文里都能看到未消费告警", () => {
     const { project } = newWorkspace();
     const loop = loopFor(project);
-    // 「配制10%次氯酸钠溶液」：prepareReagent 认得出来（有"配制"关键词），
-    // 但浓度 10% 不会被编译器解析进 concentration_limit 需要的字段——安全门看不见它，
-    // 只会看到一个体积正常的 prepareReagent 步骤，四条规则理应全过。
-    const view = loop.design({ title: "浓度未消费", naturalLanguage: "配制10%次氯酸钠溶液200uL" });
+    // 「配制10%次氯酸钠和乙醇的混合液」：prepareReagent 认得出来（有"配制"关键词），
+    // 但同句里点了两种试剂，10% 到底是谁的浓度无法确定——编译器不猜，
+    // concentration_limit 需要的字段仍然拿不到，四条规则理应全过。
+    const view = loop.design({
+      title: "浓度未消费",
+      naturalLanguage: "配制10%次氯酸钠和乙醇的混合液200uL",
+    });
     loop.compile(view.id);
     const { view: checked, report } = loop.safetyCheck(view.id);
     expect(report.passed).toBe(true);

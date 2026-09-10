@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { RUNNING_IN_COMPILED_BINARY } from "../assets/embedded";
 import {
   connectorTemplate,
   platformTemplate,
@@ -50,7 +51,25 @@ export interface ScaffoldPlan {
   followUp: string[];
 }
 
-const DEFAULT_REPO_ROOT = join(import.meta.dir, "../../..");
+// V27/V33 同类：`join(import.meta.dir, "../../..")` 在 `bun build --compile` 产物里
+// 归一化成 **`/`**（`import.meta.dir` 是 `/$bunfs/root`，往上跳的层数比虚拟路径还深）。
+// 脚手架的产出是**往仓库里写新源码文件**，所以这不是"少读一个文件"，是
+// `new skill foo` 会试图往 `/backend/src/skills/foo/` 写东西。
+//
+// 这一处刻意**不**"修好"（F-c §5.1 的裁定）：`new skill|connector|platform` 语义上就
+// 要求有一个源码仓库可写，编译产物里根本没有这么个东西，给它编一个假的 repoRoot 只会
+// 把失败推迟到更莫名其妙的地方。正确处置是**立刻、明确地拒绝**，而不是静默写到 `/`。
+function defaultRepoRoot(): string {
+  if (RUNNING_IN_COMPILED_BINARY) {
+    throw new Error(
+      "`new skill|connector|platform` 只在源码 checkout 里可用：脚手架要往仓库写新的源码文件，" +
+        "单二进制发行版里没有仓库可写（编译产物里默认 repoRoot 会退化成文件系统根目录 `/`，" +
+        "所以这里直接拒绝而不是照着写）。请改用源码运行：`bun backend/src/index.ts new ...`，" +
+        "或显式传 --repo-root 指向一个真实的 checkout。",
+    );
+  }
+  return join(import.meta.dir, "../../..");
+}
 
 export function planScaffold(
   kind: ScaffoldKind,
@@ -60,7 +79,7 @@ export function planScaffold(
   if (!/^[a-z][a-z0-9-]*$/.test(name)) {
     throw new Error(`name '${name}' 必须是小写 kebab-case（字母开头，只含小写字母/数字/连字符）`);
   }
-  const repoRoot = options.repoRoot ?? DEFAULT_REPO_ROOT;
+  const repoRoot = options.repoRoot ?? defaultRepoRoot();
   const testDir = options.testDir ?? join(repoRoot, "tests/unit");
   const className = toClassName(name);
 

@@ -319,6 +319,21 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     secret: true,
   },
   {
+    // v0.5 C4（lane β）：novelty 的相似度口径开关。
+    key: "embeddingModel",
+    type: "string",
+    envVar: "SPARK_RESEARCH_EMBEDDING_MODEL",
+    defaultValue: null,
+    summary: "novelty 语义相似度用的 embedding 模型（`<provider>/<model>`，如 local/nomic-embed-text）；不配 = 走词面覆盖率",
+    effect:
+      "只影响 novelty check 的「相似度」这一列以及评级校验层用的门槛。不配时相似度是词面内容词覆盖率" +
+      "（阈值 HIGH_AFFINITY=0.70）；配了且该模型**已在 llm/embeddings/calibration.ts 登记过标定阈值**时，" +
+      "改用语义余弦相似度与该模型自己的阈值。配了但没标定过 → 向量照算并在报告里作参考列，" +
+      "但评级约束**强制退回词面**（没标定的阈值等于没有判据，K-4）。embedding 调用失败时同样退回词面，" +
+      "并在报告的「口径说明」里写明失败原因——不静默降级。provider 需要有 OpenAI 兼容的 /v1/embeddings 端点" +
+      "（local / openai / qwen；anthropic、deepseek、openrouter 没有这个端点，配了会得到可见的 unsupported 失败）。",
+  },
+  {
     key: "llmPricingOverridesJson",
     type: "string",
     envVar: "SPARK_LLM_PRICING_JSON",

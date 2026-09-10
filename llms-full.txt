@@ -52,13 +52,13 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 25 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 26 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
 - `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
 - `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
-- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。6 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 - `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
 - `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
 - `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
@@ -78,6 +78,7 @@ spark-research mcp    # stdio 传输
 - `conclusion_list`：要看项目里的结论卡及其评审状态时。只有 review=approved 的结论才会进研究报告的「结论」区，pending / vetoed 进「待验证」区。
 - `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
 - `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
+- `chem_depict`：要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
 - `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 
 **刻意不暴露的动作**（设计声明，不是未实现清单）：
@@ -159,6 +160,7 @@ spark-research mcp    # stdio 传输
 - `QWEN_API_KEY`（默认 （凭据），env `QWEN_API_KEY`）：Qwen（阿里云 DashScope / Model Studio）API key
 - `SPARK_LOCAL_LLM_BASE_URL`（默认 —，env `SPARK_LOCAL_LLM_BASE_URL`）：本地/自建 OpenAI 兼容 LLM 端点的 baseUrl（ollama / vLLM / 任意自建服务）
 - `SPARK_LOCAL_LLM_API_KEY`（默认 （凭据），env `SPARK_LOCAL_LLM_API_KEY`）：本地/自建 LLM 端点的 API key（很多本地服务不校验，允许留空）
+- `embeddingModel`（默认 —，env `SPARK_RESEARCH_EMBEDDING_MODEL`）：novelty 语义相似度用的 embedding 模型（`<provider>/<model>`，如 local/nomic-embed-text）；不配 = 走词面覆盖率
 - `llmPricingOverridesJson`（默认 —，env `SPARK_LLM_PRICING_JSON`）：覆盖 llm/providers/registry.ts 内置单价表的 JSON（`{"<provider>:<model>": {inputPerMillionUsd, outputPerMillionUsd}}`）
 - `subAgentModel_explore`（默认 —，env `SPARK_SUBAGENT_MODEL_EXPLORE`）：子代理类型 'explore' 的独立模型覆盖（不填则退回 defaultModel）
 - `subAgentModel_literature`（默认 —，env `SPARK_SUBAGENT_MODEL_LITERATURE`）：子代理类型 'literature' 的独立模型覆盖（不填则退回 defaultModel）
@@ -209,19 +211,26 @@ spark-research mcp    # stdio 传输
 3. **干湿闭环里物理世界的操作永远不自动化审批。** 湿实验的安全门是必要非充分条件，
    通过之后停在 `awaiting_approval` 等一个**具名的人**按批准，批的是某一版协议的 hash（AD-6）。
 
-> ⚠️ **安全门当前的真实覆盖范围**（v0.3.0 起如实写在这里，不再只说「四条规则」）：
-> 四条规则里**只有 `volume_capacity` 在自然语言主管线上全程可信**。
-> `chemical_compatibility` 的试剂词表已扩到中英文与常见分子式，但仍然是有限词表；
-> **`concentration_limit` 与 `biosafety` 在自然语言主管线上仍然空转**——协议编译器
-> 目前产不出它们所需的 `concentration` / `biosafetyLevel` 字段（规则本身有对抗测试，
-> 但真实入口喂不进那种输入）。
+> ⚠️ **安全门当前的真实覆盖范围**（V25 更新，如实写在这里，不再只说「四条规则」）：
+> `volume_capacity` 在自然语言主管线上全程可信；`chemical_compatibility` 的试剂词表
+> 已扩到中英文与常见分子式，但仍然是有限词表。
 >
-> 兜底的是 `unconsumedWarnings`：协议里出现了量纲/试剂/条件、却没有被任何规则消费的，
-> 编译产物会带出显式告警，CLI 的编译与审批输出**必须**显示它。口径是——
+> **`concentration_limit` 与 `biosafety` 从 V25 起不再恒空转，但覆盖是部分的、边界明确**：
+> `concentration_limit` 只在**同一子句里恰好点名一种试剂**时才吃得到浓度（例如
+> 「配制10%次氯酸钠溶液」）——同一子句出现两种及以上试剂、或浓度描述和试剂名分处
+> 不同分句（例如「配制次氯酸钠，浓度为10%」，两个逗号分开的分句），编译器不瞎猜
+> 归属，这条规则仍然拿不到输入，仍是空转。`biosafety` 能挂到「这句话最终归属的步骤」
+> （本句新建的步骤，或它作为续句合并进的上一步）；一句独立的生物安全描述、前面
+> 没有任何步骤可挂时，同样拿不到输入。**跨句归属这种最常见的写法，两条规则目前都不认。**
+>
+> 兜底的是 `unconsumedWarnings`：现在只在解析失败或归属不了时才报（不再是全部场合），
+> 编译产物会带出显式告警，CLI 的编译与审批输出**必须**显示它。口径不变——
 > **「用户写了但安全门没看见」的内容绝不静默绿灯通过**。
 >
-> 这也是接物理设备的硬门槛：在 `concentration_limit` / `biosafety` 补齐之前，
-> 本项目不对接真实 Opentrons（BACKLOG V6）。**过度声明的安全门比没有安全门更危险。**
+> 这仍然是接物理设备的硬门槛：`concentration_limit` / `biosafety` 现在能接住的只是
+> 「浓度/生物安全等级与目标试剂或步骤同句出现」这一类最简单的写法，更常见的跨句写法
+> （先说试剂、后说浓度）依旧空转。在这个边界被继续收窄之前，本项目不对接真实 Opentrons
+> （BACKLOG V6）。**过度声明的安全门比没有安全门更危险。**
 
 ---
 
@@ -340,9 +349,13 @@ bun scripts/demo-research-thread.ts
 **文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
 AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
 
-> ⚠️ **默认只查其中四个**：`openalex` / `crossref` / `europepmc` / `semanticscholar`。
-> PubMed 与 arXiv 已实装但**不在默认集里**——要用得显式加 `--sources arxiv`（或 `pubmed`）。
-> 这意味着 `lit add <arxiv-id>` 目前会查不到。已登记为 BACKLOG **V34**，v0.5 修。
+> **默认集是六个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` / `arxiv`
+> ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用（V34，v0.5 修复）。
+> `aminer` 需自备 key、`cnki` / `wanfang` 是占位实现无公开 API，这三个默认不参与，
+> 但**排除必须带理由**：`tests/unit/literature_source_parity.test.ts` 以连接器注册表为真源，
+> 任何已实装且无需 key 的源不在默认集里就会让门禁变红。
+> 这条门禁是 V34 的教训——当时 `lit search --sources arxiv` 能用、`capabilities` 也报可用，
+> 只有默认值没跟上，而 AD-12 只核「在不在注册表」，核不了「在不在默认集」。
 **科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
 **仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
@@ -2340,27 +2353,32 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V22 | **`capabilities` 对外广播了一个无法调用的技能（自描述面撒谎）** | P10 的 D-12 门禁发现 `backend/src/proteins/analysis.ts` 只被测试引用；v0.4 方案制订时进一步核实，**比「少个入口」严重**：`capabilities --json` 把 `protein-analysis` 当**可用能力**完整广播——带描述、`triggers`（「这个蛋白长什么样」「有没有可用的结构」）、connector 清单、`validation` 文件列表，而 CLI / HTTP / MCP **三个入口全无**（实测 10 个技能里唯一一个；它的 SKILL.md 里也是唯一没有 CLI 示例的）。外部 agent 读了 triggers 会确信自己能调用它。**这不是完整性缺口，是自描述面在对外撒谎**——AD-12「能力声称必须机器可核」的直接违反，而现有门禁只查孤儿模块、没查技能可达性。另注：它列的 `validation` 第二项 `tests/integration/protein_record.test.ts` 属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。处置见 v0.4 的 P11 lane R-d：补入口或从技能目录撤下，二选一不许悬着<br>✅ **v0.4 P11 lane R-d 已消化**：`protein-analysis` 补齐三个真实入口——CLI `spark-research protein <query>`、HTTP `POST /api/proteins/analyze`、MCP 工具 `protein_analyze`（MCP 工具数 29 → 30），SKILL.md 补上此前唯一缺失的 CLI 示例。**并把判据做成门禁**：`narrative_parity.test.ts` 第 7 条断言每个技能至少有一条可达入口，登记表的每一条都去 `index.ts` 的 `switch(cmd)` case 字面量 / `MCP_TOOLS` 数组 / `capabilities` skills 列表三处对账（不靠散文正则）。阴性对照已由主会话独立复跑：拆掉 `case "protein":` → 门禁立刻红。 |
 | V23 | 湿实验 `unconsumedWarnings` 尚未在 HTTP / Web 审批面强制展示 | P10 lane D-d 交付：CLI 的编译与审批输出已强制显示，HTTP/UI 侧还没接。**接物理设备前必须补**——否则经 Web 批准的人看不到「你写了但安全门没看见」的部分<br>✅ **v0.4 P11 lane R-d 已消化**：HTTP 层原本已结构性透传（`viewJson()` 整体 spread `WetExperimentView`）只是没测试；真实缺口在前端——`WetExperiment` 类型缺 `unconsumedWarnings` 字段、审批弹窗从不渲染它。已补类型 + 显眼的告警块（`data-testid="unconsumed-warnings"`）+ HTTP 断言 + e2e ⑨b。阴性对照：强制隐藏告警块 → e2e ⑨b 红。 |
 | V24 | `RecordIntegrityError` 没有恢复路径 | P10 lane D-d 新增的 record 完整性哈希校验，检测到被篡改的记录只能拒绝信任，没有「人工确认后修复」的入口，只能用 `RecordStore` 原始接口手工处理 |
-| V25 | `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」
+| V25 | **[已完成]** `concentration_limit` / `biosafety` 的自然语言解析 | P10 D-8 明确未做：两条规则在主管线上恒空转，靠 `unconsumedWarnings` 兜底告警。**这是 V6（对接物理 Opentrons）的硬前置**，见 README 的「安全门当前的真实覆盖范围」 <br><br>✅ **v0.5 W5-1 δ 已做（部分覆盖，边界如实写进 README）**：两条规则从恒空转变成真消费。但只吃「浓度/BSL 与目标试剂或步骤**同句**出现」这一类；跨句写法（先说试剂、后说浓度，最常见）编译器**拒绝猜归属**、仍落 unconsumedWarnings。**V6 硬件门槛不因此解除。** |
 | V26 | connector 限速按 host 合池 | **2026-09-10 新登记**（来源：v0.5 connector 扩展调研）。现状：connector 层只有礼貌头（`politeness.ts`），**没有任何限速器**。pubmed 与 ncbi 已共享 NCBI eutils 的主机级预算，v0.5 计划新增的 ClinVar / GEO 也打同一主机——四个 connector 各自为政会集体被 429。限速器若做必须按 host 键控合池，不按 connector。去向：v0.5 集成 eutils 系新 connector 时同批做 |
-| V27 | **单二进制里 `import.meta.dir` 全线失效（阻塞 npx 分发）** | v0.4 W1 收口实测：`bun build --compile` 的产物里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，**任何靠它拼路径的代码在二进制里都读不到文件**。现状 **23 处、17 个文件**（`kernels/manager.ts` 找 python 脚本、`lab/wet_backend.ts` 找 `opentrons_backend.py`、`agents/*` 找 prompt `.txt`、`simulation/*` 找适配器脚本、`skills/frontmatter.ts`、`scaffold/templates.ts`、`server/app.ts` 找前端产物…）。已修两处（`index.ts` 与 `version.ts` 改静态 import，并加了版本号一致性断言）；**其余未修，后果是二进制里干湿实验 / prompt 加载 / 脚手架 / 前端托管大概率全坏**。**W1 收口实测（比初判严重）**：`bun build --compile` **不嵌入非 JS 资产**（`.sql` / `.py` / prompt `.txt`），于是二进制里凡是要读资产的命令全部 ENOENT——
+| V27 | **[已完成]** **单二进制里 `import.meta.dir` 全线失效（阻塞 npx 分发）** | v0.4 W1 收口实测：`bun build --compile` 的产物里 `import.meta.dir` 指向虚拟的 `/$bunfs/root/`，**任何靠它拼路径的代码在二进制里都读不到文件**。现状 **23 处、17 个文件**（`kernels/manager.ts` 找 python 脚本、`lab/wet_backend.ts` 找 `opentrons_backend.py`、`agents/*` 找 prompt `.txt`、`simulation/*` 找适配器脚本、`skills/frontmatter.ts`、`scaffold/templates.ts`、`server/app.ts` 找前端产物…）。已修两处（`index.ts` 与 `version.ts` 改静态 import，并加了版本号一致性断言）；**其余未修，后果是二进制里干湿实验 / prompt 加载 / 脚手架 / 前端托管大概率全坏**。**W1 收口实测（比初判严重）**：`bun build --compile` **不嵌入非 JS 资产**（`.sql` / `.py` / prompt `.txt`），于是二进制里凡是要读资产的命令全部 ENOENT——
 ```
 $ ./dist/spark-research project new x   → ENOENT: /$bunfs/root/schema.sql
 $ ./dist/spark-research doctor          → /$bunfs/root/opentrons_backend.py: No such file
 $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 ```
-也就是说**二进制能列连接器，却建不了项目**——干不了任何实事。<br>**这是 v0.4「一条 npx 命令」交付的硬阻塞**，发 v0.4.0 前必须解决，或明确降级承诺（只发 npm 包、不发单二进制）。修法方向：Bun 的 embedded files、资产改静态 import、或运行期解包到可写目录。 |
+也就是说**二进制能列连接器，却建不了项目**——干不了任何实事。<br>**这是 v0.4「一条 npx 命令」交付的硬阻塞**，发 v0.4.0 前必须解决，或明确降级承诺（只发 npm 包、不发单二进制）。修法方向：Bun 的 embedded files、资产改静态 import、或运行期解包到可写目录。 <br><br>✅ **v0.5 W5-1 ε + 收口已做**：10 处资产（3 `schema.sql` 静态 import · 4 `.py` 内嵌文本+运行期解包再 spawn · 3 prompt `.txt`）+ 3 处危险默认路径。真二进制干净目录冒烟全过（`project new` / `lit search --add` / `doctor` / `exp run --platform pyref`，pyref 误差 3.8e-9）。收口另补最后一块：`capabilities --json` 在二进制里曾报「技能 0 个」（目录枚举，静态 import 覆盖不到）→ 逐份内嵌 SKILL.md，**实测 0 → 10**。 |
 | V28 | 二进制产物没有冒烟测试 | W1-d 的测试全部跑在 `bun backend/src/index.ts` 上，**二进制是另一个运行时**，于是 V27 那类问题测不出来（版本号不一致是主会话手工跑二进制才发现的）。构建只要约 300ms，值得加一条 CI 冒烟：构建 → `--version` / `capabilities --json` / `doctor` 三条路径 → 断言版本号三处一致且不为 `0.0.0`。 |
 | V29 | npm 打包字段未完成 | W1-d 原计划做 `package.json` 的 `files` / `engines` / `prepublishOnly`，但主会话在额度中断后把它的剩余范围收窄成「只补文档」，于是这部分**既没做完也没被静默丢掉**——W1-d 如实记进了 `docs/INSTALL.md` 的 TODO。`npx spark-research` 这条路径要真跑通需要补上。 |
 | V30 | **删除论文这条路今天不可达，孤儿对账扫描也只被测试调用** | W4-b 按 E-6 交付了 `retractOrphanRecords()`（把指向已删论文的 record 标 `retracted`），但收口核查发现两件事：① `LibraryStore.remove()` **零生产调用方**——用户today根本删不掉论文，所以「删论文留孤儿」这个场景不可达；② `retractOrphanRecords()` 也只被测试引用。叙事门禁看不见它，因为孤儿检测是**文件粒度**而 `reading.ts` 整体有生产调用方（W3-c 标过的表达力上限）。**处置：将来加删除入口时必须同时接上这个对账扫描**；或把它做成一条维护命令让它可达。发布前不加新入口——那属于没有 lane 测试纪律兜底的仓促改动。 |
 | V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 |
 | V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 |
-| V33 | **二进制里 `workspaceRoot` 默认值解析到文件系统根 `/workspaces`** | v0.5 闸门 F-c 调查时发现，主会话已核实：`agents/orchestrator.ts:223` 的 `join(import.meta.dir, "../../../workspaces")` 在编译产物里等于 `join("/$bunfs/root", ...)` → **`/workspaces`**，紧接着 `mkdirSync(workspaceRoot, { recursive: true })`。**这不是 ENOENT，是往文件系统根目录写**——macOS 被权限挡住，Linux 上以 root 跑会真建。属 V27 家族但性质更重（其余是读不到文件，这条是写错地方）。修 V27 时必须一并处理。 |
-| V34 | **`DEFAULT_SEARCH_SOURCES` 没跟上 W3-d 的 arxiv/pubmed 接通** | **零上下文外部验收（v0.5 闸门 F-1）实测发现，主会话已核实**：`literature/models.ts:16-21` 的默认源仍是 P2 时代的 `[openalex, crossref, europepmc, semanticscholar]`，**不含 arxiv / pubmed**。于是 `lit search --sources arxiv` 能用、`capabilities` 也报 arxiv 可用，但 `lit add <arxiv-id>` 走默认值查四个不含 arxiv 的源 → 报「未找到」。**能力做好了、默认值没跟着改。** AD-12 门禁抓不到这一类——它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。修默认值的同时应考虑给门禁加一条：**已实装的源必须在默认集里，或有显式排除理由**。 |
-| V35 | **长任务在 CLI 层完全不可见** | 外部验收的**头号卡点**：`lit read --all` 8 分钟零输出，无进度、无 job id、断开后无法查状态——验收者只能杀掉进程再用 `lit list` 反推它其实在工作。**而 MCP 层有 `task_status` 机制、W4-c 还做了长任务落盘与 MCP 进度回传（V17）**——CLI 是唯一没接的入口。这是 CLI/MCP 的能力不对等，不是缺功能。 |
-| V36 | 失败消息不给下一步 | 外部验收：`idea new` 的契约校验失败与 `lit add` 的未找到，**都只说哪里错了、不说该试什么**，验收者靠猜绕过去。对照：`lab approve` 的 V19 拒绝消息就给了完整的下一步指引，是好样板。 |
-| V37 | `auth` 与 `config list` / `doctor` 对同一把 key 报不同状态 | 外部验收：`sr auth` 把 `OPENROUTER_API_KEY` 报成未配置，而 `config list` / `doctor` 正确显示已配置。**三处读同一份配置却给出矛盾答案**——与 P11 收口修过的 `PROVIDER_API_KEY_ENV` 手工副本是同一类问题（真源没统一）。 |
-| V38 | BibTeX 导出把「Last F」形态的作者名解析错 | 外部验收发现，导致引用 key 生成错误。 |
-| V39 | `lit review --help` 直接执行而不是显示帮助 | 外部验收发现。帮助不可用是上手性问题。 |
+| V33 | **[已完成]** **二进制里 `workspaceRoot` 默认值解析到文件系统根 `/workspaces`** | v0.5 闸门 F-c 调查时发现，主会话已核实：`agents/orchestrator.ts:223` 的 `join(import.meta.dir, "../../../workspaces")` 在编译产物里等于 `join("/$bunfs/root", ...)` → **`/workspaces`**，紧接着 `mkdirSync(workspaceRoot, { recursive: true })`。**这不是 ENOENT，是往文件系统根目录写**——macOS 被权限挡住，Linux 上以 root 跑会真建。属 V27 家族但性质更重（其余是读不到文件，这条是写错地方）。修 V27 时必须一并处理。 <br><br>✅ **v0.5 W5-1 ε 已做**：`workspaceRoot` 改挂 `join(dataDir(), "workspaces")`；另两处危险路径在编译产物里改成显式拒绝。实机验证：跑 `server` 后 `<dataDir>/workspaces` 建出来了，`/workspaces` 不存在。 |
+| V34 | **[已完成]** **`DEFAULT_SEARCH_SOURCES` 没跟上 W3-d 的 arxiv/pubmed 接通** | **零上下文外部验收（v0.5 闸门 F-1）实测发现，主会话已核实**：`literature/models.ts:16-21` 的默认源仍是 P2 时代的 `[openalex, crossref, europepmc, semanticscholar]`，**不含 arxiv / pubmed**。于是 `lit search --sources arxiv` 能用、`capabilities` 也报 arxiv 可用，但 `lit add <arxiv-id>` 走默认值查四个不含 arxiv 的源 → 报「未找到」。**能力做好了、默认值没跟着改。** AD-12 门禁抓不到这一类——它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。修默认值的同时应考虑给门禁加一条：**已实装的源必须在默认集里，或有显式排除理由**。 <br><br>✅ **v0.5 W5-1 ζ 已做**：默认集补上 arxiv/pubmed（现 6 个）。**重点是另一半**——新增 `tests/unit/literature_source_parity.test.ts`，**以连接器注册表为真源**（拿 `LITERATURE_SOURCES` 手写副本当真源等于自证自明），合法排除只认 `apiKeyRequired` 或 `placeholder`。门禁当场抓出两个没人想到的源（cnki/wanfang 在注册表里但不在联合类型里）。实机核验：`lit add 1706.03762` 不带 `--sources` 从「未找到」变成功入库。 |
+| V35 | **[已完成]** **长任务在 CLI 层完全不可见** | 外部验收的**头号卡点**：`lit read --all` 8 分钟零输出，无进度、无 job id、断开后无法查状态——验收者只能杀掉进程再用 `lit list` 反推它其实在工作。**而 MCP 层有 `task_status` 机制、W4-c 还做了长任务落盘与 MCP 进度回传（V17）**——CLI 是唯一没接的入口。这是 CLI/MCP 的能力不对等，不是缺功能。 <br><br>✅ **v0.5 W5-1 ζ 已做**：接线不新建——`server/tasks.ts` 的能力全都有，CLI 是唯一没接的入口。新增 `backend/src/cli/progress.ts`；`lit read --all` / `lit review` 走任务句柄，新增 `lit tasks [<id>] [--json]` 读落盘快照，断开/重启后查得回状态。两个刻意决定：**默认不设超时**（为可见性引入新失败路径方向是反的）、`--json` 静音进度。 |
+| V36 | **[已完成]** 失败消息不给下一步 | 外部验收：`idea new` 的契约校验失败与 `lit add` 的未找到，**都只说哪里错了、不说该试什么**，验收者靠猜绕过去。对照：`lab approve` 的 V19 拒绝消息就给了完整的下一步指引，是好样板。 <br><br>✅ **v0.5 W5-1 ζ + η 已做**：照 V19 质量写。ζ 侧的指引由本次实际发生的事推出来（标识符形态 → 该由哪个源解析 → 那个源在不在本次检索集），并把 `skipped` 再分「缺凭据」与「不认这个 id 形态」——两者处理动作不同，合成一句等于把判断推回用户。η 侧给 `idea new` 的契约校验失败补了下一步。 |
+| V37 | **[已完成]** `auth` 与 `config list` / `doctor` 对同一把 key 报不同状态 | 外部验收：`sr auth` 把 `OPENROUTER_API_KEY` 报成未配置，而 `config list` / `doctor` 正确显示已配置。**三处读同一份配置却给出矛盾答案**——与 P11 收口修过的 `PROVIDER_API_KEY_ENV` 手工副本是同一类问题（真源没统一）。 <br><br>✅ **v0.5 W5-1 η + 收口已做**。真因比报告更具体：`index.ts:103` 有一份**手写的 `KEY_NAMES` 副本只列 2 个 provider**（实装 6 个），且 `auth()` 显示时**只读 config 文件、不看环境变量**。已改为从 `PROVIDER_API_KEY_ENV` 派生并标明来源，加了正则断言禁止手写表复发。**收口另修一处更深的**：`defaultProvider` 是个**只写不读**的设置（见 V40）。 |
+| V38 | **[已完成]** BibTeX 导出把「Last F」形态的作者名解析错 | 外部验收发现，导致引用 key 生成错误。 <br><br>✅ **v0.5 W5-1 ζ 已做**：判据「最后一段只由 1~3 个大写字母组成才判为名缩写」——只认大写是关键，`Jan van der Berg` / `Xu Li` 不会被误伤。**顺带修好一处更隐蔽的**：`dedupe.ts` 的跨源姓氏比对也错位（openalex 侧 `jumper` vs europepmc 侧 `j`），因为它走同一个 `firstAuthorSurname`。 |
+| V39 | **[已完成]** `lit review --help` 直接执行而不是显示帮助 | 外部验收发现。帮助不可用是上手性问题。 <br><br>✅ **v0.5 W5-1 ζ 已做**：9 条子命令级帮助，在 switch **之前**统一拦截（放进各 case 会漏掉新加的子命令）。ζ 写这条门时自己踩了一次同样的形状：第一版按 `flags.h` 判，但 `-h` 是单横线被 `parseFlags` 当位置参数收走，`lit export -h` 照样执行。 |
+| V40 | **`defaultProvider` 是个只写不读的设置** | **v0.5 W5-1 收口发现并当场修掉**（登记在此是为了记住形状，不是待办）。`auth()` 让用户挑默认 provider 并落盘、`config set` 能设、`auth` 还回显它——**但没有任何代码用它来选 provider**，`getApiKey()` 只按声明顺序取第一个有 key 的。用户明明选了 kimi，只要 `OPENROUTER_API_KEY` 也在就走 openrouter，不留痕迹。**这是本项目第 7 次「建好了但没有生产调用方」，但前六次是孤儿模块、门禁抓得到，这次藏在配置项里**——门禁核「模块有没有调用方」，核不了「配置项有没有读者」。值得将来补一条门禁：可写入的配置项必须有读者。 |
+| V41 | **MCP 工具描述的能力声称没有任何门禁** | v0.5 W5-1 γ 的第三条阴性对照发现：把 `chem_depict` 的 MCP 描述改成谎称支持 3D docking，**没有任何测试变红**。MCP 工具描述是**给外部 agent 看的能力声明**，它说谎的后果和 `capabilities --json` 说谎是一样的，但 AD-12 的机器可核只覆盖了后者。γ 如实记录而没有偷偷补上（不在其足迹内）。 |
+| V42 | **local 算力目标的 `network` 是声明不是强制** | v0.5 W5-1 α 如实记下：`adapters/local.ts` 的 `capabilities().network` 声明 `"none"` 时，本地进程事实上仍能联网（没有 sandbox / netns）。**名实不符**。α 选择记下而不是假装隔离。真远端 target（Modal）不受此影响。 |
+| V43 | **二进制里前端目录与脚手架仍不可用** | V27 的剩余项，ε 如实列出：① `server/app.ts:27` 前端目录在产物里解析到 `/frontend/workspace/dist`（只读且有 `existsSync` 门控，不会崩，但 `server` 起来没有 UI）；② `new skill|connector|platform` 与 `ext verify --kind platform` 在产物里已改成**显式拒绝**（而不是静默做错）——**`docs/INSTALL.md` 应明说这两条只在源码 checkout 可用**，ε 未改（不在足迹内）。 |
+| V44 | `semanticscholar` 标 `apiKeyRequired` 却留在默认集里（已裁定保留） | ζ 提出的口径问题，**主会话裁定：保留**。理由是它与 aminer 的差别有实质——`literature.ts:748` 记着「P2 实测：匿名请求持续 429」，即无 key 时它走 **`skipped`（带配置指引、可见）**，不是静默空结果；把它移出默认集，有 key 的用户反而少一个源。登记在此是**为了让下一个人知道这个不对称是有意的**，不是漏改。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -3921,6 +3939,24 @@ design ─► compile ─► safety_check ─► awaiting_approval ─► wet_ru
 只有排完 deck 累加起来才知道会溢。没有编译产物时它退回单次核对，并在 detail 里
 明说「单孔累计体积待编译后复核」，**不静默放行**。
 
+### 覆盖范围（V25 更新，如实写）
+
+`volume_capacity` 全程可信；`chemical_compatibility` 认识一个有限的中英文/分子式试剂词表
+（词表外的试剂完全看不见）。
+
+`concentration_limit` / `biosafety` 从 V25 起**不再恒空转，但覆盖是部分的**：
+- `concentration_limit` 只在**同一子句里恰好点名一种试剂**时才吃得到浓度（例如
+  「配制10%次氯酸钠溶液」）。同一子句出现两种及以上试剂、或浓度描述和试剂名分处
+  不同分句（例如「配制次氯酸钠，浓度为10%」），编译器不瞎猜归属，这条规则仍然
+  拿不到输入。
+- `biosafety` 能挂到「这句话最终归属的步骤」（本句新建的步骤，或它作为续句合并进的
+  上一步）。一句独立的生物安全描述、前面没有任何步骤可挂时，同样拿不到输入。
+
+**跨句归属（先说试剂、后单独一句说浓度/生物安全等级）这种最常见的写法，两条规则
+目前都不认**——那种情况下 `unconsumedWarnings` 仍然会报，`lab status` / HTTP 响应体
+都能看到，不会静默放行。写协议时想让这两条规则真的生效，把浓度/生物安全等级和
+对应的试剂/步骤写在**同一个分句**里。
+
 ## 编译目标
 
 Opentrons **Flex** / Python Protocol API v2（`apiLevel 2.21`）。
@@ -4115,7 +4151,7 @@ conclusion               --derives_from--> observation / experiment
 
 ## lit_search（长任务）
 
-【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。并发查 OpenAlex / CrossRef / Europe PMC / Semantic Scholar（配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+【何时调】需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。6 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 【参数示例】{"query": "allosteric site prediction molecular dynamics GPCR", "limit": 20, "add": true, "tags": ["background"]}
 【何时不该用】① 已经拿到确定的 DOI/arXiv id 只想入库 → 用 lit_add。② 不要把用户的一整句话直接当 query——先拆成 2-4 个核心概念，每个概念查一次。③ 不要 add: true 一次灌几百条，入库是显式动作。
 【典型链路】lit_search(add=false) 先看候选 → 挑选后 lit_search(add=true) 或 lit_add → lit_read_cards → lit_review_draft。
@@ -4138,7 +4174,7 @@ conclusion               --derives_from--> observation / experiment
       "items": {
         "type": "string"
       },
-      "description": "限定文献源；不给则用默认组合",
+      "description": "限定文献源；不给则用全部默认源",
       "examples": [
         [
           "openalex",
@@ -5055,6 +5091,62 @@ conclusion               --derives_from--> observation / experiment
       ]
     }
   },
+  "additionalProperties": false
+}
+```
+
+## chem_depict
+
+【何时调】要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
+【参数示例】{"smiles": "CCO", "name": "ethanol"} —— name 可省略（省略时按 canonical SMILES 的短 hash 生成文件名，重复 depict 同一个分子会稳定落到同一个 artifact 并递增版本号）。
+【何时不该用】① 只是想核对 SMILES 语法是否合法而不需要图——直接本地跑 RDKit 更快。② 需要 3D 构象/对接姿态——这个工具只画 2D 结构图，不算 3D 坐标，也不做对接。
+【典型链路】lit_search / idea_coexplore 聊到某个具体分子 → chem_depict 生成结构图存进证据图 → 结构图的 artifactId 可以在报告里引用。
+【常见错误】SMILES 语法不合法（括号不配对、化合价超限等）会返回失败而不是一张空图——错误信息里带了具体该查哪里（元素符号/化合价/环闭合编号/括号），不是「解析失败」四个字了事。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "smiles": {
+      "type": "string",
+      "description": "要绘制的分子 SMILES 表达式",
+      "examples": [
+        "CCO"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "description": "产物文件名（不含扩展名）。省略则按 canonical SMILES 的短 hash 自动生成",
+      "examples": [
+        "ethanol"
+      ]
+    },
+    "width": {
+      "type": "number",
+      "description": "SVG 宽度（像素），默认 400",
+      "examples": [
+        400
+      ]
+    },
+    "height": {
+      "type": "number",
+      "description": "SVG 高度（像素），默认 300",
+      "examples": [
+        300
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "smiles"
+  ],
   "additionalProperties": false
 }
 ```

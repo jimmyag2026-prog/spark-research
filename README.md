@@ -24,19 +24,26 @@
 3. **干湿闭环里物理世界的操作永远不自动化审批。** 湿实验的安全门是必要非充分条件，
    通过之后停在 `awaiting_approval` 等一个**具名的人**按批准，批的是某一版协议的 hash（AD-6）。
 
-> ⚠️ **安全门当前的真实覆盖范围**（v0.3.0 起如实写在这里，不再只说「四条规则」）：
-> 四条规则里**只有 `volume_capacity` 在自然语言主管线上全程可信**。
-> `chemical_compatibility` 的试剂词表已扩到中英文与常见分子式，但仍然是有限词表；
-> **`concentration_limit` 与 `biosafety` 在自然语言主管线上仍然空转**——协议编译器
-> 目前产不出它们所需的 `concentration` / `biosafetyLevel` 字段（规则本身有对抗测试，
-> 但真实入口喂不进那种输入）。
+> ⚠️ **安全门当前的真实覆盖范围**（V25 更新，如实写在这里，不再只说「四条规则」）：
+> `volume_capacity` 在自然语言主管线上全程可信；`chemical_compatibility` 的试剂词表
+> 已扩到中英文与常见分子式，但仍然是有限词表。
 >
-> 兜底的是 `unconsumedWarnings`：协议里出现了量纲/试剂/条件、却没有被任何规则消费的，
-> 编译产物会带出显式告警，CLI 的编译与审批输出**必须**显示它。口径是——
+> **`concentration_limit` 与 `biosafety` 从 V25 起不再恒空转，但覆盖是部分的、边界明确**：
+> `concentration_limit` 只在**同一子句里恰好点名一种试剂**时才吃得到浓度（例如
+> 「配制10%次氯酸钠溶液」）——同一子句出现两种及以上试剂、或浓度描述和试剂名分处
+> 不同分句（例如「配制次氯酸钠，浓度为10%」，两个逗号分开的分句），编译器不瞎猜
+> 归属，这条规则仍然拿不到输入，仍是空转。`biosafety` 能挂到「这句话最终归属的步骤」
+> （本句新建的步骤，或它作为续句合并进的上一步）；一句独立的生物安全描述、前面
+> 没有任何步骤可挂时，同样拿不到输入。**跨句归属这种最常见的写法，两条规则目前都不认。**
+>
+> 兜底的是 `unconsumedWarnings`：现在只在解析失败或归属不了时才报（不再是全部场合），
+> 编译产物会带出显式告警，CLI 的编译与审批输出**必须**显示它。口径不变——
 > **「用户写了但安全门没看见」的内容绝不静默绿灯通过**。
 >
-> 这也是接物理设备的硬门槛：在 `concentration_limit` / `biosafety` 补齐之前，
-> 本项目不对接真实 Opentrons（BACKLOG V6）。**过度声明的安全门比没有安全门更危险。**
+> 这仍然是接物理设备的硬门槛：`concentration_limit` / `biosafety` 现在能接住的只是
+> 「浓度/生物安全等级与目标试剂或步骤同句出现」这一类最简单的写法，更常见的跨句写法
+> （先说试剂、后说浓度）依旧空转。在这个边界被继续收窄之前，本项目不对接真实 Opentrons
+> （BACKLOG V6）。**过度声明的安全门比没有安全门更危险。**
 
 ---
 
@@ -155,9 +162,13 @@ bun scripts/demo-research-thread.ts
 **文献源（9）**：OpenAlex · CrossRef · EuropePMC · Semantic Scholar · PubMed · arXiv ·
 AMiner（需自备 key）· CNKI / 万方（占位，无公开 API）
 
-> ⚠️ **默认只查其中四个**：`openalex` / `crossref` / `europepmc` / `semanticscholar`。
-> PubMed 与 arXiv 已实装但**不在默认集里**——要用得显式加 `--sources arxiv`（或 `pubmed`）。
-> 这意味着 `lit add <arxiv-id>` 目前会查不到。已登记为 BACKLOG **V34**，v0.5 修。
+> **默认集是六个**：`openalex` / `crossref` / `europepmc` / `semanticscholar` / `pubmed` / `arxiv`
+> ——已实装的源默认全部参与检索，所以 `lit add <arxiv-id>` 直接可用（V34，v0.5 修复）。
+> `aminer` 需自备 key、`cnki` / `wanfang` 是占位实现无公开 API，这三个默认不参与，
+> 但**排除必须带理由**：`tests/unit/literature_source_parity.test.ts` 以连接器注册表为真源，
+> 任何已实装且无需 key 的源不在默认集里就会让门禁变红。
+> 这条门禁是 V34 的教训——当时 `lit search --sources arxiv` 能用、`capabilities` 也报可用，
+> 只有默认值没跟上，而 AD-12 只核「在不在注册表」，核不了「在不在默认集」。
 **科学 connector（8）**：UniProt · PDB · AlphaFold · Ensembl · NCBI · CNCB · ChEMBL · PubChem
 **仿真平台（2）**：OpenMM（`deterministic=false`）· pyref 纯 Python 参考实现（`deterministic=true`）
 **湿实验后端（2）**：`opentrons_simulate`（默认，官方模拟器）· `mock_devices`（单测用）
