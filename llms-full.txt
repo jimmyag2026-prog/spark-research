@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.5.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.6.0-alpha.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2311,7 +2311,8 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
+> 最后更新：2026-09-11（v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、新增 V61–V63；
+> 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
 > v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
 
 ## 去向总表（一眼看清每条在哪）
@@ -2392,12 +2393,12 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差 |
 | V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
 | V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘 |
-| V9 | AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200） |
+| V9 | **[已完成]** AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200）<br>✅ **v0.6 G-4 已验**：真 key 实测 `getPaper` HTTP OK、详情字段齐全（abstract/authors/venue/year）。key 续期（2026-10-07 到期）仍是独立运维项，用户已明示本版不做。 |
 | V12 | LLM 结构化输出（`response_format` / JSON mode） | P8-G5 实测：kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON（`finish_reason` 不是 `length`，不是截断）。已加「解析失败重试一次」但治标不治本。根治要么让 LLMRouter 支持 `response_format: json_object`，要么给判定器配一个支持结构化输出的模型。现状是安全的（降级为可见的 `citation_judge_unavailable` soft finding，不假装通过），代价是这部分引用本轮没被检查 |
 | V13 | 判定 prompt 对「凭空归因」的口径 | P8-G5 实测：难档唯一稳定的漏报模式是「草稿给出卡片里没有的归因解释」。prompt 写的是「声称了卡片里明确没有的结果 = conflict」，模型读成「卡片没覆盖 → unclear」。两种读法都讲得通，是 prompt 的歧义而非模型的错。改口径前要先想清楚：收紧会不会把合法的概括也扫进来（那正是 P3 刻意避免的误报） |
 
 | V15 | 移除 `MCPConnector` 等 deprecated 别名 | P9 已改名 `HttpConnector`（连同 `HttpConnectorConfig` / `HttpTool`）并保留三个别名兼容外部引用。v0.3 可删——但要先确认没有外部集成在用旧名 |
-| V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估 |
+| V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估<br>⚠️ **v0.6 G-1 做了用户可见的一半**：`defaultModel` 配置现在三个入口（CLI/HTTP/agent）都真的读（CLI 此前整条不读，V40 形状第 8 例），主要 LLM 命令加 `--model` 覆盖。分「子代理类型」的模型配置项 v0.4 已有（subAgentModel_*），与 V7 的联合评估仍悬。 |
 | V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等 |
 | V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎 |
 | V20 | `backend/src/index.ts` 的 `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR` | P10 lane D-c 发现：`config/index.ts` 的 `dataDir()` 认这个环境变量，`index.ts` 里的 `CONFIG_DIR` 是硬编码 `~/.spark-research`。默认设置下无害，但意味着测试注入的临时工作区对 `auth` 命令无效，两条路径对同一份 config.json 有两种解析<br>✅ **v0.4 P11 lane R-d 已消化**：`index.ts` 的 `CONFIG_DIR` 改为调用 `config/index.ts` 的 `dataDir()`，两条路径对同一份 config.json 归一解析；顺带清掉已死的 `homedir` import 与 `auth` 成功提示里的硬编码路径。 |
@@ -2414,8 +2415,8 @@ $ ./dist/spark-research doctor          → /$bunfs/root/opentrons_backend.py: N
 $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 ```
 也就是说**二进制能列连接器，却建不了项目**——干不了任何实事。<br>**这是 v0.4「一条 npx 命令」交付的硬阻塞**，发 v0.4.0 前必须解决，或明确降级承诺（只发 npm 包、不发单二进制）。修法方向：Bun 的 embedded files、资产改静态 import、或运行期解包到可写目录。 <br><br>✅ **v0.5 W5-1 ε + 收口已做**：10 处资产（3 `schema.sql` 静态 import · 4 `.py` 内嵌文本+运行期解包再 spawn · 3 prompt `.txt`）+ 3 处危险默认路径。真二进制干净目录冒烟全过（`project new` / `lit search --add` / `doctor` / `exp run --platform pyref`，pyref 误差 3.8e-9）。收口另补最后一块：`capabilities --json` 在二进制里曾报「技能 0 个」（目录枚举，静态 import 覆盖不到）→ 逐份内嵌 SKILL.md，**实测 0 → 10**。 |
-| V28 | 二进制产物没有冒烟测试 | W1-d 的测试全部跑在 `bun backend/src/index.ts` 上，**二进制是另一个运行时**，于是 V27 那类问题测不出来（版本号不一致是主会话手工跑二进制才发现的）。构建只要约 300ms，值得加一条 CI 冒烟：构建 → `--version` / `capabilities --json` / `doctor` 三条路径 → 断言版本号三处一致且不为 `0.0.0`。 |
-| V29 | npm 打包字段未完成 | W1-d 原计划做 `package.json` 的 `files` / `engines` / `prepublishOnly`，但主会话在额度中断后把它的剩余范围收窄成「只补文档」，于是这部分**既没做完也没被静默丢掉**——W1-d 如实记进了 `docs/INSTALL.md` 的 TODO。`npx spark-research` 这条路径要真跑通需要补上。 |
+| V28 | **[已完成]** 二进制产物没有冒烟测试 | W1-d 的测试全部跑在 `bun backend/src/index.ts` 上，**二进制是另一个运行时**，于是 V27 那类问题测不出来（版本号不一致是主会话手工跑二进制才发现的）。构建只要约 300ms，值得加一条 CI 冒烟：构建 → `--version` / `capabilities --json` / `doctor` 三条路径 → 断言版本号三处一致且不为 `0.0.0`。<br>✅ **v0.6 G-2 已做**：`scripts/smoke-binary.sh`（版本三处一致 + capabilities 技能数 + 干净目录 server 起来首页 200 且 bundle 可达）+ 首个 GitHub Actions CI（单测 + 冒烟）。**上线首日即抓到一个真 bug**（V59），证明这道门不是摆设。 |
+| V29 | **[已完成]** npm 打包字段未完成 | W1-d 原计划做 `package.json` 的 `files` / `engines` / `prepublishOnly`，但主会话在额度中断后把它的剩余范围收窄成「只补文档」，于是这部分**既没做完也没被静默丢掉**——W1-d 如实记进了 `docs/INSTALL.md` 的 TODO。`npx spark-research` 这条路径要真跑通需要补上。<br>✅ **v0.6 G-2 已做**：files/engines/prepublishOnly 齐；dist 随包（开箱有 UI）。实际发 npm 由维护者决定。 |
 | V30 | **删除论文这条路今天不可达，孤儿对账扫描也只被测试调用** | W4-b 按 E-6 交付了 `retractOrphanRecords()`（把指向已删论文的 record 标 `retracted`），但收口核查发现两件事：① `LibraryStore.remove()` **零生产调用方**——用户today根本删不掉论文，所以「删论文留孤儿」这个场景不可达；② `retractOrphanRecords()` 也只被测试引用。叙事门禁看不见它，因为孤儿检测是**文件粒度**而 `reading.ts` 整体有生产调用方（W3-c 标过的表达力上限）。**处置：将来加删除入口时必须同时接上这个对账扫描**；或把它做成一条维护命令让它可达。发布前不加新入口——那属于没有 lane 测试纪律兜底的仓促改动。 |
 | V31 | 外部 MCP 工具的执行记录未进证据图 | W4-d 让每次外部工具调用都落一条记录（成功/失败/超时/未知工具四个分支都落，阴性对照钉死），但记录写在 `extensions/<name>/.mcp_calls.jsonl`，**没有进项目的证据图**（`project/**` 不在那条 lane 的所有权内）。所以「相对 OpenScience 的差异化点——外部工具调用天然进 provenance」**只兑现了一半**：审计记录有了，证据图还没接。接上之前不要在对外材料里宣称完整兑现。 <br><br>⚠️ **v0.5 W5-2 δ 做了机制，但没有生产接线**（δ 主动交代）：`mcp_client.ts` 的 `recordSink` 可选字段落 `observation`（`kind:"external_tool_call"`, `evidence:"sourced"`），四个分支（成功/失败/超时/未知工具）都落；`contract.ts` 把它排除出证据图（**AD-10 的硬要求**——外部调用是审计不是进展，算进证据会让 `noProgress` 停止条件失效，P12 的 `agent_run` 事故就是这个形状，δ 为它建了具名回归用例）。**但生产里没有任何调用方传 `recordSink`**。主会话追查发现比这更彻底：`connectExternalMcp()` **整条生产路径零调用方**，只有 `ext verify` 在用——「agent 运行时连接外部 MCP 扩展」这条流程**在生产里根本不存在**。见 V45。 <br><br>✅ **v0.5 W5-3 γ 已关闭**（一条不对称要交代：留痕只覆盖「调用发生了」；「连接失败了」没有工具调用可留痕，只进执行日志不进证据图）。 |
 | V32 | ToolBus 尚未换成 external tool runner | W4-d 提供了 `createExternalToolRunner()`（返回可直接赋给 `AgentToolBus.options.runner` 的实例），收口未接——接上后子代理才能真的调用外部 MCP 工具并自动享受同一套授权/预算/审计。与 V31 是同一件事的两半。 <br><br>⚠️ **同 V31，机制完成、生产未接线**：`orchestrator.ts` 的 `OrchestratorDeps.externalTools` 注入位已开，注入了就走 `createExternalToolRunner()`。但 `index.ts:339,388` 与 `server/context.ts:124` 三个构造点都没有传它。见 V45。 <br><br>✅ **v0.5 W5-3 γ + 收口已关闭**。γ 接通执行链路后**自己戳破**：`AgentToolBus.specs()` 是 `MCP_TOOLS.filter(...)`，`mcp:` 前缀名永远进不了模型可见的 tools 列表——**真实模型不会自己想到调一个它从没被告知存在的工具**。收口补上 `externalSpecs` 传递链（`ExternalToolRegistry.specs()` 从 W4-d 起带着「供收口拼进」的注释**等了两个波次**）。外部工具同样过 grants 白名单；不给 = 与接线前逐字节同行为。 |
@@ -2429,7 +2430,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V40 | **`defaultProvider` 是个只写不读的设置** | **v0.5 W5-1 收口发现并当场修掉**（登记在此是为了记住形状，不是待办）。`auth()` 让用户挑默认 provider 并落盘、`config set` 能设、`auth` 还回显它——**但没有任何代码用它来选 provider**，`getApiKey()` 只按声明顺序取第一个有 key 的。用户明明选了 kimi，只要 `OPENROUTER_API_KEY` 也在就走 openrouter，不留痕迹。**这是本项目第 7 次「建好了但没有生产调用方」，但前六次是孤儿模块、门禁抓得到，这次藏在配置项里**——门禁核「模块有没有调用方」，核不了「配置项有没有读者」。值得将来补一条门禁：可写入的配置项必须有读者。 |
 | V41 | **MCP 工具描述的能力声称没有任何门禁** | v0.5 W5-1 γ 的第三条阴性对照发现：把 `chem_depict` 的 MCP 描述改成谎称支持 3D docking，**没有任何测试变红**。MCP 工具描述是**给外部 agent 看的能力声明**，它说谎的后果和 `capabilities --json` 说谎是一样的，但 AD-12 的机器可核只覆盖了后者。γ 如实记录而没有偷偷补上（不在其足迹内）。 |
 | V42 | **local 算力目标的 `network` 是声明不是强制** | v0.5 W5-1 α 如实记下：`adapters/local.ts` 的 `capabilities().network` 声明 `"none"` 时，本地进程事实上仍能联网（没有 sandbox / netns）。**名实不符**。α 选择记下而不是假装隔离。真远端 target（Modal）不受此影响。 |
-| V43 | **二进制里前端目录与脚手架仍不可用** | V27 的剩余项，ε 如实列出：① `server/app.ts:27` 前端目录在产物里解析到 `/frontend/workspace/dist`（只读且有 `existsSync` 门控，不会崩，但 `server` 起来没有 UI）；② `new skill|connector|platform` 与 `ext verify --kind platform` 在产物里已改成**显式拒绝**（而不是静默做错）——**`docs/INSTALL.md` 应明说这两条只在源码 checkout 可用**，ε 未改（不在足迹内）。 |
+| V43 | **二进制里前端目录与脚手架仍不可用** | V27 的剩余项，ε 如实列出：① `server/app.ts:27` 前端目录在产物里解析到 `/frontend/workspace/dist`（只读且有 `existsSync` 门控，不会崩，但 `server` 起来没有 UI）；② `new skill|connector|platform` 与 `ext verify --kind platform` 在产物里已改成**显式拒绝**（而不是静默做错）——**`docs/INSTALL.md` 应明说这两条只在源码 checkout 可用**，ε 未改（不在足迹内）。<br>✅ **v0.6 G-2 已关①**：前端 dist 经构建期 codegen 内嵌、运行期 materializeAssetTree 解包托管，二进制 server 打开即工作台（冒烟③钉死）。②脚手架维持显式拒绝并写进 INSTALL.md §3——**这是有意的终态**，脚手架要写仓库源码树，二进制里没有它的合法语义 |
 | V44 | `semanticscholar` 标 `apiKeyRequired` 却留在默认集里（已裁定保留） | ζ 提出的口径问题，**主会话裁定：保留**。理由是它与 aminer 的差别有实质——`literature.ts:748` 记着「P2 实测：匿名请求持续 429」，即无 key 时它走 **`skipped`（带配置指引、可见）**，不是静默空结果；把它移出默认集，有 key 的用户反而少一个源。登记在此是**为了让下一个人知道这个不对称是有意的**，不是漏改。 |
 | V45 | **「agent 运行时连接外部 MCP 扩展」这条流程在生产里不存在**（V31/V32 的真正缺口） | **v0.5 W5-2 收口追查发现，比 δ 报告的更彻底**：`connectExternalMcp()` 与 `discoverExternalMcpTools()` 的调用方只有 `ext verify` / `ext` CLI，**agent 运行路径上一个都没有**。所以 V31/V32 补的两个可选参数（`recordSink` / `externalTools`）没有生产调用方，不是「忘了传」，而是**没有那条流程可传**。<br>要建的是完整生命周期：发现已装的 `mcp_client` 扩展 → agent 开跑时连接（**子进程**）→ 注册进 `ExternalToolRegistry` → 绑定项目的 `recordSink` → 结束时收掉 → **坏扩展不许拖垮整轮**。接线点：`extensions/loader.ts` · `daemon/daemon.ts` · `server/context.ts:124` · `index.ts:339,388`。<br>**主会话判断：这不是收口活，是一条 lane**——在收口里手搓子进程生命周期正是工程纪律第 13 条警告的那类跨层改动。**排进 W5-3**。在它做完之前，对外**不许**宣称「外部工具调用天然进 provenance」。 <br><br>✅ **v0.5 W5-3 γ 已做**：六段生命周期（发现 → 连接 → 注册 → 绑定 recordSink → finally 收尾 → 逐扩展失败隔离），实现放 `loader.ts` 避免 `loader ⇄ mcp_client` 双向环（W4-d 被 TDZ 咬过一次）。惰性三层：没装 mcp_client 扩展的用户全部代价 = 敲 `chat` 时多一次 readdir。**追查中发现第二个「没人走的流程」**：`runResearchLoop()` 自己也零生产调用方，两条都接了。 |
 | V46 | **Modal 凭据字段名曾在两条 lane 间对不上**（已修，登记形状） | v0.5 W5-2 收口实测发现：β 照设计文档 §1.1.7 在配置指引里写 `token_id`/`token_secret`，α 照 Modal SDK 的 `ModalClientParams`（核过 `.d.ts`）读 `tokenId`/`tokenSecret`。**后果是用户照提示填完，adapter 永远报「未配置」，还会去反复检查自己的 token。**已改成从 adapter 的 `MODAL_REQUIRED_CREDENTIAL_KEYS` 派生并加门禁。<br>**登记是为了记住形状**：这是 V34（默认源）/ V37（auth 口径）之后**第三次**「同一件事两份手写副本」，而且这次是**两条并行 lane 各写一份**——单条 lane 的门禁看不见对方。并行开发要额外防这一类。 |
@@ -2441,20 +2442,23 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | S12 | 若干小的不一致 | `delivery` 状态与 `llms.txt` 描述不符（说只在 pending 时 collect，实际 none 也能且被提示这么做）· `rev` 编号跳变无解释 · local 任务收割完 `resource=active` 悬挂且从不提示 `release` · `chem depict` 人类输出不给文件路径（`--json` 里有 `path`）· `--gpu` 在 local 上的报错「（可选：无）」措辞怪且不给下一步。归 W5-3 δ。 <br><br>⚠️ **v0.5 W5-3 收口做了 4/5**：文档说谎（`mcp/tools.ts` 说 collect 只在 delivery=pending，实际 none/pending/failed 三种）· collect 不提示下一步导致 `resource=active` 悬挂 · `chem depict` 人类输出缺 path · `--gpu` 在 local 上的报错不给下一步。**第 5 条 `rev` 跳变没修**——δ 诊断到 CAS 每次写自增的机制，但明说「没有把握的修法」，只给了两个候选方向。见 V50。 |
 | V48 | **local 算力的 handle 执行期间不落盘 → 设计里的 SIGKILL 验收路径今天走不通** | **v0.5 W5-3 α 如实交代（它修不了，不在足迹内）**：编排进程中途被杀 → `job.json.adapterHandle` 为 null → **既无法接回也无法收割**。原来那句「这个任务从未真正派发出去」**是假话**，且 `recoverable` 留 false 会让 `release` 删掉唯一一份产物——α 已把消息改诚实，但根治要动 `target.ts` / `adapters/local.ts`。**设计 §1.1.9 写的验收路径「SIGKILL → resume → 收割」在 local 上今天不成立**，对外不许宣称。 |
 | V49 | **`deterministic=true` 的口径待裁定**（用户 2026-09-11 决定推迟） | W5-3 β 实测：scanpy / pydeseq2 / cobrapy 三个平台**同机重跑逐字节一致**（runner 把 n_jobs/n_cpus 钉成 1、固定种子、cobrapy 默认 pFBA），但**不保证跨机器 / 跨 BLAS / 换求解器**。staged 设计稿原写 `false`，β 按实测改成 `true` 并配了每次重测的门禁。<br>**问题是口径而非事实**：如果「跨机器可复现」才配叫 deterministic，这三个标签要一起翻，而 `pyref`（唯一既有的 `deterministic=true`）也要重新审。这个标签是**确定性层的输入**，标错等于让模型的结论绕过约束。<br>**β 的第 4 条阴性对照还挖出一件更深的**：「deterministic 标错」在加 `embedding.csv` 之前**根本红不起来**——拿掉 PCA 种子后 clusters/markers 一个字节都不变。**产出里没有对随机性敏感的数据时，这个标签在测试层面不可观测。** |
-| V50 | `rev` 编号跳变无解释 | 外部验收 S12 的第 5 条。δ 诊断到根因是 CAS 每次写自增（`job_store.ts:170` + `broker.ts` 多个调用点），新 plan 出来就是 rev 2、run 完跳 5、collect 完跳 7。**δ 明说没有把握的修法**，只给了两个候选方向（对外只暴露单调计数 / 把内部写次数与用户可见 rev 分开）。属产品判断，留给下一版。 |
+| V50 | `rev` 编号跳变无解释 | 外部验收 S12 的第 5 条。δ 诊断到根因是 CAS 每次写自增（`job_store.ts:170` + `broker.ts` 多个调用点），新 plan 出来就是 rev 2、run 完跳 5、collect 完跳 7。**δ 明说没有把握的修法**，只给了两个候选方向（对外只暴露单调计数 / 把内部写次数与用户可见 rev 分开）。属产品判断，留给下一版。<br>⚠️ **v0.6 W6-1 γ 部分处理**：dispatch 内两次 patch 合一（跳变 +4→+3，CHANGELOG 有记录）。**字段级分离明确不做**：CAS（approval.ts）依赖 rev 每写 +1、既有测试钉死该语义，分离要连 approval/cli 一起立项，收益配不上风险。本条到此归档，后续如再被外部验收点名再议 |
 | V51 | 共享 helper 位置别扭 + 三处探测仍是内联形状 | W5-3 β 交代：`probeCodeFor`/`datasetParam` 放在 `simulation/scanpy/probe.ts`，另两个平台 `import ../scanpy/probe`——**本该在 `simulation/` 顶层，是文件所有权逼出来的形状**，搬走是纯移动。另：`doctor.ts` / `pyref` / `openmm` 的探测仍是内联字符串形状（**「探测说可用、真提交任务却坏」的老形状**，V27 时期咬过一次），β 已把修法验证可复用，但不在其授权内。 |
 | R1 | **湿实验编译器改写试剂身份**（🔴 已修） | **发布前零上下文外部验收（干净机器、只有二进制）的头号 blocker，主会话实机复现**：写「硫酸」，编译产物是「**盐酸**」；写「硝酸」「甲醇」则被抹成 `reagent`。真因：`extractReagents()` 用 `name: r.keywords[0]`——**组内第一个关键词替换掉用户实际写的试剂名**。<br>**危害不是显示瑕疵，是落在物理世界路径上的身份改写**：人在 `lab approve` 读的是协议原文（硫酸）、批准的是编译产物的 hash（盐酸）——**他批的不是他读的那个东西**，AD-6 的署名审批失去意义；审计记录里会出现方案中根本不存在的化学品；拦截报告也跟着错。<br>已修：`name` 用**真正匹配上的那个关键词**，`reagentId` 仍是分类 id（规则匹配不受影响）。 |
 | R2 | **`concentration_limit` 把「查不到规则」渲染成「✅ 通过」**（🔴 已修） | 同一次验收的第二个 blocker。`MAX_CONCENTRATION[id] ?? Infinity`——**表里没有条目的试剂阈值当无穷大，一律放行**。验收者一句话点破性质：**「『我查了，没有针对这个试剂的规则』和『我查了，通过了』在输出里是同一个符号」**——本项目红线「没查到 ≠ 查了没有」的镜像违反，且落在湿实验安全门上。<br>已修且**一个阈值都没有编造**：查不到限值 → 不放行，理由写「没有规则可查」而不是「超标」（两者该做的事不同）。另加一条与限值表无关的判断：**百分比 > 100 物理上不存在，一律拦**。<br>**顺带挖出更深的一层**：`extractConcentration()` 原来**把单位丢了**，`%` 与 `mol/L` 都只返回裸数字——**规则在比较自己不知道单位的数**。现已把单位带下来（见 V52）。<br>这条推翻了一条**有意为之**的旧断言（「表外试剂不设上限 → 放行，不凭空造标准」）：「不造标准」是对的、现在也没造，被推翻的是「所以放行」。 |
 | R3 | **`chem depict` 在二进制里不可用，却四处声称可用**（🟠 已修） | 验收实测 `can't open file '/$bunfs/root/depict.py'`。**这是 V27 家族的遗漏**——W5-1 ε 修了 10 处资产，但 chem 是同一波 γ 并行交付的新文件，两条 lane 谁也没覆盖到对方；**收口（我）接了 `case "chem"` 却没给它的 `.py` 走内嵌机制**。后果比一般 ENOENT 更糟：`--help` / `capabilities` / MCP `tools/list` / `llms.txt` 四处都说它可用。已改用 `materializeAssetTree`，二进制实测出图。 |
 | V52 | 浓度单位口径未统一（`MAX_CONCENTRATION` 的数到底是什么单位） | R2 挖出：解析器现已把单位带下来（`percent` / `molar` / `unknown`），但 `MAX_CONCENTRATION` 的三个数（hypochlorite 100 · ethanol 95 · strong_acid 200）**没有声明单位**——strong_acid 的 200 在百分比语境下无意义。当前只做了无歧义的一半（百分比 > 100 必拦）。**要真正修好，得先定义这张表的单位，可能还要按单位分表。**验收者另指出：次氯酸钠阈值 100% 意味着这条规则只拦物理上不可能的浓度——商用漂白水是 5–15%。**这属于要请领域判断的事，不该由实现者拍。** |
-| V53 | `doctor` 的 `packagingLimitation` 机制对真实故障零覆盖 | 验收实测：`doctor --json` 三个档位 `packagingLimitation` **全是 false**，而唯一真实产生 `/$bunfs/` 报错的 `chem depict` **根本不在 doctor 的探测范围内**。INSTALL.md 描述过这个检测机制（识别 `/$bunfs/` 子串 → 打 ⚠️ 而非 ❌）——**字段存在，机制未生效**。R3 修完后这个具体故障消失了，但**机制本身仍未被任何真实故障验证过**。 |
-| V54 | bioRxiv 的「不是真检索」免责声明人类看不到 | `capabilities --json` 的 `caveat` 里写得清清楚楚「search 是最近 N 篇 + 客户端打分模拟的，查不到 ≠ 不存在」，但 `lit sources` 与 `lit search` 两个**人类实际使用的入口**都只显示 ✅ / 「免 key」。验收者的对照很刺眼：缺凭据的源老老实实标 `⏭️ skipped` 并说明原因（本项目做得最好的地方之一），**而 bioRxiv 用一个 ✅ 掩盖了「这不是检索」**——同一个输出里诚实与不诚实并存。README 已补说明（v0.5 收口），但**两个 CLI 入口仍未显示 caveat**。附带：标题里的 `&amp;amp;` 未解码，会流进 BibTeX 与报告。 |
+| V53 | `doctor` 的 `packagingLimitation` 机制对真实故障零覆盖 | 验收实测：`doctor --json` 三个档位 `packagingLimitation` **全是 false**，而唯一真实产生 `/$bunfs/` 报错的 `chem depict` **根本不在 doctor 的探测范围内**。INSTALL.md 描述过这个检测机制（识别 `/$bunfs/` 子串 → 打 ⚠️ 而非 ❌）——**字段存在，机制未生效**。R3 修完后这个具体故障消失了，但**机制本身仍未被任何真实故障验证过**。<br>✅ **v0.6 W6-1 γ 已补**：核心机制 F-c 时已实现，γ 补上 backlog 字面要求的两条——/$bunfs 假探测正例 + 裸 ENOENT 阴性对照（不得误判为打包限制） |
+| V54 | bioRxiv 的「不是真检索」免责声明人类看不到 | `capabilities --json` 的 `caveat` 里写得清清楚楚「search 是最近 N 篇 + 客户端打分模拟的，查不到 ≠ 不存在」，但 `lit sources` 与 `lit search` 两个**人类实际使用的入口**都只显示 ✅ / 「免 key」。验收者的对照很刺眼：缺凭据的源老老实实标 `⏭️ skipped` 并说明原因（本项目做得最好的地方之一），**而 bioRxiv 用一个 ✅ 掩盖了「这不是检索」**——同一个输出里诚实与不诚实并存。README 已补说明（v0.5 收口），但**两个 CLI 入口仍未显示 caveat**。附带：标题里的 `&amp;amp;` 未解码，会流进 BibTeX 与报告。<br>✅ **v0.6 W6-1 γ 已做**：caveat 从 connector metadata 真源直读进 lit sources / lit search 两个人类入口；HTML 实体解码一并修（normalize.ts 新 helper） |
 | V55 | 湿实验自然语言解析只吃中文 | 验收实测：英文协议编译不出任何步骤（直接报错，不静默产出空协议）。**试剂词表是双语的，但上游步骤解析器不是**，所以词表永远拿不到英文输入。README 已如实补上这条（原文只说词表覆盖中英文，读起来像整条链路都支持）。 |
-| V56 | 未知命令不回显打错的那个词 · 报告不带 unconsumedWarnings · observation 表格压成一行 | 验收的三条低危：`spark-research frobnicate` 打印一屏帮助但**从不提及 `frobnicate`**（退出码正确）；`report export` 的湿实验条目**不携带 unconsumedWarnings**——README 说 CLI 编译与审批输出必须显示它，**报告是第三个面，目前是缺口**；`report export` 把 observation 的 markdown 表格压成一行。 |
+| V56 | 未知命令不回显打错的那个词 · 报告不带 unconsumedWarnings · observation 表格压成一行 | 验收的三条低危：`spark-research frobnicate` 打印一屏帮助但**从不提及 `frobnicate`**（退出码正确）；`report export` 的湿实验条目**不携带 unconsumedWarnings**——README 说 CLI 编译与审批输出必须显示它，**报告是第三个面，目前是缺口**；`report export` 把 observation 的 markdown 表格压成一行。<br>✅ **v0.6 W6-1 γ 已做**：三条全修（未知命令回显 / report export 携带 unconsumedWarnings / observation 表格保排版），回归测试 w61_cli_polish_output.test.ts |
 | V57 | **一大片路径三次外部验收都没验过**（不是缺陷，是覆盖缺口） | **三次零上下文验收共同的空白**，如实记下来免得被误当成「验过了」：<br>· **所有 LLM 路径**：`idea new` / `idea check` / `lit read` / `lit review` / `chat` / `auth`——验收者按「花钱操作不自动批准」的纪律**主动不跑**（环境里有真实 key）。README 快速开始的第 ②③⑥ 步因此整段未验证。<br>· **`lab simulate` 与真 Opentrons 后端**：本机无 opentrons，湿实验链条只验到 `awaiting_approval`。<br>· **5 个仿真平台里的 4 个**（openmm / scanpy / pydeseq2 / cobrapy）：本机未装依赖，只验了 pyref。<br>· **Web 工作台**：前端产物未构建，未启动。<br>· **Modal 算力**：产品自述 gateway 未实现，未尝试。<br>· **`conclusion review` / `lab approve` 的署名审批实际写入**：未产生可评审的结论卡，未走到。<br>**处置建议**：下一版的验收任务书里，把「花钱路径」单独列出来并预先约定预算，否则它会**永远**停在未验证——三次都是同一个原因跳过的。 |
 | V58 | **安全门语义刚改，而第三次验收跑在改之前** | v0.5 发布前收口把 `concentration_limit` 从「表外试剂放行」改成「不放行」，这是**行为变更**，可能误杀正常协议。改动只经过单测与几条手工命令，**没有人以用户视角重走一遍**。已补跑一次窄范围验收（只打安全门，误杀与漏放两个方向都看）。<br>**记下来的是教训不是待办**：**在验收之后改动被验收的东西，等于那次验收作废了一部分。**要么改动前置、要么补跑——不能默认「测试绿了就等于验过了」。 |
 | V59 | 安全门的剩余缺口（窄范围验收，发布前**未修**，如实列出） | 发布前最后一次窄范围验收（只打安全门）在两条 blocker 修好之后又挖出这些，**v0.5 没修**：<br>· **限值表只覆盖 4 类试剂**（盐酸/硫酸 · 次氯酸钠 · 乙醇），且其中三类阈值就是 100 ——与「物理上不可能」那条完全重合，**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**。审批人看到这一行会被误导。<br>· **`biosafety` 只认字面 `BSL-n` / `生物安全N级`**：`P3 实验室`（最常见的中文口语写法）静默通过且零告警。<br>· **`chemical_compatibility` 不看孔位**：A1 的次氯酸钠 + B1 的盐酸也拦，消息没说「本规则不看孔位」。<br>· **旧的 `over-limit` 消息不合格**：英文残句、不说限值是多少、不说单位、不给下一步——同一条规则里新分支的消息质量比它高一个数量级。`volume capacity` / `chemical compatibility` 同样没有下一步。<br>· **`lab compile` 那一屏不打印覆盖范围声明**（`lab status` 有，写得很好）——**而绝大多数人是在 compile 那一屏看到四行 ✅ 的**。 |
 | V60 | 词表外试剂的身份仍然丢失（只止住了塌缩） | v0.5 收口把占位符按步骤唯一化（`未识别试剂#step-1`），**止住了「两种不同试剂共用同一个 reservoir 孔」**这个真实的物理别名，并补了未消费告警。**但用户写的原文没有保留进编译产物**——人在审批时仍然看不到自己写的是「硝酸」。要真正修好得让编译产物携带原文片段，属解析器工作。 |
+| V61 | **`existsSync("/$bunfs/…")` 的语义平台相关**（已修一处，登记形状） | v0.6 G-2 的首个 Linux CI 冒烟抓到：macOS 上对虚拟路径返回 false（内嵌兜底生效），Linux 上返回 true 但枚举拿不到内容——于是 Linux 二进制的技能索引**恒为 0 且不报错**，AD-12 最忌讳的安静错误答案。`skills/frontmatter.ts` 已改显式 `/$bunfs` 前缀判据。**登记是为了形状**：任何「用 existsSync 判断要不要走内嵌兜底」的代码在 Linux 上都可能悄悄走错分支；grep 过一遍，`agents/prompts.ts`（try/catch 兜底）与 server/index 的前端路径（materialize 后真实目录）均不受影响，当前无第二处。新增此类兜底时判据一律用 `/$bunfs` 前缀不用 existsSync |
+| V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫 |
+| V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2477,7 +2481,42 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ---
 
-## [Unreleased]
+## [0.6.0-alpha.1] — 2026-09-11
+
+**v0.6 第一个内部基线：闸门 G（模型配置化 / 预算闸 / 发行面）+ W6-1 三 lane
+（connector 台账 / 工作台四面板 / CLI 清扫）。**
+
+### 新增
+
+- **模型配置化（G-1）**：`z-ai/glm-5.3-flash` 进 openrouter 路由与定价表（实效价含
+  5.5% 手续费，保守估计）；CLI 模型解析链 `--model` flag > 注入 > config `defaultModel`
+  > 内部默认——此前 CLI 是三个入口里唯一不读 `defaultModel` 的（V40「只写不读」形状
+  第 8 例）。新门禁 `config_reader_parity`：可写配置项必须登记读者且读者真有调用点。
+- **轮级用量台账与预算闸（G-3）**：每次 LLM 调用落 `usage.jsonl`（按项目、跨进程累计）；
+  `lit read/review`、`idea new/check` 支持 `--budget-usd N`——已知花费下界达上限即拒绝
+  后续调用（kind=`budget`，请求不发出、已完成产出保留、消息给下一步）。成本未知**绝不
+  当 0**：unknown>0 时 `usage` 命令明说总花费报不出。新命令 `spark-research usage`。
+- **connector 调用台账（W6-1 α）**：base 层单点埋点，全部 connector 的每次 HTTP 调用落
+  `api_calls.jsonl`（只记 host 绝不记 URL，防 query 里的凭据；有源码级门禁）。
+  `usage api` 子命令与 `GET /api/usage`、`GET /api/usage/api` 两个只读端点。
+- **工作台四面板（W6-1 β）**：长任务进度（落盘快照、刷新仍在）、record/证据图浏览、
+  算力只读（**无任何派发入口**——V47 裁定的 UI 面兑现，面板内说明「派发与审批仅 CLI」）、
+  用量面板（只消费后端数字，前端零成本算术）。
+- **发行面（G-2）**：前端构建产物内嵌进单二进制——`npx`/二进制起 `server` 打开即是
+  工作台（V43① 关闭）；npm 打包字段补齐（`files`/`engines`/`prepublishOnly`，V29）；
+  首个 GitHub Actions CI（单测 + 二进制冒烟，V28）。
+- `lit read --all` 默认跳过已有精读卡的论文（断点重跑不重复花钱），`--redo` 强制全读。
+
+### 修复
+
+- **Linux 单二进制技能索引恒为空**：`existsSync("/$bunfs/…")` 的语义平台相关（macOS
+  假 → 内嵌兜底生效；Linux 真 → 枚举拿不到技能 → 平静地报 0 个）。判据改为显式
+  `/$bunfs` 前缀。首个 Linux CI 冒烟实测抓到——正是 V28 想抓的「本机绿 ≠ 产物绿」。
+- bioRxiv「search 不是真检索」的 caveat 现在显示在 `lit sources` / `lit search` 两个
+  人类入口（V54）；标题/摘要的 HTML 实体解码。
+- 未知命令回显打错的词；`report export` 携带湿实验 unconsumedWarnings、observation
+  表格不再压成一行（V56）。
+- AMiner `getPaper` 详情接口带真实 key 实测验证通过（V9）。
 
 ### Changed
 
