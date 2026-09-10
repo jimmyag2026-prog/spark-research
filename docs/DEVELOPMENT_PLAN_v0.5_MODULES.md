@@ -1007,11 +1007,39 @@ export interface EmbeddingCapability { configured: boolean; model: string | null
 
 ### X-3 · daemon 里的 v0.1 `ComputeService` 必须二选一
 
-`daemon/daemon.ts:16,72-91,194` + `permissions.ts:8` + `control_repl.ts:66` 是一套内存 mock。v0.5 落地真 compute 后，`capabilities`/`llms.txt` 里若同时出现「compute_submit permit」与「compute targets」，AD-12 门禁看不出矛盾但外部读者会被误导。建议收口时**删除** `ComputeService`/`DefaultCompute`/`compute_submit`（kernel 侧的算力入口在 v0.5 就是没有——kernel 不该能派发计费任务，这与 AD-2/AD-14 一致），并删 `control_repl.ts:66` 对应分支。若主会话决定保留，则必须把它路由到 `ComputeBroker.plan()`（只 plan，永不 dispatch）。**本文不替主会话拍板，但不许悬着。**
+> **主会话核实后升级（2026-09-10）：这不是「v0.5 落地后会有两个 compute 造成混淆」，
+> 是 v0.4.0 里一条活着的静默假成功路径。**
+>
+> 实测链路：`agents/orchestrator.ts:53` 的 `TASK_KINDS` 含 `"compute"` →
+> `orchestrator.ts:490-494` 的 `case "compute"` 调 `this.daemon.compute.submit()` →
+> `daemon/daemon.ts:72-91` 的 `DefaultCompute` 用**内存 Map** 造一个
+> `{ id, status: "queued" }` 假 job → **`ok: true` 返回**。
+>
+> 也就是说：**LLM 计划出一个 compute 任务，会拿到一个永远不出结果的假 job，
+> 而整条链路报成功。** 这正是外部评审当年的原话——
+> 「delegate_task/compute 走内存 mock 永不出结果——LLM plan 出 compute 任务会静默产出假 job」。
+> P8 删掉了 `backend/src/compute/`（providers/manager/job_manager 三件），
+> **daemon 侧这一条活了下来**，v0.3.0 的 D-4「LLM 失败不再静默当成功」也没覆盖到它
+> （它不是 LLM 失败，是执行层假成功）。
+>
+> **处置升格为闸门 F 的第五件（F-5）**，先于任何 v0.5 功能：
+> 要么删掉 `ComputeService` / `DefaultCompute` / `permissions.ts:8` 的 `compute_submit` /
+> `TASK_KINDS` 的 `"compute"` 与 orchestrator 的 case 分支，要么让它显式报「未实现」。
+> **静默假成功是最差的那个选择**，而它已经在仓库里活了四个版本。
 
-### X-4 · W5-3 δ「runtime contract + Python SDK」无定义
+### X-4 · W5-3 δ「runtime contract + Python SDK」定义没跟着走（主会话已纠正措辞）
 
-方案第 261 行之外全文与规划目录都找不到它的含义、产出物或验收。本文不为一个没有需求来源的项编设计（那正是 §2.2「需求拉动」要挡的）。改为机动位 + BACKLOG 清扫实施。若主会话确有所指，请补一段定义再排。
+> **主会话核实：原文「全文与规划目录里没有任何定义」是过头了。**
+> 规划目录 `TODO_v0.5.md:101` 与 `:132` **有定义**：
+> 「对外 API 升格为有版本契约 + 零依赖 Python 客户端（对标上游 `tooling/sdk/python`）。
+> 排 v0.5 后段，依赖 P14 的 SSE 流稳定」。
+>
+> **但这条异议的实质成立**：主会话把它抄进方案 §5 的波次表时，
+> **定义没跟着走**——方案正文只剩一行标题，任何拿方案去派活的人都不知道它要做什么。
+> 这与 v0.4 反复出现的「叙事与实现分家」是同一形状，只是发生在文档之间。
+>
+> **处置**：W5-3 δ 保留但**必须先把定义从规划目录搬进方案正文**，
+> 或降为机动位。派活前定义不在方案里，就不派。
 
 ### X-5 · C5-② 的「kernel 侧」应解作「Python 侧」
 

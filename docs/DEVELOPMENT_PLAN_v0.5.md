@@ -107,6 +107,7 @@ opentargets pdbe reactome sifts single-cell-atlas string-db surechembl ucsc wiki
 | **F-1** | **补跑三次零上下文外部验收** | v0.4 方案要求 W2/W3/W4 末各一次，**一次都没跑**。这是本项目信噪比最高的检验——v0.2.1 的三个真实摩擦点就是这么发现的。**第二次必须由未参与开发的人/会话执行**。v0.5 引入远端算力（真花钱）与大批扩展之前，先知道当前的外部体验有多少摩擦 |
 | **F-2** | **AMiner key 续期（2026-10-07 到期）** | 运维项，**有硬 deadline**。过期后中文文献检索直接 401，AMiner 是中文主路径 |
 | **F-3** | **V15 删 deprecated 别名** | v0.4 §2.2 明文「走废弃周期到 v0.5」。`MCPConnector` / `MCPConnectorConfig` / `MCPTool` 三个别名（`base.ts:180-186`）。**breaking change，进 CHANGELOG** |
+| **F-5** | **删掉（或显式报未实现）daemon 里的假 `ComputeService`** | **v0.4.0 里一条活着的静默假成功路径**：`orchestrator.ts:490-494` 的 `case "compute"` 调 `daemon/daemon.ts:72-91` 的 `DefaultCompute`——内存 Map 造一个 `{status:"queued"}` 假 job，**`ok:true` 返回**。评审当年原话「LLM plan 出 compute 任务会静默产出假 job」，P8 删了 `backend/src/compute/` 但 daemon 侧这条活了下来。**v0.5 要落地真 compute，这个必须先清**——否则仓库里会有两个 compute，一个真的一个撒谎的 |
 | **F-4** | **V27 定性：修还是永久降级** | 单二进制只有浅层命令可用。v0.4 按用户决定不修。v0.5 要么修（23 处资产加载），要么**把「不发单二进制」写成永久承诺**并从 INSTALL.md 移除该路径。**不许再挂一版** |
 
 **F-1 的产出直接影响 §2 的选择**：外部验收暴露的摩擦点，优先级高于任何 staged 素材。
