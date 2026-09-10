@@ -21,9 +21,10 @@ import { failure, type ProviderAdapter, type ProviderRequest } from "./types";
 // 没人验证过的承诺，见 devlog 里的取舍记录）。
 
 const ANTHROPIC_VERSION = "2023-06-01";
-// CallOptions 没有 maxTokens 字段（llm/types.ts 是 R-c/主会话的所有权，本 lane
-// 不加字段），而 Anthropic 的 max_tokens 是必填参数。这里用一个保守的默认值；
-// 需要可配置时应该在 CallOptions 上加 `maxTokens?: number`（见 devlog 的已知缺口）。
+// Anthropic 的 max_tokens 是**必填**参数（OpenAI 侧不传则由上游决定）。
+// P11 收口时给 CallOptions 加了 `maxTokens`，调用方可以覆盖；不传才用这个默认值。
+// 4096 对综述草稿这类长文本偏小，会**静默截断**（只能从 finishReason:"length" 看出来）
+// —— 所以「可覆盖」比「默认值调大」重要：默认值多少都可能不够，得让调用方能说了算。
 const DEFAULT_MAX_TOKENS = 4096;
 
 interface AnthropicContentBlock {
@@ -123,7 +124,7 @@ function buildRequestBody(
   const { system, messages: wireMessages } = toAnthropicRequest(messages);
   const body: Record<string, unknown> = {
     model,
-    max_tokens: DEFAULT_MAX_TOKENS,
+    max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
     messages: wireMessages,
   };
   if (system) body.system = system;

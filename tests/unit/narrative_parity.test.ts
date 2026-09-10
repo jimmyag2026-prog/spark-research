@@ -77,10 +77,12 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   "backend/src/agents/swarm.ts":
     "**已知缺口**：v0.1 遗留，生产代码零调用方、dependsOn 未实现、decompose 是三条正则。" +
     "README 的「100 并发 swarm」宣传语即出自此处。方案 v0.3 P12 决定删除（BACKLOG V7）",
-  "backend/src/llm/providers/anthropic.ts":
-    "**等接线**：v0.4 P11 lane R-b 交付的 Anthropic 适配器。router.ts 的 ADAPTERS 注册由主会话在 " +
-    "P11 收口时统一接线（R-b/R-c 都不持有 router.ts，避免两条 lane 在同一文件上撞车）。" +
-    "接线完成后必须删除本条——门禁的『多余登记必须删除』对称检查会强制这件事。",
+  // v0.4 P11 收口前，backend/src/llm/providers/anthropic.ts 在这里登记过一条「等接线」：
+  // R-b 交付了适配器，但 router.ts 的 ADAPTERS 注册权被主会话刻意扣下（R-b/R-c 都不持有
+  // 该文件，避免两条 lane 撞车），于是新模块在自己分支上必然是孤儿。
+  // 收口时接了线 → 本条变成多余 → 按对称检查删除。**这条登记走完了它的完整生命周期**，
+  // 也顺带证明了这张表的设计意图：它不只防叙事漂移，同时是一张接线清单
+  // （接了不删会红，忘接也会红）。做法已写进 DEVELOPMENT_PLAN_v0.4.md §5.3·补。
   // v0.4 P11 lane R-d 之前，backend/src/proteins/analysis.ts 在这里登记过一条「已知缺口」：
   // protein-analysis 技能有 e2e、有 SKILL.md，但 CLI / HTTP / MCP 三个入口全无（BACKLOG V22）。
   // R-d-2 补齐了三个入口（proteins/cli.ts、server/routes/proteins.ts、mcp/tools.ts 的

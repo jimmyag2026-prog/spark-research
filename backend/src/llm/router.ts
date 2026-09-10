@@ -1,4 +1,5 @@
 import { configuredLlmTimeoutMs } from "../config";
+import { anthropicAdapter } from "./providers/anthropic";
 import { OpenAiCompatAdapter } from "./providers/openai_compat";
 import { failure, type ProviderAdapter } from "./providers/types";
 import type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities } from "./types";
@@ -39,6 +40,12 @@ const ADAPTERS: Partial<Record<Provider, { adapter: ProviderAdapter; envKey: str
   kimi: {
     adapter: new OpenAiCompatAdapter({ id: "kimi", baseUrl: "https://api.moonshot.ai/v1" }),
     envKey: "KIMI_API_KEY",
+  },
+  // P11 lane R-b：Anthropic 原生（Messages API，与 OpenAI 形状差七处，见 providers/anthropic.ts）。
+  // 接线由主会话统一做——R-b 与 R-c 都不持有 router.ts，避免两条 lane 在同一文件上撞车。
+  anthropic: {
+    adapter: anthropicAdapter,
+    envKey: "ANTHROPIC_API_KEY",
   },
   openai: {
     adapter: new OpenAiCompatAdapter({ id: "openai", baseUrl: "https://api.openai.com/v1" }),

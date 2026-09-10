@@ -89,6 +89,14 @@ export interface CallOptions {
   model?: string;
   tools?: ToolSpec[];
   toolChoice?: "auto" | "none" | { name: string };
+  /**
+   * 输出 token 上限。**Anthropic 的 `max_tokens` 是必填参数**，不传就用适配器的默认值；
+   * OpenAI 兼容侧不传则由上游自己决定（不主动加字段，避免改变既有行为）。
+   *
+   * 为什么要它：4096 这类保守默认值对综述草稿这种长文本会**静默截断**——
+   * 截断在 `finishReason: "length"` 上看得出来，但调用方没有把它调大的手段。
+   */
+  maxTokens?: number;
   /** BACKLOG V12 的根治：不再靠「解析失败重试一次」治标。 */
   responseFormat?: "text" | "json_object";
   timeoutMs?: number;
