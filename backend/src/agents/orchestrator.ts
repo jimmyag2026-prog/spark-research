@@ -6,8 +6,44 @@ import { LineageGraph } from "../artifacts/lineage";
 import type { ExecutionRecord } from "../artifacts/models";
 import { ReviewerAgent } from "../reviewer/agent";
 import type { ReviewResult } from "../reviewer/rules";
-import { LLMRouter, type ChatMessage } from "../llm/router";
-import { SubAgentFactory, type SubAgentType } from "./sub_agent";
+import { LLMRouter, type CallOptions, type ChatMessage } from "../llm/router";
+import {
+  buildSubAgentSpec,
+  runSubAgent,
+  runSubAgentOfType,
+  SubAgentFactory,
+  type SubAgentDeps,
+  type SubAgentType,
+} from "./sub_agent";
+// 值导入（不是 `import type`）：getToolRunner() 要在运行期真的 `new` 它。这与
+// mcp/server.ts → server/app.ts → agents/orchestrator.ts 构成一个模块级循环依赖，
+// 但两边都只在**函数体内**（不是模块顶层）用到对方——ESM 的循环 import 只要不在
+// 模块初始化阶段互相读对方尚未求值的绑定就没问题，`server/app.ts` 的 `ServerContext`
+// 构造函数本来就已经是这个模式（`new OrchestratorAgent(...)` 在方法体里，不在顶层）。
+import { McpToolRunner } from "../mcp/server";
+import { BudgetLedger } from "../llm/budget";
+import {
+  createLiteratureReviewContract,
+  describeStop,
+  evaluateRound,
+  NoProgressGuard,
+  RecordStoreEvidenceQuery,
+  type ContractReport,
+  type ContractStageReport,
+  type EvidenceQuery,
+  type ResearchContract,
+  type StopReason,
+} from "./contract";
+import {
+  runReplanLoop,
+  type Observation,
+  type Planner,
+  type RoundExecutor,
+  type RoundLogEntry,
+  type RoundOutcome,
+  type RoundPlan,
+  type RoundPlanItem,
+} from "./replan";
 import type { Project, ProjectManager } from "../project/manager";
 import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
@@ -71,6 +107,14 @@ export interface OrchestratorDeps {
   workspaceRoot?: string;
   // 注入后 session 会归属到真实 project（找不到绑定时落到默认项目）。
   projects?: ProjectManager;
+  /**
+   * P9 的进程内工具运行器（W2-a 的 runSubAgent() 要求调用方传入）。不给就在第一次需要
+   * 真子代理工具面时惰性构造一个、复用同一实例（见 `getToolRunner()`）——惰性构造要求
+   * `projects` 已注入（子代理的工具要操作跟当前 session 同一个证据图），否则退回旧的
+   * 裸 `llm.call` 路径（不静默假装有工具，见 executeTask 的 "subagent" 分支注释）。
+   * 测试可以直接注入一个假 `McpToolRunner`，不需要真的起 HTTP app。
+   */
+  toolRunner?: McpToolRunner;
 }
 
 // skills 目录尚无正式实现，这里用内置目录作为 MVP stub；后续 skill 模块落地后替换。
@@ -161,6 +205,8 @@ export class OrchestratorAgent {
   private projects?: ProjectManager;
   private projectCache = new Map<string, Project>();
   private seq = 0;
+  // 惰性构造、跨调用复用的真实工具面（见 getToolRunner()）；测试可以直接注入一个假的。
+  private toolRunner?: McpToolRunner;
 
   constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
     this.daemon = daemon;
@@ -172,13 +218,59 @@ export class OrchestratorAgent {
     this.reviewer = deps.reviewer;
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
     this.projects = deps.projects;
+    this.toolRunner = deps.toolRunner;
     this.workspaceRoot = deps.workspaceRoot ?? join(import.meta.dir, "../../../workspaces");
     mkdirSync(this.workspaceRoot, { recursive: true });
     this.corePrompt = loadPrompt("core.txt");
     this.researchPrompt = loadPrompt("research.txt");
   }
 
-  async processRequest(userMessage: string, sessionId: string): Promise<OrchestrationResult> {
+  /**
+   * 惰性构造、跨调用复用的真实工具面——W2-b 交接说明第 3 点：「orchestrator 通常已经
+   * 持有一个跟当前会话绑定的 Hono app / daemon 实例，McpToolRunner 应该复用那一个，
+   * 而不是每次子代理调用都重新构造一份」。本 orchestrator 没有现成的 app，构造一个新的
+   * 只在**第一次**真的需要工具面时发生，之后缓存复用；`agent: this` 让新 app 不必再递归
+   * 造一个 OrchestratorAgent（`server/context.ts` 没注入 `agent` 时会自己 new 一个）。
+   *
+   * 返回 `null`（而不是抛错）的唯一情况：既没注入 `toolRunner`，也没注入 `projects`。
+   * 后者是有意的降级信号——子代理的工具要操作跟当前 session 同一个证据图，没有 project
+   * 就没有真实的证据图可操作，调用方（executeTask 的 subagent 分支 / runResearchLoop）
+   * 据此决定退回旧路径或直接报错，而不是悄悄用一个跟当前 session 无关的默认 project。
+   */
+  private getToolRunner(): McpToolRunner | null {
+    if (this.toolRunner) return this.toolRunner;
+    if (!this.projects) return null;
+    this.toolRunner = new McpToolRunner({ projects: this.projects, agent: this });
+    return this.toolRunner;
+  }
+
+  /**
+   * `SubAgentDeps.llm` 要求 `Pick<LLMRouter, "call" | "capabilitiesFor">`（W2-a 的硬性
+   * 依赖：不支持 tool calling 的模型必须走显式降级，见 sub_agent.ts 的 `runDegraded`），
+   * 但 `OrchestratorDeps.llm` 的公开类型仍然只承诺 `"call" | "listModels"`——**刻意不
+   * 收紧**：narrative_parity.test.ts（不在本 lane 文件所有权内）构造 OrchestratorAgent
+   * 用的假 LLM 只实现了这两个方法，收紧类型会让那个文件的 typecheck 当场变红，而我们
+   * 不能去改它。这里在运行期适配：有 `capabilitiesFor` 就直接转发，没有就保守假设
+   * `toolCalling: true`（真实 LLMRouter 一定有这个方法；没有这个方法的只会是测试假件，
+   * 而测试假件只有在同时注入了 `toolRunner`/`projects` 时才会真的走到这条路径——见
+   * getToolRunner() 的降级设计，两者结合下这个假设不会被没打算测真 tool loop 的用例踩到）。
+   */
+  private subAgentLlm(): Pick<LLMRouter, "call" | "capabilitiesFor"> {
+    const llm = this.llm;
+    const withCaps = llm as Partial<Pick<LLMRouter, "capabilitiesFor">>;
+    return {
+      call: (messages, options) => llm.call(messages, options),
+      capabilitiesFor: withCaps.capabilitiesFor
+        ? (model) => withCaps.capabilitiesFor!(model)
+        : () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
+    };
+  }
+
+  async processRequest(
+    userMessage: string,
+    sessionId: string,
+    options: { onDelta?: (chunk: string) => void } = {},
+  ): Promise<OrchestrationResult> {
     this.record(sessionId, "orchestrator", "start", `request received: ${userMessage.slice(0, 80)}`);
     mkdirSync(join(this.workspaceRoot, sessionId), { recursive: true });
 
@@ -194,7 +286,11 @@ export class OrchestratorAgent {
       execution.push(await this.executeTask(sessionId, task));
     }
 
-    let summary = await this.summarize(sessionId, userMessage, plan, execution);
+    // onDelta 只接到 summarize()——它是唯一产出「用户最终会看到的正文」的调用点
+    // （result.summary 直接就是 chat() 返回的 response）。plan() 产出的是 JSON 任务数组，
+    // 把它的增量当"预览文本"流给用户只会看到破碎的 JSON 片段，那不是根治 W2-d 的问题，
+    // 是换一种方式制造同一个问题——见 docs/devlog/W3-a.md「onDelta 怎么接」一节。
+    let summary = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
     let review = await this.reviewSession(sessionId);
     let reviewRounds = 1;
 
@@ -205,7 +301,10 @@ export class OrchestratorAgent {
       for (const fix of fixes) {
         execution.push(await this.executeTask(sessionId, fix));
       }
-      summary = await this.summarize(sessionId, userMessage, plan, execution);
+      // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
+      // 已知的、如实记录的简化，见 devlog（根治需要一个「本轮作废，重新开始」的边界信号，
+      // 那属于 SSE 传输层的事，不在本文件所有权内）。
+      summary = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
       review = await this.reviewSession(sessionId);
       reviewRounds++;
     }
@@ -295,8 +394,18 @@ export class OrchestratorAgent {
     // defaultPlan()，但这纯属误打误撞：换一种上游错误格式（比如错误文本里恰好带
     // 一对方括号）就会把错误文本当成计划解析。显式检查一次，把这一步的失败记进
     // 执行日志（可见），再统一落到同一个 defaultPlan() 兜底。
+    //
+    // F-2 收尾（W3-a）：这里原来读 `res.content.slice(0, 200)` 记诊断——AD-13（P11）
+    // 把 LlmResponse 做成可辨识联合之后，`ok:false` 分支的 `content` 类型是字面量
+    // `""`，`res.content` 恒为空字符串，这一行从那时起就在往执行日志里记一个永远是
+    // 空串的"诊断"，真正的原因（`res.error.message`）从没被读过——不是冗余防线，是
+    // 一条已经失效但没人发现的防线（D-4 写下它的时候 AD-13 还不存在，那时 content
+    // 确实held错误文本）。改读 `res.error.message`，`if (!res.ok)` 分支本身继续保留
+    // ——它不是"多余的重复检查"，是 TypeScript 窄化到 `res.error` 存在这条分支的
+    // 唯一入口，删了它类型都过不了，且控制流上仍然必须走这条分支才能不把（如今恒为
+    // 空串的）`res.content` 当成计划文本喂给 parsePlan()。
     if (!res.ok) {
-      this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.content.slice(0, 200)}`);
+      this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.error.message}`);
       return this.defaultPlan();
     }
     return this.parsePlan(res.content) ?? this.defaultPlan();
@@ -333,13 +442,15 @@ export class OrchestratorAgent {
           // D-4（战术版）：无 key 时 router 返回 ok:false + content 是错误文本
           // （比如 "[error] No API key configured..."）。不检查 res.ok 就把它当
           // explore 的产出放行，review 会把一段错误消息误判成合法的探索结论。
+          // F-2 收尾：诊断信息改读 `res.error.message`（原因见 plan() 里同一处改动的
+          // 注释——AD-13 之后 `res.content` 在失败分支恒为空串）。
           if (!res.ok) {
-            this.record(sessionId, "explore", "llm-failed", res.content.slice(0, 200));
+            this.record(sessionId, "explore", "llm-failed", res.error.message);
             return {
               taskId: task.id,
               kind: task.kind,
               ok: false,
-              output: `[llm call failed, not a model output] ${res.content}`,
+              output: `[llm call failed, not a model output] ${res.error.message}`,
             };
           }
           this.record(sessionId, "explore", "run", res.content.slice(0, 200));
@@ -388,6 +499,41 @@ export class OrchestratorAgent {
         }
         case "subagent": {
           const type = (task.params?.subagent ?? "execute") as SubAgentType;
+          const runner = this.getToolRunner();
+          if (runner) {
+            // W3-a 接线：走 W2-a 的真 tool loop（buildSubAgentSpec + runSubAgent），
+            // 不再是裸 `llm.call` 零工具的旧路径——explore 真能检索，execute 真能跑
+            // 工具。旧路径只在没有真实工具面（没注入 projects/toolRunner）时才退回，
+            // 见下方 else 分支与 getToolRunner() 的注释。
+            const spec = buildSubAgentSpec(type);
+            const result = await runSubAgent(spec, task.description, { llm: this.subAgentLlm(), runner });
+            this.record(
+              sessionId,
+              spec.type,
+              "run",
+              `stopReason=${result.stopReason} toolCalls=${result.toolCalls.length}`,
+            );
+            if (result.stopReason === "error") {
+              return {
+                taskId: task.id,
+                kind: task.kind,
+                ok: false,
+                output: `[llm call failed, not a model output] ${result.error ?? "(no error message)"}`,
+              };
+            }
+            // stopReason !== "done"（budget/timeout/denied）如实标注：子代理没跑完
+            // 不等于产出可用，不能冒充成功——与 sub_agent.ts「宁可报预算内没做完，
+            // 不假装完成」同一条纪律在 processRequest 这一层的落实。
+            const note = result.stopReason === "done" ? "" : `[子代理未完成，stopReason=${result.stopReason}] `;
+            return {
+              taskId: task.id,
+              kind: task.kind,
+              ok: result.stopReason === "done",
+              output: `${note}${result.finalText}`,
+            };
+          }
+          // 没有真实工具面（没注入 projects/toolRunner）：退回旧路径，裸 `llm.call`，
+          // 零工具——不静默假装有工具，只是老老实实做它一直在做的事。
           const agent = this.subAgents.create(type);
           const res = await this.llm.call(
             [{ role: "system", content: agent.prompt }, { role: "user", content: task.description }],
@@ -395,13 +541,14 @@ export class OrchestratorAgent {
           );
           // D-4（战术版）：与 analysis 分支同一处漏洞（本 lane 委托的三处之外顺带发现的
           // 第四处调用点，同一个模式，见 docs/devlog/P10-b.md）。
+          // F-2 收尾：诊断信息改读 `res.error.message`（理由同 plan() 处的注释）。
           if (!res.ok) {
-            this.record(sessionId, agent.type, "llm-failed", res.content.slice(0, 200));
+            this.record(sessionId, agent.type, "llm-failed", res.error.message);
             return {
               taskId: task.id,
               kind: task.kind,
               ok: false,
-              output: `[llm call failed, not a model output] ${res.content}`,
+              output: `[llm call failed, not a model output] ${res.error.message}`,
             };
           }
           this.record(sessionId, agent.type, "run", res.content.slice(0, 200));
@@ -429,6 +576,7 @@ export class OrchestratorAgent {
     userMessage: string,
     plan: PlannedTask[],
     execution: ExecutionOutcome[],
+    onDelta?: (chunk: string) => void,
   ): Promise<string> {
     const exec = execution
       .map((e) => `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${e.output.slice(0, 200)}`)
@@ -447,7 +595,11 @@ export class OrchestratorAgent {
           `\nExecution log:\n${exec}`,
       },
     ];
-    const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    // W3-a：这是唯一产出「用户最终会看到的正文」的 LLM 调用点，所以 onDelta 接在这里
+    // ——根治 W2-d 留下的设计问题（session.ts 曾经不得不为"预览流"单独发一次裸调用，
+    // 因为 processRequest 没有 onDelta 的口子；见 docs/devlog/W3-a.md）。
+    const options: CallOptions = { model: LLMRouter.DEFAULT_MODEL, ...(onDelta ? { onDelta } : {}) };
+    const res = await this.llm.call(messages, options);
     // D-4（战术版）：这是三处委托里最要紧的一处——summarize() 的返回值**就是**
     // 用户最终看到的 `OrchestrationResult.summary`，也是 reviewer 读的正文。
     // 之前不检查 res.ok，router 的错误文本（"[error] No API key configured..."）会
@@ -455,8 +607,11 @@ export class OrchestratorAgent {
         // （"summary 不得包含错误文本"——错误文本本身可能含误导性描述，不该出现在
     // 面向用户的产出里），也不静默吞掉——具体错误进执行日志供排查，summary 只留一句
     // 结构化、无法被误读成模型产出的失败说明。
+    // F-2 收尾：诊断信息改读 `res.error.message`（理由同 plan() 处的注释——这里尤其
+    // 要紧，这条日志曾经是排查"为什么摘要生成失败"的唯一线索，AD-13 之后它一直在
+    // 记一个空字符串，排查者等于什么都没拿到）。
     if (!res.ok) {
-      this.record(sessionId, "orchestrator", "summarize-llm-failed", res.content.slice(0, 200));
+      this.record(sessionId, "orchestrator", "summarize-llm-failed", res.error.message);
       return "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。";
     }
     return res.content;
@@ -579,6 +734,10 @@ export class OrchestratorAgent {
     model?: string;
     // 会话模式。缺省 = "chat"，行为与 P1-P3 完全一致。
     mode?: SessionMode;
+    // W3-a：权威调用本身的流式增量出口——只在 mode !== "coexplore" 时生效
+    // （CoExploreSession 的 prompt/grounding 装配在 ideation/coexplore.ts，不在本
+    // 文件所有权内，本 lane 没有替它接 onDelta；见 docs/devlog/W3-a.md）。
+    onDelta?: (chunk: string) => void;
   }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null }> {
     if (req.mode === "coexplore") {
       const result = await this.coexplore(req);
@@ -587,10 +746,249 @@ export class OrchestratorAgent {
         ideaRecordId: result.stored?.recordId ?? null,
       };
     }
-    const result = await this.processRequest(req.message, req.sessionId);
+    const result = await this.processRequest(req.message, req.sessionId, { onDelta: req.onDelta });
     return {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,
     };
   }
+
+  // ── 研究循环（v0.4 P13 波次 W3-a）：把「单发管线」变成「真 agent 循环」───────────
+  //
+  // 与上面 processRequest() 的 P1-P3 规划/执行/review 循环是**两条并列的机制**，
+  // 不是互相替换：processRequest() 处理的是任意 task-kind 混合的一次性请求 +
+  // reviewer 硬 finding 的事后修正；这里实现的是 DEVELOPMENT_PLAN_v0.4.md §4.3.2
+  // 的观察反馈循环——面向一个**契约化的研究目标**（当前只有 `literature-review`
+  // 一种契约，见 contract.ts），反复派出真子代理、把结构化 observation 回流进下一轮
+  // planner，直到 contract.ts 的三条并行停机条件之一触发。
+  //
+  // 需要 project（RecordStore 就是它的证据图）——AD-10「完成判定问图不问模型」在
+  // 没有图的地方无法成立，所以没有绑定 project 时直接报错，不悄悄退化成"问模型"。
+  async runResearchLoop(
+    sessionId: string,
+    goal: string,
+    options: ResearchLoopOptions = {},
+  ): Promise<ResearchLoopResult> {
+    const project = this.projectForSession(sessionId);
+    if (!project) {
+      throw new Error(
+        `session '${sessionId}' 未绑定 project——研究循环的完成判定（AD-10）依赖证据图` +
+          `（RecordStore），没有 project 就没有图。请先通过 ProjectManager 绑定 project` +
+          `（processRequest()/chat() 走 projectForSession() 的同一套绑定逻辑），再调用 runResearchLoop()。`,
+      );
+    }
+    this.record(sessionId, "research", "start", `goal: ${goal.slice(0, 120)}`);
+
+    const q: EvidenceQuery = new RecordStoreEvidenceQuery(project.records());
+    const contract: ResearchContract = (options.contract ?? createLiteratureReviewContract)(q);
+    const guard = new NoProgressGuard(q.snapshot(), options.noProgressThreshold ?? 2);
+    const maxRounds = options.maxRounds ?? DEFAULT_RESEARCH_MAX_ROUNDS;
+
+    const runner = this.getToolRunner();
+    if (!runner) {
+      throw new Error(
+        `session '${sessionId}' 绑定了 project '${project.slug}'，但未能构造 McpToolRunner` +
+          `（这不应该发生——getToolRunner() 只在没有 projects 时才返回 null）。`,
+      );
+    }
+    const sessionBudget = new BudgetLedger(options.budget ?? {});
+
+    const planner: Planner = async ({ report, lastObservations, round }) =>
+      this.planResearchRound(sessionId, goal, report, lastObservations, round);
+
+    const execute: RoundExecutor = async (plan) => {
+      const outcomes: RoundOutcome[] = [];
+      for (const item of plan) {
+        const deps: SubAgentDeps = { llm: this.subAgentLlm(), runner, parentBudget: sessionBudget };
+        const result = await runSubAgentOfType(item.subagentType, item.task, deps);
+        outcomes.push({ item, result });
+      }
+      return outcomes;
+    };
+
+    const loopResult = await runReplanLoop({
+      goal,
+      contract,
+      q,
+      guard,
+      planner,
+      execute,
+      maxRounds,
+      budgetExceeded: () => sessionBudget.snapshot().exceeded.length > 0,
+      onRound: (entry) => {
+        const hits = entry.observations.reduce((n, o) => n + o.newRecordIds.length, 0);
+        this.record(
+          sessionId,
+          "research",
+          `round-${entry.round}`,
+          `派出 ${entry.plan.length} 个子代理任务，新增证据 ${hits} 条，` +
+            `evaluation.stopReason=${entry.evaluation.stopReason ?? "(继续)"}`,
+        );
+      },
+    });
+
+    // 收尾日志：优先用最后一轮真实算出的 noProgress 状态（大多数情况下就是它触发了
+    // 停机，或者它证明了循环是因为 done/budget 而不是 no_progress 停下）；只有安全阀
+    // （maxRounds 命中、rounds 里最后一条的 evaluation.stopReason 仍是 null）时才没有
+    // 现成的——这种情况下不重新 tick() 一次（那会多算一轮、污染 guard 的内部计数),
+    // 直接给一个"未触发"的占位状态，describeStop() 在 stopReason==="budget" 分支
+    // 根本不读 noProgress 字段，所以占位值不影响文案。
+    const lastRound = loopResult.rounds[loopResult.rounds.length - 1];
+    const noProgressForLog = lastRound?.evaluation.noProgress ?? {
+      streak: 0,
+      triggered: false,
+      addedRecordCount: 0,
+      addedRecordIds: [],
+    };
+    // describeStop() 本身只认得 "done"/"no_progress" 两种文案分支（"budget" 落到它的
+    // 兜底 `return evaluation.report.summary`，不会显式提到"budget"三个字——那是
+    // contract.ts 的既有实现，本 lane 只读复用，不改它）。这里在日志文案里显式前缀
+    // 一下 stopReason，确保"跑了 25 轮还没做完"这件事不会被淹没在一句听起来像是
+    // 中性总结的 report.summary 里。
+    const stopText = describeStop(contract.id, {
+      report: loopResult.finalReport,
+      noProgress: noProgressForLog,
+      stopReason: loopResult.stopReason,
+    });
+    this.record(sessionId, "research", "stop", `stopReason=${loopResult.stopReason}. ${stopText}`);
+
+    return {
+      sessionId,
+      projectSlug: project.slug,
+      goal,
+      contractId: contract.id,
+      stopReason: loopResult.stopReason,
+      rounds: loopResult.rounds.length,
+      report: loopResult.finalReport,
+      observations: loopResult.rounds.flatMap((r) => r.observations),
+      log: loopResult.rounds,
+    };
+  }
+
+  // ── planner：LLM 决定下一轮派哪些子代理、干什么 ─────────────────────────────────
+  //
+  // 输入是 contract.evaluate(q) 的未完成 stage（"现在还缺什么证据"）与上一轮的结构化
+  // observation（"上一轮做了什么、拿到了什么、卡在哪"）——两者都是可以直接喂给模型
+  // 决策的字段化数据，不是一句被腰斩的话。解析失败/调用失败都有确定性兜底
+  // （defaultResearchPlan），不会让循环卡死在"planner 说不出话"上。
+  private async planResearchRound(
+    sessionId: string,
+    goal: string,
+    report: ContractReport,
+    lastObservations: Observation[],
+    round: number,
+  ): Promise<RoundPlan> {
+    if (report.incomplete.length === 0) return []; // 防御性：evaluateRound() 应该已经在上一轮就停了
+    const stagesText = report.incomplete.map((s) => `- ${s.id}（${s.description}）：${s.reason}`).join("\n");
+    const obsText =
+      lastObservations.length === 0
+        ? "（第一轮，尚无观察）"
+        : lastObservations
+            .map((o) => {
+              const bits = [
+                `stopReason=${o.stopReason}`,
+                `新增证据 ${o.newRecordIds.length} 条（${JSON.stringify(o.newRecordCountByType)}）`,
+              ];
+              if (o.deniedCount > 0) bits.push(`被拒 ${o.deniedCount} 次（${o.deniedReasons.join(",")}）`);
+              if (o.failedToolCount > 0) bits.push(`工具执行失败 ${o.failedToolCount} 次`);
+              if (o.errorMessage) bits.push(`错误：${o.errorMessage}`);
+              return `- [${o.subagentType}] ${bits.join("；")}`;
+            })
+            .join("\n");
+    const messages: ChatMessage[] = [
+      { role: "system", content: `${this.corePrompt}\n\n${this.researchPrompt}` },
+      {
+        role: "user",
+        content:
+          `研究目标：${goal}\n这是第 ${round + 1} 轮。\n\n` +
+          `契约未完成的 stage：\n${stagesText}\n\n` +
+          `上一轮的观察（结构化）：\n${obsText}\n\n` +
+          `请给出这一轮要派出的子代理任务，只回复 JSON 数组，每项 {"id","subagent","task"}。` +
+          `"subagent" 必须是以下之一：${SUB_AGENT_TYPES.join(", ")}。` +
+          `"task" 是给该子代理的具体指令，要结合上面未完成的 stage 与观察来定，不要重复已经成功` +
+          `拿到证据的动作。No markdown, no prose, only JSON.`,
+      },
+    ];
+    const res = await this.llm.call(messages, LLMRouter.DEFAULT_MODEL);
+    if (!res.ok) {
+      this.record(sessionId, "research", "plan-llm-failed", `第 ${round + 1} 轮 planner 调用失败：${res.error.message}`);
+      return this.defaultResearchPlan(report.incomplete, round);
+    }
+    return this.parseResearchPlan(res.content, round) ?? this.defaultResearchPlan(report.incomplete, round);
+  }
+
+  private parseResearchPlan(content: string, round: number): RoundPlan | null {
+    const match = content.match(/\[[\s\S]*\]/);
+    if (!match) return null;
+    let data: unknown;
+    try {
+      data = JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(data)) return null;
+    const items: RoundPlan = [];
+    data.forEach((raw, i) => {
+      if (!raw || typeof raw !== "object") return;
+      const obj = raw as Record<string, unknown>;
+      const subagent = obj.subagent as SubAgentType;
+      if (!SUB_AGENT_TYPES.includes(subagent)) return;
+      const task = typeof obj.task === "string" ? obj.task : typeof obj.description === "string" ? obj.description : null;
+      if (!task) return;
+      items.push({
+        id: typeof obj.id === "string" ? obj.id : `r${round + 1}_${i + 1}`,
+        subagentType: subagent,
+        task,
+      });
+    });
+    return items.length > 0 ? items : null;
+  }
+
+  // 确定性兜底：把第一个未完成的 stage 映射到一个"多半能推进它"的子代理类型。
+  // 不追求聪明，追求循环不卡死——真正的智能决策交给上面 LLM 驱动的 planner。
+  private defaultResearchPlan(incomplete: ContractStageReport[], round: number): RoundPlan {
+    const stageToType: Partial<Record<string, SubAgentType>> = {
+      searched: "explore",
+      read_cards: "literature",
+      citations_verified: "review",
+    };
+    const stage = incomplete[0];
+    if (!stage) return [];
+    return [
+      {
+        id: `r${round + 1}_1`,
+        subagentType: stageToType[stage.id] ?? "explore",
+        task: `推进未完成的 stage '${stage.id}'（${stage.description}）：${stage.reason}`,
+      },
+    ];
+  }
+}
+
+// 与 sub_agent.ts 的 `SubAgentType` 联合类型手工保持同步（5 个值，联合类型改动会在
+// buildSubAgentSpec()/runSubAgentOfType() 的调用点触发编译错误，属于低风险手工表）。
+const SUB_AGENT_TYPES: readonly SubAgentType[] = ["explore", "execute", "review", "lab", "literature"];
+
+// 安全阀，独立于 contract 的三条停机条件之外——与 sub_agent.ts 的 DEFAULT_MAX_ROUNDS
+// 同一类考量，命中时 runReplanLoop() 报 "budget"。
+const DEFAULT_RESEARCH_MAX_ROUNDS = 25;
+
+export interface ResearchLoopOptions {
+  maxRounds?: number;
+  noProgressThreshold?: number;
+  budget?: ConstructorParameters<typeof BudgetLedger>[0];
+  /** 可插拔契约；默认 literature-review（contract.ts 目前唯一的真实契约）。 */
+  contract?: (q: EvidenceQuery) => ResearchContract;
+}
+
+export interface ResearchLoopResult {
+  sessionId: string;
+  projectSlug: string;
+  goal: string;
+  contractId: string;
+  stopReason: StopReason;
+  rounds: number;
+  report: ContractReport;
+  /** 全部轮次的 observation 展平后的列表，便于调用方直接查看（也可以从 `log` 按轮次读）。 */
+  observations: Observation[];
+  log: RoundLogEntry[];
 }
