@@ -413,6 +413,52 @@ export function fromPubMed(raw: unknown): Paper | null {
   return paper;
 }
 
+// ── bioRxiv / medRxiv（W5-2 γ · V26 附带的 C2 第一批）──────────────────────────
+//
+// connector 的 search()/getRecent() 都吐 `{ collection: [...] }`，每条记录形状
+// 实测确认（2026-09-10，真实打 api.biorxiv.org 录制）：
+//   { title, authors（分号分隔的 "Last, F.;Last2, F2." 字符串，不是数组）,
+//     author_corresponding, author_corresponding_institution, doi, date,
+//     version, type, license, category, jatsxml, abstract, funder, published, server }
+// 没有独立的 citedByCount / isOpenAccess 字段——预印本本身即公开可读（license 各异，
+// 但都不设访问墙），isOpenAccess 按此语义硬编码 true，不是从字段读出来的。
+
+export function extractBiorxivList(payload: unknown): unknown[] {
+  return asArray(asObject(payload)?.collection);
+}
+
+export function fromBiorxiv(raw: unknown): Paper | null {
+  const item = asObject(raw);
+  if (!item) return null;
+  const title = asString(item.title);
+  if (!title) return null;
+  const paper = emptyPaper();
+  paper.title = title.replace(/\s+/g, " ").trim();
+  paper.sources = ["biorxiv"];
+  // authors 是分号分隔的 "Last, F.;Last2, F2." 字符串（bioRxiv API 约定，没有结构化数组）。
+  const authorsRaw = asString(item.authors) ?? "";
+  paper.authors = authorsOf(
+    authorsRaw
+      .split(";")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  paper.year = yearOf(item.date);
+  const server = asString(item.server);
+  paper.venue = server ?? "bioRxiv";
+  paper.doi = normalizeDoi(item.doi);
+  if (paper.doi) paper.ids.biorxiv = paper.doi;
+  paper.abstract = asString(item.abstract);
+  // 预印本本身公开可读，不看 published 字段（那是"是否已被正式期刊收录"，与
+  // "现在能不能免费读全文"是两回事，"NA" 不代表不可读）。
+  paper.isOpenAccess = true;
+  paper.url = paper.doi ? `https://doi.org/${paper.doi}` : null;
+  // 官方 API 不返回 PDF 直链；bioRxiv 网站确实有 .full.pdf 形态的 URL，但拼接规则
+  // 没有官方文档承诺稳定，宁可留 null 也不编一个可能是错的链接。
+  paper.pdfUrl = null;
+  return paper;
+}
+
 const NORMALIZERS: Record<LiteratureSource, { extract: (p: unknown) => unknown[]; map: (r: unknown) => Paper | null }> = {
   openalex: { extract: extractOpenAlexList, map: fromOpenAlex },
   crossref: { extract: extractCrossRefList, map: fromCrossRef },
@@ -422,6 +468,7 @@ const NORMALIZERS: Record<LiteratureSource, { extract: (p: unknown) => unknown[]
   // v0.4 W3 收口：W3-d 的 connector 落地后接上（此前是 P2 留的空占位）。
   arxiv: { extract: extractArxivList, map: fromArxiv },
   pubmed: { extract: extractPubMedList, map: fromPubMed },
+  biorxiv: { extract: extractBiorxivList, map: fromBiorxiv },
 };
 
 // 统一入口：给定源与原始响应，吐出归一化后的 Paper 列表。

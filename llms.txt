@@ -58,7 +58,7 @@ spark-research mcp    # stdio 传输
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
 - `project_create`：用户提出一个**新课题**（不是新问题、不是新会话）时。判据：这批文献、思路、实验是否要和已有项目分开积累？要，就新建。
 - `project_use`：要在一个已存在的项目下工作，且不想每次都传 project 参数时。
-- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。6 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
+- `lit_search`（长任务，同步等待）：需要摸清某个问题上的已有工作时；为综述或创新性核验准备候选池时。7 个源并发检索（openalex / crossref / europepmc / semanticscholar / arxiv / pubmed / biorxiv；配了凭据还有 AMiner），按 DOI 与标题模糊匹配去重合并。
 - `lit_add`（长任务，同步等待）：已经有确定的标识符（DOI / arXiv id / PMID），想把这一篇放进项目文献库时。入库会自动去重合并，并在证据图里建一个 type=paper 的锚点，后续所有引用都指向它。
 - `lit_list`：要知道项目文献库里已经有什么（写综述前、判断某篇是否已入库、找 bibtexKey 时）。
 - `lit_read_cards`（长任务，同步等待）：文献入库之后、写综述之前。为每篇论文生成结构化精读卡（问题/方法/结论/局限/与本项目关系），卡片是证据图里的 reading record，综述的每一句话都要能追到某张卡。
@@ -98,11 +98,12 @@ spark-research mcp    # stdio 传输
 
 ## 能力面
 
-### 数据源 Connector（17）
+### 数据源 Connector（21）
 
 - **chemistry**：chembl / pubchem
-- **genomics**：ensembl / ncbi / cncb
-- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang
+- **genomics**：ensembl / ncbi / cncb / clinvar
+- **literature**：pubmed / arxiv / openalex / crossref / europepmc / semanticscholar / aminer / cnki / wanfang / biorxiv
+- **pathways**：reactome / string-db
 - **proteins**：uniprot / pdb / alphafold
 
 可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。

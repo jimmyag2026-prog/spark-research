@@ -1,0 +1,22 @@
+{
+  "cassette": "biorxiv-getbydoi",
+  "note": "Recorded by FixtureHttp. Request headers are never persisted; credential-bearing query params are stripped from the match key.",
+  "entries": [
+    {
+      "key": "d7e26c2af1e2446d27f74439",
+      "method": "GET",
+      "url": "https://api.biorxiv.org/details/biorxiv/10.64898/2026.08.11.744243",
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "bodyLength": 1968,
+        "bodySha256": "3633aee8101987090617534fa20e931fe203e25677c89766d8b2aadefbdf7011",
+        "truncated": false,
+        "body": "{\"messages\":[{\"status\":\"ok\",\"category\":\"all\"}], \"collection\":[{\"title\":\"Correlative light\\u2013electron microscopy reveals fundamentally different axonal architectures for fast and modulatory transmission\",\"authors\":\"Lee, K.;Sahlender, D.;Blanc, J.;Jorstad, A.;Gasselin, C.;Clerc-Rosset, S.;Markopoulos, F.;Petersen, C.;Holtmaat, A.;Knott, G.\",\"author_corresponding\":\"Graham William Knott\",\"author_corresponding_institution\":\"\\u00c9cole Polytechnique F\\u00e9d\\u00e9rale de Lausanne\",\"doi\":\"10.64898\\/2026.08.11.744243\",\"date\":\"2026-8-19\",\"version\":\"1\",\"type\":\"new results\",\"license\":\"cc_by\",\"category\":\"neuroscience\",\"jatsxml\":\"https:\\/\\/www.biorxiv.org\\/content\\/early\\/2026\\/8-\\/9\\/2026.08.11.744243.source.xml\",\"abstract\":\"We used correlative light and focused ion beam\\u2013scanning electron microscopy (FIBSEM) to characterise the ultrastructural organisation of neuromodulatory axons in the upper layers of the adult mouse somatosensory cortex. Cholinergic projections from the basal forebrain and serotonergic axons from the raphe nucleus were reconstructed, enabling quantitative analysis of synapse and vesicle distribution. Consistent with prior work, these axons formed only small and morphologically indistinct synaptic specialisations. However, these sites contained only a small fraction of the total axonal vesicle population, which were instead distributed along their length and spatially uncoupled from identifiable synaptic contacts. In contrast to classical excitatory and inhibitory axons, where vesicles are tightly clustered at defined presynaptic release sites, this organisation indicates that synaptic release contributes only minimally to neuromodulator output. Instead, our data support a model in which acetylcholine and serotonin signalling is mediated predominantly through non-synaptic release, consistent with a spatially diffuse transmission across cortical microcircuits.\",\"funder\":\"NA\",\"published\":\"NA\",\"server\":\"bioRxiv\"}]}\r\n\r\n\r\n\r\n"
+      },
+      "recordedAt": "2026-09-10T13:07:29.993Z"
+    }
+  ]
+}

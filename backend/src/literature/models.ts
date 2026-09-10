@@ -9,6 +9,7 @@ export const LITERATURE_SOURCES = [
   "aminer",
   "arxiv",
   "pubmed",
+  "biorxiv",
 ] as const;
 export type LiteratureSource = (typeof LITERATURE_SOURCES)[number];
 
@@ -22,6 +23,19 @@ export type LiteratureSource = (typeof LITERATURE_SOURCES)[number];
 //
 // 结构性教训写在 `DEFAULT_SOURCE_EXCLUSIONS` 上：光改这一行还会复发，
 // 因为 AD-12 门禁核的是「源在不在注册表」，核不了「默认值有没有包含它」。
+// W5-2 γ（V26 附带的 C2 第一批）：biorxiv 判断——进默认集，不进排除表。
+//
+// bioRxiv 免 key、`status: "available"`，按 V34 门禁的判据，这类源**没有**合法的
+// 排除理由（只认 apiKeyRequired 或 status:"placeholder"，二者都不成立）。唯一能让它
+// "合法"缺席默认集的办法是把 status 谎报成 placeholder——那是为了让门禁变绿而
+// 放宽门禁本身，本轮明确不许。
+//
+// bioRxiv 官方 API 没有全文检索端点（只有"最近 N 篇"和"按 DOI 精确查"两个原语），
+// 所以 connector 层（backend/src/connectors/biorxiv.ts）在此之上组合出了一个
+// "search"/"getPaper" 复合工具：search 拉最近 200 篇窗口 + 客户端关键词打分过滤，
+// getPaper 只认 DOI。这不是伪造出来的假通过——是一个真实、诚实（caveat 里写清楚了
+// 窗口限制）的能力，能让 bioRxiv 加入统一检索、覆盖它独有的预印本（尤其是刚挂出、
+// 还没被 europepmc/openalex 二次索引的最新内容）。所以判断是：让它进默认集。
 export const DEFAULT_SEARCH_SOURCES: LiteratureSource[] = [
   "openalex",
   "crossref",
@@ -29,6 +43,7 @@ export const DEFAULT_SEARCH_SOURCES: LiteratureSource[] = [
   "semanticscholar",
   "arxiv",
   "pubmed",
+  "biorxiv",
 ];
 
 // V34 的门禁面：**已实装的文献源要么在 `DEFAULT_SEARCH_SOURCES` 里，要么在这张表里带理由。**

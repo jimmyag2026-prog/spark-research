@@ -19,6 +19,10 @@ import { BufferedResponse, StubHttp, type HttpRequestInit } from "../../backend/
 import { EuropePMCConnector, OpenAlexConnector } from "../../backend/src/connectors/literature";
 import { AMinerConnector, isCredentialMissing } from "../../backend/src/connectors/aminer";
 import type { CredentialProvider } from "../../backend/src/connectors/base";
+import { ClinVarConnector } from "../../backend/src/connectors/clinvar";
+import { BioRxivConnector } from "../../backend/src/connectors/biorxiv";
+import { ReactomeConnector } from "../../backend/src/connectors/reactome";
+import { StringDBConnector } from "../../backend/src/connectors/string-db";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // echo http：把这次 HTTP 请求本身（url / method / headers / body）原样编码进响应体。
@@ -255,6 +259,152 @@ describe("connector 并发竞态回归（P10-a D-1，P0）", () => {
       expect(echo.method).toBe("POST");
       expect(echo.headers.Authorization).toBe("test-aminer-token");
       expect(JSON.parse(echo.body!)).toEqual({ ids: [`paper-${i}`] });
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// W5-2 γ · V26 附带的 C2 第一批：4 个新 connector 的并发不变式（§1.4.2 checklist ②）。
+//
+// 这四个走的是「TS connector」路（不是 P15 declarative manifest），按方案 §1.4.1
+// 的分流判据，并发不变式要手写在这里，不能靠 `ext verify` 自动过。
+//
+// 重点覆盖 bioRxiv 的 `getByDoi`——它是四个新 connector 里**唯一**不走
+// `requestRaw()` 通用路径的方法（见 connectors/biorxiv.ts 的 encodeDoiSegments
+// 注释：doi 内部的 "/" 必须原样保留，不能被 requestRaw() 的 encodeURIComponent
+// 转义成 %2F，所以自己直接调 `this.http.request()`）。它绕开了 P10-a 那次修复
+// 验证过的 handlers 表分发路径，需要单独确认：并发下每次调用各自的 doi/server
+// 参数不会串位——因为它是纯局部变量拼 URL、没有任何跨请求共享的可变实例状态，
+// 结构上就不可能重演 P10-a 的竞态，但「结构上不可能」需要一个真跑的测试来兜底，
+// 不能只靠读代码断言。
+describe("W5-2 γ · 4 个新 connector 的并发竞态（V26 checklist §1.4.2 ②）", () => {
+  function newHttp(): StubHttp {
+    return echoHttp();
+  }
+
+  interface NewJob {
+    label: string;
+    exec: (http: StubHttp) => Promise<unknown>;
+  }
+
+  function buildNewJobs(n: number): NewJob[] {
+    const jobs: NewJob[] = [];
+    for (let i = 0; i < n; i++) {
+      const kind = i % 9;
+      switch (kind) {
+        case 0:
+          jobs.push({
+            label: `clinvar.search#${i}`,
+            exec: async (http) => new ClinVarConnector({ http }).call("search", { query: `gene-${i}`, retmax: (i % 5) + 1 }),
+          });
+          break;
+        case 1:
+          jobs.push({
+            label: `clinvar.getSummary#${i}`,
+            exec: async (http) => new ClinVarConnector({ http }).call("getSummary", { id: [`uid-${i}`, `uid-${i}b`] }),
+          });
+          break;
+        case 2:
+          jobs.push({
+            label: `biorxiv.getRecent#${i}`,
+            exec: async (http) => new BioRxivConnector({ http }).call("getRecent", { count: (i % 50) + 1 }),
+          });
+          break;
+        case 3:
+          jobs.push({
+            label: `biorxiv.getByDoi#${i}`,
+            // 绕开 requestRaw() 的那条自定义路径——本组里唯一的重点。
+            exec: async (http) => new BioRxivConnector({ http }).call("getByDoi", { doi: `10.1101/2021.01.${String(i).padStart(2, "0")}.race` }),
+          });
+          break;
+        case 4:
+          jobs.push({
+            label: `biorxiv.search#${i}`,
+            // search() 内部又调了一次 getByDoi 同款的间接路径（通过 getRecent → requestRaw），
+            // 混进同一批并发里，覆盖「复合方法内部再发一次请求」这条形态。
+            exec: async (http) => new BioRxivConnector({ http }).call("search", { query: `topic-${i}`, windowSize: 20 }),
+          });
+          break;
+        case 5:
+          jobs.push({
+            label: `reactome.search#${i}`,
+            exec: async (http) => new ReactomeConnector({ http }).call("search", { query: `pathway-${i}`, species: "Homo sapiens" }),
+          });
+          break;
+        case 6:
+          jobs.push({
+            label: `reactome.getEntry#${i}`,
+            exec: async (http) => new ReactomeConnector({ http }).call("getEntry", { id: `R-HSA-${100000 + i}` }),
+          });
+          break;
+        case 7:
+          jobs.push({
+            label: `string-db.search#${i}`,
+            exec: async (http) => new StringDBConnector({ http }).call("search", { query: `GENE${i}`, species: 9606 }),
+          });
+          break;
+        default:
+          jobs.push({
+            label: `string-db.getPartners#${i}`,
+            exec: async (http) => new StringDBConnector({ http }).call("getPartners", { id: `9606.ENSP${i}`, limit: (i % 10) + 1 }),
+          });
+      }
+    }
+    return jobs;
+  }
+
+  async function runNewJobs(order: "serial" | "parallel", jobs: NewJob[]): Promise<unknown[]> {
+    const http = newHttp();
+    if (order === "serial") {
+      const out: unknown[] = [];
+      for (const job of jobs) out.push(await job.exec(http));
+      return out;
+    }
+    return Promise.all(jobs.map((job) => job.exec(http)));
+  }
+
+  const M = 180; // 9 种 job 类型各 20 个
+
+  test(`单实例 ${M} 并发混合工具调用（4 个新 connector），结果与串行逐个调用逐位一致`, async () => {
+    const jobs = buildNewJobs(M);
+    const serial = await runNewJobs("serial", jobs);
+    const parallel = await runNewJobs("parallel", jobs);
+    expect(serial.length).toBe(jobs.length);
+    expect(parallel.length).toBe(jobs.length);
+    for (let i = 0; i < jobs.length; i++) {
+      expect(parallel[i]).toEqual(serial[i]);
+    }
+  });
+
+  test("并发下 bioRxiv getByDoi 的 doi/server 参数不串位（绕开 requestRaw 的自定义路径）", async () => {
+    const jobs = buildNewJobs(M);
+    const parallel = await runNewJobs("parallel", jobs);
+    const doiJobs = jobs
+      .map((job, idx) => ({ job, echo: parallel[idx] as { url: string } }))
+      .filter(({ job }) => job.label.startsWith("biorxiv.getByDoi#"));
+    expect(doiJobs.length).toBe(20);
+    for (const { job, echo } of doiJobs) {
+      const i = Number(job.label.split("#")[1]);
+      const expectedDoi = `10.1101/2021.01.${String(i).padStart(2, "0")}.race`;
+      expect(echo.url).toBe(`https://api.biorxiv.org/details/biorxiv/${expectedDoi}`);
+      // 每次都各自拼出正确的 doi，没有被并发中的其他 job 串味成 %2F 转义形态
+      // 或者别的 job 的 doi/count/server。
+      expect(echo.url).not.toContain("%2F");
+    }
+  });
+
+  test("并发下 STRING getPartners 的 id→identifiers 映射与 limit 未被跳过", async () => {
+    const jobs = buildNewJobs(M);
+    const parallel = await runNewJobs("parallel", jobs);
+    const partnerJobs = jobs
+      .map((job, idx) => ({ job, echo: parallel[idx] as { url: string } }))
+      .filter(({ job }) => job.label.startsWith("string-db.getPartners#"));
+    expect(partnerJobs.length).toBe(20);
+    for (const { job, echo } of partnerJobs) {
+      const i = Number(job.label.split("#")[1]);
+      expect(echo.url).toContain(`identifiers=9606.ENSP${i}`);
+      expect(echo.url).toContain(`limit=${(i % 10) + 1}`);
+      expect(echo.url).not.toContain("id=9606");
     }
   });
 });
