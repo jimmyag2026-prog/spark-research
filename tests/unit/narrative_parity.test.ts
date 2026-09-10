@@ -71,11 +71,17 @@ function productionImportTargets(): Set<string> {
 // 这张表只许缩短、不许悄悄变长：新增一条就等于新增一处「叙事与实现的缺口」，
 // 应该先问「这东西还该不该留」，而不是先把它加进白名单。
 const ALLOWED_ORPHANS: Record<string, string> = {
-  "backend/src/llm/budget.ts":
-    "**等接线**：v0.4 P11 lane R-c 交付的 BudgetLedger。它的消费方是 P12 的 ToolBus" +
-    "（子代理的调用数 / token / 成本上限）与 P13 的帧级账本，两者都还没落地，" +
-    "所以现在没有生产调用方。**W1-a（ToolBus）接上后必须删除本条**——" +
-    "门禁的『多余登记必须删除』对称检查会强制这件事（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
+  // backend/src/llm/budget.ts 曾在此登记「等接线：W1-a（ToolBus）接上后必须删除本条」——
+  // W1-a 的 backend/src/agents/toolbus.ts 已经 import BudgetLedger 并在每次工具调用后
+  // record()，budget.ts 有了真实生产调用方，按对称检查删除本条。
+
+  "backend/src/agents/toolbus.ts":
+    "**等接线**：v0.4 P12 波次 W1-a 交付的 AgentToolBus（授权 / 预算 / 审计三层，套在 P9 的" +
+    "McpToolRunner 外）。它的消费方是 W2-a 的子代理 tool loop（`agents/orchestrator.ts` /" +
+    "`agents/sub_agent.ts`，见 DEVELOPMENT_PLAN_v0.4.md §5·补.2 的任务级依赖图" +
+    "`R-c → T-a ToolBus → T-b 子代理 tool loop`），本 lane 尚未落地，所以现在没有生产调用方。" +
+    "**W2-a 接上子代理 tool loop 后必须删除本条**——门禁的『多余登记必须删除』对称检查会强制这件事" +
+    "（做法见 DEVELOPMENT_PLAN_v0.4.md §5.3·补）。",
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
   "backend/src/http/fixture.ts":
