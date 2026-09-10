@@ -1149,6 +1149,19 @@ target 即可，不必等 Modal），**发布前**第三次（干净机器）。
 用户后来做的全部动作只有两件——把 token 写进 `~/.spark-research/credentials.json`
 的 `connectors.modal`（§1.1.7 已定，复用 `CredentialStore`，0600），
 把 `computeTarget` / `modalEnvironment` 写进 `config.json`（W5-2 β 的所有权）。
+
+> ⚠️ **W5-2 α 交付后的更正（主会话，2026-09-10）**：这条约束**只兑现了一半**，
+> 而且是 lane α 主动指出来的。判定路径确实纯配置（有阴性对照钉着，没有任何编译期常量
+> 参与「Modal 能不能用」），**但真实 `ModalGateway`（Modal SDK 客户端）压根还不存在**——
+> 本波交付的是接口 + 录制层 + 假 gateway。所以**「填了 token 就能跑」现在不成立**。
+>
+> α 没有把接口做得像是能用，而是让 `status()` 在这种情况下报得难看但准确：
+> 「真实 gateway 尚未实现——所以只填 token 还跑不起来」（`adapters/modal.ts:156`）。
+> **这是对的取向**：一个还没连过真实服务的适配器，任何"看起来能用"的措辞都会误导发布材料。
+>
+> 约束一的准确表述应该是：**「将来实现真实 gateway 时，启用它不得需要任何编译期改动」**——
+> 这一条本波已经做到并有门禁。而"填 token 即可用"要等真实 gateway 落地后才成立，
+> 清单见 `docs/devlog/W5-2-a.md` §四。
 **adapter 里不许有任何 build-time 常量参与「Modal 能不能用」的判定**——
 判定只能来自运行期读配置。阴性对照：把判定改成读一个编译期常量 → 测试必须红。
 
