@@ -52,7 +52,7 @@ spark-research server [port]
 spark-research mcp    # stdio 传输
 ```
 
-暴露 26 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
+暴露 30 个工具。接入后第一步调 `research_capabilities` introspect 整个工作台。
 
 - `research_capabilities`：接入 Spark Research 后的第一次调用，或任何时候你不确定「有哪些文献源可用 / 哪些仿真平台装好了 / 有哪些技能」。一次调用即可 introspect 整个工作台。
 - `project_list`：开始任何研究工作之前，先确认「现在在哪个课题下」。Spark Research 是 project-centric 的：文献库、思路库、实验、结论都挂在项目下，选错项目等于写进别人的实验记录本。
@@ -79,6 +79,10 @@ spark-research mcp    # stdio 传输
 - `conclusion_get`：要看一张结论卡的详情与**预评估**时。预评估会跑三个检查器（data-consistency / capability-labeling / stats-plausibility）但**不落库、不改状态**——它告诉你「如果现在评审会是什么结果」。
 - `report_export`：要把一个项目这段时间的工作整理成带证据链接的 Markdown 报告时。正文全部由代码渲染、不经过模型——每条陈述都带 record id，读者可以逐条回原始记录核对。
 - `chem_depict`：要把一个 SMILES 分子式变成可看的 2D 结构图时——比如在报告/讨论里给出「这个分子长什么样」，或者拿到一个 SMILES 想先核实 RDKit 解析出来的 canonical 形式、分子式、分子量是否符合预期。产出是一张 SVG 结构图，落一条 artifact（image/svg+xml）+ 一条 evidence=computed 的 record，可在工作台「产物」页打开查看。
+- `compute_plan`：任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后停在 awaiting_approval 等人点头。
+- `compute_status`：plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
+- `compute_list`：想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
+- `compute_collect`：**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
 - `task_status`：某个长任务工具因为超时返回了任务句柄（taskId）时，用它查最终结果。
 
 **刻意不暴露的动作**（设计声明，不是未实现清单）：
@@ -88,6 +92,9 @@ spark-research mcp    # stdio 传输
 - `lab_simulate`：执行协议是物理世界动作的模拟入口，且只允许从 awaiting_approval 经人工批准进入。开放它等于绕过 approve gate。 人来做：`spark-research lab simulate <id>（须先经人工 approve）`
 - `conclusion_review`：结论卡能否进报告结论区是可信度的最后一道闸。让外部 agent 给自己产出的结论盖章，等于取消这道闸。预评估已通过 conclusion_get 只读开放。 人来做：`spark-research conclusion review <id> --actor <名字>`
 - `project_archive`：归档会把项目移出默认视图，是破坏性的组织动作，不应由外部 agent 代劳。 人来做：`spark-research project archive <slug>`
+- `compute_approve`：AD-6 同构：批准一次算力派发就是批准一笔账单。若 agent 能自己批准，它就能自己 plan、自己批准、自己派发，审批门退化成注释——而这一次退化的代价是真钱。 人来做：`spark-research compute approve <jobId> --actor <名字>（须在真实交互终端里执行）`
+- `compute_run`：派发就是计费动作本身，且只允许从 approved 经人工进入（与 lab_simulate 同构）。开放它等于绕过 approve gate；HTTP 层也刻意没有这个端点，不存在「换条路调」的余地。 人来做：`spark-research compute run <jobId>（须先经人工 approve）`
+- `compute_release`：释放会删掉远端卷/工作目录，是不可逆的破坏性动作（与 project_archive 同构）。产物只剩远端那一份时状态机会拦，但「该不该扔掉这批结果」本身是人的判断。 人来做：`spark-research compute release <jobId>（先 collect，或用 --discard 显式放弃产物）`
 
 ## 能力面
 
@@ -145,6 +152,8 @@ spark-research mcp    # stdio 传输
 - `userAgent`（默认 —，env `SPARK_RESEARCH_USER_AGENT`）：文献 connector 的 User-Agent（默认由版本号 + 项目地址 + contactEmail 拼出）
 - `wetBackend`（默认 opentrons_simulate，env `SPARK_RESEARCH_WET_BACKEND`）：湿实验默认执行后端
 - `simulationPlatform`（默认 pyref，env `SPARK_RESEARCH_SIM_PLATFORM`）：`exp new` 不给 --platform 时的默认干实验平台
+- `computeTarget`（默认 local，env `SPARK_RESEARCH_COMPUTE_TARGET`）：`spark-research compute plan` 不给 --target 时的默认执行地
+- `modalEnvironment`（默认 —，env `SPARK_RESEARCH_MODAL_ENVIRONMENT`）：Modal 账户的 environment 名（多环境账户才需要；不填走账户默认环境）
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
 - `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
 - `httpTimeoutMs`（默认 30000，env `SPARK_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）
@@ -5146,6 +5155,246 @@ conclusion               --derives_from--> observation / experiment
   },
   "required": [
     "smiles"
+  ],
+  "additionalProperties": false
+}
+```
+
+## compute_plan
+
+【何时调】任务在本机跑不动（要 GPU、要几十分钟、要独立环境）时，先用它生成一份**待人审批的算力计划**。它**不执行任何东西**：不建远端资源、不解析凭据、不产生账单，只算出「要跑什么命令、带哪些文件上去、收哪些产物回来、上界花多少钱」，然后停在 awaiting_approval 等人点头。
+【参数示例】{"purpose": "在 GPU 上跑 100ns MD 采样", "command": ["python", "run.py", "--steps", "50000000"], "upload": ["run.py", "system.pdb"], "outputs": ["traj.dcd", "log.txt"], "target": "local", "timeoutMinutes": 120}
+【command 必须是 argv 数组】不接受 shell 字符串——被审批的命令不该再经过一次 shell 展开。写 ["bash","-c","..."] 会被直接拒。
+【何时不该用】① 几秒钟就能算完的东西——本地 exp_run 更快，不必绕远端。② 你想「顺便把它跑起来」——做不到：派发必须由人在真实终端里执行 `spark-research compute approve <jobId> --run`，这个工具面上没有派发入口，试也调不到。
+【典型链路】compute_plan（拿到 jobId + digest + 逐文件上传清单 + 费用上界）→ **人**看过之后在终端 approve --run → compute_status 轮询 → 终态后 compute_collect 取产物。
+【返回体里最该看的三样】① warning：这次用谁的账户、上界多少钱；② uploads：**逐个文件**列出来了，会离开这台机器的就是这些，别的都不会；③ humanAction：需要人去敲的那条命令，原样转达给人，不要自己想办法绕过去。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "description": "这次运行要干什么（会出现在审批面上，人靠它做判断）",
+      "examples": [
+        "在 GPU 上跑 100ns MD 采样"
+      ]
+    },
+    "command": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "要执行的 argv 数组（**不是** shell 字符串）",
+      "examples": [
+        [
+          "python",
+          "run.py",
+          "--steps",
+          "50000000"
+        ]
+      ]
+    },
+    "upload": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "要带上去的文件/目录（相对 workspaceRoot）。密钥类路径会被 deny-list 硬拦",
+      "examples": [
+        [
+          "run.py",
+          "system.pdb"
+        ]
+      ]
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "要收割回来的产物（相对路径 glob）",
+      "examples": [
+        [
+          "traj.dcd",
+          "log.txt"
+        ]
+      ]
+    },
+    "target": {
+      "type": "string",
+      "description": "执行地：local（本机子进程，不计费）或 modal（云端，计费）。不给就用配置的 computeTarget",
+      "examples": [
+        "local"
+      ]
+    },
+    "workspaceRoot": {
+      "type": "string",
+      "description": "上传的根目录（绝对路径）。不给就用当前项目目录",
+      "examples": [
+        "~/.spark-research/projects/gpcr-allostery"
+      ]
+    },
+    "network": {
+      "type": "string",
+      "description": "none（默认，声明这次运行不需要网络）或 unrestricted",
+      "examples": [
+        "none"
+      ]
+    },
+    "secretRefs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "密钥的**符号名**（值永不进 plan/job/record）",
+      "examples": [
+        [
+          "hf_token"
+        ]
+      ]
+    },
+    "gpu": {
+      "type": "string",
+      "description": "GPU 型号；local 不提供 GPU，填了会被拒",
+      "examples": [
+        "A100"
+      ]
+    },
+    "cpus": {
+      "type": "number",
+      "description": "CPU 核数，默认 1",
+      "examples": [
+        4
+      ]
+    },
+    "memoryGb": {
+      "type": "number",
+      "description": "内存 GiB，默认 1",
+      "examples": [
+        16
+      ]
+    },
+    "timeoutMinutes": {
+      "type": "number",
+      "description": "墙钟超时（分钟），默认 30；费用上界 = 它 × 单价",
+      "examples": [
+        120
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "purpose",
+    "command"
+  ],
+  "additionalProperties": false
+}
+```
+
+## compute_status
+
+【何时调】plan 之后想知道「人批了没 / 跑到哪了 / 产物收了没」。返回三轴状态（execution / delivery / resource）+ 三段审批（未消费的 approval、已消费的 consumedApproval、因 plan 变更而作废的 supersededApproval）。
+【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
+【怎么读三轴】execution 是「跑没跑完」，delivery 是「产物取没取回来」，resource 是「远端资源还在不在」。三者独立：execution=succeeded 且 delivery=pending 意味着**跑完了但产物还在远端**，这时候该调 compute_collect。
+【何时不该用】想推进状态时——这是只读的。批准与派发都必须由人在真实终端里做。
+【典型链路】compute_plan → （人 approve --run）→ compute_status 轮询到 execution 终态 → compute_collect。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "jobId": {
+      "type": "string",
+      "description": "算力任务 id",
+      "examples": [
+        "cj-m2x9k1-1a2b3c4d"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "jobId"
+  ],
+  "additionalProperties": false
+}
+```
+
+## compute_list
+
+【何时调】想看这个项目里有哪些算力任务、有没有卡在 awaiting_approval 等人批的。可按 execution 状态过滤。
+【参数示例】{"state": "awaiting_approval"} —— 不给 state 就返回全部。
+【何时不该用】只关心某一个任务时——compute_status 更直接。
+【典型链路】compute_list（发现有三个还等着人批）→ 把 humanAction 转达给人 → 人批完之后 compute_status 跟进。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "description": "按 execution 状态过滤（planned / awaiting_approval / approved / running / succeeded …）",
+      "examples": [
+        "awaiting_approval"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+## compute_collect
+
+【何时调】**只在 delivery=pending 时**——也就是 execution 已经到终态（succeeded/failed/timed_out/cancelled）但产物还在远端。它把 outputs 拉回本地 <job>/harvest/，并把 delivery 推进到 complete。
+【参数示例】{"jobId": "cj-m2x9k1-1a2b3c4d"}
+【何时不该用】① execution 还没到终态——会得到 409，不是「等一会再试」的意思，是「你调早了」。② delivery 已经是 complete——再调一次没有语义。
+【典型链路】compute_status 看到 execution=succeeded & delivery=pending → compute_collect → 产物落到 harvest/，之后才允许人 release 远端资源。
+【为什么收割是独立一步】产物只剩远端那一份时（recoverable=true），释放资源会被状态机直接拒——**不许关掉持有唯一副本的资源**。收割就是把「唯一副本」变成两份的那一步。
+
+参数 schema：
+```json
+{
+  "type": "object",
+  "properties": {
+    "jobId": {
+      "type": "string",
+      "description": "算力任务 id",
+      "examples": [
+        "cj-m2x9k1-1a2b3c4d"
+      ]
+    },
+    "project": {
+      "type": "string",
+      "description": "项目 slug。不给就用当前项目（与 CLI 的 `spark-research project open` 选中的那个一致）。",
+      "examples": [
+        "gpcr-allostery"
+      ]
+    }
+  },
+  "required": [
+    "jobId"
   ],
   "additionalProperties": false
 }

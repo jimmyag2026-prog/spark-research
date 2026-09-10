@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { ConnectorRegistry } from "../../backend/src/connectors/registry";
-import { MCP_TOOLS } from "../../backend/src/mcp/tools";
+import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
+import { TARGET_KINDS } from "../../backend/src/compute/target";
+import { defaultComputeAdapters } from "../../backend/src/compute/cli";
 import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/lab/wet_models";
 import { EXPERIMENT_STATES } from "../../backend/src/experiment/models";
 import { loadSkills } from "../../backend/src/skills/frontmatter";
@@ -120,13 +122,14 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   "backend/src/http/fixture.ts":
     "fixture 回放层，刻意只被测试使用（生产走 NativeHttp）——这是 P2 的设计，不是缺口",
 
-  // v0.5 W5-1 α（CB-1/CB-2）：算力层的编排入口与第一个 adapter 在本波交付，
-  // 但生产调用方（CLI `spark-research compute …`）是 W5-2 β 的所有权。
-  // 这两条是本波**唯一**的跨波「等接线」（DEVELOPMENT_PLAN_v0.5_MODULES.md §5.1）。
-  "backend/src/compute/broker.ts":
-    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
-  "backend/src/compute/adapters/local.ts":
-    "等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条",
+  // v0.5 W5-1 α 在这里登记过两条「等接线」：`backend/src/compute/broker.ts` 与
+  // `backend/src/compute/adapters/local.ts`（当时 CLI 还没有，算力层没有生产调用方）。
+  // W5-2 β 已经把 `backend/src/compute/cli.ts` 接上——它 import 了 ComputeBroker 与
+  // LocalComputeAdapter，`backend/src/index.ts` 的 `case "compute"` 又 import 了它，
+  // 两者都有了真实的生产调用方，按对称检查删除这两条。
+  //
+  // **这张表同时是接线清单**：忘接会红（未登记的孤儿），接了不删也会红（多余的登记）。
+  // 这正是它不该变成永久豁免的机制——见下面「反向：在册的条目若已不再是孤儿」那一段。
   // backend/src/agents/swarm.ts 曾在此登记「已知缺口」：v0.1 遗留、生产代码零调用方、
   // dependsOn 未实现、decompose 是三条正则，README 的「100 并发 swarm」宣传语即出自此处。
   // W4-a 按 BACKLOG V7 删除了 swarm.ts + swarm_types.ts + tests/unit/swarm.test.ts——
@@ -514,6 +517,46 @@ describe("叙事一致性门禁（AD-12）", () => {
     const raw = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as { version: string };
     expect(PACKAGE_VERSION, "version.ts 的读法与 package.json 对不上——多半又是靠运行期读文件").toBe(raw.version);
     expect(PACKAGE_VERSION).not.toBe("0.0.0");
+  });
+
+  // v0.5 W5-2 β（CB-5 接线）：算力执行地的「数」与「口径」都必须是派生的。
+  //
+  // 这条断言防的是与 connector 数、技能数完全同一类的漂移：capabilities 对外说有几个
+  // 执行地、每个能不能用，如果是手写的，加一个 adapter 就会错，而且不报警。
+  // 额外钉住 AD-12 在算力上的具体形态（§三·补.7 约束二）：**注册表里没有 adapter 的
+  // 执行地，永远不许报 available**——没配 Modal 凭据时它必须是「未配置」
+  // （needs_credential），既不是「不可用」也不是「可用」。
+  test("算力执行地：capabilities 声称的 target 数 = TARGET_KINDS，且无 adapter 者一律不报 available", async () => {
+    const manifest = await buildCapabilities();
+    expect(manifest.compute.targets.map((t) => t.kind)).toEqual([...TARGET_KINDS]);
+
+    const registered = new Set(Object.keys(defaultComputeAdapters()));
+    for (const target of manifest.compute.targets) {
+      if (target.availability === "available") {
+        expect(
+          registered.has(target.kind),
+          `capabilities 说 target '${target.kind}' 可用，但 adapter 注册表里根本没有它——` +
+            `这正是 AD-12 禁止的形状（声称 > 实现）`,
+        ).toBe(true);
+      }
+      // 每一个非 available 的执行地都必须说清楚为什么，不许只给一个状态词。
+      if (target.availability !== "available") {
+        expect(target.reason, `target '${target.kind}' 报了 ${target.availability} 却没给理由`).toBeTruthy();
+      }
+    }
+
+    // modal 的口径：本仓库的测试环境不配 Modal 凭据，所以它必须是「未配置」。
+    const modal = manifest.compute.targets.find((t) => t.kind === "modal")!;
+    expect(modal.credentialConfigured).toBe(false);
+    expect(modal.availability).toBe("needs_credential");
+    expect(modal.setupHint, "报「未配置」就必须同时给出配置指引（V36）").toBeTruthy();
+
+    // 默认执行地是 local，且 withheld 清单从 MCP_WITHHELD 派生（不是又抄一份）。
+    expect(manifest.compute.defaultTarget).toBe("local");
+    expect([...manifest.compute.withheld].sort()).toEqual(
+      MCP_WITHHELD.map((w) => w.name).filter((n) => n.startsWith("compute_")).sort(),
+    );
+    expect(manifest.compute.withheld).toHaveLength(3);
   });
 
   test("MCP 工具：每个工具名唯一，且 withheld 清单与暴露清单不重叠", () => {
