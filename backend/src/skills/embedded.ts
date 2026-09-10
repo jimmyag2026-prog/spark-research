@@ -15,6 +15,7 @@
 // 这张表由收口手工维护，但**不是"靠自觉"**：`tests/unit/embedded_skills.test.ts` 断言
 // 它与磁盘上的目录集合逐字一致，新增或删除技能而忘了改这里，测试立刻变红。
 
+import CobraPyMd from "./cobrapy/SKILL.md" with { type: "text" };
 import DryExperimentMd from "./dry-experiment/SKILL.md" with { type: "text" };
 import IdeaCoexploreMd from "./idea-coexplore/SKILL.md" with { type: "text" };
 import LibraryCurationMd from "./library-curation/SKILL.md" with { type: "text" };
@@ -23,11 +24,14 @@ import LiteratureSearchMd from "./literature-search/SKILL.md" with { type: "text
 import NoveltyCheckMd from "./novelty-check/SKILL.md" with { type: "text" };
 import PaperDownloadMd from "./paper-download/SKILL.md" with { type: "text" };
 import ProteinAnalysisMd from "./protein-analysis/SKILL.md" with { type: "text" };
+import PyDESeq2Md from "./pydeseq2/SKILL.md" with { type: "text" };
 import ResearchReportMd from "./research-report/SKILL.md" with { type: "text" };
+import ScanpyMd from "./scanpy/SKILL.md" with { type: "text" };
 import WetProtocolMd from "./wet-protocol/SKILL.md" with { type: "text" };
 
 /** 技能名 → SKILL.md 原文。键集合与 backend/src/skills 下各技能目录的 SKILL.md 一致。 */
 export const EMBEDDED_SKILLS: Readonly<Record<string, string>> = {
+  cobrapy: CobraPyMd,
   "dry-experiment": DryExperimentMd,
   "idea-coexplore": IdeaCoexploreMd,
   "library-curation": LibraryCurationMd,
@@ -36,6 +40,8 @@ export const EMBEDDED_SKILLS: Readonly<Record<string, string>> = {
   "novelty-check": NoveltyCheckMd,
   "paper-download": PaperDownloadMd,
   "protein-analysis": ProteinAnalysisMd,
+  pydeseq2: PyDESeq2Md,
   "research-report": ResearchReportMd,
+  scanpy: ScanpyMd,
   "wet-protocol": WetProtocolMd,
 };

@@ -108,16 +108,17 @@ spark-research mcp    # stdio 传输
 
 可用性四档：available / needs_credential（要 key 但没配，检索时被 **skip** 而不是失败）/ placeholder（占位实现，调用会失败）/ unavailable。跑 `spark-research capabilities --json` 看当前机器的实际状态。
 
-### 干实验平台（2，默认 pyref）
+### 干实验平台（5，默认 pyref）
 
-- pyref / openmm
+- pyref / openmm / scanpy / pydeseq2 / cobrapy
 
 ### 湿实验后端（2，默认 opentrons_simulate）
 
 - opentrons_simulate / mock_devices
 
-### 技能（10）
+### 技能（13）
 
+- **cobrapy**（域 B）：敲掉这个基因还能不能长 / 跑一下 FBA / 厌氧条件下代谢会怎么变 / 代谢通量分析
 - **dry-experiment**（域 B）：先在计算机上验一遍 / 跑一个 MD 算例 / 设计一个仿真 / 实验跑挂了能不能续跑
 - **idea-coexplore**（域 A）：我有个想法 / 帮我挑毛病 / 这个方向值不值得做 / 陪我想清楚这个假设
 - **library-curation**（域 A）：把这篇加进文献库 / 整理文献库 / 导出 BibTeX / 标记已读 / 给这批论文打标签
@@ -126,7 +127,9 @@ spark-research mcp    # stdio 传输
 - **novelty-check**（域 D）：这个想法有没有人做过 / 我们相对已有工作新在哪 / 查一下新颖性 / 有没有撞车的论文
 - **paper-download**（域 A）：下载这篇论文 / 把 PDF 拿到本地 / 库里哪些论文有全文 / 补全文献库的 PDF
 - **protein-analysis**（域 B）：这个蛋白长什么样 / 有没有可用的结构 / AlphaFold 模型信得过吗 / 查一下这个 UniProt
+- **pydeseq2**（域 B）：处理组和对照组哪些基因有差异表达 / 跑一下 DESeq2 / 这批 RNA-seq 有哪些显著变化的基因 / 差异表达分析
 - **research-report**（域 C/E）：整理成一份报告 / 导出研究报告 / 评审这张结论卡 / 这个结论能不能写进论文
+- **scanpy**（域 B）：这个单细胞数据能分出几群细胞 / 跑一下单细胞聚类 / 这个基因是不是这群细胞的 marker / 单细胞降维聚类
 - **wet-protocol**（域 B）：把这个实验方案变成协议 / 先在模拟器上验一遍 / 编译成 Opentrons 脚本 / 这个协议安全吗
 
 ### 规则

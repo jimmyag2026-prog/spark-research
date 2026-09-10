@@ -152,10 +152,12 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     type: "enum",
     envVar: "SPARK_RESEARCH_SIM_PLATFORM",
     defaultValue: "pyref",
-    allowed: ["pyref", "openmm"],
+    // W5-3 β：C3 组学三件套进注册表后，这张表必须跟着长——config.test.ts 的
+    // 「enum 的 allowed 与真实注册表一致」会对撞 SIMULATION_PLATFORM_IDS。
+    allowed: ["pyref", "openmm", "scanpy", "pydeseq2", "cobrapy"],
     summary: "`exp new` 不给 --platform 时的默认干实验平台",
     effect:
-      "pyref 零依赖且确定性（deterministic=true）；openmm 需要装 openmm 且 CPU 上不逐位可复现（deterministic=false），下游结论会被要求按「区间对账」措辞。",
+      "pyref 零依赖且确定性（deterministic=true）；openmm 需要装 openmm 且 CPU 上不逐位可复现（deterministic=false），下游结论会被要求按「区间对账」措辞。scanpy / pydeseq2 / cobrapy 各需要装对应的 python 包（`exp platforms` 会打出安装命令），三者都是 deterministic=true（单线程 + 固定种子，同机重跑逐位一致）。",
   },
   {
     // v0.5 C1（W5-2 β 接线）：算力的默认执行地。

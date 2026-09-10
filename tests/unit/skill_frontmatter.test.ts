@@ -124,7 +124,7 @@ describe("SKILL.md frontmatter · schema 约束", () => {
   });
 });
 
-describe("SKILL.md frontmatter · 仓库内 10 个技能全部合规（CI 门）", () => {
+describe("SKILL.md frontmatter · 仓库内 13 个技能全部合规（CI 门）", () => {
   const skills = loadSkills({
     repoRoot: REPO_ROOT,
     knownConnectors: CONNECTOR_IDS,
@@ -132,8 +132,8 @@ describe("SKILL.md frontmatter · 仓库内 10 个技能全部合规（CI 门）
   });
 
   test("技能目录被完整扫到", () => {
-    expect(skillDirs().length).toBe(10);
-    expect(skills).toHaveLength(10);
+    expect(skillDirs().length).toBe(13);
+    expect(skills).toHaveLength(13);
   });
 
   for (const skill of skills) {

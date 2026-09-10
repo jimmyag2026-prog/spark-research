@@ -1,9 +1,14 @@
 import { join } from "node:path";
+import { CobraPyPlatform } from "./cobrapy";
 import { OpenMMPlatform } from "./openmm";
+import { PyDESeq2Platform } from "./pydeseq2";
 import { PyRefPlatform } from "./pyref";
+import { ScanpyPlatform } from "./scanpy";
 import { SimulationSpecError, type SimulationPlatform } from "./models";
 
-export const SIMULATION_PLATFORM_IDS = ["pyref", "openmm"] as const;
+// W5-3 β：C3 组学三件套（scanpy / pydeseq2 / cobrapy）进注册表。
+// 顺序 = `exp platforms` 的打印顺序：先两个零/轻依赖的参考实现，再三个组学平台。
+export const SIMULATION_PLATFORM_IDS = ["pyref", "openmm", "scanpy", "pydeseq2", "cobrapy"] as const;
 export type SimulationPlatformId = (typeof SIMULATION_PLATFORM_IDS)[number];
 
 export const DEFAULT_SIMULATION_PLATFORM: SimulationPlatformId = "pyref";
@@ -40,6 +45,15 @@ export class SimulationRegistry {
         break;
       case "openmm":
         platform = new OpenMMPlatform(options);
+        break;
+      case "scanpy":
+        platform = new ScanpyPlatform(options);
+        break;
+      case "pydeseq2":
+        platform = new PyDESeq2Platform(options);
+        break;
+      case "cobrapy":
+        platform = new CobraPyPlatform(options);
         break;
       default:
         throw new SimulationSpecError(

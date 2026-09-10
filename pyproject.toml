@@ -33,4 +33,17 @@ openmm = ">=8.1"
 # ⚠️ 它会把 numpy 钉到 1.26.x（opentrons-shared-data 的约束）——实测 openmm 8.6 在
 #    numpy 1.26.4 下照常工作，P5 的契约测试全绿。装的顺序无所谓，结果一样。
 opentrons = ">=9.0"
+# v0.5 W5-3 干实验 · C3 组学三件套（backend/src/simulation/{scanpy,pydeseq2,cobrapy}/）。
+# 实测（2026-09-10，macOS arm64 / Python 3.12 / uv 0.10.2）：
+#   `uv pip install "numpy<2" scanpy pydeseq2 cobra` → 74 个包、**43 秒**，全部有 wheel，
+#   零源码编译。追加 `leidenalg igraph` 再 0.9 秒。
+# ⚠️ numpy 必须钉在 <2：opentrons-shared-data 把 numpy 锁在 1.26.x，而 scanpy 系默认会
+#    往 2.x 拉。实测 "numpy<2" 约束下三件套与 openmm 8.6 全部正常，P5 契约测试不受影响。
+# leidenalg + igraph 不是 scanpy 的硬依赖，但 runner 的 leiden 聚类一定用得上——
+# 所以它们缺失时探测就报不可用（见 simulation/scanpy/runner.py 的 probe()）。
+scanpy = ">=1.11"
+leidenalg = ">=0.10"
+igraph = ">=0.11"
+pydeseq2 = ">=0.5"
+cobra = ">=0.29"
 pytest = ">=8.0"

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXP_HELP, runExpCommand } from "../../backend/src/experiment/cli";
 import { ProjectManager } from "../../backend/src/project/manager";
+import { SIMULATION_PLATFORM_IDS } from "../../backend/src/simulation/registry";
 
 // P5 CLI 单测（风格同 project/cli、ideation/cli）：注入 out/err + 返回退出码，不打真实网络。
 // 仿真走 pyref（零依赖、秒级），所以这些用例是真跑，不是打桩。
@@ -185,11 +186,12 @@ describe("exp CLI · run / status / list", () => {
 });
 
 describe("exp CLI · platforms 与帮助", () => {
-  test("platforms 列出两个平台与可用性", async () => {
+  test("platforms 列出全部平台与可用性", async () => {
     const c = cli();
     const code = await c.run(["platforms", "--json"]);
     const list = JSON.parse(c.text()) as { id: string; ok: boolean; reason: string | null }[];
-    expect(list.map((p) => p.id)).toEqual(["pyref", "openmm"]);
+    // W5-3 β：C3 三件套（scanpy / pydeseq2 / cobrapy）进注册表后这里跟着长。
+    expect(list.map((p) => p.id)).toEqual([...SIMULATION_PLATFORM_IDS]);
     // pyref 必然可用（零依赖）；openmm 视本机环境而定，不可用时必须给出可操作的原因。
     expect(list.find((p) => p.id === "pyref")!.ok).toBe(true);
     const openmm = list.find((p) => p.id === "openmm")!;
