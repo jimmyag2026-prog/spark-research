@@ -62,16 +62,16 @@ spark-research
 
 ## 2. npm 包 / `npx spark-research`（发布步骤——**尚未发布**，以下是给发布者看的清单）
 
-**当前状态**：`package.json` 的 `bin` 字段已经指向 `backend/src/index.ts`，运行时验证过可行
-（`bun` 作为 shebang 解释器直接执行 `.ts` 源文件，不需要编译）。**但发布前的打磨还没做完**：
+**当前状态（v0.6 G-2 已补完打包字段，V29 关闭）**：
 
-- [ ] `files` 字段：限定 npm tarball 只带 `backend/`、`package.json`、`README.md`（当前没有这个
-      字段，npm 默认行为可能打包进不必要的内容，比如 `llms-full.txt`）。
-- [ ] `prepublishOnly` 脚本：发布前跑一次 `bun run build:web`，把 `frontend/workspace/dist`
-      塞进 npm 包，否则 `npx spark-research server` 起来的 Web UI 是空的。
-- [ ] `engines` 字段：声明 `{ "bun": ">=1.3.0" }`，让 npm/npx 在没有 bun 的机器上给出更清楚的
-      报错，而不是 shebang 解释器找不到时的原始 shell 错误。
-- [ ] 决定 `frontend/workspace/dist` 要不要真的随包发布（体积 vs. 开箱即用的取舍）。
+- [x] `files` 字段：tarball 只带 `backend/src`、`frontend/workspace/dist`、`llms.txt`、
+      `docs/INSTALL.md`、`README.md`。
+- [x] `prepublishOnly`：发布前自动 `bun run build:web`（dist 随包，`npx spark-research server`
+      开箱有 UI）+ 全量单测。
+- [x] `engines`：`{ "bun": ">=1.2.0" }`。
+- [x] `frontend/workspace/dist` 随包发布（约 100KB gzip 级，开箱即用优先）。
+
+实际发不发 npm 由维护者决定；字段与脚本已备齐。
 
 **前置条件（无论谁来发布都要知道）**：`npx spark-research` 执行的是 `#!/usr/bin/env bun` 脚本，
 **目标机器必须已经装了 `bun`**。这跟"零依赖秒装"的体验目标有落差——如果要做到目标机器
@@ -94,51 +94,28 @@ npx spark-research doctor
 
 ---
 
-## 3. 单二进制（实验性，只有浅层命令可用）
+## 3. 单二进制
 
 ```bash
-bun run build   # bun run build:web && bun build backend/src/index.ts --compile --outfile dist/spark-research
+bun run build   # scripts/build-binary.ts：build:web → 前端清单内嵌 → 编译 → 还原存根
+bun run smoke   # scripts/smoke-binary.sh：版本一致 + capabilities + server/UI 三段冒烟
 ```
 
 实测数据（`docs/devlog/W1-d.md` §2 有完整记录）：构建耗时约 300ms，产物 62M（Mach-O arm64
 可执行文件，不依赖 `node_modules`）。
 
-**已验证可用**：
+**当前状态（v0.5 修 V27/V33，v0.6 G-2 修 V43①）**：干净机器上核心链路全部可用——
+`project new` / `lit` 全系 / `idea` / `exp run` / `doctor` / `capabilities` /
+**`server`（Web 工作台已内嵌，打开即用）**。前端产物在构建时经
+`scripts/gen-frontend-embed.ts` 写入内嵌清单、运行期解包托管；源码模式与二进制
+走同一条托管代码路径。
 
-```bash
-dist/spark-research --version
-dist/spark-research --help
-dist/spark-research capabilities --json
-dist/spark-research doctor
-dist/spark-research doctor --json
-```
-
-**已知不可用**（BACKLOG V27，跨模块问题，详见 `docs/devlog/W1-d.md` §5）：
+**仍只在源码 checkout 可用（V43②，二进制里是显式拒绝而非静默做错）**：
 
 ```
-dist/spark-research project new <名字>     ← ENOENT: schema.sql
-dist/spark-research idea ...                ← 同上（同一个 records.db schema）
-dist/spark-research lab simulate ...        ← ENOENT: opentrons_backend.py
+dist/spark-research new skill|connector|platform    ← 脚手架要写仓库源码树
+dist/spark-research ext verify --kind platform      ← 同上
 ```
-
-根因：`bun build --compile` 只把 **JS/TS 模块图内的静态 import** 编译进产物；`.sql`/`.py` 这类
-通过 `join(import.meta.dir, "...")` 在运行期拼路径读取的资源文件**不会**被自动内嵌，产物运行时
-这些路径指向虚拟文件系统（`/$bunfs/root/`），真实文件不存在。`index.ts` 里读 `package.json`
-版本号的同款问题已经修复（改用静态 `import`），但同一模式在仓库另外 17 个文件里还有 23 处，
-是一次专门的修复工作，不是这次打包分发 lane 的范围。
-
-**结论**：单二进制目前**不建议**作为主力分发形态。想要完整功能，用 §1（源码）或 §2（npm，
-但目标机器需要预装 bun）。
-
-**这不是永久判决**：`docs/devlog/F-c.md`（v0.5 闸门 F-c）对 V27 做了精确盘点 + 三条修法的
-实测验证，**结论是「修，成本可控」，不是「永久降级」**——最小可行集（3 处 `schema.sql` 改静态
-`import ... with { type: "text" }`）实测编译后 `project new` 即可在单二进制里跑通，见该文档
-§2 的真实终端输出（补丁前 ENOENT、补丁后成功建项目，两次编译两次运行的对照）。`.py` 类资源
-（`opentrons_backend.py`、各 `runner.py`、`python_kernel.py`）需要额外一步（内容静态 import
-成文本 + 运行期 `writeFileSync` 到临时目录再 `Bun.spawn` 那个真实路径），`docs/devlog/F-c.md`
-§3 里也有实测验证 Bun 的 `type: "file"`/`Bun.embeddedFiles` **不能**直接用于外部子进程 spawn
-（虚拟路径外部进程读不到），这条路必须走"解包到真实磁盘路径"这一步。真正把这 23 处改完是
-另一条 lane 的工作（不在 F-c 文件所有权内），F-c 只负责把可行性、修法优先级和风险敲实。
 
 ---
 
