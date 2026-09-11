@@ -121,7 +121,7 @@ function localCapabilities(): ProviderCapabilities {
   return { toolCalling: false, jsonMode: false, streaming: true, usageReported: false };
 }
 
-function providerForModel(model: string): Provider {
+export function providerForModel(model: string): Provider {
   for (const provider of SUPPORTED_PROVIDERS) {
     if (PROVIDER_MODELS[provider].includes(model)) return provider;
   }

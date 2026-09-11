@@ -1,6 +1,6 @@
 import type { ConfigOptions } from "../config";
 import { priceFor } from "./providers/registry";
-import type { Usage } from "./types";
+import type { CallOptions, ChatMessage, Usage } from "./types";
 
 // R-c-1：预算账本。
 //
@@ -46,6 +46,13 @@ export interface BudgetSnapshot {
    * 全部调用都定了价时才等于 `knownCostUsd`。
    */
   costUsd: number | null;
+  /**
+   * V93（v0.8 G-3）：**在飞预留**——已过闸、尚未返回的调用按发前估价预留的金额之和。
+   * 不计入 knownCostUsd（那是已结算的确定下界），但 `tryReserve()` 判「能不能再发一个」
+   * 时用 `knownCostUsd + inFlightUsd + 估价`，这样 `Promise.all` 下 N 个在飞的合计不越闸。
+   */
+  inFlightUsd: number;
+  inFlightCalls: number;
   limits: BudgetLimits;
   /**
    * 确定超限的维度。**`costUsd` 这一项的判定用 `knownCostUsd`（下界）而不是
@@ -73,6 +80,36 @@ export interface BudgetRecordResult {
   snapshot: BudgetSnapshot;
   /** 这一次 record() **新增**变成超限的维度（记录之前没超、记录之后超了）。 */
   newlyExceeded: BudgetLimitKind[];
+}
+
+/**
+ * V93：一次在飞预留的句柄。`settle()` 用真实 usage 结算（预留额释放、走 `record()`），
+ * `release()` 用于调用抛异常/被取消时只释放不记账。两者都幂等，第二次调用无效。
+ */
+export interface BudgetReservation {
+  readonly estimateUsd: number;
+  settle(usage: Usage, options?: BudgetRecordOptions): BudgetRecordResult;
+  release(): void;
+  readonly settled: boolean;
+}
+
+/**
+ * 发前估价（V93「按模型上限价预留」）：输入按字符数粗估 token（≈3 字符/token——对中英混排
+ * 偏保守，宁多预留不少预留），输出按 `maxTokens`（没给就按 4096 这个各适配器的保守默认）。
+ * 查不到单价返回 null——**不是 0**；调用方决定 null 怎么处理（G-4 之后默认拒绝未定价模型）。
+ */
+export function estimateCallCostUsd(
+  messages: ChatMessage[],
+  options: CallOptions,
+  target: { provider: string; model: string; configOptions?: ConfigOptions },
+): number | null {
+  const price = priceFor(target.provider, target.model, target.configOptions ?? {});
+  if (!price) return null;
+  let chars = 0;
+  for (const m of messages) chars += typeof m.content === "string" ? m.content.length : JSON.stringify(m.content).length;
+  const inputTokens = Math.ceil(chars / 3);
+  const outputTokens = options.maxTokens ?? 4096;
+  return (inputTokens / 1_000_000) * price.inputPerMillionUsd + (outputTokens / 1_000_000) * price.outputPerMillionUsd;
 }
 
 export class BudgetExceededError extends Error {
@@ -115,6 +152,8 @@ export class BudgetLedger {
   private outputTokens = 0;
   private knownCostUsd = 0;
   private unknownCostCalls = 0;
+  private inFlightUsd = 0;
+  private inFlightCalls = 0;
 
   constructor(limits: BudgetLimits = {}, options: BudgetLedgerOptions = {}) {
     this.label = options.label ?? "budget";
@@ -175,6 +214,60 @@ export class BudgetLedger {
     };
   }
 
+  /** V93：再发一个估价 `estimateUsd` 的调用，是否会让「已结算 + 在飞 + 这一个」越过 maxCostUsd。 */
+  wouldExceedCost(estimateUsd: number): boolean {
+    if (this.limits.maxCostUsd === undefined) return false;
+    return this.knownCostUsd + this.inFlightUsd + Math.max(0, estimateUsd) > this.limits.maxCostUsd;
+  }
+
+  /**
+   * V93：发前预留。越闸返回 null（一分钱都没预留）；否则把估价计入在飞，返回结算句柄。
+   * 有父账本时**先向父账本预留**——父账本拒绝就整体拒绝（全局上限拦住"每个子代理都没超，
+   * 加起来超了"的在飞版本）。预留与判定在同一个同步段内完成，`Promise.all` 里 N 个调用
+   * 的同步前缀依次执行，后来者一定看得到先到者的预留——这就是 TOCTOU 的封口。
+   */
+  tryReserve(estimateUsd: number): BudgetReservation | null {
+    const estimate = Math.max(0, estimateUsd);
+    if (this.wouldExceedCost(estimate)) return null;
+    const parentReservation = this.parent ? this.parent.tryReserve(estimate) : null;
+    if (this.parent && !parentReservation) return null;
+    this.inFlightUsd += estimate;
+    this.inFlightCalls += 1;
+    let settled = false;
+    const unreserve = () => {
+      this.inFlightUsd = Math.max(0, this.inFlightUsd - estimate);
+      this.inFlightCalls = Math.max(0, this.inFlightCalls - 1);
+    };
+    const ledger = this;
+    return {
+      estimateUsd: estimate,
+      get settled() {
+        return settled;
+      },
+      settle(usage, options = {}) {
+        if (settled) return { costUsd: null, costUnavailable: true, snapshot: ledger.snapshot(), newlyExceeded: [] };
+        settled = true;
+        unreserve();
+        // 父账本的在飞额先释放，再由 record() 的常规转发把结算额记到父账本。
+        parentReservation?.release();
+        return ledger.record(usage, options);
+      },
+      release() {
+        if (settled) return;
+        settled = true;
+        unreserve();
+        parentReservation?.release();
+      },
+    };
+  }
+
+  /** `tryReserve` 的抛错版：越闸抛 `BudgetExceededError("costUsd")`。 */
+  reserve(estimateUsd: number): BudgetReservation {
+    const r = this.tryReserve(estimateUsd);
+    if (!r) throw new BudgetExceededError("costUsd", this.snapshot());
+    return r;
+  }
+
   snapshot(): BudgetSnapshot {
     const totalTokens = this.inputTokens + this.outputTokens;
     const wallMs = this.now() - this.startedAtMs;
@@ -202,6 +295,8 @@ export class BudgetLedger {
       knownCostUsd: this.knownCostUsd,
       unknownCostCalls: this.unknownCostCalls,
       costUsd,
+      inFlightUsd: this.inFlightUsd,
+      inFlightCalls: this.inFlightCalls,
       limits: this.limits,
       exceeded,
     };

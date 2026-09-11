@@ -3,7 +3,8 @@ import { dirname } from "node:path";
 import { configuredRawLlm, type ConfigOptions } from "../config";
 import { USER_OWNED_LICENSE } from "../provenance/policy";
 import { redactLlmOptions, type RawSink } from "../raw";
-import { BudgetLedger } from "../llm/budget";
+import { BudgetLedger, estimateCallCostUsd } from "../llm/budget";
+import { DEFAULT_MODEL, providerForModel } from "../llm/router";
 import { failure } from "../llm/providers/types";
 import type { CallOptions, ChatMessage, LlmResponse } from "../llm/types";
 
@@ -149,6 +150,11 @@ export interface UsageTrackingOptions {
   rawSink?: RawSink;
   project?: string | null;
   sessionId?: string | null;
+  /**
+   * V93：发前估价函数，默认 `estimateCallCostUsd`（按字符数 + maxTokens 上限价）。
+   * 返回 null = 查不到单价（不是 0）。测试注入用；生产不传。
+   */
+  estimateUsd?: (messages: ChatMessage[], options: CallOptions, target: { provider: string; model: string }) => number | null;
 }
 
 export interface UsageTrackingLlm {
@@ -168,6 +174,7 @@ export interface UsageTrackingLlm {
 export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLlm {
   const { llm, store, command, budgetUsd, configOptions, rawSink } = options;
   const rawOn = rawSink !== undefined && configuredRawLlm(configOptions);
+  const estimateUsd = options.estimateUsd ?? ((m, o, t) => estimateCallCostUsd(m, o, { ...t, configOptions }));
   const priorKnownCostUsd = store.totals().knownCostUsd;
   const ledger = new BudgetLedger(
     budgetUsd !== undefined ? { maxCostUsd: Math.max(0, budgetUsd - priorKnownCostUsd) } : {},
@@ -177,23 +184,49 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
   return {
     ledger,
     async call(messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> {
+      const callOptions: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+      const requestedModel = callOptions.model ?? DEFAULT_MODEL;
+      const provider = providerForModel(requestedModel);
+      // V93：发前估价。查不到单价 → 预留 0（闸仍按已结算+在飞判，未定价模型的拒绝由 G-4 负责）。
+      const estimate = estimateUsd(messages, callOptions, { provider, model: requestedModel }) ?? 0;
+
+      // V93 闸：**实时重读** usage.jsonl（跨进程：别的进程刚花的钱这里立刻看得见，不再只在
+      // 构造时读一次）+ 本进程在飞预留 + 这一次的估价。三者之和越线就拒绝，一分钱不发。
+      // 预留在同一个同步段内完成——`Promise.all` 下第 k 个调用的同步前缀跑到这里时，
+      // 前 k-1 个已经把估价记进 inFlight 了，集体越闸的窄缝就此封死。
       if (budgetUsd !== undefined) {
-        const spent = priorKnownCostUsd + ledger.snapshot().knownCostUsd;
-        if (spent >= budgetUsd) {
-          const requested =
-            typeof modelOrOptions === "string" ? modelOrOptions : (modelOrOptions.model ?? "(默认)");
-          return failure("budget-gate", requested, {
+        const live = store.totals().knownCostUsd;
+        const inFlight = ledger.snapshot().inFlightUsd;
+        const committed = live + inFlight;
+        if (committed >= budgetUsd || committed + estimate > budgetUsd) {
+          return failure("budget-gate", requestedModel, {
             kind: "budget",
             message:
-              `预算闸：本项目已知花费 $${spent.toFixed(4)} 已达上限 $${budgetUsd.toFixed(2)}（已知下界口径，` +
-              `未知成本调用另见 usage 输出）。这次调用没有发出、没有新花费；已完成的产出都已保存。` +
+              `预算闸：本项目已知花费 $${live.toFixed(4)} + 在飞预留 $${inFlight.toFixed(4)} + 本次估价 $${estimate.toFixed(4)}` +
+              ` 将超过上限 $${budgetUsd.toFixed(2)}（已知下界口径，未知成本调用另见 usage 输出）。` +
+              `这次调用没有发出、没有新花费；已完成的产出都已保存。` +
               `下一步：提高 --budget-usd，或用 spark-research usage 查各命令花费后缩小范围重跑。`,
             retryable: false,
           });
         }
       }
-      const res = await llm.call(messages, modelOrOptions);
-      const recorded = ledger.record(res.usage, {
+      const reservation = ledger.tryReserve(estimate);
+      if (!reservation) {
+        // 本进程账本自己的上限（budget − 构造时历史）也越了——与上面同语义，不同路径都拦。
+        return failure("budget-gate", requestedModel, {
+          kind: "budget",
+          message: `预算闸：本进程在飞预留已达上限 $${(budgetUsd ?? 0).toFixed(2)}。这次调用没有发出、没有新花费。`,
+          retryable: false,
+        });
+      }
+      let res: LlmResponse;
+      try {
+        res = await llm.call(messages, modelOrOptions);
+      } catch (error) {
+        reservation.release();
+        throw error;
+      }
+      const recorded = reservation.settle(res.usage, {
         provider: res.provider,
         model: res.model,
       });
