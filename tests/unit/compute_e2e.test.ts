@@ -386,7 +386,19 @@ describe("真实 SIGKILL · 编排进程与任务一起被 kill -9", () => {
     // ② 如实报 recoverable：产物可能只剩本地 job 目录这一份。
     expect(recovered.lifecycle.recoverable).toBe(true);
     // ③ 说清楚发生了什么、东西在哪儿——不许用「从未真正派发出去」这种假话打发。
-    expect(recovered.message).toContain("派发过");
+    //
+    // V48 改了这里会走到**哪条**路径：本用例把编排进程、shim、任务本身三个都杀了，
+    // 在 V48 之前 adapterHandle 从未落盘（只在 run() 返回时才写），recover() 走的是
+    // 「没有 adapterHandle」那条 fallback，message 里带「派发过」字样。V48 之后
+    // adapterHandle 在 spawn 成功那一刻就已经落盘，recover() 因此真的去调用了
+    // adapter.recover()——它发现进程也没了、没有 exit-code 标记，抛 RecoverFailure
+    // (not_found)，broker 在 catch 里落地为 failed（这条路径本来就存在，被
+    // compute_local.test.ts 的「exit-code 丢了 + 进程也没了」用例单独覆盖过）。
+    // 这是**更准确**的诊断（真的尝试过 recover，不是靠 job.dispatchedAt 猜），
+    // 所以这里改的是断言内容，不是把断言删掉——「东西在哪儿」这个信息量必须保留，
+    // 只是来源换成了 broker.ts 的 RecoverFailure catch 分支（见其改动）。
+    expect(recovered.message).toContain("not_found");
+    expect(recovered.message).toContain("exit-code");
     expect(recovered.message).toContain(recovered.jobDir);
     expect(recovered.message).not.toContain("从未真正派发出去");
 
@@ -396,4 +408,85 @@ describe("真实 SIGKILL · 编排进程与任务一起被 kill -9", () => {
     expect(h.err.slice(before).join("\n")).toContain("不许关掉持有唯一可恢复产物副本的资源");
     expect(existsSync(join(jobs.dirOf(jobId), "workspace"))).toBe(true);
   }, 120_000);
+});
+
+// V48（BACKLOG）：设计 §1.1.9 的验收路径「SIGKILL → resume → 收割」——**只**杀编排进程，
+// 任务本体（task.py 的孙进程）活下来，重启后接回、收割到真产物。这是「三刀齐下」那个
+// SIGKILL 用例的镜像场景：那边验证的是「连任务一起死了必须如实报 failed，不许装成功」；
+// 这边验证的是修复本身——handle 不再等 run() 返回才落盘，所以编排进程死了以后，只要
+// 任务还活着或已经跑完，recover() 真的能接回来，而不是像 V48 之前那样因为 job.json 里
+// 压根没有 adapterHandle 而只能猜。
+describe("真实 SIGKILL · 只杀编排进程，任务本体活下来（V48）", () => {
+  test("handle 早落盘 → 编排进程死了任务不受影响地跑完 → 新进程 recover() 接回并收割到真产物", async () => {
+    const h = harness("v48");
+    const jobId = await runOnce(h, "2"); // 任务跑 2 秒，够我们在中途杀编排进程
+
+    const script = join(h.root, "orchestrator.ts");
+    const repo = join(import.meta.dir, "../..");
+    writeFileSync(
+      script,
+      `import { runComputeCommand } from ${JSON.stringify(join(repo, "backend/src/compute/cli.ts"))};\n` +
+        `import { ProjectManager } from ${JSON.stringify(join(repo, "backend/src/project/manager.ts"))};\n` +
+        `const [root, jobId] = process.argv.slice(2);\n` +
+        `const manager = new ProjectManager(root);\n` +
+        `await runComputeCommand(["run", jobId], { manager, root, out: () => {}, err: () => {} });\n`,
+    );
+    const child = Bun.spawn([process.execPath, script, h.root, jobId], {
+      stdout: "ignore",
+      stderr: "ignore",
+      stdin: "ignore",
+    });
+
+    const jobs = new ComputeJobStore(join(h.open().paths.experimentsDir, "compute", "jobs"));
+    const pidFile = join(jobs.dirOf(jobId), "workspace", "started.pid");
+    const startDeadline = Date.now() + 30_000;
+    while (!existsSync(pidFile) && Date.now() < startDeadline) await Bun.sleep(50);
+    expect(existsSync(pidFile)).toBe(true); // 任务真的起来了
+
+    // V48 的核心断言：只要任务真的起来了，job.json 立刻就该有 adapterHandle——
+    // 不必等编排进程活到 run() 返回（那要再等将近 2 秒，任务才会跑完）。
+    const handleDeadline = Date.now() + 10_000;
+    let sawHandle = false;
+    while (Date.now() < handleDeadline) {
+      const view = jobs.get(jobId);
+      if (view.adapterHandle !== null) {
+        sawHandle = true;
+        // 落盘的时候任务应该还在跑，不是凑巧在它跑完那一刻才看到。
+        expect(view.lifecycle.execution).toBe("running");
+        break;
+      }
+      await Bun.sleep(20);
+    }
+    expect(sawHandle, "任务已经起来了但 job.json 里还没有 adapterHandle——V48 要修的正是这个时机").toBe(true);
+    // 这时候任务还没写产物——上面「落盘时 execution=running」不是巧合追上了任务终态。
+    expect(existsSync(join(jobs.dirOf(jobId), "workspace", "result.json"))).toBe(false);
+
+    // 只杀编排进程这一个真实进程。task.py 是它的孙进程（编排 → shim(/bin/sh) → task.py），
+    // 杀父进程不会自动带走子孙进程（没有对它们做进程组/会话操作）——这正是「任务能活下来」
+    // 的机制，不是测试环境的巧合。
+    process.kill(child.pid, "SIGKILL");
+    await child.exited;
+
+    // 任务本体应该不受影响地继续跑、写下产物——它压根不知道编排进程死了。
+    const resultPath = join(jobs.dirOf(jobId), "workspace", "result.json");
+    const resultDeadline = Date.now() + 10_000;
+    while (!existsSync(resultPath) && Date.now() < resultDeadline) await Bun.sleep(50);
+    expect(existsSync(resultPath)).toBe(true);
+    // shim 也要活下来写 exit-code 标记（它同样是编排进程的子孙，没被牵连）。
+    const exitCodeDeadline = Date.now() + 10_000;
+    while (!existsSync(join(jobs.dirOf(jobId), "exit-code")) && Date.now() < exitCodeDeadline) await Bun.sleep(50);
+    expect(existsSync(join(jobs.dirOf(jobId), "exit-code"))).toBe(true);
+
+    // 全新进程视角接回来（`compute recover` 是 broker.recover() 的生产入口）：这一次
+    // adapterHandle 早就在磁盘上，local.recover() 先看 exit-code 标记（在）判定成功——
+    // 跟上面「三刀齐下」那个用例（标记不在，报 failed）正是一体两面。
+    expect(await h.compute(["recover", jobId])).toBe(0);
+    const recovered = jobs.get(jobId);
+    expect(recovered.lifecycle.execution).toBe("succeeded");
+    expect(recovered.adapterHandle).not.toBeNull();
+
+    expect(await h.compute(["collect", jobId])).toBe(0);
+    const harvested = JSON.parse(readFileSync(join(jobs.dirOf(jobId), "harvest", "result.json"), "utf8"));
+    expect(harvested).toEqual({ answer: 42, seconds: 2 });
+  }, 60_000);
 });

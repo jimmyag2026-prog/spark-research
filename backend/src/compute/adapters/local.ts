@@ -146,6 +146,10 @@ export class LocalComputeAdapter implements ComputeAdapter {
       kind: "local",
       data: { pid: proc.pid ?? null, startedAt: new Date().toISOString(), logPath, workspace },
     };
+    // V48：spawn 成功、拿到 pid 的这一刻立刻回调——这是「handle 存在」这件事第一次成立
+    // 的时间点。**先**于 awaitTerminal()（后面可能跑几分钟才返回）调用，broker 借这个
+    // 回调把 handle 落盘，编排进程在等待期间被杀也不会把它带走。
+    hooks.onHandle?.(handle);
     hooks.onState?.({ execution: "running" });
     return this.awaitTerminal(spec, handle, hooks, proc);
   }

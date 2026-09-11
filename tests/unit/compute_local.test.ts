@@ -122,4 +122,43 @@ describe("CB-2 · local adapter 的自有行为", () => {
     expect(existsSync(join(released.jobDir, "harvest", "out.txt"))).toBe(true);
     expect(existsSync(join(released.jobDir, "run.log"))).toBe(true);
   }, 30_000);
+
+  // V48（BACKLOG）：adapterHandle 原来只在 adapter.run() **返回时**才写 job.json——
+  // 编排进程在执行期中途被 SIGKILL，句柄跟着一起丢，既不能 recover() 接回，release 还
+  // 会因为 recoverable 判不出来而删掉唯一的产物。这里只做**同进程**能验的那一半：
+  // handle 必须在 spawn 成功、pid 到手的那一刻就出现在 job.json 里，不必等到任务终态。
+  // 真正的「编排进程死了、任务活下来、新进程接回并收割」那条完整路径要求「旧编排进程」
+  // 是一个真的、已经不存在的独立 OS 进程——同一个 JS 进程里"造一个 broker 实例然后不
+  // await它" 并不能让它停止运行（它仍是同一个事件循环里的一个挂起 promise，后台还在跑），
+  // 会跟"新" broker 对同一个 job.json 产生真实的并发写竞争，不是可靠的模拟；这条更完整
+  // 的验收挪到了 compute_e2e.test.ts 的「真实 SIGKILL · 只杀编排进程」用例，那边跟现有
+  // 「三刀齐下」SIGKILL 用例一样真的 spawn 一个独立进程再真 kill -9（见该文件）。
+  test("V48：handle 在 spawn 成功那一刻就落盘，不等 run() 返回（同进程可验的那一半）", async () => {
+    const adapter = new LocalComputeAdapter({ pollIntervalMs: 20 });
+    const fx = makeContractFixture(adapter);
+    const planned = await fx.broker.plan(fx.planInput({ command: SLOW(2), outputs: [] }), {
+      projectSlug: "contract",
+    });
+    fx.approval.approve(planned.jobId, { actor: "测试员" });
+
+    const dispatched = fx.broker.dispatch(planned.jobId);
+    // 轮询 job.json：handle 必须在 2 秒 sleep 结束之前就出现——旧代码（handle 只在
+    // run() 返回时才写）要等到 dispatch() 整个 resolve，也就是 2 秒之后才写得进去，
+    // 这条断言等不到就会超时（阴性对照见 docs/devlog/W7-E.md「E-2」）。
+    const deadline = Date.now() + 1500;
+    let sawHandleWhileRunning = false;
+    while (Date.now() < deadline) {
+      const current = fx.jobs.get(planned.jobId);
+      if (current.adapterHandle !== null) {
+        sawHandleWhileRunning = current.lifecycle.execution === "running";
+        break;
+      }
+      await Bun.sleep(10);
+    }
+    expect(sawHandleWhileRunning, "spawn 成功后 handle 应该在任务仍处于 running 时就已经落盘").toBe(true);
+
+    // 收尾：让这次真实 dispatch() 正常跑完（sleep 2s 后以 exit=0 终结），不留后台任务。
+    const settled = await dispatched;
+    expect(settled.lifecycle.execution).toBe("succeeded");
+  }, 15_000);
 });

@@ -481,9 +481,14 @@ export class ComputeBroker {
     if (!job.adapterHandle) {
       // 两种完全不同的情形，**不许**用同一句话打发（W5-3 α 的真实 SIGKILL 实测撞到）：
       //   ① 从未派发：dispatchedAt 为空，确实没有可接回的东西；
-      //   ② 派发过、执行中途编排进程被杀：adapterHandle 只在 adapter.run() **返回时**
-      //      才落盘（CB-2 的现状），所以句柄跟着编排进程一起没了——但任务本身可能仍在跑、
-      //      也可能已经跑完，产物就在 <jobDir>/workspace 里。
+      //   ② 派发过、但编排进程在 adapter 真正拿到 handle 之前就被杀——V48 之前，
+      //      adapterHandle 只在 adapter.run() **返回时**才落盘，这个窗口覆盖了从「派发」
+      //      到「执行终态」的整段时间；V48 之后（见 `runOn()` 的 `onHandle` 回调），
+      //      走 hooks.onHandle 的 adapter（目前是 local）会在拿到 handle 的**那一刻**
+      //      立刻落盘，这个窗口缩到了「claimed 派发权 → adapter.run() 内部真正 spawn
+      //      出可用 handle」之间那一小段（比如 stageUploads 之后、Bun.spawn 真正成功
+      //      之前）——窗口变窄了，但不是关闭了，所以这条 fallback 仍然要留着，不能删。
+      //      任务本身可能仍在跑、也可能已经跑完，产物就在 <jobDir>/workspace 里。
       // 情形②说成「从未真正派发出去」是**假话**，而且它把 recoverable 留在 false，
       // 于是 release 会毫无阻拦地删掉那份唯一的产物副本（L-4 本该拦住它）。
       const inflight: LifecycleState["execution"][] = ["queued", "starting", "running"];
@@ -497,7 +502,8 @@ export class ComputeBroker {
         finishedAt: this.now(),
         message: wasDispatched
           ? `派发过（${job.dispatchedAt}）但 job.json 里没有 adapterHandle——` +
-            `本地 adapter 的句柄只在执行返回时落盘，编排进程在执行中途被杀就会连它一起丢。` +
+            `编排进程在 adapter 真正拿到执行期 handle 之前就被杀了（V48 把这个窗口缩到了` +
+            `派发权已声明、handle 尚未 spawn 出来的那一小段）。` +
             `任务本身可能仍在跑、也可能已经跑完：产物与日志请到 ${job.jobDir}/workspace ` +
             `与 ${job.jobDir}/run.log 自行核对。按失败处理，且 recoverable=true（产物可能只剩本地这一份，` +
             `release 前必须先 collect 或显式 --discard）。重跑需要**新的审批**。`
@@ -511,15 +517,23 @@ export class ComputeBroker {
     });
     const spec = this.specOf(interrupted);
     try {
-      const result = await adapter.recover(spec, job.adapterHandle, hooks);
+      const result = await adapter.recover(spec, job.adapterHandle, this.hooksWithHandlePersist(jobId, hooks));
       return this.settle(interrupted, result.exitCode, result.timedOut, result.handle, "recover");
     } catch (error) {
       if (error instanceof RecoverFailure) {
         const terminal = isTerminalRecoverFailure(error.kind);
+        // V48：handle 早落盘之后，「连任务进程本身都被一起杀掉、没留下 exit-code 标记」
+        // 这种情形会走到这里（adapter.recover() 真的尝试过，抛 RecoverFailure），而不再
+        // 是上面「没有 adapterHandle」那条 fallback——但「东西在哪儿自己核对」这个信息量
+        // 不能跟着丢：终态失败时同样把 jobDir 指出来。
         return this.jobs.patch(jobId, {
           lifecycle: this.step(interrupted.lifecycle, "fail", job.plan),
           finishedAt: this.now(),
-          message: `接回失败（${error.kind}${terminal ? "，终态" : "，可重试"}）：${error.message}`,
+          message:
+            `接回失败（${error.kind}${terminal ? "，终态" : "，可重试"}）：${error.message}` +
+            (terminal
+              ? ` 产物与日志请到 ${interrupted.jobDir}/workspace 与 ${interrupted.jobDir}/run.log 自行核对。`
+              : ""),
         });
       }
       throw error;
@@ -624,6 +638,25 @@ export class ComputeBroker {
     return { jobId: job.jobId, plan: job.plan, jobDir: job.jobDir };
   }
 
+  /**
+   * V48：包一层 hooks，把 adapter 的 `onHandle` 回调接到「立刻落盘」上——
+   * adapter 一拿到执行期 handle（spawn 成功、pid 到手）就写 job.json，不必等
+   * `run()`/`recover()` 整体返回。`jobs.patch()` 是对磁盘上**当前**记录做字段合并
+   * （见 job_store.ts 的 `patch()` 实现：`{...record, ...patch}` 里的 `record` 是刚
+   * 重新读出来的最新值），所以这里不需要 `expectedRev`——别的并发写不会被这次写盖掉，
+   * 这次写也只多加 `adapterHandle` 一个字段。调用方自己的 `onHandle`（如果给了）仍然会
+   * 收到回调，只是排在落盘之后。
+   */
+  private hooksWithHandlePersist(jobId: string, hooks: RunHooks): RunHooks {
+    return {
+      ...hooks,
+      onHandle: (handle) => {
+        this.jobs.patch(jobId, { adapterHandle: handle });
+        hooks.onHandle?.(handle);
+      },
+    };
+  }
+
   /** 上传面的物理落点：只有 plan.uploads 里的文件会进 job 的 workspace。 */
   private stageUploads(job: ComputeJobView): void {
     const workspace = join(job.jobDir, "workspace");
@@ -670,7 +703,7 @@ export class ComputeBroker {
       },
     };
     try {
-      const result = await adapter.run(spec, hooks);
+      const result = await adapter.run(spec, this.hooksWithHandlePersist(job.jobId, hooks));
       return this.settle(running, result.exitCode, result.timedOut, result.handle, origin);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
