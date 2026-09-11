@@ -1,3 +1,4 @@
+import { projectBackgroundBlock } from "../agents/prompts";
 import type { LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
 import type { ResearchRecord } from "../project/models";
@@ -159,9 +160,9 @@ function paperBrief(paper: LibraryPaper, fullText?: ReadingFullText): string {
 }
 
 export function buildReadingCardPrompt(paper: LibraryPaper, projectContext?: string, fullText?: ReadingFullText): string {
-  const context = projectContext?.trim()
-    ? `本研究项目的背景：${projectContext.trim()}`
-    : "本研究项目的背景：未提供；relationToProject 请只写「这篇工作可被哪类项目借鉴/对比」，不要臆测具体项目。";
+  const block = projectBackgroundBlock(projectContext);
+  const context =
+    block || "（本项目未填写描述）relationToProject 请只写「这篇工作可被哪类项目借鉴/对比」，不要臆测具体项目。";
   return `${context}\n\n待精读论文：\n${paperBrief(paper, fullText)}`;
 }
 
