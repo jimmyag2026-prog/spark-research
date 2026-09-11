@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -39,8 +40,25 @@ import { configuredTaskTimeoutMs } from "../config";
 // 比对能不能排除掉「同一个 pid 但其实是全新进程」这类误判）——那是更精确但也更复杂的判据，
 // 且不是本 lane 的范围。「只会多报 running」这个方向本身是安全的：它从不会把一个可能还在
 // 正常跑的任务谎报成 failed，也不会把一个可能已经跑挂的任务谎报成 succeeded。
+//
+// W7-C2（V70 + V3）：上面这段是当年的决定，现在把「更精确的判据」补上了——`recovered`
+// 只回答「这条记录是不是从磁盘读回来的」，从不回答「它现在到底还在不在跑」，这正是
+// V70 的原始投诉（kill 进程后 `lit tasks` 永久显示 running，没有 liveness 判据）。
+// 做法：`start()` 现在把本进程的 pid 与它的启动时间（`getProcessStartTime()`，
+// `ps -o lstart=` 归一化到秒）一起落进快照。读回（`get()` / `list()`）时，对仍是
+// running/pending 且**不是本进程亲手在跑**（`!entry.live`）的记录，重新核验一遍：
+// pid 已经不存在 → 判定原进程已经死了；pid 还在但启动时间对不上 → 那是 V3 说的
+// pid 复用，当前占着这个 pid 的是另一个不相干的进程，原进程同样已经不在了。
+// 两种情况都落 **`orphaned`**——不是 `failed`：我们只能确认「持有 run() 闭包的进程
+// 不在了」，确认不了任务体本身是正常收尾之前刚好没来得及写终态、还是真的跑挂了，
+// 谎称 failed 与谎称 succeeded 一样都是在编造信息。查不出 pid 存活性之外的更多信息
+// （启动时间拿不到、或本来就没记录）时保持「只多报不少报」的老口径，继续报 running，
+// 只是额外标一下 `startTimeUnavailable`，让消费方知道这条判据本身没能完整核验。
 
-export const TASK_STATES = ["pending", "running", "succeeded", "failed"] as const;
+// W7-C2（V70）：`orphaned` 是新增的第五态——只在读回时由 liveness 判据推导出来，
+// 任务体自己从来不会主动把自己置成这个状态（对比 succeeded/failed，那是 run() 落定
+// 的自然结果）。见文件头大注释「W7-C2（V70 + V3）」段。
+export const TASK_STATES = ["pending", "running", "succeeded", "failed", "orphaned"] as const;
 export type TaskState = (typeof TASK_STATES)[number];
 
 export type TaskEventType = "state" | "progress" | "result" | "error";
@@ -83,6 +101,18 @@ export interface TaskSnapshot {
   events: TaskEvent[];
   // 只有从磁盘恢复的、状态仍非终态的快照才有值；本进程正常创建/正常结束的任务恒为 null。
   recovered?: TaskRecovery | null;
+  // W7-C2（V70 + V3）：持有该任务 run() 闭包的进程 pid，与该进程的启动时间
+  // （同一 `getProcessStartTime()` 口径，见文件头大注释）。`start()` 里恒写
+  // （legacy——本 lane 之前落盘的旧快照没有这两个字段，JSON.parse 出来是 undefined，
+  // 读回逻辑按「查不了，维持只多报不少报」处理，不当成错误）。
+  pid?: number | null;
+  pidStartedAt?: string | null;
+  // ps 探测拿不到启动时间（平台不支持 / 权限受限 / 瞬时失败）时为 true——只能退化到
+  // 只核 pid 存在性，不能编造一个可能是错的 pidStartedAt 去做比对。
+  startTimeUnavailable?: boolean;
+  // orphaned 判据命中时的人类可读原因；其余状态恒为 null。每次读回按当前 liveness
+  // 重新算（见 `applyLiveness()`），不是 emit() 时一次性固化的字段。
+  orphanReason?: string | null;
 }
 
 export interface TaskHandle {
@@ -148,6 +178,87 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
       },
     );
   });
+}
+
+// W7-C2（V70 + V3）：pid 是否还活着。`kill(pid, 0)` 不发信号，只做存在性/权限检查——
+// 与 simulation/run_store.ts 的 `isProcessAlive()` 逐字节同构（那边是核验子进程，这边
+// 是核验持有 run() 闭包的服务进程自己），两处各留一份是刻意的：两个模块不互相 import，
+// 避免 server/ 依赖 simulation/ 这类跨层耦合（足迹只允许改这两个文件，没有第三个
+// 「共享 util」文件可落）。
+export function isProcessAlive(pid: number | null | undefined): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+// W7-C2（V70 + V3）：查一个 pid 当前的启动时间，供落盘时记录、也供读回时对同一个 pid
+// 再查一次做比对（V3 的核心判据：比对不上就是 pid 被复用）。
+//
+// 用 `ps -o lstart=`（macOS/Linux/BSD 通用）而不是 Linux 专属的 `/proc/<pid>/stat`——
+// 后者更精确更快，但要另外读 `/proc/uptime` 换算、还要处理 comm 字段里可能带括号的
+// 边界情况，是「可优先」的可选优化（任务书原文），本 lane 没有实现，双平台通用的
+// `ps` 已经能满足「读回时核验」这个用途。只有秒级精度——只要写入时与读回时都用这同一个
+// 函数查同一个 pid，两次结果在进程没换过的前提下逐字符相等，精度本身不影响判据。
+//
+// 查不到（pid 不存在、`ps` 不认识、没权限、命令本身超时）一律返回 null——调用方据此
+// 标 `startTimeUnavailable`，不拿一个可能是瞎猜的时间戳去参与后续比对。
+export function getProcessStartTime(pid: number | null | undefined): string | null {
+  if (!pid || pid <= 0) return null;
+  try {
+    // `ps -o lstart=` 的输出不带时区（`"Fri Sep 11 14:17:56 2026"`）——`new Date()` 解析
+    // 这种非 ISO 格式时是否按本地时区补全是 JS 引擎的实现细节，实测同一台机器上不同
+    // 进程调用会给出不一致的结果（调试时真实撞到过：两个进程各查一次同一个 pid，一个
+    // 按本地时区补全、一个当成 UTC 直接吃，差了 8 小时，把「同一个还活着的进程」判成
+    // 了 orphaned）。显式给 `ps` 传 `TZ=UTC`（`ps` 认这个 env var，会把 lstart 按 UTC
+    // 打印）、再在字符串末尾补一个 " UTC" 消歧义，两头都固定成同一个基准，才能保证
+    // 「写入时查一次、读回时再查一次」逐字符可比。
+    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2_000,
+      env: { ...process.env, TZ: "UTC" },
+    }).trim();
+    if (!out) return null;
+    const parsed = new Date(`${out} UTC`);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+// W7-C2（V70 + V3）：读回时的核心判据。只在调用方已经确认「这条记录不是本进程亲手在跑」
+// （`!entry.live`）、且状态仍是 running/pending 时才会被调用——本进程亲眼看着在跑的任务
+// 不需要、也不应该去猜自己的 liveness。
+//
+// 返回 orphaned 的原因字符串；返回 null 表示「核验不出问题，继续按 running/pending 处理」
+// ——查不出来（pid 存活但启动时间探测失败、或本来就没记录）不等于「查出来有问题」，
+// 安全方向仍是「只多报不少报」（文件头大注释的既有纪律）。
+function checkOrphaned(pid: number, pidStartedAt: string | null, startTimeUnavailable: boolean): string | null {
+  if (!isProcessAlive(pid)) {
+    return `pid ${pid} 已不存在——持有这个任务 run() 闭包的进程已经退出`;
+  }
+  if (startTimeUnavailable || pidStartedAt === null) return null; // 只能核存在性，存在就继续信。
+  const currentStartedAt = getProcessStartTime(pid);
+  if (currentStartedAt === null) return null; // 这次探测失败：不要用「测不到」误判成 orphaned。
+  if (currentStartedAt !== pidStartedAt) {
+    return `pid ${pid} 仍存活，但启动时间对不上（记录=${pidStartedAt}，此刻=${currentStartedAt}）——pid 已被复用，原进程已经不在了`;
+  }
+  return null;
+}
+
+// W7-C2（V70 + V3）：本进程自己的启动时间只可能有一个值，查一次记下来就够了——
+// 没必要在每个 `start()` 调用上都重新 `ps` 一次（任务提交是「立刻返回句柄」的契约，
+// 犯不着为了这个再加一次子进程调用的延迟）。惰性求值：真起了长任务才付这次查询成本。
+let cachedOwnPidStartedAt: string | null | undefined;
+function ownProcessStartTime(): string | null {
+  if (cachedOwnPidStartedAt === undefined) {
+    cachedOwnPidStartedAt = getProcessStartTime(process.pid);
+  }
+  return cachedOwnPidStartedAt;
 }
 
 export class TaskRegistry {
@@ -242,6 +353,12 @@ export class TaskRegistry {
       error: null,
       events: [],
       recovered: null,
+      // W7-C2（V70 + V3）：这个任务的 run() 闭包活在**本进程**里——记下本进程的 pid
+      // 与启动时间，读回时（可能是重启后的另一个进程）才有据可查「当年那个进程还在不在」。
+      pid: process.pid,
+      pidStartedAt: ownProcessStartTime(),
+      startTimeUnavailable: ownProcessStartTime() === null,
+      orphanReason: null,
     };
     let resolveSettled: (value: TaskSnapshot) => void;
     const settled = new Promise<TaskSnapshot>((resolve) => {
@@ -294,16 +411,42 @@ export class TaskRegistry {
   }
 
   get(id: string): TaskSnapshot | null {
-    return this.entries.get(id)?.snapshot ?? null;
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    this.applyLiveness(entry);
+    return entry.snapshot;
   }
 
   list(filter: { project?: string; state?: TaskState; limit?: number } = {}): TaskSnapshot[] {
     const all = [...this.entries.values()]
-      .map((e) => e.snapshot)
+      .map((e) => {
+        this.applyLiveness(e);
+        return e.snapshot;
+      })
       .filter((s) => (filter.project ? s.project === filter.project : true))
       .filter((s) => (filter.state ? s.state === filter.state : true))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return filter.limit ? all.slice(0, filter.limit) : all;
+  }
+
+  // W7-C2（V70 + V3）：读回时的 liveness 交叉核验——`get()`/`list()` 是「lit tasks 数据面」
+  // 与「exp status 数据面」（经由 shared.ts / session.ts 透传）唯一的两个读入口，判据只用
+  // 落这一处，不散到各个调用方里各查一遍。
+  private applyLiveness(entry: TaskEntry): void {
+    const snapshot = entry.snapshot;
+    // 本进程亲手在跑的任务：ground truth 就在这个闭包里，不需要、也不应该去猜自己的
+    // liveness（猜出来的结论不可能比「我们本来就知道」更可信）。
+    if (entry.live) return;
+    // 已经是终态（含上一次判过的 orphaned）：不用再查一遍——orphaned 是单向的，死掉的
+    // 进程不会用同一个身份复活。
+    if (snapshot.state !== "running" && snapshot.state !== "pending") return;
+    // V70 之前落盘的旧快照没有 pid 字段：查不了，维持既有「只多报不少报」口径。
+    if (snapshot.pid == null) return;
+    const reason = checkOrphaned(snapshot.pid, snapshot.pidStartedAt ?? null, snapshot.startTimeUnavailable === true);
+    if (!reason) return;
+    snapshot.state = "orphaned";
+    snapshot.orphanReason = reason;
+    this.persist(entry);
   }
 
   // 订阅返回「历史事件 + 取消订阅函数」：晚订阅者也拿得到开头。

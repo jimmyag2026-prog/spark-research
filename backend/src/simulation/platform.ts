@@ -9,15 +9,16 @@ import {
   type PlatformAvailability,
   type PreparedRun,
   type RunStatus,
+  type SimRunState,
   type SimulationOutputFile,
   type SimulationOutputs,
   type SimulationPlatform,
   type SimulationSpec,
 } from "./models";
-import { RunStore, isProcessAlive, type RunRecord } from "./run_store";
+import { RunStore, isProcessAlive, getProcessStartTime, type RunRecord } from "./run_store";
 
 export * from "./models";
-export { RunStore, isProcessAlive } from "./run_store";
+export { RunStore, isProcessAlive, getProcessStartTime } from "./run_store";
 export type { RunRecord, DoneEnvelope } from "./run_store";
 
 // Python 解释器解析：与 kernels/manager 同一口径（SPARK_PYTHON > 仓库 .venv > python3）。
@@ -115,6 +116,20 @@ export interface SubprocessPlatformOptions {
   python?: string;
   // 单次 available() 探测的超时。
   probeTimeoutMs?: number;
+}
+
+// W7-C2（V3）：poll() 里「本进程没有活句柄、但 pid 看着还活着」这条路径专用的核验。
+// 返回 orphaned 原因；null 表示核验不出问题（继续按 running 处理——查不出来不等于
+// 查出来有问题，安全方向仍是「只多报不少报」）。
+function crossCheckPidIdentity(pid: number | null, recordedStartedAt: string | null, startTimeUnavailable: boolean): string | null {
+  if (pid == null) return null;
+  if (startTimeUnavailable || recordedStartedAt === null) return null; // 只能核存在性，存在就继续信。
+  const currentStartedAt = getProcessStartTime(pid);
+  if (currentStartedAt === null) return null; // 这次探测失败：不要用「测不到」误判成 orphaned。
+  if (currentStartedAt !== recordedStartedAt) {
+    return `pid=${pid} 仍存活，但启动时间对不上（记录=${recordedStartedAt}，此刻=${currentStartedAt}）——pid 已被复用，原进程已经不在了，结果不确定`;
+  }
+  return null;
 }
 
 // 本地子进程型仿真平台的公共骨架：openmm 与 pyref 都是「写 params.json →
@@ -242,6 +257,9 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
       closeSync(errFd);
     }
 
+    // W7-C2（V3）：submit() 落盘那一刻就把子进程的启动时间记下来——poll() 读回（尤其是
+    // 「本进程没有活句柄」那条跨进程路径）时要拿它跟同一个 pid 此刻的启动时间再比一次。
+    const pidStartedAt = getProcessStartTime(proc.pid ?? null);
     const record: RunRecord = {
       runId,
       platform: this.id,
@@ -258,6 +276,8 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
       params: prepared.params,
       expectedOutputs: prepared.expectedOutputs,
       recoverable: false,
+      pidStartedAt,
+      startTimeUnavailable: pidStartedAt === null,
     };
     this.store.create(record);
     this.handles.set(runId, proc);
@@ -269,6 +289,11 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
   async poll(runId: string): Promise<RunStatus> {
     const record = this.store.read(runId);
     if (!record) throw new UnknownRunError(runId);
+    // W7-C2（V3）：`orphaned` 是本 lane 加的第五态，只存在于 `RunRecord.state`（run_store.ts，
+    // 比 models.ts 的 `SimRunState` 宽一个值），单独短路掉——既是「一旦判定就不会再变回
+    // running，跟 completed/failed 一样不用重查」，也是让下面 `isTerminalRunState()` 拿到
+    // 的 `record.state` 收窄回 `SimRunState`，类型对得上（models.ts 不在本 lane 足迹内）。
+    if (record.state === "orphaned") return this.toStatus(record, null);
     if (isTerminalRunState(record.state)) return this.toStatus(record, null);
 
     // 顺序很重要：**先看 done.json**。任务写完结果才退出，所以只要结果在，
@@ -300,11 +325,39 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
     }
 
     if (isProcessAlive(record.pid)) {
+      if (!handle) {
+        // W7-C2（V3）：本进程没有这个 runId 的活句柄——不是这个 `SubprocessSimulationPlatform`
+        // 实例自己 submit 的（另一个 CLI/server 实例 submit 的，或本进程重启过）。pid 存活
+        // 不代表「就是当年那个进程」——这正是 V3 的原始投诉：pid 可能已经被系统回收又
+        // 分配给一个完全无关的新进程。本进程亲手 submit 的（`handle` 非空）不用查，我们
+        // 手上就攥着真正的子进程句柄，ground truth 不需要靠 pid 猜。
+        const orphanReason = crossCheckPidIdentity(
+          record.pid,
+          record.pidStartedAt ?? null,
+          record.startTimeUnavailable === true,
+        );
+        if (orphanReason) {
+          const orphaned = this.store.patch(runId, {
+            state: "orphaned",
+            message: orphanReason,
+            finishedAt: new Date().toISOString(),
+            recoverable: false,
+          })!;
+          return this.toStatus(orphaned, null);
+        }
+      }
       return this.toStatus(record, this.readProgress(runId));
     }
 
     // 进程不在了、结果也没有：典型的「编排进程和任务一起被 kill」。
     // 标 failed 但 recoverable=true —— 这类失败重跑一次就可能好。
+    //
+    // W7-C2（V3）：这条既有分支特意保持不变——把它也并入 orphaned 会牵动
+    // `backend/src/experiment/loop.ts`（禁止修改）与 `tests/unit/experiment*.test.ts`
+    // （不在本 lane 足迹内）里对「pid 不存在 → failed + recoverable=true +『已消失』文案」
+    // 的既有断言（`process.kill(pid,'SIGKILL')` 之后期待 `lastError` 含「已消失」）。
+    // V3 真正投诉的是「pid 复用误判」——上面 `!handle` 分支已经补上；这条「pid 干脆不在了」
+    // 的分支本来就没有复用歧义（不存在就是不存在），沿用既有口径，diff 见报告。
     const next = this.store.patch(runId, {
       state: "failed",
       message: `runner 进程（pid=${record.pid ?? "?"}）已消失，且没有写出结果——任务可能随进程一起被杀，可重试`,
@@ -356,6 +409,9 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
   async cancel(runId: string): Promise<RunStatus> {
     const record = this.store.read(runId);
     if (!record) throw new UnknownRunError(runId);
+    // W7-C2（V3）：同 poll() 里的说明——orphaned 比 models.ts 的 SimRunState 宽一个值，
+    // 单独短路掉再把 record.state 收窄回 SimRunState 给 isTerminalRunState()。
+    if (record.state === "orphaned") return this.toStatus(record, null);
     if (isTerminalRunState(record.state)) return this.toStatus(record, null);
     if (record.pid && isProcessAlive(record.pid)) {
       try {
@@ -394,7 +450,12 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
     return {
       runId: record.runId,
       platform: record.platform,
-      state: record.state,
+      // W7-C2（V3）：`record.state` 的类型是 `SimRunState | "orphaned"`（run_store.ts），
+      // `RunStatus.state` 的类型仍是 models.ts 原本的 `SimRunState`（models.ts 不在本 lane
+      // 足迹内，没有改它）——这里的类型断言是已知、刻意留下的缺口：运行时这个字段确实
+      // 可能是字符串 `"orphaned"`，静态类型看不出来。收口时把 `SIM_RUN_STATES` /
+      // `RunStatus.state` 加上 `"orphaned"` 就能去掉这处断言，diff 见报告。
+      state: record.state as SimRunState,
       progress,
       message: record.message,
       pid: record.pid,
