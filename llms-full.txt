@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.7.0-alpha.4，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0-alpha.5，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -508,6 +508,13 @@ spark-research capabilities --probe    # 真去探测 openmm / opentrons 装没�
 ```
 
 清单**从真实注册表生成**（有双向一致性测试守着），不是手写的。你接进来的东西注册之后自动出现。
+
+### 并发使用与会话绑定（v0.7）
+
+多个终端/agent 同时用一个数据目录时，每个终端先 `export SPARK_RESEARCH_SESSION=<任意名字>`，再
+`spark-research project use <slug>` 只绑定本会话（不改全局指针；`--global` 才改）。项目解析顺序：
+`--project` > env `SPARK_RESEARCH_PROJECT` > 会话绑定 > 全局指针；全局指针的写入带文件锁。不设会话 id 时
+`project use` 退化为改全局指针（有提示）——并发场景请一律带 `--project`。
 
 ### 用户配置
 
@@ -2342,7 +2349,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 > 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
 > P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
 > ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
-> 最后更新：2026-09-11 晚（v0.7 W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2492,15 +2499,15 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V61 | **`existsSync("/$bunfs/…")` 的语义平台相关**（已修一处，登记形状） | v0.6 G-2 的首个 Linux CI 冒烟抓到：macOS 上对虚拟路径返回 false（内嵌兜底生效），Linux 上返回 true 但枚举拿不到内容——于是 Linux 二进制的技能索引**恒为 0 且不报错**，AD-12 最忌讳的安静错误答案。`skills/frontmatter.ts` 已改显式 `/$bunfs` 前缀判据。**登记是为了形状**：任何「用 existsSync 判断要不要走内嵌兜底」的代码在 Linux 上都可能悄悄走错分支；grep 过一遍，`agents/prompts.ts`（try/catch 兜底）与 server/index 的前端路径（materialize 后真实目录）均不受影响，当前无第二处。新增此类兜底时判据一律用 `/$bunfs` 前缀不用 existsSync |
 | V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫<br>📐 **v0.7 W7-D0 裁定：豁免并写明理由**——45 个错误全部是 Bun 特有 import 属性（`.sql/.py/.md with { type }`）在 e2e 的 plain tsconfig 下报错，与代码正确性无关；e2e 实跑本身就是它的类型检查。不纳入 `typecheck`，`tests/e2e/tsconfig.json` 保持现状。若将来 e2e 里真出现类型错误被这层噪声掩盖，再回来做 ambient 声明 |
 | V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线 |
-| V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项 |
-| V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没<br>✅ **v0.6 R2 前已修（机制修复+边界如实）**：searchOne 对 aminer 加拆词兜底——原查询 0 命中且多词时逐词查（深池 ≥20）、按命中词数合并、status.note 如实标注「这是拆词合并不是原查询命中」。真 API 实测：R1 扑空的查询 0→8 条相关结果；T3 冻结基准 top-20 单词池 3/3 可达。**残余限制（不隐瞒）**：复合单词（如「运动意图解码」连写）仍按词序列匹配 0 命中——没有中文分词器无法再拆，用户侧对策=概念间用空格（帮助文案已提示）；合并后 top-10 排序仍受 V67 制约<br>**R2 实证**：T4 中文查询 1 召回 **3/3（R1 是 0/3）**；查询 2 兜底触发但逐词结果偏题（钙钛矿泛化结果压过封装/降解特定结果）——兜底的相关性上限受 V67 同款排序制约，如实records |
+| V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项<br>✅ **v0.7 alpha.5 根治**（C-1，PR #74）：`state.json.lock` 文件锁 + 四档解析 + `project use` 会话绑定。**残余**：CLI 无持久会话 id，需 env `SPARK_RESEARCH_SESSION`，否则退化为全局指针（有提示） |
+| V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没<br>✅ **v0.6 R2 前已修（机制修复+边界如实）**：searchOne 对 aminer 加拆词兜底——原查询 0 命中且多词时逐词查（深池 ≥20）、按命中词数合并、status.note 如实标注「这是拆词合并不是原查询命中」。真 API 实测：R1 扑空的查询 0→8 条相关结果；T3 冻结基准 top-20 单词池 3/3 可达。**残余限制（不隐瞒）**：复合单词（如「运动意图解码」连写）仍按词序列匹配 0 命中——没有中文分词器无法再拆，用户侧对策=概念间用空格（帮助文案已提示）；合并后 top-10 排序仍受 V67 制约<br>**R2 实证**：T4 中文查询 1 召回 **3/3（R1 是 0/3）**；查询 2 兜底触发但逐词结果偏题（钙钛矿泛化结果压过封装/降解特定结果）——兜底的相关性上限受 V67 同款排序制约，如实records<br>✅ **v0.7 alpha.5 残余已做**（B-2b）：jieba 可选依赖分词器，连写复合词 0 命中时先分词；缺 jieba 退回空格拆词并如实标注 |
 | V66 | **精读卡不吃已下载的 PDF 全文（仅摘要推理）** | R1-T1：10/10 张卡全部呈摘要级推理形态，含 PDF 已成功下载的论文。文献链路价值大头——精读的「读」目前名不副实。需查 reading.ts 的输入构造是否根本没接 PDF 文本抽取<br>✅ **v0.6 R1 修复窗口已做**：pdf_text.py（pypdf）抽取 + reading 注入全文（40k 字符截断）+ basis/basisReason 落 record 元数据 + CLI 显示「基于全文/仅摘要」。降级路径不抛：无 PDF/抽取失败/缺 pypdf 都回摘要并留原因。实弹：AlphaFold3 论文 24 页抽出 40k 字符。pypdf 为可选依赖（缺了整体降级），doctor 探测面未加——后续有人被绊再补 |
-| V67 | 默认检索排序让里程碑论文沉底 | R1-T1：任务书检索式下召回 2/8，--limit 提到 50 才 5/8；3 篇里程碑（ESMFold/Foldseek/ProGen2）任何设置都不出现在检索结果但 DOI 直加秒中——**排序问题非覆盖问题**。方向：被引数加权 / 源侧排序参数<br>⚠️ **R2 证据加强**：T4 英文任务书查询召回 1/5@10，limit 放到 150 仍只 2/5，而缺席的 3 篇 DOI 直加秒中——**纯排序/合并问题**（含跨源去重后的排序）。T2 同样 3/8（高被引但偏题的压过奠基性论文）。v0.7 候选主线<br>⚠️ **v0.7 alpha.2 B-1 已做排序**（PR #69）：`--rank blended|hits|citations|recent`，默认 blended，HTTP 入口同步（收口）。**真实核验结论：排序修好了，深度不够**——默认 `--limit 10` 下 T1/T2/T4 recall@10 与 v0.6 无差异（里程碑根本不在浅池里）；`--limit 50` 下 T1 RFdiffusion 20/28 → 6/5 进 top10，另三篇 38/40/44 → 11/12/13。**待用户拍板**：blended 模式默认加深每源抓取（perSource 30–50）换取召回，代价是 API 调用量与限速风险（V26 令牌桶已在）。AMiner 无凭据时 T4 中文里程碑结构性不可达 |
+| V67 | 默认检索排序让里程碑论文沉底 | R1-T1：任务书检索式下召回 2/8，--limit 提到 50 才 5/8；3 篇里程碑（ESMFold/Foldseek/ProGen2）任何设置都不出现在检索结果但 DOI 直加秒中——**排序问题非覆盖问题**。方向：被引数加权 / 源侧排序参数<br>⚠️ **R2 证据加强**：T4 英文任务书查询召回 1/5@10，limit 放到 150 仍只 2/5，而缺席的 3 篇 DOI 直加秒中——**纯排序/合并问题**（含跨源去重后的排序）。T2 同样 3/8（高被引但偏题的压过奠基性论文）。v0.7 候选主线<br>⚠️ **v0.7 alpha.2 B-1 已做排序**（PR #69）：`--rank blended|hits|citations|recent`，默认 blended，HTTP 入口同步（收口）。**真实核验结论：排序修好了，深度不够**——默认 `--limit 10` 下 T1/T2/T4 recall@10 与 v0.6 无差异（里程碑根本不在浅池里）；`--limit 50` 下 T1 RFdiffusion 20/28 → 6/5 进 top10，另三篇 38/40/44 → 11/12/13。**待用户拍板**：blended 模式默认加深每源抓取（perSource 30–50）换取召回，代价是 API 调用量与限速风险（V26 令牌桶已在）。AMiner 无凭据时 T4 中文里程碑结构性不可达<br>✅ **v0.7 alpha.5 深池已做**（B-2，PR #76）：blended 默认每源 30，`--per-source` 可覆盖；T1 recall@10 3/8 → 5/8。**T2/T4 未实测**（OpenAlex 匿名 429），R4 出数后再关 |
 | V68 | `idea new` / `idea check` 无任务句柄 | R1-T1：进程被杀 100% 丢工作、零痕迹——与 lit read/review（V35 已接任务句柄）能力不对等。照 runCliTask 同款接线<br>✅ **v0.6 R1 修复窗口已做**：非交互 idea new 与 idea check 走 runCliTask（kind=idea-new/idea-check），快照落盘、被杀可查；任务失败时原始错误原因透出（不被包装吞掉，V36）。交互模式刻意不包（readline 生命周期由人掌控） |
 | V69 | 项目 `--desc` 逐字注入每次 LLM prompt，污染报告正文 | R1 双课题都观察到：desc 文本渗入精读卡「与本项目关系」与报告「研究问题」。projectContext 注入时应显式框定为背景说明而非任务指令<br>✅ **v0.7 alpha.2 B-3 已做**（PR #65）：`agents/prompts.ts` `projectBackgroundBlock()` 单一 helper，精读卡与 co-explore 两处真实注入点改用；`review.ts`/`novelty.ts` 核实本无注入；`report/export.ts` 的 desc 是代码渲染非 prompt，不套。金测试 8 条 |
 | V70 | 长任务进程被杀后快照僵死「running」 | R1-T3：kill 后 lit tasks 永久显示 running，无 liveness 判据（V3 的亲戚：缺 pid/start-time 交叉核验）<br>✅ **v0.7 alpha.2 C-2 已做**（PR #67）：快照记 pid + 启动时间，读回交叉核验 → `orphaned`（新状态，不冒充 failed）；kill -9 / pid 复用假阳性 / 启动时间不可用退化三类测试。顺手修 `ps lstart` 无时区跨进程差 8h 的真 bug。**残余**：前端任务面板与 MCP TaskEnvelope 对 `orphaned` 的展示为建议性 diff（devlog W7-C2），未接 |
-| V71 | `review findings` 不显示刚落的 citation-integrity soft finding | R1-T1：soft finding 刚写入证据图，review findings 却看不到——查询过滤面或类型映射有洞 |
-| V72 | 中文无作者论文的 BibTeX key 嵌入原始汉字 | R1-T3：key 应转拼音或降级 anonymous+年份；汉字 key 会破坏部分 BibTeX 工具链 |
+| V71 | `review findings` 不显示刚落的 citation-integrity soft finding | R1-T1：soft finding 刚写入证据图，review findings 却看不到——查询过滤面或类型映射有洞<br>✅ **v0.7 alpha.5 已做**（B-4 复现 + 收口接线）：根因是 `lit review` 从不调 `findings().reviewTarget()`（查询侧无洞）；收口在 CLI 落库处接线，fingerprint 复用 `reviewer/agent.ts` 的 `computeFingerprint`。HTTP 侧 `routes/literature.ts` 同形未接，登记为残余 |
+| V72 | 中文无作者论文的 BibTeX key 嵌入原始汉字 | R1-T3：key 应转拼音或降级 anonymous+年份；汉字 key 会破坏部分 BibTeX 工具链<br>✅ **v0.7 alpha.5 已做**（B-4，PR #73）：key 只允许 `[a-z0-9]`，中文/无作者降级 `anon<year>`；覆盖 E-5 |
 | V73 | AMiner 间歇 401（12%，100 调用中 12 次） | R1-T3 的 usage api 台账捕获；key 在有效期内。待查：限速的 401 表达？某类端点无权限？与 key 续期（10-07）一并处理<br>⚠️ **v0.6 复核：无法复现**——12 并发 burst 实测 0 个 401。R1 当时的 12% 可能是服务端瞬时状态或特定时段限流，无稳定判据、不编造限速修法（V26 纪律）。保持观察，R2/R3 台账若再现再查 |
 | V74 | **测试套件对用户级 config 不完全隔离** | R1 连带发现：用户 `config set defaultModel` 后 sub_agent.test.ts 的 legacy 断言变红（读了真实 ~/.spark-research）。已修该测试（env 隔离）；**系统性方案待议**：bunfig preload 统一注入临时 SPARK_RESEARCH_DATA_DIR——但要先清点哪些测试有意读真实凭据（RECORDING 模式） |
 
@@ -2544,6 +2551,33 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.7.0-alpha.5] — 2026-09-11
+
+**alpha.5：第二段三条 lane（B-2 · B-4 · C-1）+ 收口。** PR #73 B-4 · #74 C-1 · #76 B-2 · 收口 PR。
+
+### 新增
+
+- **blended 默认深池 30/源（V67 深度，用户拍板）**：`lit search` 与 HTTP 入口在 blended 档不再把 `--limit`
+  当每源抓取数，每源抓 30 后合并排序、返回 `limit` 条；`--per-source N` 显式覆盖；`--rank hits` 保持 10。
+  真实核验（免 key 源）：T1 recall@10 hits 3/8 → blended 5/8（**达 +2**）；**T2/T4 因 OpenAlex 匿名池持续 429
+  未实测**，R4 补。
+- **中文分词器（V65 残余）**：Python `jieba` 作可选依赖（与 pypdf 同形状），连写复合词 0 命中时先分词再走
+  深池合并，note 如实标注；缺 jieba 退回空格拆词；`doctor` 加探测。
+- **V64 根治**：`state.json.lock` 文件锁（O_EXCL + pid/时间，过期且 pid 不存活即回收）；项目解析四档
+  `--project` > env `SPARK_RESEARCH_PROJECT` > 会话绑定 > 全局指针；`project use` 默认只绑会话
+  （会话 id 取 env `SPARK_RESEARCH_SESSION`），`--global` 才改全局。两个真实子进程 100 次交替零串项目。
+- **V72**：BibTeX key 只允许 `[a-z0-9]`，中文作者/无作者降级 `anon<year>…`（覆盖 E-5 旧决定）。
+- **V71**：`lit review` 现在把逐条 citation finding 登记进 findings.db（fingerprint 复用 reviewer 口径），
+  `review findings` 终于看得到——根因不是查询侧，是落库侧从没写过。
+
+### 如实交代
+
+- CLI 没有持久会话 id：不设 `SPARK_RESEARCH_SESSION` 时 `project use` 退化为改全局指针（有提示）。并发使用请
+  每个终端 `export SPARK_RESEARCH_SESSION=<名字>`，或一律带 `--project`。
+- 深池让 fixture cassette（按 10/源录制）失配——修法是 `LiteratureSearcher` 新增 `deepPool` 选项、测试场景
+  如实注入 10，不重录 cassette，生产默认不变。
+- B-2 lane 曾因 Claude 额度中断，未提交改动由主会话落 wip commit 保存后复活续做；终态分支无「未验证」提交。
 
 ## [0.7.0-alpha.4] — 2026-09-11
 

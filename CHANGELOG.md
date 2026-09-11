@@ -5,6 +5,33 @@
 
 ---
 
+## [0.7.0-alpha.5] — 2026-09-11
+
+**alpha.5：第二段三条 lane（B-2 · B-4 · C-1）+ 收口。** PR #73 B-4 · #74 C-1 · #76 B-2 · 收口 PR。
+
+### 新增
+
+- **blended 默认深池 30/源（V67 深度，用户拍板）**：`lit search` 与 HTTP 入口在 blended 档不再把 `--limit`
+  当每源抓取数，每源抓 30 后合并排序、返回 `limit` 条；`--per-source N` 显式覆盖；`--rank hits` 保持 10。
+  真实核验（免 key 源）：T1 recall@10 hits 3/8 → blended 5/8（**达 +2**）；**T2/T4 因 OpenAlex 匿名池持续 429
+  未实测**，R4 补。
+- **中文分词器（V65 残余）**：Python `jieba` 作可选依赖（与 pypdf 同形状），连写复合词 0 命中时先分词再走
+  深池合并，note 如实标注；缺 jieba 退回空格拆词；`doctor` 加探测。
+- **V64 根治**：`state.json.lock` 文件锁（O_EXCL + pid/时间，过期且 pid 不存活即回收）；项目解析四档
+  `--project` > env `SPARK_RESEARCH_PROJECT` > 会话绑定 > 全局指针；`project use` 默认只绑会话
+  （会话 id 取 env `SPARK_RESEARCH_SESSION`），`--global` 才改全局。两个真实子进程 100 次交替零串项目。
+- **V72**：BibTeX key 只允许 `[a-z0-9]`，中文作者/无作者降级 `anon<year>…`（覆盖 E-5 旧决定）。
+- **V71**：`lit review` 现在把逐条 citation finding 登记进 findings.db（fingerprint 复用 reviewer 口径），
+  `review findings` 终于看得到——根因不是查询侧，是落库侧从没写过。
+
+### 如实交代
+
+- CLI 没有持久会话 id：不设 `SPARK_RESEARCH_SESSION` 时 `project use` 退化为改全局指针（有提示）。并发使用请
+  每个终端 `export SPARK_RESEARCH_SESSION=<名字>`，或一律带 `--project`。
+- 深池让 fixture cassette（按 10/源录制）失配——修法是 `LiteratureSearcher` 新增 `deepPool` 选项、测试场景
+  如实注入 10，不重录 cassette，生产默认不变。
+- B-2 lane 曾因 Claude 额度中断，未提交改动由主会话落 wip commit 保存后复活续做；终态分支无「未验证」提交。
+
 ## [0.7.0-alpha.4] — 2026-09-11
 
 **W7-D2：`data export / import / verify`——项目整体可导出（JSONL + manifest）、可核、可重建；`--for-sharing` 把 AD-16 落到产物上。**

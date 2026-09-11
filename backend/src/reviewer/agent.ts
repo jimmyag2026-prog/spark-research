@@ -103,7 +103,7 @@ interface CheckAttempt {
 //     那部分字段；citation_conflict 显式排除 detail.reason，judge_unavailable 显式排除
 //     judgeErrors/judgedCount 两个计数，只保留固定字面量。
 //   其余 checker：message 全文本身就是确定性程序输出，直接用作身份。
-function citationFindingIdentity(finding: Finding): string {
+export function citationFindingIdentity(finding: Finding): string {
   const detail = (finding.detail ?? {}) as Record<string, unknown>;
   if ("key" in detail && "sentence" in detail && "reason" in detail) {
     // citation_conflict（rules.ts citationIntegrity 第②段）：身份 = key + 陈述所在的句子。
@@ -131,7 +131,7 @@ function citationFindingIdentity(finding: Finding): string {
   return `unrecognized ${finding.message.split(":")[0]?.trim() ?? finding.message}`;
 }
 
-function computeFingerprint(checker: string, finding: Finding): string {
+export function computeFingerprint(checker: string, finding: Finding): string {
   const identity = checker === CITATION_RULE ? citationFindingIdentity(finding) : finding.message;
   return createHash("sha256").update(`${checker} ${identity}`).digest("hex").slice(0, 16);
 }
