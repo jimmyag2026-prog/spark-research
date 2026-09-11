@@ -81,7 +81,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | V5 | R kernel | v0.1 遗留 permit set 已有位置 |
 | V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（当前 execute() 入参为 OpentronsProgram）。**P9 已把五步施工说明写进 [EXTENDING.md 第 4 节](EXTENDING.md)**（含 protocolHash 语义搬迁与 volume_capacity 规则的降级口径）；等第二设备族选定再动（AD-4 教训：两个真实实现才验证得了接口） |
 | V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估 |
-| V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差 |
+| V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差<br>✅ **机制已定位并修复（见 V65，v0.6）**：根源=AMiner title 检索按词序列匹配。拆词兜底后中文多概念查询从整体扑空变为可用；进一步召回提升归 V67（排序）与分词器引入（未排期） |
 | V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
 | V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘 |
 | V9 | **[已完成]** AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200）<br>✅ **v0.6 G-4 已验**：真 key 实测 `getPaper` HTTP OK、详情字段齐全（abstract/authors/venue/year）。key 续期（2026-10-07 到期）仍是独立运维项，用户已明示本版不做。 |
@@ -151,7 +151,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫 |
 | V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线 |
 | V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项 |
-| V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没 |
+| V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没<br>✅ **v0.6 R2 前已修（机制修复+边界如实）**：searchOne 对 aminer 加拆词兜底——原查询 0 命中且多词时逐词查（深池 ≥20）、按命中词数合并、status.note 如实标注「这是拆词合并不是原查询命中」。真 API 实测：R1 扑空的查询 0→8 条相关结果；T3 冻结基准 top-20 单词池 3/3 可达。**残余限制（不隐瞒）**：复合单词（如「运动意图解码」连写）仍按词序列匹配 0 命中——没有中文分词器无法再拆，用户侧对策=概念间用空格（帮助文案已提示）；合并后 top-10 排序仍受 V67 制约 |
 | V66 | **精读卡不吃已下载的 PDF 全文（仅摘要推理）** | R1-T1：10/10 张卡全部呈摘要级推理形态，含 PDF 已成功下载的论文。文献链路价值大头——精读的「读」目前名不副实。需查 reading.ts 的输入构造是否根本没接 PDF 文本抽取<br>✅ **v0.6 R1 修复窗口已做**：pdf_text.py（pypdf）抽取 + reading 注入全文（40k 字符截断）+ basis/basisReason 落 record 元数据 + CLI 显示「基于全文/仅摘要」。降级路径不抛：无 PDF/抽取失败/缺 pypdf 都回摘要并留原因。实弹：AlphaFold3 论文 24 页抽出 40k 字符。pypdf 为可选依赖（缺了整体降级），doctor 探测面未加——后续有人被绊再补 |
 | V67 | 默认检索排序让里程碑论文沉底 | R1-T1：任务书检索式下召回 2/8，--limit 提到 50 才 5/8；3 篇里程碑（ESMFold/Foldseek/ProGen2）任何设置都不出现在检索结果但 DOI 直加秒中——**排序问题非覆盖问题**。方向：被引数加权 / 源侧排序参数 |
 | V68 | `idea new` / `idea check` 无任务句柄 | R1-T1：进程被杀 100% 丢工作、零痕迹——与 lit read/review（V35 已接任务句柄）能力不对等。照 runCliTask 同款接线<br>✅ **v0.6 R1 修复窗口已做**：非交互 idea new 与 idea check 走 runCliTask（kind=idea-new/idea-check），快照落盘、被杀可查；任务失败时原始错误原因透出（不被包装吞掉，V36）。交互模式刻意不包（readline 生命周期由人掌控） |
@@ -159,7 +159,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V70 | 长任务进程被杀后快照僵死「running」 | R1-T3：kill 后 lit tasks 永久显示 running，无 liveness 判据（V3 的亲戚：缺 pid/start-time 交叉核验） |
 | V71 | `review findings` 不显示刚落的 citation-integrity soft finding | R1-T1：soft finding 刚写入证据图，review findings 却看不到——查询过滤面或类型映射有洞 |
 | V72 | 中文无作者论文的 BibTeX key 嵌入原始汉字 | R1-T3：key 应转拼音或降级 anonymous+年份；汉字 key 会破坏部分 BibTeX 工具链 |
-| V73 | AMiner 间歇 401（12%，100 调用中 12 次） | R1-T3 的 usage api 台账捕获；key 在有效期内。待查：限速的 401 表达？某类端点无权限？与 key 续期（10-07）一并处理 |
+| V73 | AMiner 间歇 401（12%，100 调用中 12 次） | R1-T3 的 usage api 台账捕获；key 在有效期内。待查：限速的 401 表达？某类端点无权限？与 key 续期（10-07）一并处理<br>⚠️ **v0.6 复核：无法复现**——12 并发 burst 实测 0 个 401。R1 当时的 12% 可能是服务端瞬时状态或特定时段限流，无稳定判据、不编造限速修法（V26 纪律）。保持观察，R2/R3 台账若再现再查 |
 | V74 | **测试套件对用户级 config 不完全隔离** | R1 连带发现：用户 `config set defaultModel` 后 sub_agent.test.ts 的 legacy 断言变红（读了真实 ~/.spark-research）。已修该测试（env 隔离）；**系统性方案待议**：bunfig preload 统一注入临时 SPARK_RESEARCH_DATA_DIR——但要先清点哪些测试有意读真实凭据（RECORDING 模式） |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3

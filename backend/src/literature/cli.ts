@@ -59,6 +59,8 @@ export const LIT_SUBCOMMAND_HELP: Record<string, string> = {
   跨源并行检索并按 DOI/标题去重合并。默认源: ${DEFAULT_SEARCH_SOURCES.join(", ")}
   --sources  逗号分隔，可选: ${LITERATURE_SOURCES.join(", ")}
   --limit    去重后展示/入库的上限（默认 10，同时作为每源取回条数）
+  中文/多概念查询请在概念之间加空格（AMiner 按词序列匹配，连写会整体扑空；
+  0 命中时会自动拆词检索并在结果状态里标注）
   --add      把本次结果写进当前项目的文献库（并重建引文边）
   --tag      入库时打的标签，逗号分隔（仅与 --add 同用时有意义）
 
@@ -214,7 +216,9 @@ function printSourceStatus(
   out("各源结果:");
   for (const s of statuses) {
     const mark = s.outcome === "ok" ? "✅" : s.outcome === "skipped" ? "⏭️ " : "❌";
-    const detail = s.outcome === "ok" ? `${s.count} 条` : (s.note ?? s.error ?? s.outcome);
+    // V65：ok 也要带 note——拆词兜底这类「结果是怎么来的」说明不显示，用户会把
+    // 合并结果误当原查询命中（召回数字因此不可比）。
+    const detail = s.outcome === "ok" ? `${s.count} 条${s.note ? `（${s.note}）` : ""}` : (s.note ?? s.error ?? s.outcome);
     out(`  ${mark} ${s.source}: ${detail}`);
     if (s.outcome !== "skipped") {
       const caveat = caveatOf?.(s.source);
