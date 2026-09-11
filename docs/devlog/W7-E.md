@@ -74,3 +74,61 @@
 `tests/unit/compute_e2e.test.ts`：8 pass / 0 fail（含改写后的「三刀齐下」用例 + 新增 V48 用例）。
 `tests/unit/compute_broker.test.ts` + 上两个文件合计：55 pass / 0 fail。
 `tests/unit/compute_{broker,dispatch_once,http,mcp,modal,target,plan,lifecycle,approval,job_store,uploads,cli}.test.ts`（12 个 compute_*.test.ts，不含 local/e2e）：227 pass / 0 fail。
+
+## E-3 · V21：超时 env 前缀统一，启动废弃周期
+
+现状：`SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS` 与仓库约定 `SPARK_RESEARCH_*` 不一致；v0.2.1 起 MCP 工具描述已把 `SPARK_TASK_TIMEOUT_MS` 写给外部 agent 看，改名是 breaking change。
+
+### 交付
+
+- `backend/src/config/index.ts`：
+  - `SettingSpec` 新增 `legacyEnvVars?: readonly string[]`（已废弃但仍生效的旧 env 名，按优先级排列）。
+  - 四个超时项的 `envVar` 改成 `SPARK_RESEARCH_{HTTP,LLM,KERNEL,TASK}_TIMEOUT_MS`；旧名 `SPARK_{HTTP,LLM,KERNEL,TASK}_TIMEOUT_MS` 登记进各自的 `legacyEnvVars`（`mcpTimeoutMs` 本来就是 `SPARK_RESEARCH_MCP_TIMEOUT_MS`，不在改名范围内，未动）。
+  - `resolveSetting()`：新名没读到值时才回落旧名；命中旧名走 `options.warn`（既有出口，默认 `console.warn`，测试可注入）告警一次，文案点名旧名与新名；新旧同设时走新名分支，不告警。
+- `backend/src/mcp/tools.ts`（仅文案）：`exp_run` 与 `task_status` 两处提到 `SPARK_TASK_TIMEOUT_MS` 的地方改成 `SPARK_RESEARCH_TASK_TIMEOUT_MS`，并加一句「旧名 `SPARK_TASK_TIMEOUT_MS` 仍生效但已废弃，计划 v0.8 起移除」——旧名字面量仍然出现在文本里（只是带了废弃说明），不是整段替换掉，`tests/unit/mcp_friction_fixes.test.ts`（不在本 lane 足迹内，未改）里断言这两个工具描述必须同时提到 `SPARK_TASK_TIMEOUT_MS` 与 `600000` 的用例因此仍然绿。
+- `tests/unit/config.test.ts` 新增 describe「V21：超时 env 改名为 SPARK_RESEARCH_* 前缀，旧名进入废弃周期」：对四个 key 逐一验证「新名生效不告警」「旧名生效且告警一次（文案含旧名与新名）」「新旧同设新名赢不告警」，外加「都不设落回默认不告警」与「下游窄口 `configuredTaskTimeoutMs` 同样吃得到旧名」。
+
+### 阴性对照（真跑，2026-09-11）
+
+把 `resolveSetting()` 里判断旧名的 `if (envRaw === undefined || envRaw === "")` 临时改成 `if (false && (...))`（相当于「去掉旧名兼容」）：
+
+| 结果 |
+|---|
+| **红**：5 个用例失败——4 个 key 的「旧名仍生效」用例（`source` 变回 `"default"`、`value` 变回默认值而不是旧名传入的值）+ 「下游窄口读旧名」用例（`configuredTaskTimeoutMs` 收到 `900000` 却返回 `600000`） |
+
+撤回改动后 `tests/unit/config.test.ts` 100/100（含新增 14 条）、`config_reader_parity.test.ts`、`mcp_friction_fixes.test.ts`、`narrative_parity.test.ts` 合计 100 pass / 0 fail。
+
+### 数字
+
+`bun run typecheck`：0 错误。
+`tests/unit/config.test.ts`：100 pass / 0 fail（新增 14 条：4 key × 3 条 + 2 条通用）。
+`tests/unit/config.test.ts` + `config_reader_parity.test.ts` + `mcp_friction_fixes.test.ts` + `narrative_parity.test.ts` 合计：100 pass / 0 fail。
+`tests/concurrency` + `tests/timeout`（8 个文件）：25 pass / 0 fail。
+`bun run test:py`：73 passed，0 skipped。
+`bun run test:lab`：26 passed，0 skipped。
+`bun run test:e2e`：19 passed（`E-3` 碰了 `mcp/tools.ts` 文案且 `resolveSetting` 是 HTTP/CLI 公共读路径，按纪律 13 算跨层改动，补跑）。
+
+### 已知残留红（不在本 lane 足迹内，未改，diff 附在报告里交收口）
+
+`bun test tests/unit` 全量跑一遍后除了 E-1/E-2/E-3 自己的部分，还剩两条红：
+- `tests/unit/llms_txt.test.ts`「生成物与仓库里已提交的文件一致」——worktree 建好之前就已经红（与 E-1/E-2/E-3 均无关），`llms*.txt` 归收口，本 lane 未碰。
+- `tests/unit/w61_cli_polish_rev.test.ts`「dispatch 一次只让 rev 跳 2 格...而不是 3 格」——**这条是 E-2 的连带影响**：V48 的 `hooksWithHandlePersist` 让 dispatch 内部多了一次 `jobs.patch()`（handle 落盘），rev 从「claim+merged-transition+settle 共 3 次」变成「+handle 落盘 共 4 次」，`expect(ran.rev).toBe(planned.rev + 3)` 因此从 4 变成收到 5。这个文件不在本 lane 任何一条的足迹（`tests/unit/compute_*.test.ts` / `tests/unit/config*.test.ts`）内，按纪律不碰，diff 交收口：
+  ```diff
+  -  test("不需要审批的 plan：dispatch 一次只让 rev 跳 2 格（claim 1 + start-run-merged 1），而不是 3 格", async () => {
+  +  test("不需要审批的 plan：dispatch 一次让 rev 跳 3 格（claim 1 + start-run-merged 1 + V48 handle 落盘 1），而不是 4 格", async () => {
+  @@
+  -    // 三次 patch()：① 无审批分支的 dispatch 声明（claim）② 合并后的
+  -    // resource_start/resource_active/start/run ③ settle()。合并前是 4 次（②拆成
+  -    // started/running 两次），rev 会从 1 跳到 5；合并后是 3 次，1 跳到 4。
+  -    expect(ran.rev).toBe(planned.rev + 3);
+  +    // 四次 patch()：① 无审批分支的 dispatch 声明（claim）② 合并后的
+  +    // resource_start/resource_active/start/run ③ W7-E V48：adapter 一拿到执行期
+  +    // handle 就立刻回调 hooks.onHandle 把它落盘（不必等 run() 返回，是 SIGKILL 能
+  +    // 恢复的前提）④ settle()。V48 之前 3 次，1 跳到 4；V48 之后 4 次，1 跳到 5。
+  +    expect(ran.rev).toBe(planned.rev + 4);
+  ```
+  这是 V48 与 V50（「减少 dispatch 内部 patch() 次数」）两条 BACKLOG 条目的真实目标冲突：V48 要的是「crash 后能接回」，代价是必须多一次独立落盘；V50 要的是「rev 跳变格数更贴近直觉」。本 lane 判断 V48 的正确性（数据不丢）优先于 V50 的展示层整洁度，但收口方可能有不同权衡（比如把 handle 落盘也想办法合并进同一次 patch），所以只给 diff、不擅自在足迹外落子。
+
+### 需要同步但本 lane 不改的文档
+
+`grep -rn "SPARK_HTTP_TIMEOUT_MS\|SPARK_LLM_TIMEOUT_MS\|SPARK_KERNEL_TIMEOUT_MS\|SPARK_TASK_TIMEOUT_MS" docs/INSTALL.md README.md` 零命中——两份文档目前都不提这四个变量，**不需要同步**。`docs/BACKLOG.md`（V21 条目原文）与 `docs/devlog/P10-b.md`（历史 devlog）里各有一处提到旧名，均属于记录历史决策的文本，本 lane 不改（归收口，且改了就篡改了历史记录本身的意思）。

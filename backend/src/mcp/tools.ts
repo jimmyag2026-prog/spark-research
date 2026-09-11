@@ -411,7 +411,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
   但干实验的**状态真源在磁盘上**（AD-4）——所以新连接里用 exp_list 找到该实验，再 exp_run 带 resume 接回来即可，进度不会丢。
 【想避免超时】**两个上限要一起调**，只调一个没用：
   · SPARK_RESEARCH_MCP_TIMEOUT_MS=900000 —— MCP 工具同步等待的上限（也可 spark-research config set mcpTimeoutMs 900000）
-  · SPARK_TASK_TIMEOUT_MS=900000 —— 任务本身的生命周期上限，**默认只有 600000（10 分钟）**，超过它任务会被结构化地判为超时失败
+  · SPARK_RESEARCH_TASK_TIMEOUT_MS=900000 —— 任务本身的生命周期上限，**默认只有 600000（10 分钟）**，超过它任务会被结构化地判为超时失败（旧名 SPARK_TASK_TIMEOUT_MS 仍生效但已废弃，计划 v0.8 起移除，读到旧名会在日志里 warn 一次）
   只调大前者而不调后者，任务仍会在 10 分钟被掐掉，你等到的是一个超时失败。`,
     longRunning: true,
     inputSchema: {
@@ -813,7 +813,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 【连接断了怎么办】分两种：
   · **干实验（exp_run）**：状态真源在磁盘上，用 exp_list 找到实验后 exp_run 带 resume 接回，进度不丢。
   · **文献/思路类长任务（lit_read_cards、lit_review_draft、idea_novelty_check）**：没有磁盘 checkpoint，连接断开后**任务确实会随进程一起结束**，已完成的部分（已落库的精读卡等）保留，未完成的需要重跑。
-【所以更该做的是别让它超时】调大**两个**上限（只调一个没用）：SPARK_RESEARCH_MCP_TIMEOUT_MS（MCP 等待）与 SPARK_TASK_TIMEOUT_MS（任务生命周期，默认 600000 即 10 分钟）；或缩小单次范围（如 lit_read_cards 用 tag 分批）。
+【所以更该做的是别让它超时】调大**两个**上限（只调一个没用）：SPARK_RESEARCH_MCP_TIMEOUT_MS（MCP 等待）与 SPARK_RESEARCH_TASK_TIMEOUT_MS（任务生命周期，默认 600000 即 10 分钟；旧名 SPARK_TASK_TIMEOUT_MS 仍生效但已废弃，计划 v0.8 起移除）；或缩小单次范围（如 lit_read_cards 用 tag 分批）。
 【超时失败长什么样】error.timeout=true 表示是生命周期兜底触发的，不是任务体自己报的错——区别在于前者该调超时或缩范围，后者该看错误内容。`,
     inputSchema: {
       type: "object",
