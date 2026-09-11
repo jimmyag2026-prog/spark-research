@@ -117,3 +117,27 @@ describe("P1-6 · AMiner 拆词合并查准", () => {
     expect(r2.sources[0]!.note).toContain("退回单词命中");
   });
 });
+
+describe("V91（A6）· raw 导入按源文件顺序回放，不按 ts 重排", () => {
+  test("同一 connector 文件里两行 ts 相同（并发 append）→ 导出/导入后链仍完整；import 结果逐链报告", () => {
+    const root = tmp();
+    const manager = new ProjectManager(root);
+    const project = manager.create("order");
+    const sink = project.raw() as JsonlRawSink;
+    const ts = "2026-09-11T10:00:00.000Z";
+    const mk = (i: number, connector: string) =>
+      sink.append({ kind: "connector", provenanceClass: "upstream", license: "CC0-1.0", ts, payload: { connector, tool: "search", host: "h", method: "GET", params: { i }, status: 200, latencyMs: 1, contentType: null, response: sink.body(String(i)) } });
+    // 故意让「后 append 的行」内容排序上靠前（params.i 递减），ts 完全相同——任何按 ts/内容重排都会断链。
+    mk(3, "arxiv"); mk(2, "arxiv"); mk(1, "arxiv"); mk(9, "crossref"); mk(8, "crossref");
+    expect(sink.verify("connector").ok).toBe(true);
+    const result = exportProject(project, { now: () => "2026-09-11T11:00:00.000Z" });
+    const imported = importExport(manager, result.dir, "order-dst");
+    expect(imported.verification.raw.connector).toEqual({ ok: true, lines: 5 });
+    expect(imported.verification.journal.ok).toBe(true);
+    expect(imported.verified).toBe(true);
+    const dst = imported.project.raw() as JsonlRawSink;
+    expect([...dst.iterate({ kind: "connector" })].map((e) => (e.payload as unknown as { params: { i: number } }).params.i)).toEqual([3, 2, 1, 9, 8]);
+    imported.project.close();
+    project.close();
+  });
+});

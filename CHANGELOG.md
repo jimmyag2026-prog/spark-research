@@ -5,6 +5,31 @@
 
 ---
 
+## [0.7.0-alpha.7] — 2026-09-11
+
+**A6（第五次零上下文验收）通过，无 Blocker/High；但它的一条 Low 观察项挖出了 raw 链的真问题（V91）。**
+
+A6 报告：`spark-research-v0.7-plan/A6/A6_report.md`（37 张截图）。验收者把 `data import` 返回的 `verified:false`
+读成「没顺带校验」——**实际是链真断了**：源项目的 raw/llm 第 59 行 prevHash 指向第 57 行。真因是
+`JsonlRawSink` 把「上一行 hash」按**进程**缓存，server 与 CLI 两个进程同时往同一个文件 append 时各自接在
+同一行后面。这是 AD-15 承诺的核心（链可核）在多进程场景下不成立，不修不发。
+
+### 修复
+
+- **raw append 多进程安全（V91）**：每次 append 从文件尾重读上一行 hash（只读最后 64KB），
+  「读尾 → 写入」用 `<file>.lock`（O_EXCL，过期 10s 回收）做成临界区；`importEntry` 同样。
+  两个真实子进程各 100 次 append 同一文件 → 200 行链完整（`tests/concurrency/raw_append_race`，
+  阴性对照：回到按进程缓存 + 无锁 → 红）。
+- **`data import` 逐链复核并逐项报告**：`verification.journal` 与 `verification.raw.{connector,llm,kernel,device}`
+  各带 ok/lines/reason，CLI 一行打全；不再是一个裸 `verified` 布尔。
+- **raw 导入不再按 ts 重排**：按导出的源文件顺序回放（同毫秒并发 append 的行重排会断链）。
+
+### 如实交代
+
+- A6 那次导出的源项目链**已经断了**，导入它照样报 ❌——这是对的（导入不修链，只如实报）。
+- V91 之前所有多进程混用（server + CLI 同时跑）的项目，raw 链都可能带这种断点；`data import` /
+  `JsonlRawSink.verify()` 会指出行号。历史断点不回填（回填等于伪造）。
+
 ## [0.7.0-alpha.6] — 2026-09-11
 
 **R4 修复窗口。** R4（四课题零上下文全量复跑，`spark-research-v0.7-plan/R4/`）三条 P0 全在数据层，

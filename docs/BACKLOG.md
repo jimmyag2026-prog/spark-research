@@ -6,7 +6,7 @@
 > 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
 > P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
 > ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
-> 最后更新：2026-09-11 晚（v0.7 alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -192,6 +192,11 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V85 | raw 层「四类」不含仿真平台执行 | R4 T2 跑 `exp run --platform scanpy` 想验 kernel raw，发现 `exp run` 走 SimulationPlatform 子进程、不经 KernelManager，raw 里没有它；只有产物与 observation（带 contentHash）。是否把仿真 prepare/submit/collect 也落 raw（kind=simulation）待议——产物已是 append 形状，收益存疑 |
 | V86 | OpenAlex 匿名池在深池 × 并发下 100% 429，召回@10 全线 0/8（R4 P1-7） | ✅ **alpha.6 已加 `api.openalex.org` 主机限速（官方 10 rps）**。**未验证召回**：要等 429 消退后 A6 复测。用户侧对策：`config set contactEmail <邮箱>` 进礼貌池（政策原文见 ratelimit.ts）。V67 的「每课题 ≥ +2」到此仍未在 T2/T4 实测 |
 | V87 | `lit review` 的「解析引用数 > 判定数」差额无说明（R4 P2-10） | 四课题均有差额（T1 76/64 … T4 113/98），CLI 与 observation record 都没说去向（去重？自引？解析失败静默跳过？）。查 `citation_judge` 的计数口径并在输出里说明 |
+
+| V88 | 精读任务进度条不实时（A6 Medium C-1；A5 也记过 0/9） | `lit read --all` 跑 7.8 分钟，任务面板 `progress.done` 全程 0，结束瞬间跳到 10。数据正确，纯体验。查 `runCliTask` 的 progress 回调是否被批处理吞掉 |
+| V89 | co-explore 单次消息产出 2 张高度雷同的 Idea 卡（A6 Low） | 不确定是刻意（主/备假设）还是同一次生成记了两条。若刻意，UI 加一句说明；若不是，去重 |
+| V90 | 项目下拉框只显示名称不显示 slug，导入产物与原项目重名无法区分（A6 Low） | `data import` 原样带入 `dcat.title`。下拉框显示 slug 或给导入产物加后缀 |
+| V91 | **raw 链在多进程 append 下会断**（A6 `verified:false` 的真因） | ✅ **alpha.7 已修**：`JsonlRawSink.append` 每次从文件尾重读上一行 hash + `<file>.lock` 临界区；`importEntry` 同款；导入不按 ts 重排。两进程 200 次 append 链完整（concurrency 套件）。**登记形状**：「按进程缓存文件状态」在任何允许 server + CLI 并用的路径上都是错的——C-1 的 state.json 用文件锁、这里用文件锁，模式统一。历史断点不回填 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 

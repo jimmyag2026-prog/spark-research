@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.7.0-alpha.6，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0-alpha.7，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2349,7 +2349,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 > 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
 > P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
 > ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
-> 最后更新：2026-09-11 晚（v0.7 alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2536,6 +2536,11 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V86 | OpenAlex 匿名池在深池 × 并发下 100% 429，召回@10 全线 0/8（R4 P1-7） | ✅ **alpha.6 已加 `api.openalex.org` 主机限速（官方 10 rps）**。**未验证召回**：要等 429 消退后 A6 复测。用户侧对策：`config set contactEmail <邮箱>` 进礼貌池（政策原文见 ratelimit.ts）。V67 的「每课题 ≥ +2」到此仍未在 T2/T4 实测 |
 | V87 | `lit review` 的「解析引用数 > 判定数」差额无说明（R4 P2-10） | 四课题均有差额（T1 76/64 … T4 113/98），CLI 与 observation record 都没说去向（去重？自引？解析失败静默跳过？）。查 `citation_judge` 的计数口径并在输出里说明 |
 
+| V88 | 精读任务进度条不实时（A6 Medium C-1；A5 也记过 0/9） | `lit read --all` 跑 7.8 分钟，任务面板 `progress.done` 全程 0，结束瞬间跳到 10。数据正确，纯体验。查 `runCliTask` 的 progress 回调是否被批处理吞掉 |
+| V89 | co-explore 单次消息产出 2 张高度雷同的 Idea 卡（A6 Low） | 不确定是刻意（主/备假设）还是同一次生成记了两条。若刻意，UI 加一句说明；若不是，去重 |
+| V90 | 项目下拉框只显示名称不显示 slug，导入产物与原项目重名无法区分（A6 Low） | `data import` 原样带入 `dcat.title`。下拉框显示 slug 或给导入产物加后缀 |
+| V91 | **raw 链在多进程 append 下会断**（A6 `verified:false` 的真因） | ✅ **alpha.7 已修**：`JsonlRawSink.append` 每次从文件尾重读上一行 hash + `<file>.lock` 临界区；`importEntry` 同款；导入不按 ts 重排。两进程 200 次 append 链完整（concurrency 套件）。**登记形状**：「按进程缓存文件状态」在任何允许 server + CLI 并用的路径上都是错的——C-1 的 state.json 用文件锁、这里用文件锁，模式统一。历史断点不回填 |
+
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
 > D1/D3 的展开理由见 §post-v0.3；D2（Semantic Scholar key）已归口 v0.3 P16。
@@ -2556,6 +2561,31 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.7.0-alpha.7] — 2026-09-11
+
+**A6（第五次零上下文验收）通过，无 Blocker/High；但它的一条 Low 观察项挖出了 raw 链的真问题（V91）。**
+
+A6 报告：`spark-research-v0.7-plan/A6/A6_report.md`（37 张截图）。验收者把 `data import` 返回的 `verified:false`
+读成「没顺带校验」——**实际是链真断了**：源项目的 raw/llm 第 59 行 prevHash 指向第 57 行。真因是
+`JsonlRawSink` 把「上一行 hash」按**进程**缓存，server 与 CLI 两个进程同时往同一个文件 append 时各自接在
+同一行后面。这是 AD-15 承诺的核心（链可核）在多进程场景下不成立，不修不发。
+
+### 修复
+
+- **raw append 多进程安全（V91）**：每次 append 从文件尾重读上一行 hash（只读最后 64KB），
+  「读尾 → 写入」用 `<file>.lock`（O_EXCL，过期 10s 回收）做成临界区；`importEntry` 同样。
+  两个真实子进程各 100 次 append 同一文件 → 200 行链完整（`tests/concurrency/raw_append_race`，
+  阴性对照：回到按进程缓存 + 无锁 → 红）。
+- **`data import` 逐链复核并逐项报告**：`verification.journal` 与 `verification.raw.{connector,llm,kernel,device}`
+  各带 ok/lines/reason，CLI 一行打全；不再是一个裸 `verified` 布尔。
+- **raw 导入不再按 ts 重排**：按导出的源文件顺序回放（同毫秒并发 append 的行重排会断链）。
+
+### 如实交代
+
+- A6 那次导出的源项目链**已经断了**，导入它照样报 ❌——这是对的（导入不修链，只如实报）。
+- V91 之前所有多进程混用（server + CLI 同时跑）的项目，raw 链都可能带这种断点；`data import` /
+  `JsonlRawSink.verify()` 会指出行号。历史断点不回填（回填等于伪造）。
 
 ## [0.7.0-alpha.6] — 2026-09-11
 
