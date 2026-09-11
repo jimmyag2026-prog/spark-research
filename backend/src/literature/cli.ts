@@ -14,7 +14,16 @@ import { cliTaskRegistry, renderTaskList, renderTaskSnapshot, runCliTask } from 
 import type { TaskRegistry } from "../server/tasks";
 import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
 import { LibraryStore, type LibraryPaper } from "./library";
-import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, normalizeDoi, type LiteratureSource, type Paper } from "./models";
+import {
+  DEFAULT_RANK_MODE,
+  DEFAULT_SEARCH_SOURCES,
+  LITERATURE_SOURCES,
+  normalizeDoi,
+  RANK_MODES,
+  type LiteratureSource,
+  type Paper,
+  type RankMode,
+} from "./models";
 import { PdfDownloader } from "./pdf";
 import { extractPdfText } from "./pdf_text";
 import { ReadingCardGenerator, listReadingCards, renderReadingCard } from "./reading";
@@ -25,8 +34,8 @@ import { LiteratureSearcher } from "./search";
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
 
 export const LIT_HELP = `用法:
-  spark-research lit search <query> [--sources a,b] [--limit N] [--add] [--tag 标签]
-                                                  跨源检索（默认 ${DEFAULT_SEARCH_SOURCES.join("/")}）
+  spark-research lit search <query> [--sources a,b] [--limit N] [--rank ${RANK_MODES.join("|")}] [--add] [--tag 标签]
+                                                  跨源检索（默认 ${DEFAULT_SEARCH_SOURCES.join("/")}，排序默认 ${DEFAULT_RANK_MODE}）
   spark-research lit add <doi|arxiv-id|pmid> [--tag 标签]    按标识符入库
   spark-research lit list [--tag 标签] [--status unread|reading|read] [--json]
                                                   列出项目文献库
@@ -54,11 +63,18 @@ export const LIT_HELP = `用法:
 //
 // 每条子命令一段：用法行 + 它到底做什么 + 相关的下一步命令。
 export const LIT_SUBCOMMAND_HELP: Record<string, string> = {
-  search: `用法: spark-research lit search <query> [--sources a,b] [--limit N] [--add] [--tag 标签]
+  search: `用法: spark-research lit search <query> [--sources a,b] [--limit N] [--rank ${RANK_MODES.join("|")}] [--add] [--tag 标签]
 
   跨源并行检索并按 DOI/标题去重合并。默认源: ${DEFAULT_SEARCH_SOURCES.join(", ")}
   --sources  逗号分隔，可选: ${LITERATURE_SOURCES.join(", ")}
   --limit    去重后展示/入库的上限（默认 10，同时作为每源取回条数）
+  --rank     排序依据，默认 ${DEFAULT_RANK_MODE}（V67：默认按命中源数排序会把高被引里程碑
+             论文埋进结果尾部——纯覆盖问题已解决，这是排序问题）
+               blended   —— 命中源数 × 被引数(log 归一化) × 年份衰减，默认档
+               hits      —— 命中源数 → 被引 → 年份 → 标题（v0.6 原始行为，逐字节不变）
+               citations —— 纯按被引数降序（无被引数据的论文退化为 hits 排序）
+               recent    —— 纯按年份降序（缺年份的论文退化为 hits 排序）
+             结果头会打印本次实际用的排序依据一行，不用去猜。
   中文/多概念查询请在概念之间加空格（AMiner 按词序列匹配，连写会整体扑空；
   0 命中时会自动拆词检索并在结果状态里标注）
   --add      把本次结果写进当前项目的文献库（并重建引文边）
@@ -175,6 +191,15 @@ function parseSources(raw: string | undefined): LiteratureSource[] {
     throw new Error(`未知文献源: ${invalid.join(", ")}（可用: ${LITERATURE_SOURCES.join(", ")}）`);
   }
   return names as LiteratureSource[];
+}
+
+// V67：`--rank` 解析。默认 blended（见 models.ts DEFAULT_RANK_MODE），不给值时不报错。
+function parseRank(raw: string | undefined): RankMode {
+  if (!raw) return DEFAULT_RANK_MODE;
+  if (!(RANK_MODES as readonly string[]).includes(raw)) {
+    throw new Error(`未知排序档位 '${raw}'（可用: ${RANK_MODES.join(", ")}；默认 ${DEFAULT_RANK_MODE}）`);
+  }
+  return raw as RankMode;
 }
 
 function formatAuthors(paper: Paper, max = 3): string {
@@ -422,7 +447,8 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         }
         const sources = parseSources(flagString(flags.sources));
         const limit = Number(flagString(flags.limit) ?? 10) || 10;
-        const result = await makeSearcher().search(query, { sources, perSource: limit, limit });
+        const rank = parseRank(flagString(flags.rank));
+        const result = await makeSearcher().search(query, { sources, perSource: limit, limit, rank });
 
         // 三个数字含义不同，不能混为一谈：原始条数 / 合并掉的条数 / 实际展示条数（受 --limit 截断）。
         const afterDedupe = result.totalBeforeDedupe - result.mergedCount;
@@ -431,6 +457,10 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             `→ 剩 ${afterDedupe} 条` +
             (result.papers.length < afterDedupe ? `（--limit 截断后展示 ${result.papers.length} 条）` : ""),
         );
+        // V67 / AD-12：排序依据必须可见，不能只让用户看到一个顺序猜它怎么来的。
+        // rankNote 在真实 LiteratureSearcher 路径上必有；只有测试注入的旧 fixture
+        // （非本 lane 所有权，见 search.ts 对 rank/rankNote 可选的说明）可能没设置。
+        if (result.rankNote) out(result.rankNote);
         printSourceStatus(result.sources, out, caveatOf);
         out("");
         result.papers.forEach((paper, i) => printPaper(paper, i, out));
