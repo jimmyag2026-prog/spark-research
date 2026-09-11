@@ -108,6 +108,7 @@ export class ComputeApproval {
     const at = this.now();
     const decision = this.records.create({
       type: "decision",
+      provenanceClass: "user_authored",
       title: `批准算力任务 · ${job.plan.purpose}`,
       content: renderDecision({ decision: "approve", actor: input.actor, at, job, reason: input.note ?? null }),
       // 审批是人的判断，不是观察/计算/文献 → inferred（与 wet_loop.ts:387-418 同形）。
@@ -169,6 +170,7 @@ export class ComputeApproval {
     const at = this.now();
     const decision = this.records.create({
       type: "decision",
+      provenanceClass: "user_authored",
       title: `拒绝算力任务 · ${job.plan.purpose}`,
       content: renderDecision({ decision: "reject", actor: input.actor, at, job, reason: input.reason }),
       evidence: "inferred",

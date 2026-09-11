@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.6.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0-alpha.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -180,6 +180,8 @@ spark-research mcp    # stdio 传输
 - `subAgentModel_execute`（默认 —，env `SPARK_SUBAGENT_MODEL_EXECUTE`）：子代理类型 'execute' 的独立模型覆盖（不填则退回 defaultModel）
 - `subAgentModel_lab`（默认 —，env `SPARK_SUBAGENT_MODEL_LAB`）：子代理类型 'lab' 的独立模型覆盖（不填则退回 defaultModel）
 - `subAgentModel_review`（默认 —，env `SPARK_SUBAGENT_MODEL_REVIEW`）：子代理类型 'review' 的独立模型覆盖（不填则退回 defaultModel）
+- `rawLlm`（默认 on，env `SPARK_RESEARCH_RAW_LLM`）：是否把每次 LLM 调用的 prompt 与响应原文落进项目 raw/llm/（永久保留）
+- `rawUpstreamInline`（默认 off，env `SPARK_RESEARCH_RAW_UPSTREAM_INLINE`）：凭据协议源（AMiner/CNKI/万方）的原始响应体是否 inline 存进 raw/connector/
 
 ## 用这个工作台时必须知道的几条
 
@@ -2316,7 +2318,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11 晚（v0.7 基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2464,7 +2466,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V59 | 安全门的剩余缺口（窄范围验收，发布前**未修**，如实列出） | 发布前最后一次窄范围验收（只打安全门）在两条 blocker 修好之后又挖出这些，**v0.5 没修**：<br>· **限值表只覆盖 4 类试剂**（盐酸/硫酸 · 次氯酸钠 · 乙醇），且其中三类阈值就是 100 ——与「物理上不可能」那条完全重合，**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**。审批人看到这一行会被误导。<br>· **`biosafety` 只认字面 `BSL-n` / `生物安全N级`**：`P3 实验室`（最常见的中文口语写法）静默通过且零告警。<br>· **`chemical_compatibility` 不看孔位**：A1 的次氯酸钠 + B1 的盐酸也拦，消息没说「本规则不看孔位」。<br>· **旧的 `over-limit` 消息不合格**：英文残句、不说限值是多少、不说单位、不给下一步——同一条规则里新分支的消息质量比它高一个数量级。`volume capacity` / `chemical compatibility` 同样没有下一步。<br>· **`lab compile` 那一屏不打印覆盖范围声明**（`lab status` 有，写得很好）——**而绝大多数人是在 compile 那一屏看到四行 ✅ 的**。 |
 | V60 | 词表外试剂的身份仍然丢失（只止住了塌缩） | v0.5 收口把占位符按步骤唯一化（`未识别试剂#step-1`），**止住了「两种不同试剂共用同一个 reservoir 孔」**这个真实的物理别名，并补了未消费告警。**但用户写的原文没有保留进编译产物**——人在审批时仍然看不到自己写的是「硝酸」。要真正修好得让编译产物携带原文片段，属解析器工作。 |
 | V61 | **`existsSync("/$bunfs/…")` 的语义平台相关**（已修一处，登记形状） | v0.6 G-2 的首个 Linux CI 冒烟抓到：macOS 上对虚拟路径返回 false（内嵌兜底生效），Linux 上返回 true 但枚举拿不到内容——于是 Linux 二进制的技能索引**恒为 0 且不报错**，AD-12 最忌讳的安静错误答案。`skills/frontmatter.ts` 已改显式 `/$bunfs` 前缀判据。**登记是为了形状**：任何「用 existsSync 判断要不要走内嵌兜底」的代码在 Linux 上都可能悄悄走错分支；grep 过一遍，`agents/prompts.ts`（try/catch 兜底）与 server/index 的前端路径（materialize 后真实目录）均不受影响，当前无第二处。新增此类兜底时判据一律用 `/$bunfs` 前缀不用 existsSync |
-| V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫 |
+| V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫<br>📐 **v0.7 W7-D0 裁定：豁免并写明理由**——45 个错误全部是 Bun 特有 import 属性（`.sql/.py/.md with { type }`）在 e2e 的 plain tsconfig 下报错，与代码正确性无关；e2e 实跑本身就是它的类型检查。不纳入 `typecheck`，`tests/e2e/tsconfig.json` 保持现状。若将来 e2e 里真出现类型错误被这层噪声掩盖，再回来做 ambient 声明 |
 | V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线 |
 | V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项 |
 | V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没<br>✅ **v0.6 R2 前已修（机制修复+边界如实）**：searchOne 对 aminer 加拆词兜底——原查询 0 命中且多词时逐词查（深池 ≥20）、按命中词数合并、status.note 如实标注「这是拆词合并不是原查询命中」。真 API 实测：R1 扑空的查询 0→8 条相关结果；T3 冻结基准 top-20 单词池 3/3 可达。**残余限制（不隐瞒）**：复合单词（如「运动意图解码」连写）仍按词序列匹配 0 命中——没有中文分词器无法再拆，用户侧对策=概念间用空格（帮助文案已提示）；合并后 top-10 排序仍受 V67 制约<br>**R2 实证**：T4 中文查询 1 召回 **3/3（R1 是 0/3）**；查询 2 兜底触发但逐词结果偏题（钙钛矿泛化结果压过封装/降解特定结果）——兜底的相关性上限受 V67 同款排序制约，如实records |
@@ -2480,11 +2482,12 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 | V76 | **v0.5 规划期 staged 的 154 个 skill / 29 个 connector 从未在仓库里登记**（存量在仓库外、无版本控制） | **2026-09-11 补登记**。v0.5 规划期用子代理对 OpenScience 313 技能 / 46 connector 做过全量盘点并 staged 出可迁移代码，真源在本地 `~/Desktop/AI4S/spark-research-v0.5-plan/workstreams/`（70MB，**不是 git 仓库、无任何备份**）：`skills/staged/` **154 个** SKILL.md（盘点分级 P0=14 / P1=67 / P2=89 / SKIP=143）· `connectors/staged/` **29 个** connector + 各自 `.test.ts`。<br>**实际落地 3/154 与 4/29**：skill 只进了 cobrapy / pydeseq2 / scanpy（W5-3 β），connector 只进了 biorxiv / clinvar / reactome / string-db（W5-2 γ）。未落地的 25 个 connector：arrayexpress · bindingdb · biogrid · chebi · dbsnp · depmap · expression-atlas · geo · gnomad · gtex · gtopdb · hpa · intact · interpro · kegg · mygene · myvariant · ncbi-gene · opentargets · pdbe · sifts · single-cell-atlas · surechembl · ucsc · wikipathways。<br>**登记的是存量，不是铺量待办。** 口径没变：AD-5「少而深、每个技能必须有 e2e 验证才算完成」，`DEVELOPMENT_PLAN_v0.3.md` 把「追 OpenScience 的 313 skills / 46 connector 数量」明列为不做，v0.6 计划 §明确不做 同样列着「skill/connector 铺量（只集成 B2 点名的，每轮 ≤2–3 个）」。写这一条是因为**仓库里此前没有任何指针指向这批东西**——下一个 session 既可能以为它不存在，也可能反过来以为它已经在仓库里。<br>**迁移前必须知道的两件事**：① 全部 staged 文件标着 `STAGED / UNTESTED`——未接 registry、未跑真实网络、未录 fixture，`REGISTRY_PATCH.md` 开篇即写「本文档描述的操作均未执行」；② `BATCH2_B.md` 记录了一个**横跨十几个 staged 测试文件的共性 bug**：`echoHttp` 以 `content-type: application/json` 应答时 `connector.call()` 拿到的已是解析后的对象，样板里的 `JSON.parse(raw as string)` 必抛 `SyntaxError`——任何一批迁移进来之前先 grep 这个形状。<br>**去向**：按 v0.6 口径由 B2 轮次的真实课题拉动、每轮 ≤2–3 个择优接入，每个都要走 fixture 录制 + 六套件；**不设数量目标**。规划目录本身是否入库（或物化成独立 private repo）另议——当前裸放 Desktop 是唯一副本。 |
 | V77 | OpenRouter 偶发不返回 usage 统计（151 次调用中 1 次），该次成本记未知 | R3-T1 台账实测。**这是「未知不当零」纪律正常工作**，非定价表漏洞。若未知率上升可考虑 tokenizer 估算并显式标 estimated；当前发生率不值得做 |
-| V78 | orchestrator/chat 路径的 LLM 调用未进 usage.jsonl | A5 修复（alpha.7）把 read/review/idea/novelty 四条 HTTP 路由接入计量；chat（OrchestratorAgent 自建 LLMRouter）与 MCP 面仍未接。chat 有 P13 帧级记账落证据图但不进用量台账——口径不一，下轮统一 |
+| V78 | orchestrator/chat 路径的 LLM 调用未进 usage.jsonl | A5 修复（alpha.7）把 read/review/idea/novelty 四条 HTTP 路由接入计量；chat（OrchestratorAgent 自建 LLMRouter）与 MCP 面仍未接。chat 有 P13 帧级记账落证据图但不进用量台账——口径不一，下轮统一<br>⚠️ **v0.7 W7-D0 主体已修**：chat 路径（OrchestratorAgent）经 `llmFor(sessionId)` 进 usage.jsonl 与 raw/llm（command=chat）；MCP 面本就经 Hono app 走 HTTP 路由、alpha.7 起已计量（此前登记有误）。**残余**：`subAgentLlm()`（子代理 tool loop）仍裸调——它没有 sessionId 可绑项目，子代理帧在 agent_run 里有记账但不进 usage.jsonl/raw。等 W7-D1 后视需要给 runSubAgent 传 sessionId |
 | V79 | A5 遗留三条 UI 低危 | ① 综述引用 span 看着可点实际没接证据图跳转 ② conclusion review 需先有实验的前置没写在 UI 里 ③ UI 花钱操作无预算参数入口（CLI 有 --budget-usd）。均登记不阻塞发布 |
-| V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频 |
-
+| V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频<br>✅ **v0.7 W7-D0 已做（C-4）**：records / library / artifacts 三库补 `PRAGMA busy_timeout = 5000`（findings.db 早有）。并发复现脚本进 concurrency 套件的事留给 C-1 一起做 |
 | V81 | **v0.6.0 带着一条全套必红的 e2e 发布了**（⑱ 用量面板；单跑绿、按序跑红） | v0.7 基线闸 0-1 实跑六套件发现：alpha.7（A5 blocker 修复）把 HTTP 的 read/review/co-explore/novelty 路由接入 `llmFor` 计量后，e2e ③④⑤ 会往本项目 usage.jsonl 写行，⑱ 开头「面板必为空态」的断言只在单跑时成立。CI 只跑单测+冒烟不跑 e2e，所以没人看见。**形状 = V58**：验收后改了被验收的东西（HTTP 计量是 A5 之后加的），e2e 全套没重跑。<br>✅ **v0.7 基线闸已修**：⑱ 改成增量断言（before/after 的 calls/unknownCostCalls/knownCostUsd 各 +2/+1/+0.0123），空态只在确实无记录时核。**登记是为了形状**：e2e 之间共用一个项目目录，任何「假设某文件为空」的断言都是顺序敏感的；新 e2e 一律写增量。另：CI 不含 e2e 的缺口进 W7-D0 收口议题（要么进 CI、要么发版检查单明列「本机全套 e2e」） |
+
+| V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2506,6 +2509,48 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.7.0-alpha.1] — 2026-09-11
+
+**W7-D0：原始层落地（AD-15）· 来源分级三列（AD-16）· 基线闸清账。** v0.7 方案见
+`docs/DEVELOPMENT_PLAN_v0.7.md`，数据层配套设计见 `DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md`。
+
+### 新增
+
+- **L0 原始层（append-only）**：每个项目新增 `raw/{connector,llm,kernel,device}/<date>.jsonl`
+  ——connector 的脱敏请求参数 + 原始响应体、LLM 的 prompt 与响应原文、kernel 的 source/stdout/
+  stderr、湿实验设备读数，**只追加不改**，行内 `prevHash` 成链，`verify()` 逐行重算可抓篡改。
+  超 64KB 的正文落 `raw/blobs/` 按 sha256 去重。四个埋点各一处（`connectors/base.ts` ·
+  `usage/ledger.ts` · `kernels/manager.ts` · `lab/wet_loop.ts`），全体调用方自动覆盖；没有项目
+  上下文的调用（capabilities 探测、daemon mcp_call）落全局兜底 `<dataDir>/raw/`——不记等于漏。
+- **来源分级三列**：records 表新增 `provenance_class`（upstream / derived / user_authored /
+  model_generated）、`license`（SPDX 表达式；凭据源 `LicenseRef-proprietary-<源>`；用户/模型产出
+  占位 `LicenseRef-spark-user-owned`）、`quality`（把散在 metadata 里的 deterministic / basis /
+  simulated / caveat 收成一列）。老库打开即迁移回填，幂等。18 个生产写入点全部显式声明来源
+  分级，**源码门禁**核每一处，省略即红。
+- `shareable()` 判定（AD-16）：upstream 一律不出门、license 未知不出门、proprietary 不出门。
+  W7-D2 的 `data export --for-sharing` 只认它。
+- 两个配置项：`rawLlm`（默认 on；关掉后 agent_run 仍有 hash 但原文不可追溯）·
+  `rawUpstreamInline`（默认 off；凭据源响应体只存 hash）。两者都过 config_reader_parity 门禁。
+- 门禁 G1（raw 行数 == 台账行数，四类各一）· G2（带假 key 的调用后 grep raw 目录）·
+  G3（篡改任一行 verify 必红）· G6 · G7，**8 条阴性对照全部实跑变红**（devlog W7-D0）。
+
+### 修复
+
+- **chat 路径进用量台账与 raw（V78 主体）**：OrchestratorAgent 此前自建 LLMRouter 直调，
+  usage.jsonl 与 raw/llm 都漏。现在会话绑定项目即经 `usageTrackingLlm`（command=chat）。
+  **残余**：子代理 tool loop 的 `subAgentLlm()` 仍是裸调用（无 sessionId 可绑），登记在 V78。
+- **同项目并发写 `database is locked`（V80）**：records / library / artifacts 三库补
+  `PRAGMA busy_timeout = 5000`（此前只有 findings.db 有）。
+- **v0.6.0 带着一条全套必红的 e2e 发布了（V81）**：⑱ 用量面板改增量断言。CI 不跑 e2e 所以没人看见。
+
+### 如实交代
+
+- **`execution_records` 至今没有生产写入方（V82）**：kernel 的 cell 执行从未落过这张表，
+  所以 raw/kernel 行的 `executionRecordId` 恒 null，行内自带 source/stdout/stderr 与 contentHash。
+- raw/connector 行的 `rateLimitWaitMs` 未接（V63 未动）。
+- `tests/e2e` 的 45 个既有类型错误（V62）本波裁定**豁免并写明理由**（Bun 特有 import 属性），
+  不纳入 typecheck。
 
 ## [0.6.0] — 2026-09-11
 

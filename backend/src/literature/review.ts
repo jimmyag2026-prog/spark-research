@@ -212,6 +212,7 @@ export class ReviewDraftGenerator {
     // 草稿是 artifact record（AD-3：artifactId 互链）。evidence=inferred——
     // 草稿是由精读卡组织出来的推断产物，不是观察也不是计算结果。
     const record = records.createFromArtifact(artifact, {
+      provenanceClass: "model_generated",
       title: `综述草稿：${options.topic?.trim() || "项目文献库"}`,
       content: markdown,
       evidence: "inferred",

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ArtifactStore } from "../artifacts/store";
 import { RecordStore } from "./records";
+import { JsonlRawSink, type RawSink } from "../raw";
 import { assertSlug, isValidSlug, ProjectError, slugify } from "./slug";
 import type { ProjectMeta, ProjectPaths, ProjectStatus, WorkspaceState } from "./models";
 import { FindingsStore } from "../reviewer/findings_store";
@@ -25,6 +26,7 @@ export class Project {
   private recordStore?: RecordStore;
   private artifactStore?: ArtifactStore;
   private findingsStore?: FindingsStore;
+  private rawSink?: RawSink;
 
   constructor(meta: ProjectMeta, paths: ProjectPaths) {
     this.slug = meta.slug;
@@ -57,6 +59,15 @@ export class Project {
   findings(): FindingsStore {
     this.findingsStore ??= new FindingsStore(join(this.paths.root, "findings.db"));
     return this.findingsStore;
+  }
+
+  /**
+   * v0.7 W7-D0 · L0 原始层（AD-15）：本项目的 connector/llm/kernel/device 原始记录。
+   * 只追加不改；证据图（records）是它之上的派生层。
+   */
+  raw(): RawSink {
+    this.rawSink ??= new JsonlRawSink(this.paths.rawDir, { project: this.slug });
+    return this.rawSink;
   }
 
   // 关闭已打开的存储句柄，便于测试中做「关闭 → 重开」的持久化往返。
@@ -98,6 +109,7 @@ export class ProjectManager {
       artifactsDb: join(root, "artifacts", "artifacts.db"),
       papersDir: join(root, "papers"),
       experimentsDir: join(root, "experiments"),
+      rawDir: join(root, "raw"),
     };
   }
 
@@ -110,7 +122,7 @@ export class ProjectManager {
     assertSlug(slug);
     if (this.exists(slug)) throw new ProjectError(`项目 '${slug}' 已存在`);
     const paths = this.pathsFor(slug);
-    for (const dir of [paths.root, paths.artifactsDir, paths.papersDir, paths.experimentsDir]) {
+    for (const dir of [paths.root, paths.artifactsDir, paths.papersDir, paths.experimentsDir, paths.rawDir]) {
       mkdirSync(dir, { recursive: true });
     }
     const now = new Date().toISOString();

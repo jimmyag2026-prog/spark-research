@@ -52,6 +52,8 @@ const READERS: Record<string, ReaderEvidence> = {
   SPARK_LOCAL_LLM_API_KEY: { text: "SPARK_LOCAL_LLM_API_KEY" },
   embeddingModel: { text: '"embeddingModel"' },
   llmPricingOverridesJson: { text: '"llmPricingOverridesJson"' },
+  rawLlm: { helper: "configuredRawLlm" },
+  rawUpstreamInline: { helper: "configuredRawUpstreamInline" },
 };
 
 // 动态 key 族：`subAgentModel_<type>` 由 subAgentModelSettingKey() 生成，

@@ -473,6 +473,7 @@ export class ExperimentLoop {
         this.projectSlug,
       );
       const record = this.records.createFromArtifact(saved, {
+        provenanceClass: "derived",
         title: `${view.title} · ${file.filename}`,
         content: `实验 ${view.id.slice(0, 8)} 的仿真产出：${file.filename}（${file.role}，${file.bytes} 字节）`,
         evidence: "computed",
@@ -513,6 +514,7 @@ export class ExperimentLoop {
 
     const observation = this.records.create({
       type: "observation",
+      provenanceClass: "derived",
       title: `${view.title} · 观察`,
       content: renderObservation(view.title, summary, files, options.note ?? null),
       // 仿真结果是算出来的，不是看出来的，也不是推出来的 → computed。
@@ -560,6 +562,7 @@ export class ExperimentLoop {
       // 这里只落最小结构，review 状态一律 pending——不给自己发通过证。
       const conclusion = this.records.create({
         type: "conclusion",
+        provenanceClass: "user_authored",
         title: `${view.title} · 结论`,
         content: options.claim,
         evidence: "inferred",
@@ -693,6 +696,7 @@ export class ExperimentLoop {
   private createRecord(title: string, meta: ExperimentMeta, sessionId: string | null): ExperimentView {
     const record = this.records.create({
       type: "experiment",
+      provenanceClass: "user_authored",
       title,
       content: renderExperiment({ ...meta, id: "(pending)", title, createdAt: meta.timestamps.design ?? this.now() }),
       // 实验设计是推出来的；产出的 observation 才是 computed。

@@ -1,4 +1,6 @@
 import { mkdirSync } from "node:fs";
+import { USER_OWNED_LICENSE } from "../provenance/policy";
+import type { RawSink } from "../raw";
 import type { ArtifactStore } from "../artifacts/store";
 import type { ExperimentLoop } from "../experiment/loop";
 import type { ResearchRecord } from "../project/models";
@@ -58,6 +60,8 @@ export interface WetLabLoopOptions {
   artifacts: ArtifactStore;
   // 湿实验 run 目录的根，一般是 `<project>/experiments/wet`。
   root: string;
+  /** v0.7 W7-D0 · L0：设备读数逐条落 raw/device/（不给 = 不记，测试用）。 */
+  rawSink?: RawSink;
   backend?: WetLabBackend;
   compiler?: ProtocolCompiler;
   projectSlug?: string;
@@ -136,6 +140,7 @@ function emptyWetMeta(input: {
 }
 
 export class WetLabLoop {
+  private readonly rawSink: RawSink | null;
   private readonly records: RecordStore;
   private readonly artifacts: ArtifactStore;
   private readonly root: string;
@@ -149,6 +154,7 @@ export class WetLabLoop {
     this.records = options.records;
     this.artifacts = options.artifacts;
     this.root = options.root;
+    this.rawSink = options.rawSink ?? null;
     this.backend = options.backend ?? wetBackend(DEFAULT_WET_BACKEND);
     this.compiler = options.compiler ?? new ProtocolCompiler();
     this.projectSlug = options.projectSlug ?? options.records.project;
@@ -386,6 +392,7 @@ export class WetLabLoop {
     const at = this.now();
     const decision = this.records.create({
       type: "decision",
+      provenanceClass: "user_authored",
       title: `批准执行湿实验 · ${view.title}`,
       content: renderDecision({
         decision: "approve",
@@ -446,6 +453,7 @@ export class WetLabLoop {
     const at = this.now();
     const decision = this.records.create({
       type: "decision",
+      provenanceClass: "user_authored",
       title: `拒绝执行湿实验 · ${view.title}`,
       content: renderDecision({
         decision: "reject",
@@ -627,6 +635,7 @@ export class WetLabLoop {
         this.projectSlug,
       );
       const record = this.records.createFromArtifact(saved, {
+        provenanceClass: "derived",
         title: `${view.title} · ${file.filename}`,
         content: `湿实验 ${view.id.slice(0, 8)} 的执行产出：${file.filename}（${file.role}，${file.bytes} 字节）`,
         // 执行产出是被观察到的（run log 记录的是设备做了什么），不是算出来的。
@@ -661,9 +670,23 @@ export class WetLabLoop {
     const readings = entries
       .filter((e) => e.type === "read_result")
       .map((e) => ({ stepId: e.stepId ?? null, reading: e.reading ?? null }));
+    // W7-D0 · L0：每个设备读数一行 raw/device/（模拟器读数也记——`simulated` 在 record 的 quality 列）。
+    if (this.rawSink) {
+      for (const r of readings) {
+        this.rawSink.append({
+          kind: "device",
+          sessionId: options.sessionId ?? this.sessionId,
+          command: "lab-analyze",
+          provenanceClass: "derived",
+          license: USER_OWNED_LICENSE,
+          payload: { experimentId: view.id, runId: view.runId ?? null, backend: view.backend, stepId: r.stepId, reading: r.reading },
+        });
+      }
+    }
 
     const observation = this.records.create({
       type: "observation",
+      provenanceClass: "derived",
       title: `${view.title} · 观察`,
       content: renderWetObservation({
         title: view.title,
@@ -747,6 +770,7 @@ export class WetLabLoop {
     if (options.claim) {
       const conclusion = this.records.create({
         type: "conclusion",
+        provenanceClass: "user_authored",
         title: `${view.title} · 结论`,
         content: options.claim,
         evidence: "inferred",
@@ -815,6 +839,7 @@ export class WetLabLoop {
     const withHash: WetExperimentMeta = { ...metaRest, integrityHash: computeMetaIntegrityHash(metaRest) };
     const record = this.records.create({
       type: "experiment",
+      provenanceClass: "user_authored",
       title,
       content: "",
       // 实验设计是推出来的；执行产出的 observation 才是 observed。

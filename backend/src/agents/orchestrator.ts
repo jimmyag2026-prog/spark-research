@@ -46,6 +46,8 @@ import {
 // （env SPARK_RESEARCH_DATA_DIR > ~/.spark-research），不另起一套。
 import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
 import { configuredModel, dataDir } from "../config";
+import { UsageStore, usageTrackingLlm } from "../usage/ledger";
+import type { KernelExecuteOptions } from "../kernels/manager";
 import { BudgetLedger } from "../llm/budget";
 import {
   createLiteratureReviewContract,
@@ -434,6 +436,30 @@ export class OrchestratorAgent {
    * 而测试假件只有在同时注入了 `toolRunner`/`projects` 时才会真的走到这条路径——见
    * getToolRunner() 的降级设计，两者结合下这个假设不会被没打算测真 tool loop 的用例踩到）。
    */
+  /**
+   * V78（v0.7 W7-D0）：chat 路径此前自建 LLMRouter 直调，不进 usage.jsonl 也不进 raw/llm/——
+   * 与 CLI/HTTP 口径不一。会话绑定了项目就经 usageTrackingLlm（同一份台账、同一个 raw sink，
+   * command=chat）；没绑项目退回裸 llm（没有落点，不假装记了）。
+   */
+  private llmFor(sessionId: string | null): Pick<LLMRouter, "call"> {
+    const project = sessionId ? this.projectForSession(sessionId) : null;
+    if (!project) return this.llm;
+    return usageTrackingLlm({
+      llm: this.llm,
+      store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+      command: "chat",
+      rawSink: project.raw(),
+      project: project.slug,
+      sessionId,
+    });
+  }
+
+  private kernelRawFor(sessionId: string | null): KernelExecuteOptions["raw"] {
+    const project = sessionId ? this.projectForSession(sessionId) : null;
+    if (!project) return undefined;
+    return { sink: project.raw(), project: project.slug, sessionId, command: "chat" };
+  }
+
   private subAgentLlm(): Pick<LLMRouter, "call" | "capabilitiesFor"> {
     const llm = this.llm;
     const withCaps = llm as Partial<Pick<LLMRouter, "capabilitiesFor">>;
@@ -594,7 +620,7 @@ export class OrchestratorAgent {
           `Request: ${userMessage}`,
       },
     ];
-    const res = await this.llm.call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
+    const res = await this.llmFor(sessionId).call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
     // D-4（战术版）：规划这一步的 LLM 调用失败时，`res.content` 是路由层拼出的错误
     // 文本（例如 "[error] No API key configured..."），不是模型产出的 JSON 计划——
     // 不检查 res.ok 就直接喂给 parsePlan 虽然「碰巧」解析不出方括号数组从而落到
@@ -646,7 +672,7 @@ export class OrchestratorAgent {
       switch (task.kind) {
         case "analysis": {
           const agent = this.subAgents.create("explore");
-          const res = await this.llm.call(
+          const res = await this.llmFor(sessionId).call(
             [{ role: "system", content: agent.prompt }, { role: "user", content: task.description }],
             agent.model,
           );
@@ -671,7 +697,7 @@ export class OrchestratorAgent {
           const code = String(task.params?.code ?? "");
           const kernelId = this.daemon.kernelManager.createKernel("python");
           try {
-            const result = await this.daemon.kernelManager.execute(kernelId, code);
+            const result = await this.daemon.kernelManager.execute(kernelId, code, { raw: this.kernelRawFor(sessionId) });
             const output = result.result ?? result.stdout ?? result.error ?? "";
             this.record(sessionId, "python", "execute", `${task.id}: ${result.status}`);
             return { taskId: task.id, kind: task.kind, ok: result.status === "ok", output: String(output) };
@@ -752,7 +778,7 @@ export class OrchestratorAgent {
           // 没有真实工具面（没注入 projects/toolRunner）：退回旧路径，裸 `llm.call`，
           // 零工具——不静默假装有工具，只是老老实实做它一直在做的事。
           const agent = this.subAgents.create(type);
-          const res = await this.llm.call(
+          const res = await this.llmFor(sessionId).call(
             [{ role: "system", content: agent.prompt }, { role: "user", content: task.description }],
             agent.model,
           );
@@ -820,7 +846,7 @@ export class OrchestratorAgent {
     // ——根治 W2-d 留下的设计问题（session.ts 曾经不得不为"预览流"单独发一次裸调用，
     // 因为 processRequest 没有 onDelta 的口子；见 docs/devlog/W3-a.md）。
     const options: CallOptions = { model: configuredModel(LLMRouter.DEFAULT_MODEL), ...(onDelta ? { onDelta } : {}) };
-    const res = await this.llm.call(messages, options);
+    const res = await this.llmFor(sessionId).call(messages, options);
     // D-4（战术版）：这是三处委托里最要紧的一处——summarize() 的返回值**就是**
     // 用户最终看到的 `OrchestrationResult.summary`，也是 reviewer 读的正文。
     // 之前不检查 res.ok，router 的错误文本（"[error] No API key configured..."）会
@@ -931,7 +957,7 @@ export class OrchestratorAgent {
     const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
     try {
       const session = new CoExploreSession({
-        llm: this.llm,
+        llm: this.llmFor(req.sessionId),
         library,
         records: project.records(),
         model: req.model,
@@ -1219,7 +1245,7 @@ export class OrchestratorAgent {
           `拿到证据的动作。No markdown, no prose, only JSON.`,
       },
     ];
-    const res = await this.llm.call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
+    const res = await this.llmFor(sessionId).call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
     if (!res.ok) {
       this.record(sessionId, "research", "plan-llm-failed", `第 ${round + 1} 轮 planner 调用失败：${res.error.message}`);
       return this.defaultResearchPlan(report.incomplete, round);

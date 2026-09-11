@@ -160,11 +160,15 @@ export class ServerContext {
   // 用量面板对着真实花费显示 $0（对「花钱透明」这个卖点是谎报级缺陷）。
   // 所有带项目上下文的 LLM 消费路由一律经这里取 llm，与 CLI 同一份 usage.jsonl。
   // HTTP 面暂无预算参数（UI 无入口，已登记）；先保证计量真实。
-  llmFor(project: Project, command: string): Pick<LLMRouter, "call"> {
+  llmFor(project: Project, command: string, sessionId: string | null = null): Pick<LLMRouter, "call"> {
     return usageTrackingLlm({
       llm: this.llm(),
       store: new UsageStore(join(project.paths.root, "usage.jsonl")),
       command,
+      // W7-D0 · L0：HTTP/UI 路径的 LLM 原文与 CLI 落同一个项目 raw/llm/。
+      rawSink: project.raw(),
+      project: project.slug,
+      sessionId,
     });
   }
 
@@ -226,6 +230,7 @@ export class ServerContext {
           wet = new WetLabLoop({
             records: project.records(),
             artifacts: project.artifacts(),
+            rawSink: project.raw(),
             root: join(project.paths.experimentsDir, "wet"),
             backend: this.wetBackend(),
           });

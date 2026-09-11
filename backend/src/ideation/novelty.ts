@@ -1185,6 +1185,7 @@ export class NoveltyChecker {
       generator: "novelty-check",
     });
     const record = records.createFromArtifact(artifact, {
+      provenanceClass: "model_generated",
       title: `Novelty 报告：${ideaTitle(idea.hypothesis)}`,
       content: markdown,
       evidence: "inferred",

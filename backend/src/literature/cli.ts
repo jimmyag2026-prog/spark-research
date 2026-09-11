@@ -610,6 +610,9 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           command: "lit-read",
           budgetUsd: budget.value,
           configOptions: { root: deps.root },
+          rawSink: project.raw(),
+          project: project.slug,
+          sessionId: flagString(flags.session) ?? null,
         });
         const generator = new ReadingCardGenerator({
           llm: usageLlm,
@@ -709,6 +712,9 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           command: "lit-review",
           budgetUsd: reviewBudget.value,
           configOptions: { root: deps.root },
+          rawSink: project.raw(),
+          project: project.slug,
+          sessionId: flagString(flags.session) ?? null,
         });
         const generator = new ReviewDraftGenerator({
           llm,
@@ -793,6 +799,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // 调用表达式，判据不需要做变量流追踪就能可靠核实。
         const citationReviewRecord = records.create({
           type: "observation",
+          provenanceClass: "derived",
           title: `citation-integrity 核验：${draft.recordId ?? draft.artifactId ?? "草稿未入库"}`,
           content:
             `解析引用 ${check.citations.length} 处，判定 ${check.judgedCount} 处，` +

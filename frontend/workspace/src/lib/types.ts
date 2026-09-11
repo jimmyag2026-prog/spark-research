@@ -27,6 +27,10 @@ export interface ResearchRecord {
   artifactId: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
+  // v0.7 · L3 三列（后端保证非空；老快照可能缺，故可选）。
+  provenanceClass?: "upstream" | "derived" | "user_authored" | "model_generated";
+  license?: string | null;
+  quality?: string[];
 }
 
 export interface RecordEdge {

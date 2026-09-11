@@ -205,6 +205,7 @@ export class ComputeEvidenceRecorder {
     const decisionRecordId = this.decisionRecordIdOf(job);
     const observation = this.records.create({
       type: "observation",
+      provenanceClass: "derived",
       title: `算力运行 · ${job.plan.purpose}`,
       content: renderComputeObservation(job, [], null),
       evidence: COMPUTE_OUTPUT_EVIDENCE,
@@ -266,6 +267,7 @@ export class ComputeEvidenceRecorder {
         this.projectSlug,
       );
       const record = this.records.createFromArtifact(saved, {
+        provenanceClass: "derived",
         title: `算力产出 · ${file.path}`,
         content: `算力任务 ${job.jobId.slice(0, 12)} 的产出：${file.path}（${file.bytes} 字节，sha256 ${file.sha256.slice(0, 12)}）`,
         evidence: COMPUTE_OUTPUT_EVIDENCE,

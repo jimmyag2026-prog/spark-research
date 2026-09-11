@@ -8,6 +8,8 @@ import { materializeAsset } from "../assets/embedded";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import { ControlRepl } from "./control_repl";
 import { configuredKernelTimeoutMs } from "../config";
+import { USER_OWNED_LICENSE } from "../provenance/policy";
+import { globalRawSink, sha256Of, type RawSink } from "../raw";
 
 export type KernelType = "python" | "r" | "control_repl";
 
@@ -25,6 +27,11 @@ export interface KernelExecuteOptions {
   // 单次 execute 的超时上限（毫秒）。省略则用模块级默认（见 defaultKernelTimeoutMs()）；
   // 传 0 或负数显式关闭超时。
   timeoutMs?: number;
+  /**
+   * v0.7 W7-D0 · L0：这次执行的 source/stdout/stderr 落 raw/kernel/。有项目上下文的调用方
+   * （orchestrator 的 code task）传项目的 sink；不传落全局兜底。
+   */
+  raw?: { sink: RawSink; project?: string | null; sessionId?: string | null; command?: string | null };
 }
 
 function resolvePython(): string {
@@ -269,6 +276,44 @@ export class KernelManager {
   async execute(kernelId: string, code: string, options: KernelExecuteOptions = {}): Promise<KernelResult> {
     const kernel = this.kernels.get(kernelId);
     if (!kernel) throw new Error(`Unknown kernel: '${kernelId}'`);
+    const result = await this.executeInner(kernel, code, options);
+    this.appendRaw(kernel, code, result, options.raw);
+    return result;
+  }
+
+  // W7-D0 · L0 埋点：所有 kernel 执行的唯一落地点。`executionRecordId` 恒 null——
+  // artifacts.db 的 execution_records 至今没有生产写入方（V82，D0 如实登记不顺手接），
+  // 所以 raw/kernel 行自己带 source/stdout/stderr 与 contentHash，不只是引用。
+  private appendRaw(kernel: KernelHandle, code: string, result: KernelResult, raw: KernelExecuteOptions["raw"]): void {
+    try {
+      const sink = raw?.sink ?? globalRawSink();
+      const stdout = result.stdout ?? null;
+      const stderr = result.stderr ?? null;
+      sink.append({
+        kind: "kernel",
+        project: raw?.project ?? undefined,
+        sessionId: raw?.sessionId ?? null,
+        command: raw?.command ?? null,
+        provenanceClass: "derived",
+        license: USER_OWNED_LICENSE,
+        payload: {
+          kernelId: kernel.id,
+          kernelType: kernel.type,
+          status: result.status,
+          timedOut: Boolean(result.timedOut),
+          executionRecordId: null,
+          source: sink.body(code),
+          stdout: stdout === null ? null : sink.body(stdout),
+          stderr: stderr === null ? null : sink.body(stderr),
+          contentHash: sha256Of({ code, stdout, stderr, status: result.status, error: result.error ?? null }),
+        },
+      });
+    } catch {
+      // 与 connector 埋点同口径：raw 落盘失败不打断执行；系统性漏记由门禁 G1 抓。
+    }
+  }
+
+  private async executeInner(kernel: KernelHandle, code: string, options: KernelExecuteOptions): Promise<KernelResult> {
     if (kernel.type === "python") {
       // PythonKernel 自己实现「杀掉子进程」式的超时隔离（见上）——这是真正意义上
       // 能中止挂起执行的那条路径。

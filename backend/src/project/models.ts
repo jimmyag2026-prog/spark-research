@@ -1,5 +1,7 @@
 // Project 与 Research Record 的数据模型（DESIGN §5.2 AD-1/AD-3、域 C1）。
 
+import type { ProvenanceClass } from "../provenance/policy";
+
 export const RECORD_TYPES = [
   "idea",
   "decision",
@@ -54,6 +56,12 @@ export interface ResearchRecord {
   artifactId: string | null;
   metadata: Record<string, unknown>;
   createdAt: string;
+  // v0.7 W7-D0 · L3 三列（DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md §五）：
+  // 来源分级（AD-16 的判据）· 来源自述许可 · 统一质量标签（把散在各处 metadata 里的
+  // deterministic / basis / simulated 等收成一列，导出与回流时可机器过滤）。
+  provenanceClass: ProvenanceClass;
+  license: string | null;
+  quality: string[];
 }
 
 export interface RecordInput {
@@ -65,6 +73,13 @@ export interface RecordInput {
   artifactId?: string | null;
   metadata?: Record<string, unknown>;
   createdAt?: string;
+  /**
+   * v0.7：生产写入方**必须显式声明**（源码门禁 tests/unit/provenance.test.ts 逐个写入点核）。
+   * 省略时按 `classForOrigin()` 兜底——那是给老库回填与测试用的口径，不是给生产代码偷懒的。
+   */
+  provenanceClass?: ProvenanceClass;
+  license?: string | null;
+  quality?: string[];
 }
 
 export interface RecordEdge {
@@ -77,6 +92,7 @@ export interface RecordEdge {
 export interface RecordFilter {
   type?: RecordType | RecordType[];
   evidence?: EvidenceLabel;
+  provenanceClass?: ProvenanceClass;
   sessionId?: string;
   artifactId?: string;
   limit?: number;
@@ -115,6 +131,8 @@ export interface ProjectPaths {
   artifactsDb: string;
   papersDir: string;
   experimentsDir: string;
+  /** v0.7 · L0 原始层：`raw/{connector,llm,kernel,device}/<date>.jsonl` + `raw/blobs/`。 */
+  rawDir: string;
 }
 
 // 根目录状态：当前项目 + session→project 归属（AD-1）。
