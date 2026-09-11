@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.6.0-alpha.7，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.6.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2315,7 +2315,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
 > 最后更新：2026-09-11（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
-> 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
+> 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
 > v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
 
@@ -2476,6 +2476,10 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V74 | **测试套件对用户级 config 不完全隔离** | R1 连带发现：用户 `config set defaultModel` 后 sub_agent.test.ts 的 legacy 断言变红（读了真实 ~/.spark-research）。已修该测试（env 隔离）；**系统性方案待议**：bunfig preload 统一注入临时 SPARK_RESEARCH_DATA_DIR——但要先清点哪些测试有意读真实凭据（RECORDING 模式） |
 
 | V76 | **v0.5 规划期 staged 的 154 个 skill / 29 个 connector 从未在仓库里登记**（存量在仓库外、无版本控制） | **2026-09-11 补登记**。v0.5 规划期用子代理对 OpenScience 313 技能 / 46 connector 做过全量盘点并 staged 出可迁移代码，真源在本地 `~/Desktop/AI4S/spark-research-v0.5-plan/workstreams/`（70MB，**不是 git 仓库、无任何备份**）：`skills/staged/` **154 个** SKILL.md（盘点分级 P0=14 / P1=67 / P2=89 / SKIP=143）· `connectors/staged/` **29 个** connector + 各自 `.test.ts`。<br>**实际落地 3/154 与 4/29**：skill 只进了 cobrapy / pydeseq2 / scanpy（W5-3 β），connector 只进了 biorxiv / clinvar / reactome / string-db（W5-2 γ）。未落地的 25 个 connector：arrayexpress · bindingdb · biogrid · chebi · dbsnp · depmap · expression-atlas · geo · gnomad · gtex · gtopdb · hpa · intact · interpro · kegg · mygene · myvariant · ncbi-gene · opentargets · pdbe · sifts · single-cell-atlas · surechembl · ucsc · wikipathways。<br>**登记的是存量，不是铺量待办。** 口径没变：AD-5「少而深、每个技能必须有 e2e 验证才算完成」，`DEVELOPMENT_PLAN_v0.3.md` 把「追 OpenScience 的 313 skills / 46 connector 数量」明列为不做，v0.6 计划 §明确不做 同样列着「skill/connector 铺量（只集成 B2 点名的，每轮 ≤2–3 个）」。写这一条是因为**仓库里此前没有任何指针指向这批东西**——下一个 session 既可能以为它不存在，也可能反过来以为它已经在仓库里。<br>**迁移前必须知道的两件事**：① 全部 staged 文件标着 `STAGED / UNTESTED`——未接 registry、未跑真实网络、未录 fixture，`REGISTRY_PATCH.md` 开篇即写「本文档描述的操作均未执行」；② `BATCH2_B.md` 记录了一个**横跨十几个 staged 测试文件的共性 bug**：`echoHttp` 以 `content-type: application/json` 应答时 `connector.call()` 拿到的已是解析后的对象，样板里的 `JSON.parse(raw as string)` 必抛 `SyntaxError`——任何一批迁移进来之前先 grep 这个形状。<br>**去向**：按 v0.6 口径由 B2 轮次的真实课题拉动、每轮 ≤2–3 个择优接入，每个都要走 fixture 录制 + 六套件；**不设数量目标**。规划目录本身是否入库（或物化成独立 private repo）另议——当前裸放 Desktop 是唯一副本。 |
+| V77 | OpenRouter 偶发不返回 usage 统计（151 次调用中 1 次），该次成本记未知 | R3-T1 台账实测。**这是「未知不当零」纪律正常工作**，非定价表漏洞。若未知率上升可考虑 tokenizer 估算并显式标 estimated；当前发生率不值得做 |
+| V78 | orchestrator/chat 路径的 LLM 调用未进 usage.jsonl | A5 修复（alpha.7）把 read/review/idea/novelty 四条 HTTP 路由接入计量；chat（OrchestratorAgent 自建 LLMRouter）与 MCP 面仍未接。chat 有 P13 帧级记账落证据图但不进用量台账——口径不一，下轮统一 |
+| V79 | A5 遗留三条 UI 低危 | ① 综述引用 span 看着可点实际没接证据图跳转 ② conclusion review 需先有实验的前置没写在 UI 里 ③ UI 花钱操作无预算参数入口（CLI 有 --budget-usd）。均登记不阻塞发布 |
+| V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2497,6 +2501,48 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.6.0] — 2026-09-11
+
+**v0.6：装完就能用，用了知道花了多少钱，读论文是真读。**
+
+本版由六个 alpha 迭代（alpha.1–alpha.6）与 **B2 三轮零上下文实证回环**（4 个真实课题 ×
+并发执行 × 逐轮修复回归）打磨而成——全部能力声明都有实测背书，全部已知限制都如实登记。
+
+## 给用户的亮点
+
+- **开箱即有工作台**：下载本页的单二进制（macOS arm64 / Linux x64，零预装）或源码起
+  `server`，浏览器打开即完整 UI——新增长任务进度、record/证据图、算力只读、用量四个面板
+- **精读真读全文**：有 PDF 的论文经 pypdf 抽全文喂给模型，每张卡标注「基于全文/仅摘要」；
+  综述因此写得出具体数字与方法对比（实测 7–12k 字、9–32 篇引用、**三轮 400+ 条引用
+  0 伪造**）
+- **花钱有闸有账**：`--budget-usd` 预算闸（超即优雅停、产出保留）+ `usage` 命令按命令/
+  模型归因；成本未知绝不当零。实测一个完整课题 **$0.03–0.09**（glm-5.3-flash）
+- **中文检索可用了**：AMiner 词序列匹配的机制修复（0 命中自动拆词深池合并并如实标注）；
+  中文基准召回实测 0/3 → 3/3
+- **并发多开安全**：全部 CLI 支持 `--project` 显式隔离——四会话并行 22+ 分钟实测零污染
+- **上手文档**：`readme_for_human.md`（人类）/ `readme_for_agent.md`（AI agent 集成）
+
+## 如实交代的已知限制
+
+检索排序会让奠基论文沉底（DOI 直加可补救，V67 已立项）· 连写中文复合词仍无法检索
+（需分词器）· 中文全文获取率低（OA 供给）· Modal 远端算力仅契约无真实链路 ·
+湿实验止步模拟器 · bioRxiv 的 search 是窗口模拟非真检索 · 项目 desc 会渗入 LLM 措辞。
+完整登记见 `docs/BACKLOG.md`。
+
+## 数字
+
+单测 2036 → 2145+ · Playwright 15 → 19 · CI（单测+双平台二进制冒烟）从无到有 ·
+三轮实证：中文召回 0/3→3/3 · 并发污染 双向实锤→0 · 判定器 JSON 失败率 0% ·
+新 P0 发现 R1:2 → R2:1 → R3:**0**（收敛）
+
+## 安装
+
+- **单二进制（推荐）**：下载本页 assets 中对应平台的文件，`chmod +x` 即用
+- 源码：`git clone` → `bun install` → `bun backend/src/index.ts`（需 Bun ≥1.2）
+- 各 alpha 的逐项变更见 [CHANGELOG.md](https://github.com/jimmyag2026-prog/spark-research/blob/main/CHANGELOG.md)
+
+（以下 alpha.1–alpha.7 为本版开发期的逐段明细，保留供追溯）
 
 ## [0.6.0-alpha.7] — 2026-09-11
 
