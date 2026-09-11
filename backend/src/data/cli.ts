@@ -106,11 +106,16 @@ export async function runDataCommand(args: string[], deps: DataCliDeps = {}): Pr
         const result = importExport(manager, dir, slug);
         try {
           if (flags.json === true) {
-            out(JSON.stringify({ project: slug, counts: result.counts, verified: result.verified, share: result.manifest.share }, null, 2));
-            return 0;
+            out(JSON.stringify({ project: slug, counts: result.counts, verified: result.verified, verification: result.verification, share: result.manifest.share }, null, 2));
+            return result.verified ? 0 : 1;
           }
           out(`✅ 已把 '${result.manifest.share}' 的导出重建到项目 '${slug}'：records ${result.counts.records} · edges ${result.counts.edges} · journal ${result.counts.journal} · raw ${result.counts.raw} · artifacts ${result.counts.artifacts} · papers ${result.counts.papers}`);
-          out(`   导入后校验：journal 链 ${result.verified ? "✅" : "❌"}`);
+          const v = result.verification;
+          const rawBits = Object.entries(v.raw).map(([k, r]) => `${k} ${r.ok ? "✅" : "❌"}${r.lines ? `(${r.lines})` : ""}`).join(" · ");
+          out(`   导入后逐链复核：journal ${v.journal.ok ? "✅" : "❌"}(${v.journal.lines}) · raw ${rawBits}`);
+          for (const [k, r] of Object.entries(v.raw)) if (!r.ok) err(`   ❌ raw/${k}: ${r.reason}`);
+          if (!v.journal.ok) err(`   ❌ journal: ${v.journal.reason}`);
+          if (!result.verified) err("   导入的数据本身可能不完整或被改过——不要拿这个项目当原件用；用 data verify 看导出目录，再对照来源项目。");
           return result.verified ? 0 : 1;
         } finally {
           result.project.close();

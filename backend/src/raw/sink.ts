@@ -9,10 +9,26 @@
 // 除非 config `rawUpstreamInline=on`。
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { RawAppendInput, RawBody, RawEntry, RawFilter, RawKind, RawSink, RawVerifyResult } from "./models";
 import { RAW_KINDS } from "./models";
+
+/** 只读文件最后 maxBytes（大 raw 文件每次 append 不必整读）。 */
+function readTail(file: string, maxBytes: number): string {
+  const fd = openSync(file, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - maxBytes);
+    const buf = Buffer.alloc(size - start);
+    readSync(fd, buf, 0, buf.length, start);
+    const text = buf.toString("utf8");
+    // 从中间切开时第一行可能是残行——丢掉它，只要最后一整行。
+    return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -73,15 +89,21 @@ export class JsonlRawSink implements RawSink {
     return name ? join(this.root, kind, name, `${date}.jsonl`) : join(this.root, kind, `${date}.jsonl`);
   }
 
+  /**
+   * V91（A6 抓到）：此前 lastHash 按进程缓存——server 与 CLI 两个进程同时往同一个 raw 文件 append 时，
+   * 各自以为自己接在同一行后面，链就断了（A6 源项目 llm/connector 两条链都是这样断在多进程并发处）。
+   * 现在**每次 append 都从文件尾重读上一行 hash**（只读最后 64KB），并用 `<file>.lock`（O_EXCL，过期 10s
+   * 回收）把「读尾 → 写入」做成临界区。同进程内仍有缓存作为快路径核对：缓存值与文件尾不一致就以文件为准。
+   */
   private readLastHash(file: string): string | null {
-    if (this.lastHash.has(file)) return this.lastHash.get(file)!;
     let last: string | null = null;
     if (existsSync(file)) {
-      const lines = readFileSync(file, "utf8").split("\n").filter((l) => l.trim() !== "");
-      const tail = lines[lines.length - 1];
-      if (tail) {
+      const tail = readTail(file, 64 * 1024);
+      const lines = tail.split("\n").filter((l) => l.trim() !== "");
+      const lastLine = lines[lines.length - 1];
+      if (lastLine) {
         try {
-          last = (JSON.parse(tail) as RawEntry).hash ?? null;
+          last = (JSON.parse(lastLine) as RawEntry).hash ?? null;
         } catch {
           last = null;
         }
@@ -89,6 +111,41 @@ export class JsonlRawSink implements RawSink {
     }
     this.lastHash.set(file, last);
     return last;
+  }
+
+  private withFileLock<T>(file: string, fn: () => T): T {
+    const lock = `${file}.lock`;
+    mkdirSync(dirname(file), { recursive: true });
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        writeFileSync(lock, `${process.pid} ${Date.now()}`, { flag: "wx" });
+        break;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "EEXIST") throw error;
+        // 过期锁回收：持锁进程可能被 kill -9。
+        try {
+          const [, stamp] = readFileSync(lock, "utf8").split(" ");
+          if (Date.now() - Number(stamp) > 10_000) {
+            unlinkSync(lock);
+            continue;
+          }
+        } catch {
+          /* 锁刚被别人释放 */
+        }
+        if (Date.now() > deadline) throw new Error(`raw sink：等待 ${lock} 超过 5s`);
+        Bun.sleepSync(5);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      try {
+        unlinkSync(lock);
+      } catch {
+        /* 已被回收 */
+      }
+    }
   }
 
   /**
@@ -114,25 +171,26 @@ export class JsonlRawSink implements RawSink {
     const ts = input.ts ?? this.now();
     const name = input.kind === "connector" ? (input.payload as { connector: string }).connector : null;
     const file = this.fileFor(input.kind, name, dateOf(ts));
-    const prevHash = this.readLastHash(file);
-    const draft: Omit<RawEntry, "hash"> = {
-      v: 1,
-      id: randomUUID(),
-      ts,
-      kind: input.kind,
-      project: input.project === undefined ? this.project : input.project,
-      sessionId: input.sessionId ?? null,
-      command: input.command ?? null,
-      provenanceClass: input.provenanceClass,
-      license: input.license ?? null,
-      prevHash,
-      payload: input.payload,
-    };
-    const entry: RawEntry = { ...draft, hash: entryHash(draft) };
-    mkdirSync(dirname(file), { recursive: true });
-    appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
-    this.lastHash.set(file, entry.hash);
-    return entry;
+    return this.withFileLock(file, () => {
+      const prevHash = this.readLastHash(file);
+      const draft: Omit<RawEntry, "hash"> = {
+        v: 1,
+        id: randomUUID(),
+        ts,
+        kind: input.kind,
+        project: input.project === undefined ? this.project : input.project,
+        sessionId: input.sessionId ?? null,
+        command: input.command ?? null,
+        provenanceClass: input.provenanceClass,
+        license: input.license ?? null,
+        prevHash,
+        payload: input.payload,
+      };
+      const entry: RawEntry = { ...draft, hash: entryHash(draft) };
+      appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
+      this.lastHash.set(file, entry.hash);
+      return entry;
+    });
   }
 
   private *files(kind?: RawKind): Iterable<{ kind: RawKind; name: string | null; file: string }> {
@@ -202,9 +260,10 @@ export class JsonlRawSink implements RawSink {
   importEntry(entry: RawEntry): void {
     const name = entry.kind === "connector" ? (entry.payload as { connector: string }).connector : null;
     const file = this.fileFor(entry.kind, name, dateOf(entry.ts));
-    mkdirSync(dirname(file), { recursive: true });
-    appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
-    this.lastHash.set(file, entry.hash);
+    this.withFileLock(file, () => {
+      appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
+      this.lastHash.set(file, entry.hash);
+    });
   }
 
   writeBlob(sha: string, text: string): void {

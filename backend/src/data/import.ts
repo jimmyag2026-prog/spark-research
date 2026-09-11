@@ -17,7 +17,12 @@ export interface ImportResult {
   project: Project;
   manifest: ExportManifest;
   counts: { records: number; edges: number; journal: number; raw: number; artifacts: number; papers: number };
+  /** 全部链都核过且都对得上；细节看 verification。 */
   verified: boolean;
+  verification: {
+    journal: { ok: boolean; lines: number; reason?: string };
+    raw: Record<string, { ok: boolean; lines: number; reason?: string }>;
+  };
 }
 
 export class ImportError extends Error {
@@ -108,7 +113,8 @@ export function importExport(manager: ProjectManager, dir: string, slug: string)
   const rawFiles = walk(dir).filter((p) => p.startsWith("raw/kind=") && p.endsWith(".jsonl"));
   const entries: RawEntry[] = [];
   for (const rel of rawFiles) entries.push(...readLines<RawEntry>(join(dir, rel)));
-  entries.sort((a, b) => a.ts.localeCompare(b.ts));
+  // A6 抓到的断链（V91）：此前这里按 ts 重排——同一 connector 文件里并发 append 的行 ts 可能同毫秒
+  // 或非单调，重排后 prevHash 对不上原来的上一行。导出是按源文件顺序写的，导入照原顺序回放，不排序。
   for (const e of entries) {
     sink.importEntry(e);
     rawCount += 1;
@@ -141,8 +147,21 @@ export function importExport(manager: ProjectManager, dir: string, slug: string)
   // usage.jsonl
   if (existsSync(join(dir, "usage.jsonl"))) copyFileSync(join(dir, "usage.jsonl"), join(project.paths.root, "usage.jsonl"));
 
-  const verified = records.verifyJournal().ok && (rawCount === 0 || sink.verify("llm").ok);
-  return { project, manifest, counts: { records: rc.records, edges: rc.edges, journal: rc.journal, raw: rawCount, artifacts: ac, papers: pc }, verified };
+  // 导入后逐链复核并**逐项**报告——A6 把裸 `verified:false` 误读成「没顺带校验」；实际那次是 raw 链真断了。
+  const journalCheck = records.verifyJournal();
+  const raw: Record<string, { ok: boolean; lines: number; reason?: string }> = {};
+  for (const kind of ["connector", "llm", "kernel", "device"] as const) {
+    const v = sink.verify(kind);
+    raw[kind] = { ok: v.ok, lines: v.lines, ...(v.reason ? { reason: v.reason } : {}) };
+  }
+  const verified = journalCheck.ok && Object.values(raw).every((v) => v.ok);
+  return {
+    project,
+    manifest,
+    counts: { records: rc.records, edges: rc.edges, journal: rc.journal, raw: rawCount, artifacts: ac, papers: pc },
+    verified,
+    verification: { journal: { ok: journalCheck.ok, lines: journalCheck.lines, ...(journalCheck.reason ? { reason: journalCheck.reason } : {}) }, raw },
+  };
 }
 
 export { manifestHash };
