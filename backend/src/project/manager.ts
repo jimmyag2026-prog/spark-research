@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { ArtifactStore } from "../artifacts/store";
@@ -7,6 +17,10 @@ import { JsonlRawSink, type RawSink } from "../raw";
 import { assertSlug, isValidSlug, ProjectError, slugify } from "./slug";
 import type { ProjectMeta, ProjectPaths, ProjectStatus, WorkspaceState } from "./models";
 import { FindingsStore } from "../reviewer/findings_store";
+// W7-C1（V64 根治）：过期锁回收的死活判据——W7-C2 在 server/tasks.ts 已经写过同一件事
+// （`kill(pid, 0)` 存在性核验），这里直接复用导出，不再写第二份（V46 形状，任务书明文
+// 禁止）。两个模块互不依赖对方别的东西，只借这一个纯函数。
+import { isProcessAlive } from "../server/tasks";
 
 export const DEFAULT_PROJECT_SLUG = "default";
 export const PROJECT_SCHEMA_VERSION = 1;
@@ -83,18 +97,115 @@ export class Project {
   }
 }
 
+// W7-C1（V64 根治）：全局指针无锁——R1 两个并发零上下文会话各自 read-modify-write
+// state.json，后写的那个把先写的那个的改动整个覆盖掉（不是「写坏了」，是「读的时候
+// 对方还没写完，写的时候把对方那次改动读丢了」，经典 lost update）。落锁文件
+// `state.json.lock`：O_EXCL 创建即独占，内容写 pid + 时间戳；正常路径用完立即删除；
+// 持锁方如果自己崩了（没机会删），锁文件会一直挡路——所以要有过期回收：超过
+// STALE_MS 且 pid 已经不在了，判定持锁者已死，谁先抢到删除权谁就能继续建自己的锁
+// （删除本身也可能竞争，删的时候吞掉 ENOENT，交给下一轮 retry 收敛）。
+const STATE_LOCK_STALE_MS = 10_000;
+const STATE_LOCK_RETRY_MS = 15;
+// 生产环境读-改-写这几行 JSON 应该是毫秒级的；给一个远高于正常耗时的硬顶，
+// 避免真正死锁（比如回收逻辑本身有 bug）时调用方永远卡死而不是报错。
+const STATE_LOCK_ACQUIRE_TIMEOUT_MS = 30_000;
+
+interface StateLockPayload {
+  pid: number;
+  acquiredAtMs: number;
+}
+
 // Project 管理器（AD-1：Project 是持久层的根，session 挂在 project 下）。
 // root 可注入，测试用 mkdtempSync 目录，生产默认 ~/.spark-research。
 export class ProjectManager {
   readonly root: string;
   readonly projectsDir: string;
   readonly stateFile: string;
+  private readonly stateLockFile: string;
 
   constructor(root: string = defaultWorkspaceRoot()) {
     this.root = resolve(root);
     this.projectsDir = join(this.root, "projects");
     this.stateFile = join(this.root, "state.json");
+    this.stateLockFile = `${this.stateFile}.lock`;
     mkdirSync(this.projectsDir, { recursive: true });
+  }
+
+  // 独占持锁：O_EXCL 创建成功即拿到锁；创建失败（EEXIST）时先看能不能把对方的锁
+  // 判定成过期死锁并回收，回收成功立刻重试，回收不了则短暂忙等后重试。
+  // 忙等用 `Bun.sleepSync`（阻塞当前线程）而不是 async/await——`ProjectManager`
+  // 全类都是同步 API（历史形状，改成 async 会把 `--project` 单点 `openProjectResolved`
+  // 之外一整圈同步调用方都牵连），锁必须原地跟这套同步调用形状对齐。
+  private acquireStateLock(): void {
+    const deadline = Date.now() + STATE_LOCK_ACQUIRE_TIMEOUT_MS;
+    for (;;) {
+      try {
+        const fd = openSync(this.stateLockFile, "wx");
+        try {
+          const payload: StateLockPayload = { pid: process.pid, acquiredAtMs: Date.now() };
+          writeSync(fd, JSON.stringify(payload));
+        } finally {
+          closeSync(fd);
+        }
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "EEXIST") throw error;
+        if (this.reclaimStaleStateLock()) continue; // 回收成功，立刻重试，不必等一轮忙等。
+        if (Date.now() > deadline) {
+          throw new ProjectError(
+            `state.json 锁获取超时（>${STATE_LOCK_ACQUIRE_TIMEOUT_MS}ms）：${this.stateLockFile}`,
+          );
+        }
+        Bun.sleepSync(STATE_LOCK_RETRY_MS);
+      }
+    }
+  }
+
+  // 过期回收：锁文件内容读不出 pid/时间戳（损坏或对方正在写入的过渡态）一律不回收，
+  // 留给下一轮重试；没过期（时间没到 STALE_MS）不回收；过期了但 pid 还活着——保守
+  // 不抢，可能只是持锁方在做一次异常慢的写（真正卡死会在 STALE_MS 之后被下一次
+  // 检查按「pid 已死」回收，或者触发调用方的整体超时）。只有「过期 + pid 已死」
+  // 才真正判定为死锁并删除。
+  private reclaimStaleStateLock(): boolean {
+    let payload: Partial<StateLockPayload> | null;
+    try {
+      payload = JSON.parse(readFileSync(this.stateLockFile, "utf8"));
+    } catch {
+      return false;
+    }
+    const pid = payload?.pid;
+    const acquiredAtMs = payload?.acquiredAtMs;
+    if (typeof pid !== "number" || typeof acquiredAtMs !== "number") return false;
+    if (Date.now() - acquiredAtMs <= STATE_LOCK_STALE_MS) return false;
+    if (isProcessAlive(pid)) return false;
+    try {
+      unlinkSync(this.stateLockFile);
+      return true;
+    } catch (error) {
+      // 别的进程已经先一步回收了：视为「回收成功」，下一轮重试即可。
+      return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+    }
+  }
+
+  private releaseStateLock(): void {
+    try {
+      unlinkSync(this.stateLockFile);
+    } catch {
+      // 理论上不该发生（锁是本次调用自己创建的）；不因为释放失败而掩盖上面业务逻辑
+      // 可能抛出的真实错误——finally 块里调用，原错误始终优先冒泡。
+    }
+  }
+
+  // state.json 的读-改-写全部经这个口子：拿锁 → 回调内部自己 readState()/writeState()
+  // （必须在锁内重新读，不能用调用方在锁外缓存的旧快照——那正是 lost update 的成因）→
+  // 释放锁。回调允许什么都不写（纯读一致性场景），但目前所有调用点都是写。
+  private withStateLock<T>(fn: () => T): T {
+    this.acquireStateLock();
+    try {
+      return fn();
+    } finally {
+      this.releaseStateLock();
+    }
   }
 
   pathsFor(slug: string): ProjectPaths {
@@ -192,9 +303,11 @@ export class ProjectManager {
   setCurrent(slug: string): void {
     assertSlug(slug);
     if (!this.exists(slug)) throw new ProjectError(`项目 '${slug}' 不存在`);
-    const state = this.readState();
-    state.currentProject = slug;
-    this.writeState(state);
+    this.withStateLock(() => {
+      const state = this.readState();
+      state.currentProject = slug;
+      this.writeState(state);
+    });
   }
 
   currentSlug(): string | null {
@@ -205,9 +318,11 @@ export class ProjectManager {
   bindSession(sessionId: string, slug: string): void {
     assertSlug(slug);
     if (!this.exists(slug)) throw new ProjectError(`项目 '${slug}' 不存在`);
-    const state = this.readState();
-    state.sessions[sessionId] = slug;
-    this.writeState(state);
+    this.withStateLock(() => {
+      const state = this.readState();
+      state.sessions[sessionId] = slug;
+      this.writeState(state);
+    });
   }
 
   sessionProjectSlug(sessionId: string): string | null {
@@ -254,10 +369,14 @@ export class ProjectManager {
     if (!existsSync(paths.metaFile)) throw new ProjectError(`项目 '${slug}' 不存在`);
     const meta = { ...this.readMeta(paths), status, updatedAt: new Date().toISOString() };
     this.writeMeta(paths, meta);
-    if (status === "archived" && this.readState().currentProject === slug) {
-      const state = this.readState();
-      state.currentProject = null;
-      this.writeState(state);
+    if (status === "archived") {
+      this.withStateLock(() => {
+        const state = this.readState();
+        if (state.currentProject === slug) {
+          state.currentProject = null;
+          this.writeState(state);
+        }
+      });
     }
     return meta;
   }
@@ -282,10 +401,36 @@ export class ProjectManager {
   }
 }
 
-// R2-P0（V64 防线补全）：`--project` 显式覆盖的**单点**实现。R1 只修了 lit/idea/report
-// 三个 CLI，R2 零上下文实测当场抓到 exp 是盲区——用户全程带 --project 仍被全局指针
-// 出卖，实验记录写进了并发会话的另一个项目。这次把所有 CLI 收到同一个 helper，
-// 并配门禁：CLI 文件里禁止再裸调 manager.defaultProject()（见 r2_p0_project_flag.test.ts）。
-export function openProjectResolved(manager: ProjectManager, projectFlag: string | undefined): Project {
-  return projectFlag ? manager.open(projectFlag) : manager.defaultProject();
+// R2-P0（V64 防线补全）→ W7-C1（V64 根治）：`--project` 显式覆盖起初只是防线，这里把
+// 它扩成完整四档解析顺序，**单点**实现，所有 CLI 的必经点：
+//   1. `--project`（projectFlag，显式最高优先级——用户当场敲的，覆盖一切）
+//   2. env `SPARK_RESEARCH_PROJECT`（进程级显式声明，次优先）
+//   3. `state.json.sessions[sessionId]`（会话绑定；sessionId 优先取调用方显式传入的
+//      `sessionId` 参数，其次落 env `SPARK_RESEARCH_SESSION`——见下方「sessionId 来源」
+//      的如实交代）
+//   4. 全局 `currentProject`（`manager.defaultProject()`：存在则用，不存在则按需建 default）
+//
+// sessionId 来源的如实交代（任务书 W7-C1 明文要求）：CLI 现在产生 session id 的唯一
+// 地方是 `index.ts` 的 `cli_${Date.now()}` / `oneshot_${Date.now()}`——只在单次
+// `orch.chat()` 调用内部有效，从不传给这里的十几个 `openProjectResolved` 调用点
+// （它们各自在 `literature/cli.ts`、`experiment/cli.ts` 等文件里现建 `ProjectManager`
+// 直接调用，`index.ts` 是禁止改动的收口文件，没有通道把那个临时 id 传进来）。
+// 所以这十几个既有调用点的四档解析在「没有 --project/env 时」实际只能落到第 4 档
+// 或第 3 档里 env 版本——`sessionId` 参数留给测试与未来接线显式传入；生产路径唯一能
+// 跨越「`project use` 与随后一条独立进程命令」共享身份的载体，是调用方自己钉的
+// env `SPARK_RESEARCH_SESSION`（`project/cli.ts` 的 `project use` 走的就是这条）。
+export function openProjectResolved(
+  manager: ProjectManager,
+  projectFlag: string | undefined,
+  sessionId?: string,
+): Project {
+  if (projectFlag) return manager.open(projectFlag);
+  const envProject = process.env.SPARK_RESEARCH_PROJECT;
+  if (envProject) return manager.open(envProject);
+  const sid = sessionId ?? process.env.SPARK_RESEARCH_SESSION;
+  if (sid) {
+    const bound = manager.sessionProjectSlug(sid);
+    if (bound) return manager.open(bound);
+  }
+  return manager.defaultProject();
 }

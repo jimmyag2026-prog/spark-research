@@ -3,7 +3,13 @@ import { ProjectManager, ProjectError, type Project } from "./manager";
 export const PROJECT_HELP = `用法:
   spark-research project new <slug> [--name 名称] [--desc 描述]   新建项目
   spark-research project list [--all]                            列出项目（--all 含已归档）
-  spark-research project open <slug>                             打开项目并设为当前项目
+  spark-research project open <slug>                             打开项目并设为【全局】当前项目
+  spark-research project use <slug> [--global]                   默认只把【当前会话】绑定到该项目，
+                                                                    不改全局指针（V64 根治：并发会话
+                                                                    互不打扰）；加 --global 才等同 open，
+                                                                    改全局指针。会话身份来自 env
+                                                                    SPARK_RESEARCH_SESSION——没设置这个
+                                                                    环境变量时退化为改全局指针（会提示）
   spark-research project archive <slug>                          归档项目
 `;
 
@@ -13,6 +19,10 @@ export interface ProjectCliDeps {
   root?: string;
   out?: (line: string) => void;
   err?: (line: string) => void;
+  // W7-C1（V64 根治）：`project use` 用来判定「绑定哪个会话」的 session id。
+  // 测试注入优先；不注入时落 env SPARK_RESEARCH_SESSION（与 `openProjectResolved`
+  // 的读取来源保持同一套，见 project/manager.ts 顶部大注释里的如实交代）。
+  sessionId?: string;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string | true> } {
@@ -101,8 +111,8 @@ export function runProjectCommand(args: string[], deps: ProjectCliDeps = {}): nu
         }
         return 0;
       }
-      case "open":
-      case "use": {
+      case "open": {
+        // 不变：`open` 一直是「打开并改全局指针」的语义（向后兼容，既有脚本/文档不受影响）。
         const slug = positional[0];
         if (!slug) {
           err("用法: spark-research project open <slug>");
@@ -111,6 +121,33 @@ export function runProjectCommand(args: string[], deps: ProjectCliDeps = {}): nu
         const project = manager.open(slug);
         manager.setCurrent(project.slug);
         out(`✅ 当前项目已切换为 '${project.slug}'`);
+        describe(project, out);
+        return 0;
+      }
+      case "use": {
+        // W7-C1（V64 根治）：`use` 与 `open` 分家——默认只改**当前会话**的绑定
+        // （`state.json.sessions[sessionId]`），不碰全局指针，这样两个并发会话各自
+        // `project use` 不会再互相改写对方的落库目标。`--global` 才退回 `open` 的语义。
+        const slug = positional[0];
+        if (!slug) {
+          err("用法: spark-research project use <slug> [--global]");
+          return 1;
+        }
+        const project = manager.open(slug);
+        const useGlobal = flags.global === true;
+        const sessionId = deps.sessionId ?? process.env.SPARK_RESEARCH_SESSION;
+        if (useGlobal || !sessionId) {
+          manager.setCurrent(project.slug);
+          if (!useGlobal) {
+            // 如实标注（任务书明文要求）：没有可用的会话身份时，`use` 悄悄退化成
+            // `open` 的全局语义——这里把退化的事实打印出来，不让它悄悄发生。
+            out("⚠️ 未检测到会话 ID（env SPARK_RESEARCH_SESSION 未设置，也未 --global）：退化为修改全局指针");
+          }
+          out(`✅ 当前项目已切换为 '${project.slug}'（全局指针）`);
+        } else {
+          manager.bindSession(sessionId, project.slug);
+          out(`✅ 会话 '${sessionId}' 已绑定到项目 '${project.slug}'（未改全局指针；加 --global 才改全局）`);
+        }
         describe(project, out);
         return 0;
       }

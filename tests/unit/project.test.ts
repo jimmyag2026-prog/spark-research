@@ -1,9 +1,9 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ProjectManager, ProjectError, slugify } from "../../backend/src/project/manager";
+import { ProjectManager, ProjectError, openProjectResolved, slugify } from "../../backend/src/project/manager";
 import { RecordConflictError, RecordStore, RecordValidationError } from "../../backend/src/project/records";
 import { runProjectCommand } from "../../backend/src/project/cli";
 import { ArtifactStore } from "../../backend/src/artifacts/store";
@@ -621,6 +621,170 @@ describe("project CLI", () => {
 
   test("空目录 list 给出引导文案", () => {
     expect(run(["list"], tempRoot()).out).toContain("暂无项目");
+  });
+
+  // W7-C1（V64 根治）：`project use` 默认只改会话绑定，不碰全局指针；--global 才等同 open。
+  describe("project use（会话绑定 vs --global）", () => {
+    const savedSession = process.env.SPARK_RESEARCH_SESSION;
+    afterEach(() => {
+      if (savedSession === undefined) delete process.env.SPARK_RESEARCH_SESSION;
+      else process.env.SPARK_RESEARCH_SESSION = savedSession;
+    });
+
+    test("deps.sessionId 注入：只绑会话，不改全局指针", () => {
+      delete process.env.SPARK_RESEARCH_SESSION;
+      const root = tempRoot();
+      run(["new", "keep-global"], root); // 第一个建的项目自动成为全局当前项目
+      run(["new", "bind-me"], root);
+      const manager = new ProjectManager(root);
+      expect(manager.currentSlug()).toBe("keep-global");
+
+      const out: string[] = [];
+      const code = runProjectCommand(["use", "bind-me"], {
+        manager,
+        root,
+        out: (l) => out.push(l),
+        err: (l) => out.push(l),
+        sessionId: "sess-bind-1",
+      });
+      expect(code).toBe(0);
+      expect(out.join("\n")).toContain("会话 'sess-bind-1' 已绑定到项目 'bind-me'");
+      // 全局指针纹丝不动。
+      expect(manager.currentSlug()).toBe("keep-global");
+      expect(manager.sessionProjectSlug("sess-bind-1")).toBe("bind-me");
+    });
+
+    test("--global：等同 open，改全局指针", () => {
+      delete process.env.SPARK_RESEARCH_SESSION;
+      const root = tempRoot();
+      run(["new", "was-global"], root);
+      run(["new", "now-global"], root);
+      const manager = new ProjectManager(root);
+
+      const out: string[] = [];
+      const code = runProjectCommand(["use", "now-global", "--global"], {
+        manager,
+        root,
+        out: (l) => out.push(l),
+        err: (l) => out.push(l),
+        sessionId: "sess-should-be-ignored",
+      });
+      expect(code).toBe(0);
+      expect(out.join("\n")).toContain("当前项目已切换为 'now-global'（全局指针）");
+      expect(manager.currentSlug()).toBe("now-global");
+      // --global 时不写会话绑定。
+      expect(manager.sessionProjectSlug("sess-should-be-ignored")).toBeNull();
+    });
+
+    test("没有 sessionId（无注入、无 env）：如实标注后退化为改全局指针", () => {
+      delete process.env.SPARK_RESEARCH_SESSION;
+      const root = tempRoot();
+      run(["new", "fallback-target"], root);
+      const manager = new ProjectManager(root);
+
+      const out: string[] = [];
+      const code = runProjectCommand(["use", "fallback-target"], {
+        manager,
+        root,
+        out: (l) => out.push(l),
+        err: (l) => out.push(l),
+      });
+      expect(code).toBe(0);
+      const text = out.join("\n");
+      expect(text).toContain("退化为修改全局指针");
+      expect(text).toContain("当前项目已切换为 'fallback-target'（全局指针）");
+      expect(manager.currentSlug()).toBe("fallback-target");
+    });
+
+    test("env SPARK_RESEARCH_SESSION 存在时（无 deps.sessionId 注入）：走会话绑定", () => {
+      process.env.SPARK_RESEARCH_SESSION = "sess-from-env";
+      const root = tempRoot();
+      run(["new", "env-global"], root);
+      run(["new", "env-bound"], root);
+      const manager = new ProjectManager(root);
+
+      const out: string[] = [];
+      const code = runProjectCommand(["use", "env-bound"], {
+        manager,
+        root,
+        out: (l) => out.push(l),
+        err: (l) => out.push(l),
+      });
+      expect(code).toBe(0);
+      expect(out.join("\n")).toContain("会话 'sess-from-env' 已绑定到项目 'env-bound'");
+      expect(manager.currentSlug()).toBe("env-global"); // 全局指针没被 use 碰过。
+      expect(manager.sessionProjectSlug("sess-from-env")).toBe("env-bound");
+    });
+  });
+});
+
+// W7-C1（V64 根治）：`openProjectResolved` 单点的四档解析顺序——
+// --project > env SPARK_RESEARCH_PROJECT > state.json.sessions[sessionId] > 全局 currentProject。
+describe("openProjectResolved 解析顺序（V64 四档）", () => {
+  const savedProjectEnv = process.env.SPARK_RESEARCH_PROJECT;
+  const savedSessionEnv = process.env.SPARK_RESEARCH_SESSION;
+
+  beforeEach(() => {
+    delete process.env.SPARK_RESEARCH_PROJECT;
+    delete process.env.SPARK_RESEARCH_SESSION;
+  });
+  afterEach(() => {
+    if (savedProjectEnv === undefined) delete process.env.SPARK_RESEARCH_PROJECT;
+    else process.env.SPARK_RESEARCH_PROJECT = savedProjectEnv;
+    if (savedSessionEnv === undefined) delete process.env.SPARK_RESEARCH_SESSION;
+    else process.env.SPARK_RESEARCH_SESSION = savedSessionEnv;
+  });
+
+  function fourTierManager(root: string): ProjectManager {
+    const manager = new ProjectManager(root);
+    manager.create("flag-proj");
+    manager.create("env-proj");
+    manager.create("session-proj");
+    manager.create("global-proj");
+    manager.setCurrent("global-proj");
+    manager.bindSession("sess-1", "session-proj");
+    return manager;
+  }
+
+  test("① --project 优先于 env / 会话绑定 / 全局", () => {
+    const manager = fourTierManager(tempRoot());
+    process.env.SPARK_RESEARCH_PROJECT = "env-proj";
+    process.env.SPARK_RESEARCH_SESSION = "sess-1";
+    expect(openProjectResolved(manager, "flag-proj").slug).toBe("flag-proj");
+  });
+
+  test("② 无 --project 时，env SPARK_RESEARCH_PROJECT 优先于会话绑定 / 全局", () => {
+    const manager = fourTierManager(tempRoot());
+    process.env.SPARK_RESEARCH_PROJECT = "env-proj";
+    process.env.SPARK_RESEARCH_SESSION = "sess-1";
+    expect(openProjectResolved(manager, undefined).slug).toBe("env-proj");
+  });
+
+  test("③ 无 flag 无 env project 时，会话绑定优先于全局指针", () => {
+    const manager = fourTierManager(tempRoot());
+    process.env.SPARK_RESEARCH_SESSION = "sess-1";
+    expect(openProjectResolved(manager, undefined).slug).toBe("session-proj");
+  });
+
+  test("④ 以上全无：落到全局 currentProject", () => {
+    const manager = fourTierManager(tempRoot());
+    expect(openProjectResolved(manager, undefined).slug).toBe("global-proj");
+  });
+
+  test("sessionId 可显式传参，不依赖 env（供 CLI/测试直接注入）", () => {
+    const manager = fourTierManager(tempRoot());
+    expect(openProjectResolved(manager, undefined, "sess-1").slug).toBe("session-proj");
+  });
+
+  test("session 绑定的项目已被删除：退回全局（sessionProjectSlug 本身的既有语义）", () => {
+    const root = tempRoot();
+    const manager = new ProjectManager(root);
+    manager.create("ghost-proj");
+    manager.create("global-proj");
+    manager.setCurrent("global-proj");
+    manager.bindSession("sess-ghost", "ghost-proj");
+    rmSync(join(manager.projectsDir, "ghost-proj"), { recursive: true, force: true });
+    expect(openProjectResolved(manager, undefined, "sess-ghost").slug).toBe("global-proj");
   });
 });
 
