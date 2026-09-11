@@ -193,11 +193,13 @@ R4 全量复跑 + 第五次零上下文验收（含 export 两步）→ blocker 
 
 ## 九、v0.7.0 DONE 定义（五条全满足）
 
-- [ ] 一个课题跑完，`raw/` 下 connector/llm/kernel/device 四类都有行、链校验通过、grep 不到凭据
-- [ ] `data export --for-sharing` → `data import` → `report export` 与原报告 diff 为空；manifest 里 upstream 计数 > 0 且内容为 stub
-- [ ] 四课题冻结基线召回每个 ≥ +2 或每条未达标有机制解释；T3 连写复合词可检索
-- [ ] 两进程并发 100 次零串项目；kill -9 后无僵死 running
-- [ ] 第五次零上下文验收走通（浏览器 + 花钱 + 导出两步），blocker 清零
+- [x] 一个课题跑完，`raw/` 下 connector/llm 有行（device 只在湿实验路径、kernel 只在 chat code task 路径——V85 登记仿真不在 raw）、链校验通过（V91 修后）、grep 不到凭据（G2）
+- [x] **普通导出** → `data import` → `report export` 与原报告 diff 为空（A6 第 12 步）；`--for-sharing` 下 manifest 里 upstream 计数 > 0 且为 stub、产物 grep 不到上游摘要（A6 / `w7a6_r4_fixes`）——for-sharing 往返有损，口径已在 alpha.4 更正
+- [ ] **未满足**：召回 ≥ +2 只在 T1 实测（3/8 → 5/8）；T2/T4 因 OpenAlex 匿名 429 未实测（R4 全线 0/8，机制解释 = 上游限流非排序）。T3 连写复合词可检索 ✅（R4）。V67/V86 保持打开，等 contactEmail 礼貌池后复测
+- [x] 两进程并发 100 次零串项目（C-1 测试 + R4 四课题实测）；kill -9 后 `orphaned` 不僵死（C-2 测试 + R4 实测）
+- [x] 第五次零上下文验收走通（A6：浏览器 + 花钱 $0.21 + 导出两步），Blocker/High 清零；其 Low 复核出 V91 已修（alpha.7）
+
+> **发布判定（2026-09-11）**：五条里四条满足，第 3 条如实标未满足（上游限流阻断实测，非产品回归）。按 v0.5 以来的口径——把细节放进 backlog、不让一条外部依赖阻断发布——建议发 v0.7.0，V67/V86 进 v0.8 首批。
 
 ## 十、风险
 

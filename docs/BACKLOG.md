@@ -21,6 +21,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.7.0 发布时仍开**（进 v0.8 首批） | V67/V86 召回复测（需 contactEmail）· V85 仿真不在 raw · V83 真实目录污染处置（等用户）· V88 V89 V90 A6 体验项 · V87 引用判定计数差额 · V78 残余 subAgentLlm · V60/V70 残余 |
 | **v0.7 归口**（`DEVELOPMENT_PLAN_v0.7.md` §十一） | 做：V24 V30 V41 V48 V60 V62 V63 V64 V67 V69 V70 V71 V72 V78 V80 V3 V21 · 裁定关闭：V12(R4 后) V13 V16 · 登记不做：V14 V42 · 本 PR 补标已完成：V1 V7 V11 V15 V17 V18 V19 |
 | **v0.5 规划中**（本地规划目录，未入库） | V2 V4 V15 V25(字段兑现) V26 · 另有 connector/skill/内联视图扩展等新项，见规划目录 TODO_v0.5.md<br>**该目录 staged 的 154 skill / 29 connector 存量已登记为 V76** |
 

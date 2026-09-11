@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.7.0-alpha.7，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2364,6 +2364,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.7.0 发布时仍开**（进 v0.8 首批） | V67/V86 召回复测（需 contactEmail）· V85 仿真不在 raw · V83 真实目录污染处置（等用户）· V88 V89 V90 A6 体验项 · V87 引用判定计数差额 · V78 残余 subAgentLlm · V60/V70 残余 |
 | **v0.7 归口**（`DEVELOPMENT_PLAN_v0.7.md` §十一） | 做：V24 V30 V41 V48 V60 V62 V63 V64 V67 V69 V70 V71 V72 V78 V80 V3 V21 · 裁定关闭：V12(R4 后) V13 V16 · 登记不做：V14 V42 · 本 PR 补标已完成：V1 V7 V11 V15 V17 V18 V19 |
 | **v0.5 规划中**（本地规划目录，未入库） | V2 V4 V15 V25(字段兑现) V26 · 另有 connector/skill/内联视图扩展等新项，见规划目录 TODO_v0.5.md<br>**该目录 staged 的 154 skill / 29 connector 存量已登记为 V76** |
 
@@ -2561,6 +2562,57 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.7.0] — 2026-09-11
+
+**v0.7：这一路产生的每一份数据都被原样留下、可导出、可判定能不能出门；检索排序与并发/长任务可靠性补上。**
+
+本版由七个 alpha（alpha.1–alpha.7）、R4 四课题零上下文全量复跑、第五次零上下文外部验收（A6，浏览器入口 +
+花钱路径 + 导出两步）打磨而成。每条 lane 由主会话独立复跑测试与阴性对照后合入；**8 + 4 + 6 + 6 条阴性对照全部实跑变红**。
+
+## 给用户的亮点
+
+- **原始层 `raw/`（AD-15）**：每次 connector 调用（脱敏参数 + 原始响应体）、每次 LLM 调用（prompt 与响应原文）、
+  每个 kernel 执行、每个设备读数，落 `projects/<slug>/raw/…/<date>.jsonl`，只追加不改、行内 prevHash 成链、
+  多进程安全；证据图之下多了 `records_journal`（每次 create/update/link/tombstone/repair 一行），
+  `report records --history <id>` 可看，`--repair` 可署名重建（V24）。
+- **来源分级三列**：每条 record 带 `provenanceClass`（upstream / derived / user_authored / model_generated）、
+  `license`（SPDX）、`quality`；**AD-16：upstream 永不进入共享集合**。
+- **`data export / import / verify`**：项目整体导成 Hive 分区 JSONL + manifest（Delta Sharing 三级命名、
+  DCAT、SPDX 计数、每文件 sha256、rootHash、增量成链）；`--for-sharing` 把不可共享的 record 打成 stub 保边、
+  LLM prompt 只存 hash、上游 raw 与文献库不出门，排除计数写进 manifest。普通导出 → 空项目导入 → 报告 diff 为空
+  （A6 实测）。DuckDB 直查三条示例在 `data --help`。
+- **检索**：`lit search --rank blended|hits|citations|recent`，默认 blended + 每源深池 30；中文连写复合词
+  走 jieba 分词（可选依赖）；AMiner 多词要求同时命中。
+- **可靠性**：项目指针文件锁 + 会话绑定（V64 根治）；长任务 kill -9 → `orphaned` → 断点续跑不重复花钱；
+  同项目并发写不再 `database is locked`（写事务 IMMEDIATE + 迁移事务化）。
+- **审批面看得见词表外试剂原文**（V60）；`lit remove` 可达且不硬删（tombstone）；`lit review` 的逐条
+  citation finding 终于进 `review findings`（V71）；`lit search --json` 真是 JSON。
+
+## 如实交代的已知限制
+
+- **方案 DONE 第 3 条未满足**：检索召回「每课题 ≥ +2」只在 T1 实测（3/8 → 5/8）；T2/T4 因 OpenAlex 匿名池
+  持续 429 未实测，R4 四课题在 429 下全线 0/8。排序修好了、深度加深了，但**没有 mailto 礼貌池的话
+  OpenAlex 会限流**——请 `config set contactEmail <邮箱>`。V67/V86 保持打开。
+- raw 层「四类」不含仿真平台执行（`exp run` 走子进程不经 KernelManager，V85）；kernel 类只在 chat 的
+  code task 路径有行；raw/kernel 行的 `executionRecordId` 仍为 null。
+- for-sharing 往返**有损**（上游正文与文献库不出门）——「report diff 为空」只对普通导出成立。
+- CLI 无持久会话 id：并发使用请每终端 `export SPARK_RESEARCH_SESSION=<名字>`，或一律带 `--project`。
+- V91 之前（alpha.7 前）多进程混用的项目，raw 链可能带历史断点；`data import` 会指出行号，不回填。
+- **开发期事故（V83）**：alpha.1–alpha.5 的单测经 raw 全局兜底往开发者真实 `~/.spark-research` 写了 324MB
+  回放记录。代码已隔离（bunfig preload + 门禁）；这是给自己记的，用户安装不受影响。
+- 精读任务进度条不实时（V88）；co-explore 一次两张雷同卡（V89）；项目下拉框不显示 slug（V90）。
+
+## 数字
+
+单测 2147 → **2271** · Playwright 19 → **20** · concurrency+timeout 25 → **31** · pytest 73 · lab 26 ·
+R4：并发四课题零串项目、kill -9 后 orphaned、单课题 $0.03–0.05 · A6：60 次调用 $0.2136，三方对账一致，无 Blocker。
+
+## 安装
+
+- **单二进制（推荐）**：本页 assets（macOS arm64 / Linux x64），`chmod +x` 即用
+- 源码：`git clone` → `bun install` → `bun backend/src/index.ts`（需 Bun ≥1.2）
+- 各 alpha 的逐段明细见下文（alpha.1–alpha.7，保留供追溯）
 
 ## [0.7.0-alpha.7] — 2026-09-11
 
