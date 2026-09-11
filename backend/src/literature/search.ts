@@ -108,7 +108,71 @@ export class LiteratureSearcher {
     query: string,
     perSource: number,
   ): Promise<{ status: SourceStatus; papers: Paper[] }> {
-    return this.run(source, () => this.registry.call(source, "search", { query, limit: perSource }));
+    const first = await this.run(source, () => this.registry.call(source, "search", { query, limit: perSource }));
+    // V65（R1-T3 → 主会话实测复核）：AMiner 的 title 检索是**词序列匹配**——查询串必须
+    // 像标题里的连续片段（"brain computer interface" 命中 5 条，追加 "neural decoding"
+    // 就 0 条；中文同理）。多概念查询（空白分隔）因此整体扑空，这正是 V8「中文召回
+    // 极差」的机制根源。兜底：原查询 0 命中且含多词时，按空白拆词逐词查、按命中词数
+    // 打分合并，并在 status.note 里**如实标注**这是拆词合并的结果（不是原查询命中）。
+    // 只对 aminer 生效——其它源是真正的关键词检索，实测无此形态，不做没有证据的泛化。
+    if (source !== "aminer" || first.status.outcome !== "ok" || first.papers.length > 0) return first;
+    const terms = query.split(/\s+/).filter(Boolean);
+    if (terms.length < 2) {
+      return {
+        ...first,
+        status: {
+          ...first.status,
+          note: "0 命中。AMiner 按词序列匹配标题；若查询是多个概念连写，用空格分开可触发拆词兜底",
+        },
+      };
+    }
+    const useTerms = terms.slice(0, 4);
+    const started = Date.now();
+    const hitCount = new Map<string, number>();
+    const byKey = new Map<string, Paper>();
+    const order: string[] = [];
+    const failedTerms: string[] = [];
+    // 逐词串行（尊重礼貌头/限速；4 词以内延迟可接受）。
+    // 池子加深到 ≥20：实测基准论文常在单词结果的 10–20 位区间（R2 前主会话用 T3
+    // 冻结基准量过：top-10 命中 0/3、top-20 命中 3/3），先取深池再按命中词数排序截断。
+    const termPool = Math.max(perSource, 20);
+    for (const term of useTerms) {
+      const r = await this.run(source, () => this.registry.call(source, "search", { query: term, limit: termPool }));
+      if (r.status.outcome !== "ok") {
+        failedTerms.push(term);
+        continue;
+      }
+      for (const paper of r.papers) {
+        const key = paper.ids.aminer ?? `${paper.title}#${paper.year ?? ""}`;
+        if (!byKey.has(key)) {
+          byKey.set(key, paper);
+          order.push(key);
+        }
+        hitCount.set(key, (hitCount.get(key) ?? 0) + 1);
+      }
+    }
+    // 命中词数多者优先；同分保持首次出现顺序（各词内部本来就是源侧相关性序）。
+    // 原始序号先固化——比较器里对正被排序的数组做 indexOf 会拿到半排状态的错序号。
+    const firstSeen = new Map(order.map((k, i) => [k, i] as const));
+    const merged = [...order]
+      .sort((a, b) => (hitCount.get(b) ?? 0) - (hitCount.get(a) ?? 0) || firstSeen.get(a)! - firstSeen.get(b)!)
+      .slice(0, perSource)
+      .map((k) => byKey.get(k)!);
+    const noteBits = [
+      `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
+    ];
+    if (terms.length > useTerms.length) noteBits.push(`仅取前 ${useTerms.length} 词`);
+    if (failedTerms.length > 0) noteBits.push(`词 [${failedTerms.join("、")}] 查询失败未计入`);
+    return {
+      status: {
+        source,
+        outcome: "ok",
+        count: merged.length,
+        note: noteBits.join("；"),
+        elapsedMs: first.status.elapsedMs + (Date.now() - started),
+      },
+      papers: merged,
+    };
   }
 
   private async fetchOne(
