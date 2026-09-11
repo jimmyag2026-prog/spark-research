@@ -120,6 +120,9 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
         `  ⚠️ 其中 ${totals.unknownCostCalls} 次调用成本未知（拿不到 usage 或查不到单价）——` +
           `总花费无法确定报出，上面的数只是下界。`,
       );
+      if (totals.unpricedCalls > 0) {
+        out(`  ⚠️ 其中 ${totals.unpricedCalls} 次是 --allow-unpriced 放行的无单价模型调用（预算闸对它们不计价）。`);
+      }
     }
     out("  按命令:");
     for (const [cmd, t] of Object.entries(totals.byCommand)) {

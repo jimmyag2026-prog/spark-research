@@ -23,12 +23,12 @@ import { IdeaStore } from "./store";
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
 
 export const IDEA_HELP = `用法:
-  spark-research idea new [-m "你的思路"] [--session id] [--budget-usd N] [--model m] [--project slug] [--json]
+  spark-research idea new [-m "你的思路"] [--session id] [--budget-usd N] [--allow-unpriced] [--model m] [--project slug] [--json]
                                                   Co-explore 共探 → 产出 Idea 卡入思路库
                                                   不带 -m 时进入多轮交互（/card 定卡，exit 退出）
   spark-research idea list [--status unchecked|checked-novel|checked-incremental|checked-overlap] [--json]
                                                   列出思路库
-  spark-research idea check <record-id> [--sources a,b] [--per-source N] [--budget-usd N] [--model m] [--project slug] [--out 文件] [--json]
+  spark-research idea check <record-id> [--sources a,b] [--per-source N] [--budget-usd N] [--allow-unpriced] [--model m] [--project slug] [--out 文件] [--json]
                                                   跑 novelty check（claim 提取 → 密集检索 → 对比报告 → 回写）
 `;
 
@@ -186,6 +186,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
             store: new UsageStore(join(project.paths.root, "usage.jsonl")),
             command: "idea-new",
             budgetUsd: budget.value,
+            allowUnpriced: flags["allow-unpriced"] === true,
             configOptions: { root: deps.root },
             rawSink: project.raw(),
             project: project.slug,
@@ -335,6 +336,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
             store: new UsageStore(join(project.paths.root, "usage.jsonl")),
             command: "novelty-check",
             budgetUsd: checkBudget.value,
+            allowUnpriced: flags["allow-unpriced"] === true,
             configOptions: { root: deps.root },
             rawSink: project.raw(),
             project: project.slug,

@@ -103,21 +103,23 @@ export const LIT_SUBCOMMAND_HELP: Record<string, string> = {
   下载该论文的开放获取 PDF（只走 OA 渠道，不绕付费墙）。
   不可得时把原因记进库内 pdf_reason，不会重复重试。`,
 
-  read: `用法: spark-research lit read <paper-id> | --all [--tag 标签] [--redo] [--budget-usd N] [--model M] [--json]
+  read: `用法: spark-research lit read <paper-id> | --all [--tag 标签] [--redo] [--budget-usd N] [--allow-unpriced] [--model M] [--json]
 
   --all 默认跳过已有精读卡的论文（重跑接续不重复花钱），--redo 强制全部重读。
   有 PDF 的论文自动抽全文精读（需 .venv 装 pypdf；缺了降级回摘要并在输出标注）。
   --budget-usd N：本项目累计已知花费达 $N 即停止新的 LLM 调用（已完成的卡保留）。
+  --allow-unpriced：设了预算时，单价表查不到的模型默认拒绝；加此项显式放行（usage 标 unpriced）。
 
   生成结构化精读卡（研究问题/方法/核心结论/局限/与本项目关系）并落进证据图。
   --all 是长任务：会打印任务句柄与逐篇进度，断开后用 lit tasks <task-id> 查状态。
 
   下一步: lit review 由精读卡生成综述草稿`,
 
-  review: `用法: spark-research lit review [--topic 主题] [--out 文件] [--no-judge] [--session id] [--budget-usd N] [--model M]
+  review: `用法: spark-research lit review [--topic 主题] [--out 文件] [--no-judge] [--session id] [--budget-usd N] [--allow-unpriced] [--model M]
 
   由已有精读卡生成综述草稿，并逐条核验引用（citation-integrity）。
   --budget-usd N：本项目累计已知花费达 $N 即停止新的 LLM 调用（判定失败降级为可见 soft finding）。
+  --allow-unpriced：设了预算时，单价表查不到的模型默认拒绝；加此项显式放行（usage 标 unpriced）。
   --no-judge 关掉 LLM 判定，只做库内 key 的机械核对（快，但弱）。
   有 hard finding（伪造/库外引用）时退出码为 1，草稿不可用于交付。
   这是长任务：会打印任务句柄与阶段进度，断开后用 lit tasks <task-id> 查状态。
@@ -682,6 +684,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           store: new UsageStore(join(project.paths.root, "usage.jsonl")),
           command: "lit-read",
           budgetUsd: budget.value,
+          allowUnpriced: flags["allow-unpriced"] === true,
           configOptions: { root: deps.root },
           rawSink: project.raw(),
           project: project.slug,
@@ -784,6 +787,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           store: new UsageStore(join(project.paths.root, "usage.jsonl")),
           command: "lit-review",
           budgetUsd: reviewBudget.value,
+          allowUnpriced: flags["allow-unpriced"] === true,
           configOptions: { root: deps.root },
           rawSink: project.raw(),
           project: project.slug,
