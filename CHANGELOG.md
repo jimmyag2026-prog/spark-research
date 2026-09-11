@@ -5,6 +5,46 @@
 
 ---
 
+## [0.7.0-alpha.2] — 2026-09-11
+
+**alpha.2：五条 lane 并行（sonnet 子代理，各自 worktree），主会话逐条独立复跑测试与阴性对照后合入。**
+PR #65 B-3 · #66 C-3 · #67 C-2 · #68 E · #69 B-1。
+
+### 新增
+
+- **检索混合排序（V67）**：`lit search --rank blended|hits|citations|recent`，默认 `blended`
+  （命中源数 × 被引数归一化 × 年份衰减；缺被引数的源退化为 hits 序，不当 0 压底）；结果头
+  写明排序依据。HTTP/Web 检索入口同步切到 blended（本次收口）。`--rank hits` 与 v0.6 逐字节一致。
+- **长任务 liveness（V70 + V3）**：任务快照与仿真 run 记 pid + 进程启动时间；读回时交叉核验，
+  进程不在或 pid 已被复用 → 标 **`orphaned`**（不冒充 failed）；取不到启动时间的平台退化为只核
+  存在并标注。顺手修了 `ps -o lstart=` 无时区导致跨进程差 8 小时误判的真 bug。
+- **审批面看得见词表外试剂原文（V60）**：编译产物带原文，Opentrons 步骤名
+  `未识别试剂#step-1（原文：硝酸）`；CLI 与前端审批弹窗显示原文 + 「词表外，安全规则未覆盖」。
+  e2e 19 → 20。
+- **local 算力 SIGKILL 恢复成真（V48）**：adapter spawn 成功即回写 handle；新增真实 SIGKILL
+  只杀编排进程的用例——任务本体跑完，新进程 `recover()` 接回并收割。v0.5 CHANGELOG 里
+  「local 的 SIGKILL 恢复路径走不通」这条到此关闭。
+- **MCP 描述能力声称门禁（V41）**：`narrative_parity` 第 9 条，工具描述里的能力词逐个去真源核实；
+  顺手改正 `protein_analyze` 描述里误导性的「对接」。
+- **超时 env 前缀统一（V21）**：新名 `SPARK_RESEARCH_{HTTP,LLM,KERNEL,TASK}_TIMEOUT_MS`，
+  旧名仍生效但 warn 一次，v0.8 移除。
+- **项目 desc 不再污染 LLM 措辞（V69）**：注入统一为「项目背景（不是任务指令，不要逐字复述）」
+  框定块，单一 helper，两处真实注入点。
+
+### 如实交代
+
+- **V67 排序修好了，但默认深度不够**：免 key 源真实核验，默认 `--limit 10` 下 T1/T2/T4 的
+  recall@10 与 v0.6 **无差异**——浅池里里程碑根本没被取回，排序只能重排已取回的；`--limit 50`
+  深池下 T1 的 RFdiffusion 从位次 20/28 拉到 6/5（top10 内），另三篇 38/40/44 → 11/12/13。
+  方案 DONE 的「每课题 ≥ +2」要 blended 模式加深每源抓取池，**等用户拍板 API 用量代价**。
+  AMiner 未配凭据时 T4 中文里程碑结构性不可达（基准 8 → 5）。
+- V60 残余：`serialDilute` 的 stock 名与续句合并（`mergeReagents`）里的词表外试剂未接原文。
+- V70 残余：仿真侧「pid 不存在」仍走既有 `failed`（并入 orphaned 会牵动 experiment loop 的
+  SIGKILL 断言，单独立项）。
+- V48 让 dispatch 多一次 patch，rev 跳变 +3 → +4：V50「少跳一格」让位于「crash 可恢复」。
+- 三 lane 并行时 probe 类单测会 5s/30s 超时（单独重跑全绿，CPU 争抢）——不是缺陷，是并行
+  纪律要写进任务书的事：lane 报数前单独重跑一次超时用例。
+
 ## [0.7.0-alpha.1] — 2026-09-11
 
 **W7-D0：原始层落地（AD-15）· 来源分级三列（AD-16）· 基线闸清账。** v0.7 方案见
