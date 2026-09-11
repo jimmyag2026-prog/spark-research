@@ -2,6 +2,10 @@
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
+> **v0.6.0 外部 review 归账（2026-09-11，真源 docs/reviews/v0.6.0_external_review.md）**：
+> 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
+> P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
+> ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
 > 最后更新：2026-09-11 晚（v0.7 W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
@@ -172,6 +176,18 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V81 | **v0.6.0 带着一条全套必红的 e2e 发布了**（⑱ 用量面板；单跑绿、按序跑红） | v0.7 基线闸 0-1 实跑六套件发现：alpha.7（A5 blocker 修复）把 HTTP 的 read/review/co-explore/novelty 路由接入 `llmFor` 计量后，e2e ③④⑤ 会往本项目 usage.jsonl 写行，⑱ 开头「面板必为空态」的断言只在单跑时成立。CI 只跑单测+冒烟不跑 e2e，所以没人看见。**形状 = V58**：验收后改了被验收的东西（HTTP 计量是 A5 之后加的），e2e 全套没重跑。<br>✅ **v0.7 基线闸已修**：⑱ 改成增量断言（before/after 的 calls/unknownCostCalls/knownCostUsd 各 +2/+1/+0.0123），空态只在确实无记录时核。**登记是为了形状**：e2e 之间共用一个项目目录，任何「假设某文件为空」的断言都是顺序敏感的；新 e2e 一律写增量。另：CI 不含 e2e 的缺口进 W7-D0 收口议题（要么进 CI、要么发版检查单明列「本机全套 e2e」） |
 
 | V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表<br>⏸ **W7-D1 未处置**（接线要定 frame/cell_index 语义且牵动 orchestrator）。**去向：W7-D2 与导出一起定**——导出时 execution_records 如实导空表<br>✅ **v0.7 W7-D2 已接线**：orchestrator code task 每次 kernel 执行落 `execution_records`（frame=sessionId，cell_index 递增）；`data export` 的 `artifacts/execution_records.jsonl` 从此不再恒空。**残余**：raw/kernel 行的 `executionRecordId` 仍 null（raw 在 execute() 内先落），两边靠 contentHash 对齐 |
+| V83 | **中文引用 key 对两道核验门完全不可见**（外部 review P1-1，主会话实证复现） | `reviewer/rules.ts:96` 的 CITATION_TOKEN 字符集不含汉字——实测 `citedKeys("[@李某2023神经解码]")` 返回空。双向坏：伪造中文 key 绕过核验与 judge；纯中文 key 草稿误报「无引用」。**V72（#73）已让新生成的 key 不嵌汉字，主要生成路径已断**；残余=伪造/手写/存量库场景。修：字符集加 `\p{Script=Han}`（连带 :296 强断言检测），补「伪造中文 key → hard」对抗测试 |
+| V84 | **预算闸 TOCTOU：并发在飞调用可集体越闸**（review P1-2，代码级确认；并入 P2-6/P2-9） | 闸检查与记账隔着整个 `await llm.call`——`Promise.all` 下 N 个在飞全先过闸后记账；跨进程 `priorKnownCostUsd` 仅构造时读一次。另：无发前预检（单次调用可花掉预算 158%，自家测试实锤）；并发 `lit read --all` 无项目锁可双倍花钱。修：闸检查实时重读 totals + 进程内预留结算 + read 项目锁；至少文档写明并发越界上界 |
+| V85 | **无价模型让预算闸静默失效**（review P1-3，确认：anthropic 单价表零条目） | priceFor null → 全进 unknown → knownCostUsd 恒 0 → 闸永不触发，用户挂 --budget-usd 实际无保护且无警告。修：wrapper 构造时对默认模型查价，null 即 stderr 告警「预算闸对该模型无效」；SPARK_LLM_PRICING_JSON 覆盖已有，补负数拒绝 |
+| V86 | **lab approve/simulate 的 HTTP 面构成审批旁路**（review P1-5；V10/V19 的具体化，**接真实设备的硬前置**） | `POST /api/lab/experiments/:id/approve` 只要 actor 非空字符串（自报无核验）即批，随后 simulate 即执行——本机任意进程 curl 可走完 design→approve→execute，CLI 的 TTY 门被绕空。compute 已把 dispatch 撤出 HTTP（AD-14 纵深），lab 未对齐。修：撤出 HTTP（弹「去终端跑」）或 server 启动时一次性确认 token |
+| V87 | state.json 写非原子（review P0-1 的成立半） | 锁已有（#74 增强），但 `writeState` 仍是裸 writeFileSync——进程崩在写中可留截断 JSON（状态静默清零）。修：temp+rename 原子写；`create()` 的 exists→mkdir 改 `recursive:false` 抢占。**review 失准部分如实记：其称「无锁」不成立，state.json.lock（O_EXCL）在审查版本即存在** |
+| V88 | usage 台账 `model` 字段无校验、可落对象渲染成 `[object Object]`（review N1，实测复现于 e2e 项目） | 根因链：测试 ScriptedLlm 不归一化 CallOptions → res.model 为对象 → ledger append 不校验直接落盘 → 前端按模型聚合表渲染坏。修：落盘前 `typeof model === "string"` 否则记 "(unknown)" 并计 corrupt；ScriptedLlm 补归一化 |
+| V89 | **`basis/basisReason` 回读丢失——「基于全文/仅摘要」只活在生成当刻**（review P2-3，确认 cardFromRecord 零回读） | 综述 prompt 与 judge 拿不到材料级别，V66 的可审计声明被削弱（元数据在 record 里，但消费端不读）。修：cardFromRecord 恢复两字段；review prompt 按 basis 标注各卡材料级别 |
+| V90 | 用量台账三笔口径债（review P2-7/P2-8/P2-10） | ① LLM 台账写盘失败会抛掉已付费产出，而 api_ledger 明确「写盘失败绝不影响业务」——同仓两套纪律；② auth/rate_limit 失败（可证明 \$0）也记 costUsd=null，污染「未知」语义让总额永远不可确报；③ embedding 调用完全在台账外（novelty 低报且闸管不到）。修：同口径吞掉+告警；按 error.kind 区分已知 \$0 与真未知；embedding 入账或单列声明 |
+| V91 | compute uploads 的 `workspaceRoot` 接受任意绝对路径（review P2-1，安全） | 未鉴权本机调用可驱动对任意目录树的全量读盘+sha256（限额检查在哈希之后），兼目录枚举。修：resolve 后强制落在项目目录内；限额移进 walk() |
+| V92 | extensions `--trust` 指纹只覆盖入口单文件（review P2-2，安全） | 改 helper 文件可绕过 TOFU。修：指纹覆盖静态 import 闭包或目录清单哈希 |
+| V93 | 外部 review 杂项打包（P2/P3 存量，v0.7 评审逐条拆分或明确不做） | · P2-5 HTTP 综述不落 citation-integrity record（CLI/HTTP 语义分叉）· P2-11 固定 4321 端口第二实例裸崩 · P2-13 六个上帝文件（orchestrator 1304 行等）· P2-14 错误 envelope 不统一 · N3 缺 rdkit 时 chem 10 个 fail 而非 skip（与 scanpy/pydeseq2 口径不一）· N4 pyproject.toml 版本 0.2.0 未随版本走（版本同步门禁应扩到它）· P3：pdf_text 单页异常拖垮整篇（逐页 try）· 全文 40k 截断不感知模型 token 且截断仍标 fulltext · 拆词兜底无负缓存（agent 循环可放大配额消耗）且全词失败仍报 ok · rebuildCitations O(N·R·C) · 叙述式引用在核验视野外（prompt 未明令 [@key] 形式）· auth 交互录入不关回显 · CI bypass token 走 argv+非常量时间比较 · HTTP 与 CLI 批量精读跳过语义不一致。真源见 docs/reviews/v0.6.0_external_review.md |
+| V94 | 仓库内缺「并发零污染」的可复现测试（review 回归防线建议） | 「四会话 22 分钟零污染」目前只是实测口头证据。修：一条真正的并发 e2e——4 子进程各带/不带 --project 混跑，断言 records 互不串写。#74 的会话绑定落地后此测试同时守护它 |
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
 > D1/D3 的展开理由见 §post-v0.3；D2（Semantic Scholar key）已归口 v0.3 P16。
