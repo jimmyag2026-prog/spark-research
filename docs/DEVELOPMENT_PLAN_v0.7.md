@@ -142,6 +142,39 @@ R4 全量复跑 + 第五次零上下文验收（含 export 两步）→ blocker 
 - **第五次零上下文验收**：入口浏览器；花钱路径预授权 $2；任务书新增 `data export --for-sharing` → 核 manifest 计数与排除理由 → `data import` 到新项目 → `report export` diff 为空
 - **验收后不改被验收的东西**（V58）：改了就补窄验收
 
+## 七·补、执行编排：谁来干、用什么模型（2026-09-11 用户确认，开工前补入）
+
+> 两层模型互不相干：**产品侧 LLM**（spark-research 自己调的）全程 `z-ai/glm-5.3-flash`，
+> 受 $2/轮预算管；**agent 侧模型**（Claude 干活的）按下表分配，消耗的是 Claude 额度。
+
+| 步骤 | 执行者 | agent 模型 | 理由 |
+|---|---|---|---|
+| 基线闸 · **W7-D0 / W7-D1 / W7-D2** | **主会话直接干**，不开子代理 | Fable | 三波都是数据层地基，碰 `records.ts` / `manager.ts` / `base.ts` / `index.ts` 热点文件；拆给子代理要重建上下文且易撞 |
+| alpha.2 五条 lane（B-1 · B-3 · C-2 · C-3 · E）| 5 个并行子代理，各自 worktree | **sonnet** | v0.5/v0.6 同量级 lane 均由 sonnet 完成 |
+| alpha.4 三条 lane（B-2 · B-4 · C-1）| 3 个并行子代理，各自 worktree | sonnet | B-2 须在 B-1 合并后开；C-1 须在 W7-D1 合并后开（§六串并关系） |
+| 每批合入评审 | **主会话**（单一合并权，纪律 14） | Fable | **不采信 lane 自报数字**：合并前独立复跑六套件 + 每条阴性对照；核对远端 ref |
+| 各波收口（冒烟 / 窄验收 / tag / CHANGELOG） | 主会话 | Fable | 跨 lane 判断 + 发版动作 |
+| R4 四课题复跑 · 第五次零上下文验收 | **零上下文子代理**（禁读源码，只给 CLI/MCP + `llms.txt` + `readme_for_agent.md`） | sonnet | 验收者必须陌生；产品侧照样走 glm，agent 模型不影响 $2 预算 |
+| 指标汇总 / 发现分析 / BACKLOG 登记 | 主会话 | Fable | 判断密集 |
+| 机械批量活（fixture 录制、日志扫描、召回基准核对） | 单个子代理 | **haiku** | 纯执行，省额度 |
+
+硬纪律（沿用，逐条有事故出处）：
+- 一 lane 一 worktree：`~/Desktop/AI4S/spark-research-<lane>`，禁放 /tmp；lane 从中立 cwd 启动（§5.3·补二）
+- 新 worktree 先链 `.venv`、`bun install`，**实跑一次 `test:py` 看 skip 数**（v0.5：缺 `.venv` 让 17 个用例静默 skip、lane 报绿）
+- 子代理任务书必须写足迹（含 `tests/e2e/`——v0.5 δ 的 e2e 回归就是足迹漏了它）、必须写阴性对照
+- 子代理不授 merge 权；产出一律主会话验证后才算数
+- 网络/额度中断：lane 先落 wip commit 并标「未经任何验证」，恢复后从 wip 继续（v0.5 断网五 lane 同时挂的处置）
+
+### 时间盒（用户拍板：分两段，中间过目一次 alpha.2）
+
+| 段 | 内容 | 预估 |
+|---|---|---|
+| 第一段 | 基线闸 → W7-D0 → alpha.1 → 五 lane 并行 → 合入 → alpha.2 | ~6h |
+| （用户过目 alpha.2） | | |
+| 第二段 | W7-D1 → alpha.3 → 三 lane 并行 → alpha.4 → W7-D2 → alpha.5 → R4 + 第五次验收 → v0.7.0 | ~6–8h |
+
+做不完按序砍尾（先砍 B-4、再砍 E 里的 V21/V62），**不全面减薄**；砍掉的回 BACKLOG 写明原因。
+
 ## 八、指标表（R4 必填，与 R1–R3 同列）
 
 | 指标 | R1 | R2 | R3 | R4 目标 |
