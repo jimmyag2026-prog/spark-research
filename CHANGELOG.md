@@ -5,6 +5,39 @@
 
 ---
 
+## [0.8.0-alpha.1] — 2026-09-11
+
+**闸门 G：六条安全/正确性基线清账。** v0.8 方案见 `docs/DEVELOPMENT_PLAN_v0.8.md`；本 alpha 只做闸门 G，
+六条串行、各自 PR + 阴性对照实跑变红后合入（#84–#89，devlog `docs/devlog/G8-1…G8-6`）。
+
+### 安全
+
+- **V100 compute uploads `workspaceRoot` 越界**（#84）：HTTP/MCP 面的 `workspaceRoot` 经 realpath 后必须落在项目目录内，
+  项目外路径 400；上传限额（文件数/字节数）改在 sha256 之前按 lstat 判，不再先全量读盘再拒。
+- **V101 扩展 `--trust` 指纹只盖入口文件**（#85）：改为目录清单指纹（排序 relpath+sha256，跳过 node_modules/.git/点文件/符号链接），
+  改任何 helper 文件都要重新 `--trust`；旧的单文件 scheme 记录视为已变化（升级即重校）。
+
+### 预算闸
+
+- **V93 预算闸 TOCTOU**（#86）：`BudgetLedger` 引入在飞预留（`tryReserve/settle/release`），闸判「实时重读 usage.jsonl + 在飞 + 发前估价」，
+  `Promise.all` 下 N 个在飞合计不越闸（10 并发 $0.1/$0.03 → 恰 3 放行）；单次估价超预算直接拒；两个进程共用台账互相可见；上游抛错释放预留。
+- **V94 无价模型让预算闸静默失效**（#87）：设了 `--budget-usd` 时，单价表查不到的模型**默认拒绝**；`--allow-unpriced` 显式放行并在 usage 标 `unpriced`
+  （`usage` 命令单列计数）。anthropic 单价表补齐五条（官方定价页直读 2026-09-11），`PROVIDER_MODELS.anthropic` 对齐在售清单。
+
+### 可靠性
+
+- **V96 state.json 非原子写**（#88）：`writeState` 改 tmp + fsync + rename；必须在 state 锁临界区内调用。
+
+### 移除（BREAKING）
+
+- **V21 旧超时 env 名**（#89）：`SPARK_{HTTP,LLM,KERNEL,TASK}_TIMEOUT_MS` 不再生效，**设了直接报错**并指出 `SPARK_RESEARCH_*` 新名；
+  MCP 工具描述与 `docs/INSTALL.md` §5 同步。
+
+### 纪律（v0.8 起）
+
+- 冒烟脚本不进管道：`bash scripts/smoke-binary.sh > log; test $? -eq 0`；测试链同理，不用 `| grep` 吞退出码。
+- 登记新 V 号前先取远端所有分支的最大号。
+
 ## [0.7.0] — 2026-09-11
 
 **v0.7：这一路产生的每一份数据都被原样留下、可导出、可判定能不能出门；检索排序与并发/长任务可靠性补上。**
