@@ -55,7 +55,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
           const emptyLibrary = library.count() === 0;
           task.progress(0, 1, emptyLibrary ? "文献库为空：本轮观点只能是推断" : "共探中");
           const session = new CoExploreSession({
-            llm: ctx.llm(),
+            llm: ctx.llmFor(scope.project, "idea-new"),
             library,
             records: scope.project.records(),
             model: ctx.model(),
@@ -117,7 +117,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
           if (!idea) throw new Error(`思路库里没有 record '${ref}'`);
           task.progress(0, 3, "claim 提取");
           const checker = new NoveltyChecker({
-            llm: ctx.llm(),
+            llm: ctx.llmFor(scope.project, "novelty-check"),
             searcher: ctx.searcher(),
             library,
             records,

@@ -9,6 +9,7 @@ import type { HttpClient } from "../http/client";
 import { LibraryStore } from "../literature/library";
 import { LiteratureSearcher } from "../literature/search";
 import { LLMRouter } from "../llm/router";
+import { UsageStore, usageTrackingLlm } from "../usage/ledger";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
 import type { CitationJudge } from "../reviewer/rules";
 import { SimulationRegistry } from "../simulation/registry";
@@ -153,6 +154,18 @@ export class ServerContext {
 
   llm(): Pick<LLMRouter, "call"> {
     return this.deps.llm ?? new LLMRouter();
+  }
+
+  // A5 blocker②：G-3 的用量台账此前只接了 CLI——HTTP/UI 路径的 LLM 调用完全不入账，
+  // 用量面板对着真实花费显示 $0（对「花钱透明」这个卖点是谎报级缺陷）。
+  // 所有带项目上下文的 LLM 消费路由一律经这里取 llm，与 CLI 同一份 usage.jsonl。
+  // HTTP 面暂无预算参数（UI 无入口，已登记）；先保证计量真实。
+  llmFor(project: Project, command: string): Pick<LLMRouter, "call"> {
+    return usageTrackingLlm({
+      llm: this.llm(),
+      store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+      command,
+    });
   }
 
   searcher(): LiteratureSearcher {
