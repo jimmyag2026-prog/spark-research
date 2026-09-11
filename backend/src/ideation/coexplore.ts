@@ -1,5 +1,5 @@
 // V27：prompt 的编译期内嵌副本（见 ../agents/prompts.ts）。
-import { DEFAULT_PROMPT_DIR, readPromptText } from "../agents/prompts";
+import { DEFAULT_PROMPT_DIR, projectBackgroundBlock, readPromptText } from "../agents/prompts";
 import { libraryKeyIndex } from "../literature/export";
 import type { LibraryPaper, LibraryStore } from "../literature/library";
 import { extractJsonObject } from "../literature/reading";
@@ -96,8 +96,9 @@ export function buildCoExplorePrompt(
       : "（项目文献库为空。你没有任何可引用的 key —— 所有观点都必须标 (inferred)，" +
         "并且第一件事应该是告诉用户：先跑 spark-research lit search --add 把相关文献入库，" +
         "否则这次共探没有证据基础。）";
+  const block = projectBackgroundBlock(projectContext);
   return [
-    projectContext?.trim() ? `本研究项目的背景：${projectContext.trim()}` : "本研究项目的背景：未提供。",
+    block || "（本项目未填写描述）",
     "",
     `可用引用 key 白名单（项目文献库，共 ${papers.length} 篇；白名单之外一律不许引）：`,
     whitelist,
