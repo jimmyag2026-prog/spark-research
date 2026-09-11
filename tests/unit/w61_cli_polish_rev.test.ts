@@ -18,7 +18,7 @@ import { makeContractFixture } from "../helpers/compute_contract";
 // 是风险最低的等价改法：**减少一次 dispatch 内部触发的 patch() 调用次数**，让 rev 的
 // 跳变格数更贴近「真的发生了几次状态变化」，rev 本身的 CAS 语义与所有既有断言不变。
 describe("V50 · dispatch 内部合并 started/running 两次落盘，rev 跳变收窄", () => {
-  test("不需要审批的 plan：dispatch 一次只让 rev 跳 2 格（claim 1 + start-run-merged 1），而不是 3 格", async () => {
+  test("不需要审批的 plan：dispatch 一次让 rev 跳 3 格（claim 1 + start-run-merged 1 + V48 handle 落盘 1），而不是 4 格", async () => {
     const fx = makeContractFixture(new LocalComputeAdapter({ pollIntervalMs: 5 }));
     // network:"none" + LocalComputeAdapter(billable:false) + 无 secretRefs ⇒
     // derivedApprovalRequired() 为 false，直接 planned → dispatch，不走审批链，
@@ -35,7 +35,10 @@ describe("V50 · dispatch 内部合并 started/running 两次落盘，rev 跳变
     // 三次 patch()：① 无审批分支的 dispatch 声明（claim）② 合并后的
     // resource_start/resource_active/start/run ③ settle()。合并前是 4 次（②拆成
     // started/running 两次），rev 会从 1 跳到 5；合并后是 3 次，1 跳到 4。
-    expect(ran.rev).toBe(planned.rev + 3);
+    // W7-E · V48 收口裁定：dispatch 内多了一次 patch()——adapter 一拿到执行期 handle 就
+    // 立刻回调 hooks.onHandle 落盘（不等 run() 返回，这是 SIGKILL 后能接回的前提）。
+    // V50「少跳一格」与 V48「crash 可恢复」冲突时正确性优先：rev 从 +3 变 +4，如实钉住。
+    expect(ran.rev).toBe(planned.rev + 4);
   });
 
   test("最终落盘的 lifecycle 状态与合并前逐字节一致（只减少了写入次数，不改变状态机结果）", async () => {
