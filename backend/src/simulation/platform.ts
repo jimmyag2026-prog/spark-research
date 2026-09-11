@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   SimulationRunError,
   SimulationSpecError,
@@ -23,11 +23,22 @@ export type { RunRecord, DoneEnvelope } from "./run_store";
 // Python 解释器解析：与 kernels/manager 同一口径（SPARK_PYTHON > 仓库 .venv > python3）。
 // 刻意不 import kernels/manager —— 那个模块会把 ControlRepl/daemon 一并拖进来，
 // 仿真层对 daemon 应当零依赖。
+//
+// V75（V61 家族）：编译产物里 `import.meta.dir` 是 /$bunfs 虚拟路径，拼出来的 .venv
+// 永远 existsSync=false → 二进制在仓库目录里也找不到 .venv，全部科学平台被**误报
+// 不可用**（实测 .venv 四个平台俱全、源码模式全 ✅、二进制全 ❌）。二进制场景改用
+// `process.execPath`（真实二进制路径，dist/ 在仓库内 → 上一级就是仓库根）推导。
 export function resolvePython(): string {
   const env = process.env.SPARK_PYTHON;
   if (env) return env;
-  const venv = join(import.meta.dir, "../../../.venv/bin/python");
-  return existsSync(venv) ? venv : "python3";
+  const candidates = [join(import.meta.dir, "../../../.venv/bin/python")];
+  if (import.meta.dir.startsWith("/$bunfs")) {
+    candidates.push(join(dirname(process.execPath), "../.venv/bin/python"));
+  }
+  for (const venv of candidates) {
+    if (existsSync(venv)) return venv;
+  }
+  return "python3";
 }
 
 // 归一化后按 key 排序再序列化：specHash 不能受 JS 对象字面量书写顺序影响。
