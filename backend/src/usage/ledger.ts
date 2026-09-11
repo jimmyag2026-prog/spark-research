@@ -34,6 +34,8 @@ export interface UsageEntry {
   outputTokens: number;
   /** 这一次调用的已知成本；null = 拿不到 usage 或查不到单价（不是免费）。 */
   costUsd: number | null;
+  /** V94：这次调用的模型在单价表里查不到（发前就知道）。只在 true 时写入。 */
+  unpriced?: boolean;
 }
 
 export interface UsageTotals {
@@ -43,6 +45,8 @@ export interface UsageTotals {
   /** 已知成本之和——真实总花费的下界。 */
   knownCostUsd: number;
   unknownCostCalls: number;
+  /** V94：其中因「模型无单价」而成本未知的次数（unknownCostCalls 的子集）。 */
+  unpricedCalls: number;
   byCommand: Record<string, { calls: number; knownCostUsd: number; unknownCostCalls: number }>;
   byModel: Record<string, { calls: number; knownCostUsd: number; unknownCostCalls: number }>;
 }
@@ -95,11 +99,13 @@ export class UsageStore {
       outputTokens: 0,
       knownCostUsd: 0,
       unknownCostCalls: 0,
+      unpricedCalls: 0,
       byCommand: {},
       byModel: {},
     };
     for (const e of entries) {
       totals.calls += 1;
+      if (e.unpriced === true) totals.unpricedCalls += 1;
       totals.inputTokens += e.inputTokens;
       totals.outputTokens += e.outputTokens;
       const cmd = (totals.byCommand[e.command] ??= { calls: 0, knownCostUsd: 0, unknownCostCalls: 0 });
@@ -155,6 +161,11 @@ export interface UsageTrackingOptions {
    * 返回 null = 查不到单价（不是 0）。测试注入用；生产不传。
    */
   estimateUsd?: (messages: ChatMessage[], options: CallOptions, target: { provider: string; model: string }) => number | null;
+  /**
+   * V94：设了 `budgetUsd` 时，单价表查不到的模型**默认拒绝**（否则闸对它静默失效——花多少都算"未知"，
+   * 永远不会越线）。`--allow-unpriced` 显式放行：调用照发，usage 行标 `unpriced:true`，闸对它不计价。
+   */
+  allowUnpriced?: boolean;
 }
 
 export interface UsageTrackingLlm {
@@ -188,7 +199,21 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
       const requestedModel = callOptions.model ?? DEFAULT_MODEL;
       const provider = providerForModel(requestedModel);
       // V93：发前估价。查不到单价 → 预留 0（闸仍按已结算+在飞判，未定价模型的拒绝由 G-4 负责）。
-      const estimate = estimateUsd(messages, callOptions, { provider, model: requestedModel }) ?? 0;
+      const estimated = estimateUsd(messages, callOptions, { provider, model: requestedModel });
+      const unpriced = estimated === null;
+      const estimate = estimated ?? 0;
+
+      // V94：预算闸开着、模型无单价 → 默认拒绝。"未知成本"在闸里等价于"免费"，那闸就是假的。
+      if (budgetUsd !== undefined && unpriced && options.allowUnpriced !== true) {
+        return failure("budget-gate", requestedModel, {
+          kind: "budget",
+          message:
+            `预算闸：模型 '${requestedModel}'（provider ${provider}）在单价表里没有价格，--budget-usd 无法对它计价，默认不放行。` +
+            `这次调用没有发出、没有新花费。下一步：加 --allow-unpriced 显式放行（这些调用在 usage 里标 unpriced，不计入预算判定），` +
+            `或用 SPARK_LLM_PRICING_JSON 补上 "${provider}:${requestedModel}" 的单价。`,
+          retryable: false,
+        });
+      }
 
       // V93 闸：**实时重读** usage.jsonl（跨进程：别的进程刚花的钱这里立刻看得见，不再只在
       // 构造时读一次）+ 本进程在飞预留 + 这一次的估价。三者之和越线就拒绝，一分钱不发。
@@ -239,6 +264,7 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
         outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
         costUsd: recorded.costUsd,
+        ...(unpriced ? { unpriced: true } : {}),
       });
       if (rawOn) {
         // 失败也记：AD-13 的失败响应没有内容，但「问了什么、为什么失败」本身就是过程数据。

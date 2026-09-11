@@ -161,6 +161,46 @@ export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPrici
       note: "挂牌价 $0.075/M 输入、$0.25/M 输出，另含 5.5% 充值手续费摊入（×1.055）。v0.6 B2 轮次的指定模型。",
     },
   },
+  // V94（v0.8 G-4）：anthropic 五条，2026-09-11 WebFetch 直读官方定价页
+  // https://platform.claude.com/docs/en/about-claude/pricing 的 Model pricing 表（基础价，非 batch/cache）。
+  // 注意：Claude 4.7 及之后模型（Opus 5 / Sonnet 5）用新 tokenizer，同一文本约多出 30% token——
+  // usage 按 API 回报的 token 数计价不受影响，但 `estimateCallCostUsd` 的字符启发式对它们会偏低估。
+  anthropic: {
+    "claude-opus-5": {
+      inputPerMillionUsd: 5,
+      outputPerMillionUsd: 25,
+      source: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedDate: "2026-09-11",
+      note: "官方页直读。Fast mode（speed:\"fast\"）为 $10/$50，本适配器不发该参数。",
+    },
+    "claude-sonnet-5": {
+      inputPerMillionUsd: 2,
+      outputPerMillionUsd: 10,
+      source: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedDate: "2026-09-11",
+      note: "官方页直读；页面注明 $2/$10 的上市价已成为标准价，原定 2026-09-01 涨到 $3/$15 取消。",
+    },
+    "claude-haiku-4-5-20251001": {
+      inputPerMillionUsd: 1,
+      outputPerMillionUsd: 5,
+      source: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedDate: "2026-09-11",
+    },
+    "claude-sonnet-4-5": {
+      inputPerMillionUsd: 3,
+      outputPerMillionUsd: 15,
+      source: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedDate: "2026-09-11",
+      note: "PROVIDER_MODELS 里沿用的别名；官方页仍列为在售。",
+    },
+    "claude-opus-4-5": {
+      inputPerMillionUsd: 5,
+      outputPerMillionUsd: 25,
+      source: "https://platform.claude.com/docs/en/about-claude/pricing",
+      verifiedDate: "2026-09-11",
+      note: "PROVIDER_MODELS 里沿用的别名；官方页仍列为在售。",
+    },
+  },
   // kimi/openrouter 之外的 provider（如未来的 anthropic）由各自的 lane 在合入时补充；
   // 本地端点（`local/<model>`）不进这张表——自建/本地服务器没有统一定价，价格是
   // 用户自己的硬件成本，`priceFor("local", ...)` 恒返回 null。

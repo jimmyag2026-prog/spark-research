@@ -12,7 +12,9 @@ export type Provider = (typeof SUPPORTED_PROVIDERS)[number];
 export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
   kimi: ["kimi-k2", "moonshot-v1-32k", "moonshot-v1-8k"],
   openai: ["gpt-4o", "gpt-4o-mini", "o4-mini"],
-  anthropic: ["claude-sonnet-4-5", "claude-opus-4-5"],
+  // V94（2026-09-11）：对齐官方定价页当前在售清单——Opus 5 / Sonnet 5 / Haiku 4.5 为主力，
+  // 4.5 两个别名仍在售保留。单价见 providers/registry.ts 的 anthropic 段（官方页直读）。
+  anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5", "claude-opus-4-5"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   qwen: ["qwen3", "qwen-max"],
   // z-ai/glm-5.3-flash：v0.6 B2 轮次指定模型。必须显式登记——providerForModel 的
