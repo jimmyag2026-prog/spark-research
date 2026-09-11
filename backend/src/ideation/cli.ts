@@ -10,7 +10,7 @@ import { LibraryStore } from "../literature/library";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, type LiteratureSource } from "../literature/models";
 import { LiteratureSearcher } from "../literature/search";
 import { LLMRouter } from "../llm/router";
-import { ProjectManager, ProjectError, type Project } from "../project/manager";
+import { ProjectManager, ProjectError, type Project, openProjectResolved } from "../project/manager";
 import type { CitationJudge } from "../reviewer/rules";
 import { runCliTask } from "../cli/progress";
 import type { TaskRegistry } from "../server/tasks";
@@ -97,7 +97,7 @@ function parseSources(raw: string | undefined): LiteratureSource[] {
 // R1-P0：--project 显式覆盖（同 literature/cli.ts 的 openLibrary——全局项目指针在
 // 并发会话下会互相改写，显式 flag 是并发可靠使用的最小机制）。
 function openProject(manager: ProjectManager, projectSlug?: string): { project: Project; library: LibraryStore } {
-  const project = projectSlug ? manager.open(projectSlug) : manager.defaultProject();
+  const project = openProjectResolved(manager, projectSlug);
   const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
   return { project, library };
 }
@@ -161,6 +161,11 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   };
 
   try {
+    // V39 家族（R2-T2 点名）：`idea new --help` 此前掉进交互 REPL。switch 前统一拦截。
+    if (rest.includes("--help") || rest.includes("-h")) {
+      out(IDEA_HELP);
+      return 0;
+    }
     switch (sub) {
       case "new": {
         const { project, library } = openProject(manager, flagString(flags.project));

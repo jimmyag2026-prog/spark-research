@@ -42,7 +42,7 @@ import {
 import { configuredComputeTarget, configuredModalEnvironment } from "../config";
 import type { CredentialProvider } from "../connectors/base";
 import { CredentialStore } from "../daemon/credentials";
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 
 // `spark-research compute ...` 子命令（CB-5 接线，设计 §1.1.8）。
 //
@@ -526,7 +526,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("（命令必须写在裸 `--` 之后，按 argv 传：被审批的东西不该再经过一次 shell 展开）");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const workspaceRoot = flagString(flags.workspace) ?? deps.cwd ?? process.cwd();
         const scan = collectUploads(workspaceRoot, repeated.upload ?? []);
@@ -589,7 +589,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute approve <jobId> [--actor 谁] [--run]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const signer = resolveActor(deps, flagString(flags.actor));
         // 终端门在**落 decision record 之前**：没过门就没有任何审批痕迹。
@@ -620,7 +620,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute reject <jobId> --reason <理由>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const signer = resolveActor(deps, flagString(flags.actor));
         const gate = await requireApprovalGate(COMPUTE_APPROVAL_GATE, ref, "reject", deps, flags, env);
@@ -644,7 +644,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute run <jobId>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const job = await scope.broker.dispatch(ref, hooksFor(out, json));
         // S2：执行进终态时 broker 已经落了这次运行的 observation。把 id 打出来——
@@ -666,7 +666,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute status <jobId>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const job = scope.broker.poll(ref);
         if (json) {
@@ -679,7 +679,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
       }
 
       case "list": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const state = flagString(flags.state);
         if (state && !(EXECUTION_STATES as readonly string[]).includes(state)) {
@@ -703,7 +703,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute collect <jobId>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const { job, harvest, evidence } = await scope.broker.collect(ref);
         if (json) {
@@ -736,7 +736,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute recover <jobId>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const job = await scope.broker.recover(ref, hooksFor(out, json));
         if (json) {
@@ -754,7 +754,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute cancel <jobId>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const job = await scope.broker.cancel(ref);
         if (json) out(JSON.stringify({ job: jobJson(job) }, null, 2));
@@ -768,7 +768,7 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
           err("用法: spark-research compute release <jobId> [--discard \"<理由>\"]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const scope = openComputeScope(project, deps);
         const discard = flagString(flags.discard);
         // 放弃产物是一次**显式的人的决定**，不是资源清理的副作用（W5-1 α 的 D-1/D-2）。

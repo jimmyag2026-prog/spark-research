@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { ProjectManager, ProjectError } from "../project/manager";
+import { ProjectManager, ProjectError, openProjectResolved } from "../project/manager";
 import { UsageStore } from "../usage/ledger";
 import { ApiCallStore, apiCallStorePath, type ApiCallAgg } from "../usage/api_ledger";
 
@@ -88,7 +88,7 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
   let project;
   try {
     const slug = flagString(flags.project);
-    project = slug ? manager.open(slug) : manager.defaultProject();
+    project = openProjectResolved(manager, slug);
   } catch (error) {
     if (error instanceof ProjectError) {
       err(`❌ ${error.message}`);

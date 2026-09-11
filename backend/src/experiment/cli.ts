@@ -1,5 +1,5 @@
 import { configuredSimulationPlatform } from "../config";
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { DEFAULT_SIMULATION_PLATFORM, SIMULATION_PLATFORM_IDS, SimulationRegistry } from "../simulation/registry";
 import { computeDriverFor, type ExperimentComputeDriver } from "./compute_driver";
 import { ExperimentLoop } from "./loop";
@@ -144,7 +144,7 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
           err("用法: spark-research exp new <标题> [--platform pyref] [--param k=v]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         // --platform 显式 > 用户 config.json > 代码默认（P9 配置面收口）。
         const platform = flagString(flags.platform) ?? configuredSimulationPlatform(DEFAULT_SIMULATION_PLATFORM);
@@ -184,7 +184,7 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
           err("用法: spark-research exp run <id>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         let view = loop.get(ref);
 
@@ -269,7 +269,7 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
           err("用法: spark-research exp status <id>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         const view = loop.get(ref);
         const runStatus = view.runId ? await loop.poll(view.id).catch(() => null) : null;
@@ -286,7 +286,7 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
       }
 
       case "list": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         const stateFlag = flagString(flags.state);
         if (stateFlag && !isExperimentState(stateFlag)) {
@@ -309,7 +309,7 @@ export async function runExpCommand(args: string[], deps: ExpCliDeps = {}): Prom
       }
 
       case "platforms": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const registry = deps.platforms ?? new SimulationRegistry({ root: project.paths.experimentsDir });
         const list = await registry.availability();
         if (flags.json === true) {

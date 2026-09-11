@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.6.0-alpha.5，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.6.0-alpha.6，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2494,6 +2494,20 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.6.0-alpha.6] — 2026-09-11
+
+**R2（T2+T4）修复窗口。**
+
+- **`--project` 收口到全部 CLI（V64 防线补全）**：R1 只修了 lit/idea/report；R2 零上下文
+  实测当场抓到 exp 是盲区（用户全程带 --project 仍被全局指针出卖，实验记录写进并发
+  会话的另一个项目）。现在 exp/lab/compute/conclusion/chem/proteins/reviewer 全部经
+  `openProjectResolved` 单点解析，并立门禁：CLI 文件禁止裸调 `defaultProject()`。
+- `report export --help` / `idea new --help` 不再真执行/掉进交互 REPL（V39 家族补全，
+  与 lit 同款 switch 前拦截）。
+- connector 上游返回空响应或非法 JSON 时给指明上游的可读错误（R2 撞上 bioRxiv 服务端
+  故障期 HTTP 200+0 字节，此前报裸 SyntaxError）。
+- T2 任务书更正：scanpy 平台不带内置示例数据集（任务书早先说法有误，数据集自备）。
 
 ## [0.6.0-alpha.5] — 2026-09-11
 

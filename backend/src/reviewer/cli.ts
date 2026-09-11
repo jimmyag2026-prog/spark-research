@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import {
   FindingsStore,
   FindingsStoreError,
@@ -116,7 +116,7 @@ export async function runReviewCommand(args: string[], deps: ReviewCliDeps = {})
   try {
     switch (sub) {
       case "findings": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         store = makeStore(project, deps);
         const checker = flagString(flags.checker);
         const findings = store.list({ project: project.slug, open: flags.open === true, checker });
@@ -145,7 +145,7 @@ export async function runReviewCommand(args: string[], deps: ReviewCliDeps = {})
         if (noteFlag === true) {
           err('❌ --note 建议带上处理说明：--note "为什么认为已经处理好了"');
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         store = makeStore(project, deps);
         const signer = resolveActor(deps, flagString(flags.actor));
         const updated = store.markAddressed(id, {

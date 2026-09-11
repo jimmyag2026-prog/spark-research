@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { configuredWetBackend } from "../config";
 import { ExperimentLoop } from "../experiment/loop";
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { SimulationRegistry } from "../simulation/registry";
 import { LabSafetyError } from "./orchestrator";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS, wetBackend, type WetLabBackend } from "./wet_backend";
@@ -175,7 +175,7 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
   try {
     switch (sub) {
       case "compile": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps, flagString(flags.backend));
         const existingRef = flagString(flags.experiment);
         let view: WetExperimentView;
@@ -255,7 +255,7 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
           err("用法: spark-research lab approve <id> [--actor 谁]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         const signer = resolveActor(deps, flagString(flags.actor));
         const gate = await requireApprovalGate(LAB_APPROVAL_GATE, ref, "approve", deps, flags);
@@ -281,7 +281,7 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
           err("用法: spark-research lab reject <id> --reason <理由>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         const signer = resolveActor(deps, flagString(flags.actor));
         const gate = await requireApprovalGate(LAB_APPROVAL_GATE, ref, "reject", deps, flags);
@@ -305,7 +305,7 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
           err("用法: spark-research lab simulate <id>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         let view = await loop.execute(ref, { note: flagString(flags.note) });
         view = loop.analyze(view.id, { note: flagString(flags.note) });
@@ -327,7 +327,7 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
       }
 
       case "status": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const loop = makeLoop(project, deps);
         const ref = positional[0];
         if (ref) {
