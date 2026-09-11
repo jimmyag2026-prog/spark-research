@@ -177,6 +177,25 @@ export function makeGitignoreFilter(workspaceRoot: string, candidates: string[])
   };
 }
 
+/**
+ * v0.8 G-1（V100）：HTTP/MCP 调用方给的 `workspaceRoot` 必须落在 `base`（项目目录）之内——
+ * 省略即项目目录；相对路径按项目目录解析；绝对路径只接受本来就在项目目录内的。
+ * 此前 HTTP 面接受任意绝对路径：未鉴权的本机调用可以让 server 对 `/etc`、`~` 做全量读盘 + sha256
+ * 兼目录枚举。CLI 不走这一层——用户在自己机器上显式点名路径是另一回事。
+ */
+export function constrainWorkspaceRoot(requested: string | undefined | null, base: string): string {
+  const baseReal = realpathSync(base);
+  if (requested === undefined || requested === null || requested.trim() === "") return baseReal;
+  const abs = isAbsolute(requested) ? requested : resolve(baseReal, requested);
+  if (!existsSync(abs)) throw new UploadDeniedError(requested, "workspaceRoot 不存在");
+  const real = realpathSync(abs);
+  const rel = toPosix(relative(baseReal, real));
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new UploadDeniedError(requested, `workspaceRoot 必须在项目目录之内（${baseReal}）——HTTP/MCP 面不接受项目外路径`);
+  }
+  return real;
+}
+
 function resolveInside(workspaceRoot: string, requested: string): { abs: string; rel: string } {
   if (isAbsolute(requested)) {
     throw new UploadDeniedError(requested, "只接受工作区内的相对路径");
@@ -256,20 +275,20 @@ export function collectUploads(
     requested.map((r) => resolveInside(workspaceRoot, r).rel),
   );
   const filter = makeGitignoreFilter(workspaceRoot, walkedCandidates);
+  // v0.8 G-1（V100）：限额检查**先于读盘哈希**——此前先把整棵目录树读完算 sha256 再看限额，
+  // 一个越界的上传请求等于让本机对任意大目录做全量读盘。先 lstat 拿 size，超限就停。
+  const toHash: Array<{ abs: string; rel: string; size: number }> = [];
   for (const { abs, rel } of filesToHash) {
     if (!explicitRels.has(rel) && filter.ignores(rel)) {
       skipped.push({ path: rel, reason: "gitignore" });
       continue;
     }
-    const size = lstatSync(abs).size;
-    entries.push({ path: rel, size, sha256: sha256File(abs) });
+    toHash.push({ abs, rel, size: lstatSync(abs).size });
   }
-
-  entries.sort((a, b) => a.path.localeCompare(b.path));
-  const totalBytes = entries.reduce((sum, e) => sum + e.size, 0);
-  if (entries.length > limits.count) {
+  const totalBytes = toHash.reduce((sum, e) => sum + e.size, 0);
+  if (toHash.length > limits.count) {
     throw new UploadLimitError(
-      `上传文件数 ${entries.length} 超过上限 ${limits.count}——请缩小 --upload 范围（大目录别整个传）`,
+      `上传文件数 ${toHash.length} 超过上限 ${limits.count}——请缩小 --upload 范围（大目录别整个传）`,
     );
   }
   if (totalBytes > limits.bytes) {
@@ -277,6 +296,8 @@ export function collectUploads(
       `上传总字节 ${totalBytes} 超过上限 ${limits.bytes}（${(limits.bytes / 1024 / 1024).toFixed(0)} MiB）`,
     );
   }
+  for (const { abs, rel, size } of toHash) entries.push({ path: rel, size, sha256: sha256File(abs) });
+  entries.sort((a, b) => a.path.localeCompare(b.path));
   return { entries, skipped, totalBytes };
 }
 

@@ -22,6 +22,7 @@ import {
   UploadDeniedError,
   UploadLimitError,
   collectUploads,
+  constrainWorkspaceRoot,
 } from "../../compute/uploads";
 import {
   computeTargetViews,
@@ -171,7 +172,14 @@ export function computeRoutes(ctx: ServerContext): Hono {
       const compute = openComputeScope(scope.project, { root: ctx.deps.root, credentials: ctx.credentials() });
       // workspaceRoot 默认落在**项目目录**里：HTTP/MCP 调用方不该靠猜一个绝对路径
       // 就能把本机任意目录扫进上传清单（deny-list 之外还有这一层收敛）。
-      const workspaceRoot = optionalString(body, "workspaceRoot") ?? scope.project.paths.root;
+      let workspaceRoot: string;
+      try {
+        // v0.8 G-1（V100）：项目目录之外的 workspaceRoot 一律 400——不是 deny-list 能兜的事。
+        workspaceRoot = constrainWorkspaceRoot(optionalString(body, "workspaceRoot"), scope.project.paths.root);
+      } catch (error) {
+        if (error instanceof UploadDeniedError) throw new HttpError(400, error.message);
+        throw error;
+      }
       try {
         const scan = collectUploads(workspaceRoot, optionalStringList(body, "upload") ?? []);
         const input: PlanInput = {
