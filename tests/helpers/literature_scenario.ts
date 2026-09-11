@@ -46,7 +46,10 @@ export function fixtureHttp(cassette: string, mode: FixtureMode): FixtureHttp {
 }
 
 export function searcherWith(cassette: string, mode: FixtureMode): LiteratureSearcher {
+  // cassette 在 perSource=10 下录制（FixtureHttp 精确匹配 URL）；blended 深池默认 30 会 miss，
+  // 这里如实按录制条件注入 deepPool=10，不改生产默认。
   return new LiteratureSearcher(
     new ConnectorRegistry({ http: fixtureHttp(cassette, mode) }).registerBuiltins(),
+    { deepPool: 10 },
   );
 }

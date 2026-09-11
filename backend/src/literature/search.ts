@@ -11,6 +11,7 @@ import {
   type RankMode,
 } from "./models";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
+import { segmentQuery, type SegmentResult } from "./segment";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
 //
@@ -76,6 +77,15 @@ const BLENDED_CITATION_WEIGHT = 1;
 // 年份衰减半衰期（年）：里程碑论文往往是几年前发的，衰减要温和，
 // 不能反而把它们排到检索式直接命中但内容偏题的新论文后面。
 const BLENDED_YEAR_HALF_LIFE = 12;
+
+// V67 深度 / 用户 2026-09-11 拍板：blended 档默认每源抓取池从 10 加深到 30。
+// 出处：docs/devlog/W7-B1.md §四「真实召回核验」——`--limit 10`（即
+// perSource=10）下跨源重叠太稀薄，hits 退化成准被引排序，blended 没有额外空间
+// 纠正；`--limit 50` 复现时才看到 V67 描述的病灶真正发作（RFdiffusion 从
+// top10 外的 20/28 拉回 top10 内的 6/5）。30 是「浅池不够、50 又是特地复现用的
+// 极端值」之间的默认档位。只在 blended 档且调用方没有显式给 perSource 时生效——
+// 显式给的优先，`--rank hits` 的既有回归钉子（perSource 默认 10）不受影响。
+const BLENDED_DEEP_POOL = 30;
 
 function knownCitationFactor(citedByCount: number, weight: number): number {
   return 1 + weight * Math.log1p(Math.max(0, citedByCount));
@@ -175,6 +185,16 @@ export function applyRank(papers: Paper[], rank: RankMode): RankResult {
   }
 }
 
+// V65 残余：粗略判定「含 CJK」——只需要回答「有没有中文」这一个判据，不需要精确到
+// 具体文字系统。基本 CJK 统一表意文字区（一-鿿）覆盖绝大多数简繁中文场景，
+// 够用；判过头（比如漏判扩展区生僻字）不是本判据要解决的问题。
+const CJK_RANGE = /[一-鿿]/;
+function containsCJK(text: string): boolean {
+  return CJK_RANGE.test(text);
+}
+
+export type Segmenter = (text: string) => Promise<SegmentResult>;
+
 function errorSummary(error: unknown): string {
   if (error instanceof Error) {
     // Error message 里只可能是我们自己构造的「HTTP xxx」或参数校验文案，
@@ -186,17 +206,32 @@ function errorSummary(error: unknown): string {
 
 export class LiteratureSearcher {
   private registry: ConnectorRegistry;
+  // V65 残余：真实分词器默认 `segmentQuery`（jieba，见 segment.ts）；测试注入假实现
+  // 验证「拆词入口」本身的判据（含 CJK / 无空格 / 0 命中三个条件），不依赖真装了 jieba。
+  private segmenter: Segmenter;
+  private readonly deepPool: number;
 
-  constructor(registryOrOptions: ConnectorRegistry | ConnectorOptions = {}) {
+  constructor(
+    registryOrOptions: ConnectorRegistry | ConnectorOptions = {},
+    options: { segmenter?: Segmenter; deepPool?: number } = {},
+  ) {
     this.registry =
       registryOrOptions instanceof ConnectorRegistry
         ? registryOrOptions
         : new ConnectorRegistry(registryOrOptions).registerBuiltins();
+    this.segmenter = options.segmenter ?? segmentQuery;
+    // alpha.5 收口：深池档位可注入——fixture cassette 按 perSource=10 录制（FixtureHttp 精确匹配 URL），
+    // 测试场景显式传 10 如实反映录制条件；生产默认 BLENDED_DEEP_POOL。
+    this.deepPool = options.deepPool ?? BLENDED_DEEP_POOL;
   }
 
   async search(query: string, options: LiteratureSearchOptions = {}): Promise<LiteratureSearchResult> {
     const sources = options.sources ?? DEFAULT_SEARCH_SOURCES;
-    const perSource = options.perSource ?? 10;
+    // rank 要在算 perSource 之前先解出来（下面 BLENDED_DEEP_POOL 判据要用它）；
+    // 类级默认仍是 "hits"，理由见下面 `applyRank` 调用点之前的既有注释（V67 2.3）。
+    const rank = options.rank ?? "hits";
+    const deepPoolApplied = options.perSource === undefined && rank === "blended";
+    const perSource = options.perSource ?? (rank === "blended" ? this.deepPool : 10);
 
     const settled = await Promise.all(
       sources.map((source) => this.searchOne(source, query, perSource)),
@@ -205,7 +240,15 @@ export class LiteratureSearcher {
     const all: Paper[] = [];
     const statuses: SourceStatus[] = [];
     for (const { status, papers } of settled) {
-      statuses.push(status);
+      // 深池默认生效时如实标注在每个成功源上（AD-12：结果怎么来的要可见）；
+      // skipped/failed 的源没有「抓了多少池子」这件事，不掺和进去。
+      const note =
+        deepPoolApplied && status.outcome === "ok"
+          ? status.note
+            ? `${status.note}；深池 ${this.deepPool}/源（blended 默认）`
+            : `深池 ${this.deepPool}/源（blended 默认）`
+          : status.note;
+      statuses.push(note === status.note ? status : { ...status, note });
       all.push(...papers);
     }
 
@@ -218,7 +261,7 @@ export class LiteratureSearcher {
     // V67 的证据（R1/R2）全部来自 `lit search` 这个人类入口，不是内部检索候选的相关性——
     // 所以「默认 blended」只在 CLI 层落地（cli.ts 的 parseRank 不给 `--rank` 时回落到
     // DEFAULT_RANK_MODE 并显式传参），类级默认保持 v0.6 的 "hits"，不静默牵连其它调用方。
-    const rank = options.rank ?? "hits";
+    // （`rank` 已在方法顶部算 perSource 时解出，这里直接复用，不重复 `options.rank ?? "hits"`。）
     const { papers: ranked, note: rankNote } = applyRank(merged, rank);
     return {
       query,
@@ -272,13 +315,31 @@ export class LiteratureSearcher {
     // 打分合并，并在 status.note 里**如实标注**这是拆词合并的结果（不是原查询命中）。
     // 只对 aminer 生效——其它源是真正的关键词检索，实测无此形态，不做没有证据的泛化。
     if (source !== "aminer" || first.status.outcome !== "ok" || first.papers.length > 0) return first;
-    const terms = query.split(/\s+/).filter(Boolean);
+    let terms = query.split(/\s+/).filter(Boolean);
+    let segmentedByJieba = false;
+    let segmentFailureReason: string | null = null;
+    // V65 残余：空格拆词兜底认不出中文连写复合词（中文本就没有空格，"运动意图解码"
+    // 整段被当成 1 个词，terms.length===1，走不进下面的多词合并）。原查询 0 命中、
+    // 没有空格可拆、但含 CJK 时，先试一次分词器——分出的词再走下面**同一套**
+    // 「按命中词数合并」逻辑，不额外发明第二套合并规则。纯英文 / 已经有空格的查询
+    // 不碰分词器（前者没有 CJK，后者已经有 terms 可用）。
+    if (terms.length < 2 && containsCJK(query)) {
+      const segmented = await this.segmenter(query);
+      if (segmented.terms && segmented.terms.length >= 2) {
+        terms = segmented.terms;
+        segmentedByJieba = true;
+      } else {
+        segmentFailureReason = segmented.reason ?? "分词结果为空或不足 2 词";
+      }
+    }
     if (terms.length < 2) {
       return {
         ...first,
         status: {
           ...first.status,
-          note: "0 命中。AMiner 按词序列匹配标题；若查询是多个概念连写，用空格分开可触发拆词兜底",
+          note:
+            "0 命中。AMiner 按词序列匹配标题；若查询是多个概念连写，用空格分开可触发拆词兜底" +
+            (segmentFailureReason ? `（分词器不可用，退回空格拆词：${segmentFailureReason}）` : ""),
         },
       };
     }
@@ -315,7 +376,9 @@ export class LiteratureSearcher {
       .slice(0, perSource)
       .map((k) => byKey.get(k)!);
     const noteBits = [
-      `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
+      segmentedByJieba
+        ? `原查询 0 命中（AMiner 按词序列匹配）；jieba 分词合并（${useTerms.length} 词：${useTerms.join("、")}）`
+        : `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
     ];
     if (terms.length > useTerms.length) noteBits.push(`仅取前 ${useTerms.length} 词`);
     if (failedTerms.length > 0) noteBits.push(`词 [${failedTerms.join("、")}] 查询失败未计入`);

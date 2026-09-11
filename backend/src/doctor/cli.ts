@@ -52,6 +52,17 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
   }
   out("");
 
+  // V65 残余：可选依赖，不进「依赖分层」——缺失时只是 AMiner 中文拆词兜底退回
+  // v0.6 的空格拆词，不是某一整档能力不可用。`report.segmenter` 可选（见 index.ts
+  // 字段旁注释），只在真的有这个字段时才渲染这一行。
+  if (report.segmenter) {
+    out(`  ${mark(report.segmenter.available)} jieba     中文分词（可选，AMiner 拆词兜底用；缺失时退回空格拆词）`);
+    if (!report.segmenter.available && report.segmenter.reason) {
+      out(`      ${report.segmenter.reason}`);
+    }
+    out("");
+  }
+
   out(`▎LLM Provider Key（${report.providers.length}，只报已配置/未配置，值永不打印）`);
   for (const p of report.providers) {
     out(`  ${p.configured ? "🔑" : "·"} ${pad(p.id, 12)}${p.envVar}${p.configured ? "" : "（未配置）"}`);

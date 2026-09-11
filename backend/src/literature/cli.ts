@@ -34,7 +34,7 @@ import { LiteratureSearcher } from "./search";
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
 
 export const LIT_HELP = `用法:
-  spark-research lit search <query> [--sources a,b] [--limit N] [--rank ${RANK_MODES.join("|")}] [--add] [--tag 标签]
+  spark-research lit search <query> [--sources a,b] [--limit N] [--per-source N] [--rank ${RANK_MODES.join("|")}] [--add] [--tag 标签]
                                                   跨源检索（默认 ${DEFAULT_SEARCH_SOURCES.join("/")}，排序默认 ${DEFAULT_RANK_MODE}）
   spark-research lit add <doi|arxiv-id|pmid> [--tag 标签]    按标识符入库
   spark-research lit list [--tag 标签] [--status unread|reading|read] [--json]
@@ -449,7 +449,11 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         const sources = parseSources(flagString(flags.sources));
         const limit = Number(flagString(flags.limit) ?? 10) || 10;
         const rank = parseRank(flagString(flags.rank));
-        const result = await makeSearcher().search(query, { sources, perSource: limit, limit, rank });
+        // alpha.5 收口（V67 深度）：blended 档不再把 --limit 当每源抓取数——不传 perSource 让深池默认
+        // （30/源）生效，`--per-source N` 显式覆盖；hits 档保持 perSource=limit（v0.6 逐字节一致）。
+        const perSourceFlag = flagString(flags["per-source"]);
+        const perSource = perSourceFlag !== undefined ? Number(perSourceFlag) || undefined : rank === "blended" ? undefined : limit;
+        const result = await makeSearcher().search(query, { sources, perSource, limit, rank });
 
         // 三个数字含义不同，不能混为一谈：原始条数 / 合并掉的条数 / 实际展示条数（受 --limit 截断）。
         const afterDedupe = result.totalBeforeDedupe - result.mergedCount;
