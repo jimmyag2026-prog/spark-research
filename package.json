@@ -1,6 +1,6 @@
 {
   "name": "spark-research",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.0-alpha.2",
   "description": "面向科研人群的开源科研工作台：文献 → 思路 → 实验 → 记录 → 创新性核验 → 结论评审 → 报告",
   "license": "Apache-2.0",
   "type": "module",
