@@ -129,6 +129,16 @@ function printView(view: WetExperimentView, out: (line: string) => void): void {
   if (view.approval) out(`    ✅ ${view.approval.actor} @ ${view.approval.at} 批准 ${view.approval.protocolHash}`);
   if (view.rejection) out(`    ❌ ${view.rejection.actor} 拒绝：${view.rejection.reason}`);
   if (view.lastError) out(`    ⚠️  ${view.lastError}`);
+  // V60：审批前最后一次看到编译产物的地方——词表外试剂的原文必须显式点出来，
+  // 不能指望人自己从 compiledSteps 的 summary 文案里扒。summary 里其实已经带了
+  // （见 opentrons_protocol.ts 的 unrecognizedReagentLabel），这里是加一条显眼的标注。
+  for (const step of view.compiledSteps) {
+    if (!step.unrecognizedReagent) continue;
+    const raw = step.unrecognizedReagent.rawText;
+    out(
+      `    ⚠️  ${step.stepId}：词表外，安全规则未覆盖` + (raw ? `（原文：${raw}）` : "（原文抠不出来，人工核对协议原文）"),
+    );
+  }
   // D-8：approve 之前最后一次看到这份实验的地方也必须提醒——批准是人的判断，
   // 判断的输入里不能漏掉「安全门根本没看见」这部分。
   for (const warning of view.unconsumedWarnings) out(`    🚨 未被安全门消费：${warning}`);

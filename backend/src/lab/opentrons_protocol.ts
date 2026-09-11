@@ -77,6 +77,13 @@ export interface CompiledStep {
   // 该步骤结束后每个孔的累计体积（µL）。safety gate 的容量规则读它。
   wellVolumesUl: Record<string, number>;
   notes: string[];
+  /**
+   * V60（BACKLOG）：这一步引用的试剂一个都不在词表内时才有值。`rawText` 是
+   * `protocol.ts` 从原句里抠出来的候选原文（抠不出时为 undefined，但字段本身仍在，
+   * 表示"这一步确实是词表外"）。CLI（`cli.ts`）与前端审批弹窗都读这个字段来显示
+   * 「词表外，安全规则未覆盖」——safety.ts 的规则本身不读它，仍然看不见这一步。
+   */
+  unrecognizedReagent?: { rawText?: string };
 }
 
 export interface OpentronsProgram {
@@ -155,6 +162,17 @@ function reagentNamesOf(step: ProtocolStep): string[] {
   return names.length > 0 ? names : [];
 }
 
+// V60：占位符仍然按 step.id 唯一化——**这条既有断言必须继续成立**（两个不同的
+// 未识别试剂绝不能塌缩到同一个 reservoir 孔，见 prepareReagent/addSample 分支顶部
+// 注释）。原文只是追加在后面给人看，不参与唯一性判定：即使两步的原文碰巧写的是
+// 同一个词，`step.id` 不同就仍然是两个不同的 reservoir 孔——保守，不去猜「这两步
+// 说的是不是同一种试剂」。
+function unrecognizedReagentLabel(step: ProtocolStep): string {
+  const base = `未识别试剂#${step.id}`;
+  const raw = step.unrecognizedReagentText;
+  return raw ? `${base}（原文：${raw}）` : base;
+}
+
 export interface CompileToOpentronsOptions {
   // 默认目标孔（协议里没说加到哪一孔时用）。
   defaultWell?: string;
@@ -212,7 +230,10 @@ export function compileToOpentrons(
         // 编译产物指示机器人从同一个孔取两次液。这已经不是显示问题。
         // 占位符按步骤 id 唯一化：身份仍然不知道（词表就那么大，不假装认识），
         // 但至少**不同的东西不会变成同一个东西**，且名字自己说明它没被识别。
-        const reagentName = names[0] ?? `未识别试剂#${step.id}`;
+        // V60：占位符现在带上用户原文（`unrecognizedReagentLabel`），身份仍然不猜、
+        // 唯一化仍然按 step.id ——只是不再让用户写的「硝酸」两个字在编译产物里消失。
+        const unrecognized = names.length === 0 ? { rawText: step.unrecognizedReagentText } : undefined;
+        const reagentName = names[0] ?? unrecognizedReagentLabel(step);
         const well = reservoir.wellFor(reagentName);
         const amount = volumeUl === null ? "（未给体积）" : `${volumeUl} µL`;
         notes.push("离机配液：把配好的试剂放进 reservoir 对应孔位，模拟器不执行配液本身");
@@ -224,10 +245,13 @@ export function compileToOpentrons(
           action: step.action,
           device: step.device,
           execution: "manual",
-          summary: `离机配液并装载 ${reagentName} ${amount} 至 reservoir ${well}`,
+          summary:
+            `离机配液并装载 ${reagentName} ${amount} 至 reservoir ${well}` +
+            (unrecognized ? "（词表外，安全规则未覆盖）" : ""),
           transfers,
           wellVolumesUl: { ...wellVolumes },
           notes,
+          ...(unrecognized ? { unrecognizedReagent: unrecognized } : {}),
         });
         break;
       }
@@ -238,7 +262,9 @@ export function compileToOpentrons(
           throw new ProtocolCompileError(`${step.id}: 缺少可解析的体积（params.volume）`);
         }
         const names = reagentNamesOf(step);
-        const sourceName = names[0] ?? `未识别试剂#${step.id}`;  // 同上，见 prepareReagent 分支的注释
+        // V60：同上，见 prepareReagent 分支的注释——占位符仍按 step.id 唯一化，只是带上原文。
+        const unrecognized = names.length === 0 ? { rawText: step.unrecognizedReagentText } : undefined;
+        const sourceName = names[0] ?? unrecognizedReagentLabel(step);
         const sourceWell = reservoir.wellFor(sourceName);
         const target = String(step.params.well ?? defaultWell);
         // 超过移液器量程就分次转移。这是**编译期**的物理约束，不是安全问题；
@@ -270,10 +296,13 @@ export function compileToOpentrons(
           action: step.action,
           device: step.device,
           execution: "deck",
-          summary: `${sourceName}（reservoir ${sourceWell}）→ 板孔 ${target}，共 ${volumeUl} µL`,
+          summary:
+            `${sourceName}（reservoir ${sourceWell}）→ 板孔 ${target}，共 ${volumeUl} µL` +
+            (unrecognized ? "（词表外，安全规则未覆盖）" : ""),
           transfers,
           wellVolumesUl: { ...wellVolumes },
           notes,
+          ...(unrecognized ? { unrecognizedReagent: unrecognized } : {}),
         });
         break;
       }

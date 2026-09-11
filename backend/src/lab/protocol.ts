@@ -24,6 +24,20 @@ export interface ProtocolStep {
   device: DeviceType;
   params: Record<string, unknown>;
   expectedOutput: string;
+  /**
+   * V60（BACKLOG）：词表外试剂的原文兜底。这一步引用的试剂**一个都不在
+   * REAGENT_PATTERNS 词表内**时，把从原句里抠出来的候选原文（不是整句——整句
+   * 含体积数字、动作词等噪音）放在这里；`opentrons_protocol.ts` 用它给占位符
+   * 加注（`未识别试剂#step-1（原文：硝酸）`），CLI/前端审批面据此显示原文并标
+   * 「词表外，安全规则未覆盖」。
+   *
+   * 刻意**不**放进 `ProtocolStep.params.reagents`（`ReagentSpec[]`）——那个数组是
+   * `safety.ts` 四条规则的输入源，塞一条没有 `reagentId` 的假条目会改变它们的
+   * 迭代对象。只是因为两条规则都在缺 `reagentId`/`concentration` 时天然跳过
+   * 才不会误伤，但这属于「恰好没坏」，不是「设计上安全」。原文单独放在这里，
+   * 规则代码一行不用改，也不会被误读成"这试剂已经被安全门看过了"。
+   */
+  unrecognizedReagentText?: string;
 }
 
 export interface SafetyCheckResult {
@@ -303,6 +317,37 @@ const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液/;
 const GENERIC_LIQUIDS = /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS/i;
 const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]/i;
 
+// 只有这几种动作会往 opentrons_protocol.ts 里的 `reservoir.wellFor(name)` 送一个
+// 试剂名——只有这些动作产出的步骤需要"识别不出试剂就把原文带下来"这件事。
+// serialDilute 的试剂显示走另一条既有的 "stock" 兜底（BACKLOG V60 原文只点了
+// opentrons_protocol.ts:215/241 这两行），不在这次改动范围内。
+const REAGENT_BEARING_ACTIONS = new Set<string>(["prepareReagent", "addSample"]);
+
+// V60：词表外试剂的原文兜底。**不**建化学品数据库、不猜试剂身份——只从句子里减掉
+// 已经确定识别出的结构（体积数字、命中这条规则的动作关键词），剩下的残留文本当作
+// 候选原文。动作关键词可能互为子串（ACTION_RULES 里 "配" 是 "配制" 的前缀），
+// 挑命中的里最长的那个删，否则短关键词会啃掉长关键词的一部分，留下断头的残留。
+// 抠不出非空残留、或残留恰好是通用液体（样品/PBS/…，那些本就不是受管化学品）时
+// 不猜——同一条纪律：宁可漏、不瞎报（见文件顶部 REAGENT_MENTION_SIGNAL 附近注释）。
+function extractReagentRawText(clause: string, ruleKeywords: readonly string[]): string | undefined {
+  let residual = clause;
+  const volumeMatch = /\d+(?:\.\d+)?\s*(?:mL|uL|µL|μL|毫升|微升)/i.exec(residual);
+  if (volumeMatch) residual = residual.replace(volumeMatch[0], "");
+  const matchedKeywords = ruleKeywords.filter((k) => residual.includes(k));
+  if (matchedKeywords.length > 0) {
+    const longest = matchedKeywords.reduce((a, b) => (b.length > a.length ? b : a));
+    residual = residual.replace(longest, "");
+  }
+  residual = residual
+    .replace(/[，,、。；;：:]/g, "")
+    .replace(/^(?:每步|每级|每次|每个梯度|每孔|其中|即每)/, "")
+    .replace(/(试剂盒|缓冲液|溶液|试剂)$/, "")
+    .trim();
+  if (!residual) return undefined;
+  if (GENERIC_LIQUIDS.test(residual)) return undefined;
+  return residual;
+}
+
 // V25：SIGNAL 正则只负责「这句话疑似有这类描述」；下面两个函数负责「能不能确定性地
 // 抠出一个可用的数值」。两者刻意不是同一个正则——SIGNAL 里的「摩尔浓度」分支就没有数字，
 // 天然抠不出值，属于「有信号、解析失败」的合法情形，不是 bug。
@@ -405,9 +450,14 @@ function scanUnconsumedSignals(
     !GENERIC_LIQUIDS.test(clause)
   ) {
     warnings.push(
+      // V60：编译产物现在会尽量把你写的原文带下去（未识别试剂#step-N（原文：…）），
+      // 人在审批时能看见自己写的是什么——但这**只是把原文如实显示出来**，
+      // chemical_compatibility 与 concentration_limit 两条规则依旧完全读不到它
+      // （没有 reagentId，规则代码一行没改）。这条告警措辞因此改了一版，
+      // 但告警本身没删：「安全门看不见」这件事仍然要喊出来。
       `「${clause}」提到了要用某种试剂，但**没有一个在试剂词表内**——` +
-        `编译产物里只会出现占位符，chemical_compatibility 与 concentration_limit 两条规则` +
-        `**完全看不见它**（这不是「相容」也不是「安全」）。` +
+        `编译产物会把你写的原文保留下来（未识别试剂 + 原文），但 chemical_compatibility 与` +
+        ` concentration_limit 两条规则**依旧完全看不见它**（这不是「相容」也不是「安全」）。` +
         `下一步：人工核对该试剂的相容性与浓度；若它应当受管，把它加进试剂词表再重新编译。`,
     );
   }
@@ -509,12 +559,19 @@ export class ProtocolCompiler {
           { reagentCount: reagents.length, unit: concentrationValue?.unit, hasValue: concentrationValue !== undefined },
         ),
       );
+      // V60：这一步一个词表内试剂都没匹配上、但动作本身需要试剂身份（装载/加样）——
+      // 把原文残留带下去，供 opentrons_protocol.ts 与 CLI/前端审批面显示。
+      const unrecognizedReagentText =
+        reagents.length === 0 && REAGENT_BEARING_ACTIONS.has(rule.action)
+          ? extractReagentRawText(clause, rule.keywords)
+          : undefined;
       steps.push({
         id: `step-${steps.length + 1}`,
         action: rule.action,
         device: rule.device,
         params,
         expectedOutput: rule.expectedOutput,
+        ...(unrecognizedReagentText !== undefined ? { unrecognizedReagentText } : {}),
       });
     }
 
