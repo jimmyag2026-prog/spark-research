@@ -30,6 +30,14 @@ export interface AdapterCapabilities {
 export interface RunHooks {
   onLog?: (line: string) => void;
   onState?: (patch: Partial<LifecycleState>) => void;
+  /**
+   * V48：adapter 一旦拿到执行期 handle（比如本地子进程 spawn 成功、pid 到手）就立刻回调，
+   * **不等** `run()`/`recover()` 整体返回。broker 借这个回调把 handle 落盘——编排进程在
+   * 执行期中途被杀，句柄仍然留在磁盘上，重启后 `recover()` 才有东西可接。
+   * 在此之前 `adapterHandle` 只在 `run()` 返回时才写进 job.json（broker.ts 的 `settle()`），
+   * 编排进程死在执行期中途会把句柄跟着一起丢——release 还会因此删掉唯一的产物副本。
+   */
+  onHandle?: (handle: AdapterHandle) => void;
   signal?: AbortSignal;
 }
 

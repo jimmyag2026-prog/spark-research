@@ -36,6 +36,13 @@ export interface SettingSpec {
   type: SettingType;
   // 对应的环境变量；给了就意味着 env 可以临时覆盖。
   envVar: string | null;
+  /**
+   * V21（BACKLOG）：已废弃、但仍生效的旧环境变量名（按优先级排列，通常只有一个）。
+   * `resolveSetting()` 只在 `envVar` 没设时才回落到这里，命中时经 `ConfigOptions.warn`
+   * 告警一次——不是静默兼容，也不是直接砍掉（v0.2.1 起 MCP 工具描述已把旧名写给外部
+   * agent 看，改名本身是 breaking change，需要一个可观测的废弃周期）。计划 v0.8 移除。
+   */
+  legacyEnvVars?: readonly string[];
   // 默认值。`null` 表示「没有默认，由下游各自决定」。
   defaultValue: string | number | null;
   allowed?: readonly string[];
@@ -209,7 +216,10 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
   {
     key: "httpTimeoutMs",
     type: "number",
-    envVar: "SPARK_HTTP_TIMEOUT_MS",
+    // V21：与仓库约定的 SPARK_RESEARCH_* 前缀对齐（原 SPARK_HTTP_TIMEOUT_MS 少了
+    // RESEARCH 这一段，四个超时项里独此四个不合规）。旧名见下面 legacyEnvVars。
+    envVar: "SPARK_RESEARCH_HTTP_TIMEOUT_MS",
+    legacyEnvVars: ["SPARK_HTTP_TIMEOUT_MS"],
     defaultValue: 30_000,
     summary: "单次 connector HTTP 请求的超时上限（毫秒）",
     effect:
@@ -218,7 +228,8 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
   {
     key: "llmTimeoutMs",
     type: "number",
-    envVar: "SPARK_LLM_TIMEOUT_MS",
+    envVar: "SPARK_RESEARCH_LLM_TIMEOUT_MS",
+    legacyEnvVars: ["SPARK_LLM_TIMEOUT_MS"],
     defaultValue: 120_000,
     summary: "单次 LLM 调用的超时上限（毫秒）",
     effect:
@@ -227,7 +238,8 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
   {
     key: "kernelTimeoutMs",
     type: "number",
-    envVar: "SPARK_KERNEL_TIMEOUT_MS",
+    envVar: "SPARK_RESEARCH_KERNEL_TIMEOUT_MS",
+    legacyEnvVars: ["SPARK_KERNEL_TIMEOUT_MS"],
     defaultValue: 120_000,
     summary: "单次 Python kernel execute 的超时上限（毫秒）",
     effect:
@@ -236,7 +248,11 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
   {
     key: "taskTimeoutMs",
     type: "number",
-    envVar: "SPARK_TASK_TIMEOUT_MS",
+    envVar: "SPARK_RESEARCH_TASK_TIMEOUT_MS",
+    // v0.2.1 起 MCP 工具描述（mcp/tools.ts 的 exp_run / task_status）已经把旧名
+    // SPARK_TASK_TIMEOUT_MS 写给外部 agent 看——改名是 breaking change，旧名必须留一个
+    // 可观测的废弃周期（读到时 warn，不是直接失效），计划 v0.8 移除。
+    legacyEnvVars: ["SPARK_TASK_TIMEOUT_MS"],
     defaultValue: 600_000,
     summary: "server 长任务整个生命周期的超时上限（毫秒）",
     effect:
@@ -493,14 +509,31 @@ export interface ResolvedSetting {
   configured: boolean;
 }
 
-// 单个设置的解析：env > config.json > 默认值。
+// 单个设置的解析：env（新名）> env（旧名，V21 废弃周期）> config.json > 默认值。
 export function resolveSetting(key: string, options: ConfigOptions = {}): ResolvedSetting {
   const spec = settingSpec(key);
   if (!spec) throw new Error(`未知配置项 '${key}'（可用：${CONFIG_SETTINGS.map((s) => s.key).join(", ")}）`);
   const env = options.env ?? process.env;
   const config = loadConfig(options);
+  const warn = options.warn ?? ((m: string) => console.warn(m));
 
   const envRaw = spec.envVar ? env[spec.envVar] : undefined;
+  // V21：新名没设时才看旧名——新名优先，同设时新名赢。命中旧名就 warn 一次
+  // （走 ConfigOptions.warn 这个既有出口，跟上面权限告警同一套注入方式，测试可断言）。
+  let legacyRaw: string | undefined;
+  if (envRaw === undefined || envRaw === "") {
+    for (const legacyVar of spec.legacyEnvVars ?? []) {
+      const v = env[legacyVar];
+      if (v !== undefined && v !== "") {
+        legacyRaw = v;
+        warn(
+          `环境变量 '${legacyVar}' 已废弃，配置项 '${spec.key}' 请改用 '${spec.envVar}'` +
+            `（旧名 v0.7 仍生效，计划 v0.8 起移除）`,
+        );
+        break;
+      }
+    }
+  }
   const configRaw = config[spec.key];
 
   let source: SettingSource;
@@ -508,6 +541,9 @@ export function resolveSetting(key: string, options: ConfigOptions = {}): Resolv
   if (envRaw !== undefined && envRaw !== "") {
     source = "env";
     raw = envRaw;
+  } else if (legacyRaw !== undefined) {
+    source = "env";
+    raw = legacyRaw;
   } else if (configRaw !== undefined && configRaw !== "") {
     source = "config";
     raw = configRaw;
