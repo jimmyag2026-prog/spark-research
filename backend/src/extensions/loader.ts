@@ -164,7 +164,9 @@ export async function loadExtension(extensionDir: string, options: LoadExtension
       return failure(manifest.name, manifest.kind, `找不到入口文件 ${entryPath}`, warnings);
     }
 
-    const trust = checkTrust(manifest.name, entryPath, Boolean(options.trust), options.pathOptions);
+    // v0.8 G-2（V101）：TS 扩展的指纹覆盖**整个扩展目录**（清单哈希），不只是入口文件——
+    // 改 helper 文件绕过 TOFU 的口子关掉。mcp_client 仍只盖 mcp.json（见上）。
+    const trust = checkTrust(manifest.name, { kind: "dir", path: extensionDir }, Boolean(options.trust), options.pathOptions);
     if (!trust.trusted) {
       // 阴性对照②的落点：不传 --trust 时，无论 verify 状态如何，这里都拒绝装载。
       return failure(manifest.name, manifest.kind, trust.message, warnings);

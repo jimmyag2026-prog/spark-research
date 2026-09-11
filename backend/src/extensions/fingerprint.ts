@@ -11,14 +11,22 @@
 // 绑定、随扩展目录一起存在），但不触碰用户自己维护的文件。
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { trustFilePath, type ExtensionPathOptions } from "./paths";
 
 export interface TrustRecord {
   sha256: string;
   trustedAt: string;
+  /**
+   * v0.8 G-2（V101）：指纹口径。`dir-manifest-v1` = 扩展目录清单哈希（每个文件的相对路径 + 内容
+   * sha256，排序后再 sha256，跳过 node_modules/.git/隐藏文件）；`file` = 单文件（mcp_client 的
+   * mcp.json 仍用它）。旧记录没有这个字段 = 入口单文件时代的指纹，一律视为「已变化」要求重新 --trust。
+   */
+  scheme?: "file" | "dir-manifest-v1";
 }
+
+export type FingerprintTarget = { kind: "file"; path: string } | { kind: "dir"; path: string };
 
 export interface TrustCheck {
   trusted: boolean;
@@ -33,6 +41,37 @@ export interface TrustCheck {
 
 export function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+const SKIP_DIRS = new Set(["node_modules", ".git"]);
+
+/** 目录清单：相对路径排序 + 每个文件的 sha256。改任何一个 helper 文件都会变（V101 的 TOFU 绕过点）。 */
+export function dirManifest(dir: string): Array<{ path: string; sha256: string }> {
+  const out: Array<{ path: string; sha256: string }> = [];
+  const walk = (abs: string, rel: string): void => {
+    for (const name of readdirSync(abs).sort()) {
+      if (SKIP_DIRS.has(name) || name.startsWith(".")) continue;
+      const full = join(abs, name);
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) continue; // 不跟随符号链接：链接目标在目录外，不算这个扩展的一部分
+      const r = rel ? `${rel}/${name}` : name;
+      if (st.isDirectory()) walk(full, r);
+      else if (st.isFile()) out.push({ path: r, sha256: sha256File(full) });
+    }
+  };
+  walk(dir, "");
+  return out;
+}
+
+export function sha256Dir(dir: string): string {
+  const lines = dirManifest(dir).map((f) => `${f.path}\t${f.sha256}`);
+  return createHash("sha256").update(lines.join("\n")).digest("hex");
+}
+
+function fingerprintOf(target: FingerprintTarget): { sha256: string; scheme: TrustRecord["scheme"] } {
+  return target.kind === "dir"
+    ? { sha256: sha256Dir(target.path), scheme: "dir-manifest-v1" }
+    : { sha256: sha256File(target.path), scheme: "file" };
 }
 
 function readTrustRecord(name: string, options: ExtensionPathOptions): TrustRecord | null {
@@ -63,11 +102,18 @@ function writeTrustRecord(name: string, record: TrustRecord, options: ExtensionP
 //   有记录 + 指纹变了 + 给了 --trust  → 记新指纹，放行
 // 这是「manifest 记指纹」这句话唯一讲得通的实现：如果指纹从不被用来跳过重复确认，
 // 持久化它就没有意义，退化成一个从不被读的审计日志。
-export function checkTrust(name: string, entryPath: string, requestTrust: boolean, options: ExtensionPathOptions = {}): TrustCheck {
-  const sha256 = sha256File(entryPath);
+export function checkTrust(
+  name: string,
+  target: string | FingerprintTarget,
+  requestTrust: boolean,
+  options: ExtensionPathOptions = {},
+): TrustCheck {
+  const t: FingerprintTarget = typeof target === "string" ? { kind: "file", path: target } : target;
+  const { sha256, scheme } = fingerprintOf(t);
   const prior = readTrustRecord(name, options);
   const firstTime = prior === null;
-  const changed = prior !== null && prior.sha256 !== sha256;
+  // 口径不同（旧的入口单文件指纹 vs 目录清单）也算「已变化」——不能拿旧指纹给新口径背书。
+  const changed = prior !== null && (prior.sha256 !== sha256 || (prior.scheme ?? "file") !== scheme);
   const needsConfirmation = firstTime || changed;
 
   if (needsConfirmation && !requestTrust) {
@@ -78,20 +124,20 @@ export function checkTrust(name: string, entryPath: string, requestTrust: boolea
       changed,
       message:
         `扩展 "${name}"（kind 需要代码执行）${changed ? "内容已变化，需要重新确认" : "尚未信任"}，拒绝装载。\n` +
-        `入口文件指纹：sha256:${sha256}\n` +
+        `${t.kind === "dir" ? "目录清单指纹" : "文件指纹"}：sha256:${sha256}\n` +
         `确认这段代码可信后，重新执行并加上 --trust。`,
     };
   }
 
   if (needsConfirmation) {
-    writeTrustRecord(name, { sha256, trustedAt: new Date().toISOString() }, options);
+    writeTrustRecord(name, { sha256, trustedAt: new Date().toISOString(), scheme }, options);
     return {
       trusted: true,
       sha256,
       firstTime,
       changed,
       message: changed
-        ? `扩展 "${name}" 入口文件内容已变化（旧指纹 ${prior!.sha256.slice(0, 12)}… → 新指纹 ${sha256.slice(0, 12)}…），已记录新的信任指纹。`
+        ? `扩展 "${name}" 内容已变化（旧指纹 ${prior!.sha256.slice(0, 12)}… → 新指纹 ${sha256.slice(0, 12)}…），已记录新的信任指纹。`
         : `扩展 "${name}" 信任指纹已记录：sha256:${sha256}`,
     };
   }
