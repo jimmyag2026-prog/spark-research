@@ -2,7 +2,8 @@
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
+> 最后更新：2026-09-11 晚（v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
 > v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
@@ -16,6 +17,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.7 归口**（`DEVELOPMENT_PLAN_v0.7.md` §十一） | 做：V24 V30 V41 V48 V60 V62 V63 V64 V67 V69 V70 V71 V72 V78 V80 V3 V21 · 裁定关闭：V12(R4 后) V13 V16 · 登记不做：V14 V42 · 本 PR 补标已完成：V1 V7 V11 V15 V17 V18 V19 |
 | **v0.5 规划中**（本地规划目录，未入库） | V2 V4 V15 V25(字段兑现) V26 · 另有 connector/skill/内联视图扩展等新项，见规划目录 TODO_v0.5.md<br>**该目录 staged 的 154 skill / 29 connector 存量已登记为 V76** |
 
 ---
@@ -70,29 +72,28 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 
 | # | 项 | 备注 |
 |---|-----|------|
-| V19 | 审批动作要求可交互终端 | AD-9 裁定的推论：MCP 层挡的是默认路径与责任归属，**不是**技术上的绕道。要真堵住「agent 用 Bash 调 `lab approve --actor 自己编的名字`」，得在 CLI 层要求审批来自 TTY，或要求一个非交互环境拿不到的确认令牌。这才是技术防线；在此之前不要声称审批「无法被自动化」 |
-
+| V19 | 审批动作要求可交互终端 | AD-9 裁定的推论：MCP 层挡的是默认路径与责任归属，**不是**技术上的绕道。要真堵住「agent 用 Bash 调 `lab approve --actor 自己编的名字`」，得在 CLI 层要求审批来自 TTY，或要求一个非交互环境拿不到的确认令牌。这才是技术防线；在此之前不要声称审批「无法被自动化」<br>✅ **已完成（v0.4 P12，本次补标）**：`lab/cli.ts:55` `approvalIsInteractiveTty` TTY 探测 + 交互确认读取，注释直接标 V19 |
 | # | 项 | 备注 |
 |---|-----|------|
 | V14 | 位置加权豁免改白名单制 | P3 D3 说「第二个例外再重构」；P8 三条新 rule 一起成了例外，阈值已到。当前靠调用路径隔离，能工作但不显式 |
-| V1 | arXiv/PubMed 接入统一检索 | 缺 XML parser，目前统一检索只有 4 个 JSON 源 |
+| V1 | arXiv/PubMed 接入统一检索 | 缺 XML parser，目前统一检索只有 4 个 JSON 源<br>✅ **已完成（v0.4 W3-d，本次补标）**：`literature/models.ts:10-11` 默认源集含 arxiv/pubmed；CHANGELOG「arXiv / PubMed 接入（BACKLOG V1）——XML 解析走 TS 扩展」 |
 | V2 | novelty 相似度语义化（embedding provider 决策 + 集成） | 词面 0.75 阈值余量 0.08；与 G5 一起看 |
 | V3 | poll 的进程 start-time 交叉核验 | 现状「done.json 优先」方向安全，只会多报 running |
 | V4 | 远端算力真实实现（Docker/SSH/Modal/火山引擎） | DESIGN 明示按需求拉动 |
 | V5 | R kernel | v0.1 遗留 permit set 已有位置 |
 | V6 | 物理 Opentrons / 真实设备对接 | 需真实硬件。同设备族=新 WetLabBackend 即插即用；**非 Opentrons 设备族**需把「结构化步骤→设备语言」编译下沉进 backend（当前 execute() 入参为 OpentronsProgram）。**P9 已把五步施工说明写进 [EXTENDING.md 第 4 节](EXTENDING.md)**（含 protocolHash 语义搬迁与 volume_capacity 规则的降级口径）；等第二设备族选定再动（AD-4 教训：两个真实实现才验证得了接口） |
-| V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估 |
+| V7 | Agent Swarm（v0.1 遗留）接入新架构 | 与子代理独立模型配置一起评估<br>✅ **已完成（v0.4 P12 删除，本次补标）**：`swarm.ts` 已不存在；CHANGELOG「删除 swarm（330 行，v0.1 遗留、生产零调用方）」 |
 | V8 | 中文检索式召回优化 | P4 实测中文检索式召回极差<br>✅ **机制已定位并修复（见 V65，v0.6）**：根源=AMiner title 检索按词序列匹配。拆词兜底后中文多概念查询从整体扑空变为可用；进一步召回提升归 V67（排序）与分词器引入（未排期） |
 | V10 | HTTP 层真实身份（多用户场景） | P7 现状：approve 的 actor 是「谁自称就是谁」（actorSource=`http:explicit`）。单用户本地诚实；**做多用户前必须换成真实身份认证**，否则审批审计不成立 |
-| V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘 |
+| V11 | 长任务句柄落盘 | P7 现状：`server/tasks.ts` 的任务列表在进程重启后丢失（磁盘上的实验状态仍在，`exp run --resume` 可接回）。若要 UI 跨重启看到「正在跑的任务」需落盘<br>✅ **已完成（v0.4 P14，本次补标）**：`server/tasks.ts` 快照落盘；v0.5 V35 与 v0.6 V68 在其上继续。CHANGELOG「长任务句柄落盘（V11）」 |
 | V9 | **[已完成]** AMiner `getPaper` 详情接口带真实 key 验证 | search 已真实验通（HTTP 200）<br>✅ **v0.6 G-4 已验**：真 key 实测 `getPaper` HTTP OK、详情字段齐全（abstract/authors/venue/year）。key 续期（2026-10-07 到期）仍是独立运维项，用户已明示本版不做。 |
-| V12 | LLM 结构化输出（`response_format` / JSON mode） | P8-G5 实测：kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON（`finish_reason` 不是 `length`，不是截断）。已加「解析失败重试一次」但治标不治本。根治要么让 LLMRouter 支持 `response_format: json_object`，要么给判定器配一个支持结构化输出的模型。现状是安全的（降级为可见的 `citation_judge_unavailable` soft finding，不假装通过），代价是这部分引用本轮没被检查 |
+| V12 | LLM 结构化输出（`response_format` / JSON mode） | P8-G5 实测：kimi-k2.6 每轮有 2–6% 的判定只吐思维链、`content` 里没有 JSON（`finish_reason` 不是 `length`，不是截断）。已加「解析失败重试一次」但治标不治本。根治要么让 LLMRouter 支持 `response_format: json_object`，要么给判定器配一个支持结构化输出的模型。现状是安全的（降级为可见的 `citation_judge_unavailable` soft finding，不假装通过），代价是这部分引用本轮没被检查<br>📐 **v0.7 裁定候选（补数）**：R1–R3 三轮在 `z-ai/glm-5.3-flash` 上判定器 JSON 失败率 **0%**（CHANGELOG v0.6.0「数字」段；R1 T1+T3、R2 T2+T4、R3 四课题全量）。上面的 2–6% 是 kimi-k2.6 的数。**v0.7 R4 用第二 provider 复跑一课题仍 0% → 关闭**；否则 `CallOptions.responseFormat` 进 v0.8。见 `DEVELOPMENT_PLAN_v0.7.md` §五 |
 | V13 | 判定 prompt 对「凭空归因」的口径 | P8-G5 实测：难档唯一稳定的漏报模式是「草稿给出卡片里没有的归因解释」。prompt 写的是「声称了卡片里明确没有的结果 = conflict」，模型读成「卡片没覆盖 → unclear」。两种读法都讲得通，是 prompt 的歧义而非模型的错。改口径前要先想清楚：收紧会不会把合法的概括也扫进来（那正是 P3 刻意避免的误报） |
 
-| V15 | 移除 `MCPConnector` 等 deprecated 别名 | P9 已改名 `HttpConnector`（连同 `HttpConnectorConfig` / `HttpTool`）并保留三个别名兼容外部引用。v0.3 可删——但要先确认没有外部集成在用旧名 |
-| V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估<br>⚠️ **v0.6 G-1 做了用户可见的一半**：`defaultModel` 配置现在三个入口（CLI/HTTP/agent）都真的读（CLI 此前整条不读，V40 形状第 8 例），主要 LLM 命令加 `--model` 覆盖。分「子代理类型」的模型配置项 v0.4 已有（subAgentModel_*），与 V7 的联合评估仍悬。 |
-| V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等 |
-| V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎 |
+| V15 | 移除 `MCPConnector` 等 deprecated 别名 | P9 已改名 `HttpConnector`（连同 `HttpConnectorConfig` / `HttpTool`）并保留三个别名兼容外部引用。v0.3 可删——但要先确认没有外部集成在用旧名<br>✅ **已完成（v0.5.0 闸门 F-3，本次补标）**：全仓 `MCPConnector` 零引用；CHANGELOG「废弃周期已随 v0.4.0 走完，全仓库确认零活引用后删除」 |
+| V16 | 子代理独立模型暴露成用户配置项 | 现状：`SubAgentConfig.model` 是代码内配置，全部落到 `LLMRouter.DEFAULT_MODEL`。「重任务用强模型、检索摘要用快模型」的收益要与 V7 一起评估<br>⚠️ **v0.6 G-1 做了用户可见的一半**：`defaultModel` 配置现在三个入口（CLI/HTTP/agent）都真的读（CLI 此前整条不读，V40 形状第 8 例），主要 LLM 命令加 `--model` 覆盖。分「子代理类型」的模型配置项 v0.4 已有（subAgentModel_*），与 V7 的联合评估仍悬。<br>🔒 **v0.7 裁定关闭**：用户可见的一半（`defaultModel` 三入口真读 + `--model`）v0.6 G-1 已做；「与 V7 联合评估」因 V7 已删无对象；`subAgentModel_*` 配置项 v0.4 已有。不再悬着 |
+| V17 | MCP 长任务的进度回传 | 现状：超时前 MCP 侧只轮询任务句柄，进度不回传客户端。MCP 协议有 progress notification，接上后外部 agent 能看到「精读第 7/20 篇」而不是干等<br>✅ **已完成（v0.4 P14，本次补标）**：`backend/src/mcp/` 9 处 progress notification；CHANGELOG「MCP 进度回传（V17）」 |
+| V18 | `capabilities --probe` 结果缓存 | 现状：每次 probe 都 spawn 子进程（openmm/opentrons 各一次，秒级）。外部 agent 反复调 `research_capabilities(probe=true)` 会白等。缓存必须带失效条件（venv 变更），否则它会撒谎<br>✅ **已完成（v0.4 P14，本次补标）**：probe 缓存带 venv 失效判据；CHANGELOG「probe 缓存带 venv 失效判据（V18）」 |
 | V20 | `backend/src/index.ts` 的 `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR` | P10 lane D-c 发现：`config/index.ts` 的 `dataDir()` 认这个环境变量，`index.ts` 里的 `CONFIG_DIR` 是硬编码 `~/.spark-research`。默认设置下无害，但意味着测试注入的临时工作区对 `auth` 命令无效，两条路径对同一份 config.json 有两种解析<br>✅ **v0.4 P11 lane R-d 已消化**：`index.ts` 的 `CONFIG_DIR` 改为调用 `config/index.ts` 的 `dataDir()`，两条路径对同一份 config.json 归一解析；顺带清掉已死的 `homedir` import 与 `auth` 成功提示里的硬编码路径。 |
 | V21 | 超时类环境变量前缀不统一 | P10 收口时新登记的四个超时用了 `SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS`，而仓库既有约定是 `SPARK_RESEARCH_*`（如 `SPARK_RESEARCH_MCP_TIMEOUT_MS`）。**没有在 P10 一并改齐是刻意的**：v0.2.1 的 MCP 工具描述里已经把 `SPARK_TASK_TIMEOUT_MS` 写给外部 agent 看了，改名是 breaking change，要走废弃周期 |
 | V22 | **`capabilities` 对外广播了一个无法调用的技能（自描述面撒谎）** | P10 的 D-12 门禁发现 `backend/src/proteins/analysis.ts` 只被测试引用；v0.4 方案制订时进一步核实，**比「少个入口」严重**：`capabilities --json` 把 `protein-analysis` 当**可用能力**完整广播——带描述、`triggers`（「这个蛋白长什么样」「有没有可用的结构」）、connector 清单、`validation` 文件列表，而 CLI / HTTP / MCP **三个入口全无**（实测 10 个技能里唯一一个；它的 SKILL.md 里也是唯一没有 CLI 示例的）。外部 agent 读了 triggers 会确信自己能调用它。**这不是完整性缺口，是自描述面在对外撒谎**——AD-12「能力声称必须机器可核」的直接违反，而现有门禁只查孤儿模块、没查技能可达性。另注：它列的 `validation` 第二项 `tests/integration/protein_record.test.ts` 属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。处置见 v0.4 的 P11 lane R-d：补入口或从技能目录撤下，二选一不许悬着<br>✅ **v0.4 P11 lane R-d 已消化**：`protein-analysis` 补齐三个真实入口——CLI `spark-research protein <query>`、HTTP `POST /api/proteins/analyze`、MCP 工具 `protein_analyze`（MCP 工具数 29 → 30），SKILL.md 补上此前唯一缺失的 CLI 示例。**并把判据做成门禁**：`narrative_parity.test.ts` 第 7 条断言每个技能至少有一条可达入口，登记表的每一条都去 `index.ts` 的 `switch(cmd)` case 字面量 / `MCP_TOOLS` 数组 / `capabilities` skills 列表三处对账（不靠散文正则）。阴性对照已由主会话独立复跑：拆掉 `case "protein":` → 门禁立刻红。 |
