@@ -70,7 +70,7 @@ spark-research mcp    # stdio 传输
 - `exp_design`：要把一个假设变成可执行的干实验（in silico）算例时。只建实验记录、不开始跑（状态停在 design）。
 - `exp_run`（长任务，同步等待）：exp_design 建好之后，真正提交算例并等结果时。跑完自动回收产出进 artifact、生成 observation record 并进入 analyze 状态。
 - `exp_list`：要看项目里的干实验都在什么状态时（哪些还没跑、哪些失败了可重试）。
-- `protein_analyze`：要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
+- `protein_analyze`：要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑 MD 干实验之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置（本仓库目前不提供对接/docking 能力，exp_design 的两个平台 pyref/openmm 都没有对接类 kind）。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
 - `lab_compile`：要把一个自然语言湿实验方案变成可执行、可审计的协议时。做三件事并停下：编译成 Opentrons Python Protocol API v2 脚本 → 过 4 条安全门规则 → 停在 awaiting_approval。
 - `lab_status`：要看湿实验链上的实验处在哪一步时（尤其是「我编译完了，人批了没」「批完执行了没」）。
 - `records_timeline`：要回答「这个课题最近发生了什么」「某类记录有哪些」时。证据图的时间线视图，8 类 record（idea / decision / experiment / observation / reading / conclusion / paper / artifact）。
@@ -160,10 +160,10 @@ spark-research mcp    # stdio 传输
 - `modalEnvironment`（默认 —，env `SPARK_RESEARCH_MODAL_ENVIRONMENT`）：Modal 账户的 environment 名（多环境账户才需要；不填走账户默认环境）
 - `dataDir`（默认 —，env `SPARK_RESEARCH_DATA_DIR`）：工作区根目录（默认 ~/.spark-research）
 - `originAllowlist`（默认 —，env `SPARK_RESEARCH_ORIGIN_ALLOWLIST`）：HTTP 服务器额外信任的 Origin 主机名（逗号分隔）；本地 localhost/127.0.0.1（任意端口）恒信任，无需在此列出
-- `httpTimeoutMs`（默认 30000，env `SPARK_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）
-- `llmTimeoutMs`（默认 120000，env `SPARK_LLM_TIMEOUT_MS`）：单次 LLM 调用的超时上限（毫秒）
-- `kernelTimeoutMs`（默认 120000，env `SPARK_KERNEL_TIMEOUT_MS`）：单次 Python kernel execute 的超时上限（毫秒）
-- `taskTimeoutMs`（默认 600000，env `SPARK_TASK_TIMEOUT_MS`）：server 长任务整个生命周期的超时上限（毫秒）
+- `httpTimeoutMs`（默认 30000，env `SPARK_RESEARCH_HTTP_TIMEOUT_MS`）：单次 connector HTTP 请求的超时上限（毫秒）
+- `llmTimeoutMs`（默认 120000，env `SPARK_RESEARCH_LLM_TIMEOUT_MS`）：单次 LLM 调用的超时上限（毫秒）
+- `kernelTimeoutMs`（默认 120000，env `SPARK_RESEARCH_KERNEL_TIMEOUT_MS`）：单次 Python kernel execute 的超时上限（毫秒）
+- `taskTimeoutMs`（默认 600000，env `SPARK_RESEARCH_TASK_TIMEOUT_MS`）：server 长任务整个生命周期的超时上限（毫秒）
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
