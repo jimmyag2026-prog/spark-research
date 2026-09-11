@@ -89,7 +89,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
       run: async (task) => {
         task.progress(0, 1, `检索「${query}」`);
         // W7 alpha.2 收口：与 `lit search` 同一默认排序（V67 blended），Web 面不落后于 CLI（AD-7）。
-        const result = await ctx.searcher().search(query, { sources, perSource: limit, limit, rank: "blended" });
+        const result = await ctx.searcher().search(query, { sources, limit, rank: "blended" });
         task.progress(1, add ? 2 : 1, `${result.papers.length} 篇候选`);
         if (!add) {
           return { query, sources: result.sources, papers: result.papers, added: null, ...counts(result) };

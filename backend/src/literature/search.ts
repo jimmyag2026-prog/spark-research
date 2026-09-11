@@ -77,6 +77,15 @@ const BLENDED_CITATION_WEIGHT = 1;
 // 不能反而把它们排到检索式直接命中但内容偏题的新论文后面。
 const BLENDED_YEAR_HALF_LIFE = 12;
 
+// V67 深度 / 用户 2026-09-11 拍板：blended 档默认每源抓取池从 10 加深到 30。
+// 出处：docs/devlog/W7-B1.md §四「真实召回核验」——`--limit 10`（即
+// perSource=10）下跨源重叠太稀薄，hits 退化成准被引排序，blended 没有额外空间
+// 纠正；`--limit 50` 复现时才看到 V67 描述的病灶真正发作（RFdiffusion 从
+// top10 外的 20/28 拉回 top10 内的 6/5）。30 是「浅池不够、50 又是特地复现用的
+// 极端值」之间的默认档位。只在 blended 档且调用方没有显式给 perSource 时生效——
+// 显式给的优先，`--rank hits` 的既有回归钉子（perSource 默认 10）不受影响。
+const BLENDED_DEEP_POOL = 30;
+
 function knownCitationFactor(citedByCount: number, weight: number): number {
   return 1 + weight * Math.log1p(Math.max(0, citedByCount));
 }
@@ -196,7 +205,11 @@ export class LiteratureSearcher {
 
   async search(query: string, options: LiteratureSearchOptions = {}): Promise<LiteratureSearchResult> {
     const sources = options.sources ?? DEFAULT_SEARCH_SOURCES;
-    const perSource = options.perSource ?? 10;
+    // rank 要在算 perSource 之前先解出来（下面 BLENDED_DEEP_POOL 判据要用它）；
+    // 类级默认仍是 "hits"，理由见下面 `applyRank` 调用点之前的既有注释（V67 2.3）。
+    const rank = options.rank ?? "hits";
+    const deepPoolApplied = options.perSource === undefined && rank === "blended";
+    const perSource = options.perSource ?? (rank === "blended" ? BLENDED_DEEP_POOL : 10);
 
     const settled = await Promise.all(
       sources.map((source) => this.searchOne(source, query, perSource)),
@@ -205,7 +218,15 @@ export class LiteratureSearcher {
     const all: Paper[] = [];
     const statuses: SourceStatus[] = [];
     for (const { status, papers } of settled) {
-      statuses.push(status);
+      // 深池默认生效时如实标注在每个成功源上（AD-12：结果怎么来的要可见）；
+      // skipped/failed 的源没有「抓了多少池子」这件事，不掺和进去。
+      const note =
+        deepPoolApplied && status.outcome === "ok"
+          ? status.note
+            ? `${status.note}；深池 ${BLENDED_DEEP_POOL}/源（blended 默认）`
+            : `深池 ${BLENDED_DEEP_POOL}/源（blended 默认）`
+          : status.note;
+      statuses.push(note === status.note ? status : { ...status, note });
       all.push(...papers);
     }
 
@@ -218,7 +239,7 @@ export class LiteratureSearcher {
     // V67 的证据（R1/R2）全部来自 `lit search` 这个人类入口，不是内部检索候选的相关性——
     // 所以「默认 blended」只在 CLI 层落地（cli.ts 的 parseRank 不给 `--rank` 时回落到
     // DEFAULT_RANK_MODE 并显式传参），类级默认保持 v0.6 的 "hits"，不静默牵连其它调用方。
-    const rank = options.rank ?? "hits";
+    // （`rank` 已在方法顶部算 perSource 时解出，这里直接复用，不重复 `options.rank ?? "hits"`。）
     const { papers: ranked, note: rankNote } = applyRank(merged, rank);
     return {
       query,
