@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { ConnectorRegistry } from "../../backend/src/connectors/registry";
-import { MCP_TOOLS, MCP_WITHHELD } from "../../backend/src/mcp/tools";
+import { MCP_TOOLS, MCP_WITHHELD, type McpToolDef } from "../../backend/src/mcp/tools";
 import { TARGET_KINDS } from "../../backend/src/compute/target";
 import { defaultComputeAdapters } from "../../backend/src/compute/cli";
 import { WET_LEGAL_TRANSITIONS, WET_EXPERIMENT_STATES } from "../../backend/src/lab/wet_models";
@@ -743,6 +743,247 @@ describe("叙事一致性门禁（AD-12）", () => {
     expect(
       recordProblems,
       `以下登记的约定记录生产者核实不通过：\n  ${recordProblems.join("\n  ")}`,
+    ).toEqual([]);
+  });
+
+  // 第 9 条（W7-E1 · BACKLOG V41）：MCP 工具描述的能力声称门禁。
+  //
+  // 背景：MCP 工具描述是暴露给外部 agent 的能力声明——把 chem_depict 的描述改成谎称
+  // 支持 3D docking，没有任何既有测试变红。上面八条断言全部只查 capabilities/skills/
+  // 数字/状态机这些结构化端点，没有一条查 MCP_TOOLS 的自然语言 description 本身；
+  // 而 AD-12 的字面含义（「对外声称的每一项能力必须机器可核」）并不区分「结构化端点撒谎」
+  // 与「自然语言描述撒谎」——两者对外部 agent 的误导是同一件事。
+  //
+  // 判据设计（与本文件其余断言同一套纪律：小而显式的登记表 + 去真实结构化数据源核对，
+  // 不靠对散文做语义理解猜"这句话是不是在撒谎"）：
+  //   ① CAPABILITY_WORDS：能力词类别 → 真源核对函数，登记表**只许缩短、不许悄悄变长**
+  //      （新词类必须先说清楚"这项能力的真源判据是什么"，跟 ALLOWED_ORPHANS 同一套纪律）。
+  //      每个类别的 verify() 都去读真实源码文件做结构性核实（是否存在某个导出函数、
+  //      是否有真实 import+调用边、注册表里是否真的有非空条目），不是关键词全仓库模糊搜索。
+  //   ② 提取："声称"的判据是「一句话里出现了能力词，且同一句里没有出现否定标记」——
+  //      句子边界用硬标点（。！？换行）切，不用逗号/顿号/破折号切，因为本仓库大量描述
+  //      用"要 X——其实不做 X"这种跨读一整句才成立的免责声明句式（chem_depict 现有文案
+  //      正是这种写法：「需要 3D 构象/对接姿态——这个工具只画 2D 结构图，不算 3D 坐标，
+  //      也不做对接」，否定标记在破折号之后；若按逗号/破折号切句会把否定标记切到别的
+  //      分句里，导致前半句被误判成"声称"）。
+  //   ③ 否定标记宁可判定过宽（把更多话当免责声明放过）也不判定过窄（把免责声明当声称
+  //      抓起来）——后一个方向的误判是灾难性的：会逼着本来诚实的免责声明被迫改写得更
+  //      别扭才能过关。`(?<!有)没有` 专门排除"有没有实验结构"这类反问句里的"没有"
+  //      被误当否定标记——这是实测踩到的边界情况（protein_analyze 描述原文里就有
+  //      "这个蛋白有没有实验结构"，若不排除会把同一句里出现的其他能力词误判成免责声明）。
+  //
+  // 顺带发现并修正的一处不实措辞（非 chem_depict）：protein_analyze 原描述把「对接」
+  // 列为 exp_design 之后可能要跑的干实验类型之一（"准备跑干实验（MD / 对接）之前……"）——
+  // 但 exp_design 的两个平台 pyref/openmm 的 kinds 分别只有 damped-oscillator 与
+  // water-box-md，全仓库都没有任何对接/docking 的 kind 或实现。这句话把"用户可能想做
+  // 对接"（合理，protein_analyze 确实能作为选构象的前置）悄悄读成"这条链路支持对接"
+  // （不合理）。已改成只提 MD，并显式加一句现状说明。见 docs/devlog/W7-E.md。
+  //
+  // 阴性对照：给 chem_depict 描述追加一句无否定标记的独立句子"本工具还支持 3D docking。"
+  // → 3D/docking/对接 类的真源核对函数返回 false（backend/src/chem、backend/src/proteins
+  // 两个仓库里唯一可能承载这类计算的目录，都核实不到任何 dock/对接 相关实现）→ 红。
+  // 真实跑法与红/绿记录见 docs/devlog/W7-E.md「E-1」一节。
+
+  const NEGATION_PATTERN = /不算|不做|不能|不可|不支持|并非|并不|无法|(?<!有)没有|非(?=[A-Za-z0-9])/;
+
+  function splitSentences(text: string): string[] {
+    return text
+      .split(/[。！？\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  interface CapabilityClaim {
+    tool: string;
+    word: string;
+    sentence: string;
+  }
+
+  function extractCapabilityClaims(tools: readonly McpToolDef[], words: readonly string[]): CapabilityClaim[] {
+    const claims: CapabilityClaim[] = [];
+    for (const tool of tools) {
+      for (const sentence of splitSentences(tool.description)) {
+        if (NEGATION_PATTERN.test(sentence)) continue; // 整句按免责声明/条件描述处理，不算声称
+        for (const word of words) {
+          const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          // 纯 ASCII 的能力词（3D / GPU / docking / Modal / fulltext …）要求词边界——
+          // 否则 "a1b2c3d4" 这类十六进制示例 id 里会被误判命中 "3d"。中文能力词
+          // （对接/全文/真检索/实时/远端）不加词边界：\b 只识别 \w（ASCII 字母数字下划线）
+          // 与非 \w 的过渡，中文字符本身就落在"非 \w"一侧，两个中文字相邻时永远没有 \b
+          // 过渡——加了词边界反而会让中文词永远匹配不到，方向搞反。
+          const isAsciiWord = /^[A-Za-z0-9-]+$/.test(word);
+          const pattern = isAsciiWord ? `\\b${escaped}\\b` : escaped;
+          const re = new RegExp(pattern, "i");
+          if (re.test(sentence)) claims.push({ tool: tool.name, word, sentence });
+        }
+      }
+    }
+    return claims;
+  }
+
+  // 真源①：3D / docking / 对接——backend/src/chem 与 backend/src/proteins 是仓库里
+  // 唯一可能承载「结构计算/对接」这类能力的目录（chem_depict 只画 2D 结构图，
+  // protein_analyze 只查结构数据库元数据）；两处都没有任何 dock/对接 相关实现。
+  function verifyNoDocking(): { exists: boolean; detail: string } {
+    const dirs = [join(SRC, "chem"), join(SRC, "proteins")];
+    for (const dir of dirs) {
+      for (const file of walkTs(dir)) {
+        const src = readFileSync(file, "utf8");
+        if (/\bdock/i.test(src) || src.includes("对接")) {
+          return {
+            exists: true,
+            detail:
+              `${relative(REPO_ROOT, file)} 里发现了 dock/对接 字样——如果这是真实实现，` +
+              `请更新本判据；如果只是注释提到，请把本判据的排除范围写清楚`,
+          };
+        }
+      }
+    }
+    return {
+      exists: false,
+      detail:
+        "backend/src/chem 与 backend/src/proteins（唯一可能承载结构/对接计算的目录）下核实不到" +
+        "任何 dock/对接 相关实现——本仓库目前不提供 3D 对接能力",
+    };
+  }
+
+  // 真源②：全文/fulltext——literature/pdf_text.ts 定义 extractPdfText，
+  // literature/cli.ts 是否真的 import 并调用它（同 STORE_WRITE_BINDINGS 的核实套路，
+  // 这里核实的是"读方法"而不是"写方法"）。
+  function verifyFulltextExtraction(): { exists: boolean; detail: string } {
+    const pdfTextAbs = join(SRC, "literature/pdf_text.ts");
+    const cliAbs = join(SRC, "literature/cli.ts");
+    let pdfTextSrc: string;
+    let cliSrc: string;
+    try {
+      pdfTextSrc = stripComments(readFileSync(pdfTextAbs, "utf8"));
+    } catch {
+      return { exists: false, detail: "literature/pdf_text.ts 不存在" };
+    }
+    try {
+      cliSrc = stripComments(readFileSync(cliAbs, "utf8"));
+    } catch {
+      return { exists: false, detail: "literature/cli.ts 不存在" };
+    }
+    const hasExtract = /export\s+async\s+function\s+extractPdfText\s*\(/.test(pdfTextSrc);
+    const importsIt = namedRelativeImports(cliSrc, cliAbs).some(
+      (imp) => imp.resolvedNoExt === join(SRC, "literature/pdf_text") && imp.named.includes("extractPdfText"),
+    );
+    const callsIt = /extractPdfText\s*\(/.test(cliSrc);
+    if (hasExtract && importsIt && callsIt) {
+      return {
+        exists: true,
+        detail:
+          "literature/pdf_text.ts 定义 extractPdfText，literature/cli.ts 真实 import 并在精读命令里调用它——" +
+          "全文抽取是真实的生产能力",
+      };
+    }
+    return {
+      exists: false,
+      detail: `extractPdfText 定义存在=${hasExtract} 被 cli.ts import=${importsIt} 被 cli.ts 调用=${callsIt}——全文抽取链路没有完整接上`,
+    };
+  }
+
+  // 真源③：真检索/实时——connectors 的生产 http 客户端默认链是否真的打网络，而不是
+  // 回放层（backend/src/http/fixture.ts 已在 ALLOWED_ORPHANS 里登记"刻意只被测试使用，
+  // 生产走 NativeHttp"，这里核实的正是这条登记是否仍然成立）。
+  function verifyRealSearchTransport(): { exists: boolean; detail: string } {
+    const clientAbs = join(SRC, "http/client.ts");
+    const registryAbs = join(SRC, "connectors/registry.ts");
+    const baseAbs = join(SRC, "connectors/base.ts");
+    let clientSrc: string;
+    let registrySrc: string;
+    let baseSrc: string;
+    try {
+      clientSrc = stripComments(readFileSync(clientAbs, "utf8"));
+      registrySrc = stripComments(readFileSync(registryAbs, "utf8"));
+      baseSrc = stripComments(readFileSync(baseAbs, "utf8"));
+    } catch (e) {
+      return { exists: false, detail: `读取真源文件失败：${(e as Error).message}` };
+    }
+    const nativeIsDefault = /export\s+const\s+defaultHttp\s*:\s*HttpClient\s*=\s*new\s+NativeHttp\s*\(\s*\)/.test(
+      clientSrc,
+    );
+    const registryNoFixture = !/FixtureHttp/.test(registrySrc);
+    const registryUsesRateLimited = /rateLimitedHttp\s*\(\s*\)/.test(registrySrc);
+    const baseFallsBackToDefault = /options\.http\s*\?\?\s*defaultHttp/.test(baseSrc);
+    if (nativeIsDefault && registryNoFixture && registryUsesRateLimited && baseFallsBackToDefault) {
+      return {
+        exists: true,
+        detail:
+          "connectors/registry.ts 未显式传 http 时默认走 rateLimitedHttp()，其内层默认是 " +
+          "http/client.ts 的 defaultHttp=new NativeHttp()，且 registry.ts 里没有 FixtureHttp——生产路径真打网络，不是回放/mock",
+      };
+    }
+    return {
+      exists: false,
+      detail:
+        `nativeIsDefault=${nativeIsDefault} registryNoFixture=${registryNoFixture} ` +
+        `registryUsesRateLimited=${registryUsesRateLimited} baseFallsBackToDefault=${baseFallsBackToDefault}`,
+    };
+  }
+
+  // 真源④：GPU——defaultComputeAdapters() 里是否真有 adapter 的 capabilities().gpus 非空
+  // （与既有"算力执行地"断言同一个注册表，不是另起一份手写清单）。
+  function verifyGpuCapability(): { exists: boolean; detail: string } {
+    const adapters = defaultComputeAdapters();
+    const withGpu = Object.entries(adapters).filter(([, adapter]) => adapter.capabilities().gpus.length > 0);
+    return withGpu.length > 0
+      ? { exists: true, detail: `执行地 [${withGpu.map(([k]) => k).join(", ")}] 的 capabilities().gpus 非空` }
+      : { exists: false, detail: "defaultComputeAdapters() 里没有任何 adapter 的 capabilities().gpus 非空" };
+  }
+
+  // 真源⑤：远端/Modal——TARGET_KINDS 含 modal 且 defaultComputeAdapters() 真注册了它。
+  // 刻意不核实"真实 gateway 是否已验证"——那是 tests/unit/compute_modal.test.ts「等真实
+  // 录制」阴性对照的职责范围，本门禁只核实"远端执行地"这个结构性概念本身存在，两条断言
+  // 分工不同、互不替代（见本文件报告"如实交代"一节）。
+  function verifyModalRemoteCapability(): { exists: boolean; detail: string } {
+    const adapters = defaultComputeAdapters();
+    const hasModal =
+      (TARGET_KINDS as readonly string[]).includes("modal") && Object.prototype.hasOwnProperty.call(adapters, "modal");
+    return hasModal
+      ? {
+          exists: true,
+          detail:
+            "TARGET_KINDS 含 modal 且 defaultComputeAdapters() 注册了 modal adapter（真实 gateway 是否已录制核实" +
+            "由 compute_modal.test.ts 单独把关，不在本门禁范围）",
+        }
+      : { exists: false, detail: "modal 未注册进 defaultComputeAdapters()" };
+  }
+
+  interface CapabilityWordEntry {
+    words: readonly string[];
+    verify(): { exists: boolean; detail: string };
+  }
+
+  const CAPABILITY_WORDS: readonly CapabilityWordEntry[] = [
+    { words: ["3D", "docking", "对接"], verify: verifyNoDocking },
+    { words: ["全文", "fulltext", "full-text"], verify: verifyFulltextExtraction },
+    { words: ["真检索", "实时"], verify: verifyRealSearchTransport },
+    { words: ["GPU"], verify: verifyGpuCapability },
+    { words: ["远端", "Modal"], verify: verifyModalRemoteCapability },
+  ];
+
+  test("第 9 条（W7-E1 · V41）：MCP 工具描述里的能力声称必须对得上真源，不许空口白牙", () => {
+    const problems: string[] = [];
+    for (const entry of CAPABILITY_WORDS) {
+      const claims = extractCapabilityClaims(MCP_TOOLS, entry.words);
+      if (claims.length === 0) continue; // 这个类别在当前描述里没有出现，不必核实
+      const { exists, detail } = entry.verify();
+      if (!exists) {
+        for (const claim of claims) {
+          problems.push(
+            `工具 '${claim.tool}' 的描述声称了能力词 '${claim.word}'，但真源核实不通过：${detail}\n` +
+              `    命中原句：${claim.sentence}`,
+          );
+        }
+      }
+    }
+    expect(
+      problems,
+      `以下 MCP 工具描述声称了真源核实不到的能力（AD-12 在 MCP 描述面的具体形态——外部 agent 会照单全收）：\n  ${problems.join(
+        "\n  ",
+      )}`,
     ).toEqual([]);
   });
 });

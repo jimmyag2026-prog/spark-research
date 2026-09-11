@@ -462,7 +462,7 @@ export const MCP_TOOLS: readonly McpToolDef[] = [
 
   {
     name: "protein_analyze",
-    description: `【何时调】要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑干实验（MD / 对接）之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
+    description: `【何时调】要确定「这个蛋白有没有实验结构、分辨率多少、AlphaFold 预测置信度多高」时，或者准备跑 MD 干实验之前要先选定拿哪个构象做起点时——本工具是 exp_design 的前置（本仓库目前不提供对接/docking 能力，exp_design 的两个平台 pyref/openmm 都没有对接类 kind）。一次调用串联三步：UniProt 查询确定唯一身份 → RCSB PDB 取实验结构元数据（方法/分辨率/发布年份）→ AlphaFold 取预测模型与全局 pLDDT，给出「拿哪个结构去做下游计算」的判断。
 【参数示例】{"query": "hemoglobin subunit beta AND organism_id:9606 AND reviewed:true"} —— UniProt 检索语法；查询越收敛越好，见下面「常见错误」。
 【何时不该用】① 已经知道要用哪个 PDB id、只是想跑仿真——直接 exp_design，不必先过这个工具。② 想找论文/背景调研——那是 lit_search，这个工具只查结构数据库，不查文献。
 【典型链路】protein_analyze → 看返回体最后一段「拿哪个结构去跑干实验」的判断 → 若判断是「该停下」就不要往下走；否则把选定的 PDB id / AlphaFold 模型带进 exp_design。
