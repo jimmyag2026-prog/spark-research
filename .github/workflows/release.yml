@@ -45,9 +45,12 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "发布说明见 CHANGELOG.md 对应版本段。" --verify-tag \
             || gh release view "$GITHUB_REF_NAME" >/dev/null
+      - name: 生成 runtime contract（W8-2：SDK 的生成源，随 Release 挂出）
+        run: ./dist/spark-research contract --write dist/contract.json
       - name: 上传到 Release assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mv dist/spark-research "dist/${{ matrix.asset }}"
           gh release upload "$GITHUB_REF_NAME" "dist/${{ matrix.asset }}" --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/contract.json --clobber

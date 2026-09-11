@@ -16,7 +16,7 @@ export interface UsageCliDeps {
   err?: (line: string) => void;
 }
 
-const HELP = `用法: spark-research usage [--project <slug>] [--json]
+export const USAGE_HELP = `用法: spark-research usage [--project <slug>] [--json]
        spark-research usage api [--json]
 
   不带子命令：显示本项目的 LLM 用量台账（usage.jsonl）：调用数、tokens、已知花费
@@ -65,7 +65,7 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
   const { positional, flags } = parseFlags(args);
 
   if (flags.help === true || args.includes("-h") || positional[0] === "help") {
-    out(HELP);
+    out(USAGE_HELP);
     return 0;
   }
 

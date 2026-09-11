@@ -15,7 +15,7 @@ import { ExtensionGrantStore } from "./grants";
 import { loadExtensionManifest, ExtensionManifestError } from "./types";
 import { loadMcpClientConfig, McpClientConfigError, discoverExternalMcpTools } from "./mcp_client";
 
-const HELP = `spark-research ext —— 扩展装载 + 契约验收（v0.4 P17）
+export const EXT_HELP = `spark-research ext —— 扩展装载 + 契约验收（v0.4 P17）
 
 用法:
   spark-research ext list                          列出 ~/.spark-research/extensions/ 下的扩展
@@ -70,7 +70,7 @@ export async function runExtCommand(argv: string[]): Promise<number> {
     case "help":
     case "--help":
     case "-h": {
-      console.log(HELP);
+      console.log(EXT_HELP);
       return 0;
     }
 
@@ -252,7 +252,7 @@ export async function runExtCommand(argv: string[]): Promise<number> {
     }
 
     default:
-      console.log(HELP);
+      console.log(EXT_HELP);
       return 1;
   }
 }

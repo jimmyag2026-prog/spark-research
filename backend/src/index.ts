@@ -20,6 +20,8 @@ import { runDataCommand } from "./data/cli";
 import { runConfigCommand } from "./config/cli";
 import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
+// W8-2：运行时契约（CLI/HTTP/MCP/配置/导出 manifest schema），SDK 的生成源。实现在 backend/src/contract/**。
+import { runContractCommand } from "./contract/cli";
 import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
@@ -75,6 +77,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
   spark-research data        项目数据导出/导入（JSONL + manifest；--for-sharing 按 AD-16 过滤）
   spark-research capabilities 能力自描述（--json 给 agent，不带则给人看的表格）
+  spark-research contract    运行时契约（--json：CLI/HTTP/MCP/配置/导出 manifest schema，SDK 由它生成）
   spark-research doctor      环境体检（bun / Python 三档依赖 / provider key / 前端产物），缺什么给修复命令
   spark-research config      用户配置（list / get / set / unset / path）
   spark-research new         脚手架（new skill|connector|platform <name>）
@@ -569,6 +572,12 @@ function main() {
     case "caps": {
       runCapabilitiesCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "contract": {
+      runContractCommand(process.argv.slice(3)).then((code) => {
+        process.exitCode = code;
       });
       break;
     }
