@@ -159,6 +159,20 @@ function ApprovalDialog(props: {
                   {" "}
                   <Badge tone="inferred">离机手工</Badge>
                 </Show>
+                {/* V60：词表外试剂——批的人必须看见自己写的原文，安全门（chemical_compatibility /
+                    concentration_limit）对这一步完全没检查过，不是「相容」也不是「安全」。 */}
+                <Show when={step.unrecognizedReagent}>
+                  {" "}
+                  <Badge
+                    tone="rejected"
+                    title="试剂不在词表内：chemical_compatibility / concentration_limit 两条安全规则看不到这一步"
+                  >
+                    词表外，安全规则未覆盖
+                  </Badge>
+                  <Show when={step.unrecognizedReagent?.rawText}>
+                    <span class="faint"> 原文：{step.unrecognizedReagent?.rawText}</span>
+                  </Show>
+                </Show>
               </li>
             )}
           </For>

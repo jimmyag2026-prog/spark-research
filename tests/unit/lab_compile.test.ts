@@ -330,3 +330,69 @@ describe("compileToOpentrons · 体积记账", () => {
     expect(program.source).not.toContain("set_and_wait_for_temperature");
   });
 });
+
+// V60（BACKLOG）：词表外试剂的原文进编译产物。v0.5 只止住了「两种未知试剂塌缩到
+// 同一 reservoir 孔」，用户写的原文本身还是没进产物——人在 lab approve 时看不到
+// 自己写的是「硝酸」。这里测编译器这一半：原文抠不抠得出来、进不进 ProtocolStep。
+describe("ProtocolCompiler · V60 词表外试剂原文进编译产物", () => {
+  test("三种表外试剂各自原文可见，互不干扰", () => {
+    const protocol = compiler.compile("加入100uL硝酸，加入100uL柠檬酸，加入100uL高锰酸钾", { name: "oov" });
+    expect(protocol.steps).toHaveLength(3);
+    expect(protocol.steps.map((s) => s.unrecognizedReagentText)).toEqual(["硝酸", "柠檬酸", "高锰酸钾"]);
+    // 词表外试剂**不**进 params.reagents——那个数组是 safety.ts 四条规则的输入源，
+    // 不能塞一条没有 reagentId 的假条目进去喂它看不懂的东西（见 protocol.ts 里
+    // ProtocolStep.unrecognizedReagentText 字段顶部注释）。
+    for (const step of protocol.steps) {
+      expect(step.params.reagents).toBeUndefined();
+    }
+  });
+
+  test("prepareReagent 同样适用：「配制50mL柠檬酸溶液」抠出「柠檬酸」（去掉体积/动作词/通用后缀「溶液」）", () => {
+    const protocol = compiler.compile("配制50mL柠檬酸溶液", { name: "prep-oov" });
+    expect(protocol.steps).toHaveLength(1);
+    expect(protocol.steps[0]!.action).toBe("prepareReagent");
+    expect(protocol.steps[0]!.unrecognizedReagentText).toBe("柠檬酸");
+  });
+
+  test("词表内试剂行为不变：不设 unrecognizedReagentText，reagents 里正常认得出它", () => {
+    const protocol = compiler.compile("加入100uL盐酸", { name: "vocab" });
+    expect(protocol.steps[0]!.unrecognizedReagentText).toBeUndefined();
+    const reagents = protocol.steps[0]!.params.reagents as Array<{ name: string; reagentId?: string }>;
+    expect(reagents.map((r) => r.name)).toContain("盐酸");
+  });
+
+  test("抠不出非空残留（整句只剩通用液体「样品」）时不瞎猜——不设 unrecognizedReagentText", () => {
+    const protocol = compiler.compile("加入100uL样品", { name: "generic" });
+    expect(protocol.steps[0]!.unrecognizedReagentText).toBeUndefined();
+  });
+});
+
+describe("compileToOpentrons · V60 词表外试剂原文与占位符唯一化", () => {
+  test("原文进编译产物，格式与 BACKLOG 原句一致：未识别试剂#step-1（原文：硝酸）", () => {
+    const protocol = compiler.compile("加入100uL硝酸", { name: "raw" });
+    const program = compileToOpentrons(protocol);
+    expect(program.steps[0]!.summary).toContain("未识别试剂#step-1（原文：硝酸）");
+    expect(program.steps[0]!.summary).toContain("词表外，安全规则未覆盖");
+    expect(program.steps[0]!.unrecognizedReagent).toEqual({ rawText: "硝酸" });
+  });
+
+  test("三种不同的词表外试剂分到三个不同的 reservoir 孔——既有的按步骤唯一化断言必须继续绿（不塌缩）", () => {
+    const protocol = compiler.compile("加入100uL硝酸，加入100uL柠檬酸，加入100uL高锰酸钾", { name: "no-collapse" });
+    const program = compileToOpentrons(protocol);
+    const sourceWells = program.transfers.map((t) => t.from);
+    expect(sourceWells).toHaveLength(3);
+    expect(new Set(sourceWells).size).toBe(3);
+    const reservoirLines = program.source.match(/\[spark-note\] reservoir \S+ = .+/g) ?? [];
+    expect(reservoirLines).toHaveLength(3);
+    expect(new Set(reservoirLines).size).toBe(3);
+  });
+
+  test("词表内试剂编译产物不变：直接显示试剂名，不带「未识别试剂」「词表外」字样", () => {
+    const protocol = compiler.compile("加入100uL盐酸", { name: "vocab-compile" });
+    const program = compileToOpentrons(protocol);
+    expect(program.steps[0]!.summary).toContain("盐酸");
+    expect(program.steps[0]!.summary).not.toContain("未识别试剂");
+    expect(program.steps[0]!.summary).not.toContain("词表外");
+    expect(program.steps[0]!.unrecognizedReagent).toBeUndefined();
+  });
+});

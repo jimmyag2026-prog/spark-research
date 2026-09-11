@@ -252,6 +252,37 @@ test("⑨b 未消费告警在批准弹窗里必须可见（V23）", async ({ pag
   await dialog.getByRole("button", { name: "取消" }).click();
 });
 
+// V60（BACKLOG）：词表外试剂的用户原文必须真正进到编译产物、并在批准弹窗里被人看见——
+// v0.5 只止住了「两种未知试剂塌缩到同一 reservoir 孔」，用户写的「硝酸」两个字
+// 本身没有保留下来，人在 lab approve 时看不到自己批的是什么（AD-6 署名审批失去对象）。
+// 与 ⑨b 同一条纪律：新建独立湿实验，不影响 ⑧/⑨ 共用的 "OD 测定" 实验。
+test("⑨c 词表外试剂的原文与「词表外」提示必须在批准弹窗里可见（V60）", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.locator(".bottom");
+  await panel.getByRole("tab", { name: /湿实验/ }).click();
+  await panel.getByRole("button", { name: "＋ 新建" }).click();
+  await panel.getByPlaceholder("标题（可选）").fill("词表外试剂协议");
+  // 「硝酸」不在 REAGENT_PATTERNS 词表内（词表只有强酸/次氯酸盐/氢氧化物/乙醇/过氧化氢
+  // 五类常见项），100uL 在移液器量程与孔板容量内，能顺利过安全门停在 awaiting_approval。
+  await panel.getByPlaceholder(/自然语言协议/).fill("加入100uL硝酸");
+  await panel.getByRole("button", { name: "编译 + 过安全门" }).click();
+  await waitIdle(page);
+
+  await panel
+    .locator(".exp-list .nav-item")
+    .filter({ hasText: "词表外试剂协议" })
+    .first()
+    .click();
+  await panel.getByRole("button", { name: "批准执行…" }).click();
+
+  const dialog = page.getByRole("dialog", { name: /批准执行湿实验/ });
+  await expect(dialog).toBeVisible();
+  // 原文与「词表外」提示都必须在批的人眼前——不是只进了 JSON、CLI 才看得到。
+  await expect(dialog.getByText("词表外，安全规则未覆盖")).toBeVisible();
+  await expect(dialog.getByText(/原文：硝酸/)).toBeVisible();
+  await dialog.getByRole("button", { name: "取消" }).click();
+});
+
 test("⑩ 时间线呈现完整研究线索，且明暗主题都能用", async ({ page }) => {
   await page.goto("/");
 

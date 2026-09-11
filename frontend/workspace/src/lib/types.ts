@@ -129,7 +129,17 @@ export interface WetExperiment {
   robotType: string | null;
   apiLevel: string | null;
   deck: Array<{ slot: string; load: string; label?: string }>;
-  compiledSteps: Array<{ stepId: string; action: string; detail?: string; execution?: string }>;
+  compiledSteps: Array<{
+    stepId: string;
+    action: string;
+    detail?: string;
+    execution?: string;
+    // V60（BACKLOG）：这一步引用的试剂一个都不在词表内时才有值——`rawText` 是解析器
+    // 从用户原句里抠出来的候选原文（抠不出时字段仍在，只是没有 rawText）。批准弹窗
+    // 必须显示它并标「词表外，安全规则未覆盖」：人批准的是物理世界的操作（AD-6），
+    // 不能批一个自己看不到原文、也不知道安全规则根本没检查过的东西。
+    unrecognizedReagent?: { rawText?: string };
+  }>;
   compileWarnings: string[];
   // R-d-3（v0.4 P11 lane R-d / V23）：编译器看到了量纲/试剂/浓度/生物安全等级之类的信号，
   // 但没有任何安全门规则消费它——「用户写了但安全门没看见」。concentration_limit /
