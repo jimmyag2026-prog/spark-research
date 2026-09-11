@@ -11,6 +11,7 @@ import {
   type RankMode,
 } from "./models";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
+import { segmentQuery, type SegmentResult } from "./segment";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
 //
@@ -184,6 +185,16 @@ export function applyRank(papers: Paper[], rank: RankMode): RankResult {
   }
 }
 
+// V65 残余：粗略判定「含 CJK」——只需要回答「有没有中文」这一个判据，不需要精确到
+// 具体文字系统。基本 CJK 统一表意文字区（一-鿿）覆盖绝大多数简繁中文场景，
+// 够用；判过头（比如漏判扩展区生僻字）不是本判据要解决的问题。
+const CJK_RANGE = /[一-鿿]/;
+function containsCJK(text: string): boolean {
+  return CJK_RANGE.test(text);
+}
+
+export type Segmenter = (text: string) => Promise<SegmentResult>;
+
 function errorSummary(error: unknown): string {
   if (error instanceof Error) {
     // Error message 里只可能是我们自己构造的「HTTP xxx」或参数校验文案，
@@ -195,12 +206,19 @@ function errorSummary(error: unknown): string {
 
 export class LiteratureSearcher {
   private registry: ConnectorRegistry;
+  // V65 残余：真实分词器默认 `segmentQuery`（jieba，见 segment.ts）；测试注入假实现
+  // 验证「拆词入口」本身的判据（含 CJK / 无空格 / 0 命中三个条件），不依赖真装了 jieba。
+  private segmenter: Segmenter;
 
-  constructor(registryOrOptions: ConnectorRegistry | ConnectorOptions = {}) {
+  constructor(
+    registryOrOptions: ConnectorRegistry | ConnectorOptions = {},
+    options: { segmenter?: Segmenter } = {},
+  ) {
     this.registry =
       registryOrOptions instanceof ConnectorRegistry
         ? registryOrOptions
         : new ConnectorRegistry(registryOrOptions).registerBuiltins();
+    this.segmenter = options.segmenter ?? segmentQuery;
   }
 
   async search(query: string, options: LiteratureSearchOptions = {}): Promise<LiteratureSearchResult> {
@@ -293,13 +311,31 @@ export class LiteratureSearcher {
     // 打分合并，并在 status.note 里**如实标注**这是拆词合并的结果（不是原查询命中）。
     // 只对 aminer 生效——其它源是真正的关键词检索，实测无此形态，不做没有证据的泛化。
     if (source !== "aminer" || first.status.outcome !== "ok" || first.papers.length > 0) return first;
-    const terms = query.split(/\s+/).filter(Boolean);
+    let terms = query.split(/\s+/).filter(Boolean);
+    let segmentedByJieba = false;
+    let segmentFailureReason: string | null = null;
+    // V65 残余：空格拆词兜底认不出中文连写复合词（中文本就没有空格，"运动意图解码"
+    // 整段被当成 1 个词，terms.length===1，走不进下面的多词合并）。原查询 0 命中、
+    // 没有空格可拆、但含 CJK 时，先试一次分词器——分出的词再走下面**同一套**
+    // 「按命中词数合并」逻辑，不额外发明第二套合并规则。纯英文 / 已经有空格的查询
+    // 不碰分词器（前者没有 CJK，后者已经有 terms 可用）。
+    if (terms.length < 2 && containsCJK(query)) {
+      const segmented = await this.segmenter(query);
+      if (segmented.terms && segmented.terms.length >= 2) {
+        terms = segmented.terms;
+        segmentedByJieba = true;
+      } else {
+        segmentFailureReason = segmented.reason ?? "分词结果为空或不足 2 词";
+      }
+    }
     if (terms.length < 2) {
       return {
         ...first,
         status: {
           ...first.status,
-          note: "0 命中。AMiner 按词序列匹配标题；若查询是多个概念连写，用空格分开可触发拆词兜底",
+          note:
+            "0 命中。AMiner 按词序列匹配标题；若查询是多个概念连写，用空格分开可触发拆词兜底" +
+            (segmentFailureReason ? `（分词器不可用，退回空格拆词：${segmentFailureReason}）` : ""),
         },
       };
     }
@@ -336,7 +372,9 @@ export class LiteratureSearcher {
       .slice(0, perSource)
       .map((k) => byKey.get(k)!);
     const noteBits = [
-      `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
+      segmentedByJieba
+        ? `原查询 0 命中（AMiner 按词序列匹配）；jieba 分词合并（${useTerms.length} 词：${useTerms.join("、")}）`
+        : `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
     ];
     if (terms.length > useTerms.length) noteBits.push(`仅取前 ${useTerms.length} 词`);
     if (failedTerms.length > 0) noteBits.push(`词 [${failedTerms.join("、")}] 查询失败未计入`);

@@ -10,6 +10,7 @@ import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { resolvePython } from "../simulation/platform";
 import { SimulationRegistry } from "../simulation/registry";
 import { OpentronsSimulatorBackend } from "../lab/wet_backend";
+import { probeSegmenter as probeSegmenterViaSegmentQuery } from "../literature/segment";
 import { PACKAGE_VERSION } from "../version";
 
 // W1-d（B-a 打包分发）：`spark-research doctor`。
@@ -68,6 +69,13 @@ export interface DoctorReport {
    * 就是本轮反复修的那种病（V34 默认源、V37 auth 口径、modal 凭据字段名）。
    */
   computeTargets: ComputeTargetStatus[];
+  // V65 残余：中文分词（jieba）——不进 `tiers[]`，因为它不是「这档能力整体不可用」，
+  // 是「AMiner 中文拆词兜底退化回 v0.6 的空格拆词」，语义与 core/science/lab 三档不同，
+  // 混进去会让上面「三档」的既有文案（doctor/cli.ts）变得不准确。
+  // 可选字段：`tests/unit/doctor.test.ts`（不在本 lane 足迹内）手写了几份 `DoctorReport`
+  // 字面量喂给 `renderDoctor()`，不知道这个新字段——可选，不强改那份不属于本 lane 的测试；
+  // `buildDoctorReport()`（真实生产路径）始终会填上它，不会漏。
+  segmenter?: { available: boolean; reason: string | null };
   frontendBuilt: boolean;
   frontendDir: string;
   dataDir: string;
@@ -101,6 +109,7 @@ export interface DoctorOptions extends ConfigOptions {
   // 也是阴性对照①的钩子——见 tests/unit/doctor.test.ts。
   probeScience?: (python: string) => Promise<TierProbeResult>;
   probeLab?: (python: string) => Promise<TierProbeResult>;
+  probeSegmenter?: (python: string) => Promise<TierProbeResult>;
   probePython?: (python: string) => Promise<PythonStatus>;
   env?: Record<string, string | undefined>;
   now?: () => Date;
@@ -137,6 +146,13 @@ async function defaultProbeLab(python: string): Promise<TierProbeResult> {
   const backend = new OpentronsSimulatorBackend({ python });
   const status = await backend.available();
   return { ok: status.ok, reason: status.reason };
+}
+
+// V65 残余：复用 `literature/segment.ts` 自己的 `probeSegmenter`（真跑一次
+// `segmentQuery`），不在这里另起一套 `-c "import jieba"` 判断——两处各判一次
+// 就是本轮反复修的那种病（V34 默认源 / V37 auth 口径 / modal 凭据字段名）。
+async function defaultProbeSegmenter(python: string): Promise<TierProbeResult> {
+  return probeSegmenterViaSegmentQuery(python);
 }
 
 // F-c（BACKLOG V27 定性 lane）：`doctor` 的一个真实误报。
@@ -188,8 +204,9 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
   const simulationRoot = options.simulationRoot ?? mkdtempSync(join(tmpdir(), "spark-doctor-"));
   const probeScience = options.probeScience ?? ((py: string) => defaultProbeScience(py, simulationRoot));
   const probeLab = options.probeLab ?? defaultProbeLab;
+  const probeSegmenter = options.probeSegmenter ?? defaultProbeSegmenter;
 
-  const [science, lab] = await Promise.all([probeScience(python), probeLab(python)]);
+  const [science, lab, segmenter] = await Promise.all([probeScience(python), probeLab(python), probeSegmenter(python)]);
 
   const tiers: DependencyTierStatus[] = [
     {
@@ -252,6 +269,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     tiers,
     providers,
     computeTargets,
+    segmenter: { available: segmenter.ok, reason: segmenter.ok ? null : segmenter.reason },
     frontendBuilt,
     frontendDir,
     dataDir: dataDir(options),
