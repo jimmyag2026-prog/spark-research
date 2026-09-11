@@ -86,16 +86,18 @@ export async function runProteinCommand(args: string[], deps: ProteinCliDeps = {
     return 1;
   }
 
-  const registry =
-    deps.registry ??
-    new ConnectorRegistry({
-      http: deps.http,
-      credentials: deps.credentials ?? new CredentialStore({ root: deps.root }),
-    }).registerBuiltins();
-
   let project: Project | null = null;
   try {
     project = openProjectResolved(manager, flagString(flags.project));
+    // alpha.6（R4 P0-2）：registry 在项目解析之后建，connector raw 落项目目录。
+    const registry =
+      deps.registry ??
+      new ConnectorRegistry({
+        http: deps.http,
+        credentials: deps.credentials ?? new CredentialStore({ root: deps.root }),
+        rawSink: project.raw(),
+        command: "protein",
+      }).registerBuiltins();
     const analysis = new ProteinAnalysis({ registry, records: project.records() });
     const persist = flags["no-persist"] !== true;
     const result = await analysis.analyze(query, { persist });

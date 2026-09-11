@@ -153,21 +153,26 @@ export class LibraryStore {
 
   constructor(dbPath: string, options: LibraryStoreOptions = {}) {
     this.db = new Database(dbPath);
+    this.db.exec("PRAGMA busy_timeout = 5000;"); // V80：先于 journal_mode
     this.db.exec("PRAGMA journal_mode = WAL;");
-    this.db.exec("PRAGMA busy_timeout = 5000;"); // V80（v0.7 C-4）
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.records = options.records;
     this.initSchema();
   }
 
   initSchema(): void {
-    this.db.exec(SCHEMA_SQL);
-    // v0.7 W7-D1（V30）：删论文改 tombstone——`removed_at` 非空即视为已移除；get/list/count 默认不看。
-    const columns = new Set(
-      (this.db.query("PRAGMA table_info(papers)").all() as Array<{ name: string }>).map((c) => c.name),
-    );
-    if (!columns.has("removed_at")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_at TEXT");
-    if (!columns.has("removed_reason")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_reason TEXT");
+    // alpha.6：建表 + 迁移在 IMMEDIATE 事务内（并发首开的 ALTER 竞态，见 records.ts initSchema 注释；
+    // R4 复现的 `database is locked` 有一半就出在这里的 library-open）。
+    const tx = this.db.transaction(() => {
+      this.db.exec(SCHEMA_SQL);
+      // v0.7 W7-D1（V30）：删论文改 tombstone——`removed_at` 非空即视为已移除；get/list/count 默认不看。
+      const columns = new Set(
+        (this.db.query("PRAGMA table_info(papers)").all() as Array<{ name: string }>).map((c) => c.name),
+      );
+      if (!columns.has("removed_at")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_at TEXT");
+      if (!columns.has("removed_reason")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_reason TEXT");
+    });
+    tx.immediate();
   }
 
   // 入库。已存在同一篇（DOI 相同或标题模糊匹配）时合并字段而不是插重复行。
@@ -405,7 +410,7 @@ export class LibraryStore {
     const tx = this.db.transaction(() => {
       for (const r of rows) ins.run(...cols.map((c) => (r[c] ?? null) as string | number | null));
     });
-    tx();
+    tx.immediate();
     return rows.length;
   }
 

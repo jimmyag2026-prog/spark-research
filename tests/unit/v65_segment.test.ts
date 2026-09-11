@@ -62,7 +62,8 @@ describe("V65 残余 · 中文分词器拆词入口", () => {
     expect((segmenter as unknown as { calls: string[] }).calls).toEqual(["运动意图解码"]);
     // 最终跨论文顺序由 dedupePapers/applyRank（V67，另一层，本文件不测它）决定——
     // 这里只断言「分词合并本身确实把两篇论文都捞回来了」，不断言它们之间谁先谁后。
-    expect(result.papers.map((p) => p.ids.aminer).sort()).toEqual(["p1", "p2"]);
+    // alpha.6（R4 P1-6）：p1 三词都命中、p2 只命中「意图」一词——只取 ≥2 词同时命中，p2 被排除。
+    expect(result.papers.map((p) => p.ids.aminer).sort()).toEqual(["p1"]);
     const status = result.sources.find((s) => s.source === "aminer")!;
     expect(status.outcome).toBe("ok");
     expect(status.note).toContain("jieba 分词合并");

@@ -371,7 +371,18 @@ export class LiteratureSearcher {
     // 命中词数多者优先；同分保持首次出现顺序（各词内部本来就是源侧相关性序）。
     // 原始序号先固化——比较器里对正被排序的数组做 indexOf 会拿到半排状态的错序号。
     const firstSeen = new Map(order.map((k, i) => [k, i] as const));
-    const merged = [...order]
+    // alpha.6（R4 P1-6）：单词命中即入选把「信号解码」的卫星通信论文带进脑机接口前 10——
+    // 多词查询要求 ≥2 词同时命中；一个都没有才退回单词命中并在 note 里说明查准率低。
+    const minHits = Math.min(2, useTerms.length);
+    let pool = order.filter((k) => (hitCount.get(k) ?? 0) >= minHits);
+    let precisionNote: string;
+    if (pool.length === 0) {
+      pool = [...order];
+      precisionNote = `无 ${minHits} 词同时命中，退回单词命中（查准率低，建议换更具体的词）`;
+    } else {
+      precisionNote = `只取 ≥${minHits} 词同时命中（${pool.length} 篇）`;
+    }
+    const merged = pool
       .sort((a, b) => (hitCount.get(b) ?? 0) - (hitCount.get(a) ?? 0) || firstSeen.get(a)! - firstSeen.get(b)!)
       .slice(0, perSource)
       .map((k) => byKey.get(k)!);
@@ -380,6 +391,7 @@ export class LiteratureSearcher {
         ? `原查询 0 命中（AMiner 按词序列匹配）；jieba 分词合并（${useTerms.length} 词：${useTerms.join("、")}）`
         : `原查询 0 命中（AMiner 按词序列匹配）；已按 ${useTerms.length} 词拆分查询、按命中词数合并`,
     ];
+    noteBits.push(precisionNote);
     if (terms.length > useTerms.length) noteBits.push(`仅取前 ${useTerms.length} 词`);
     if (failedTerms.length > 0) noteBits.push(`词 [${failedTerms.join("、")}] 查询失败未计入`);
     return {

@@ -155,8 +155,8 @@ export class FindingsStore {
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
+    this.db.exec("PRAGMA journal_mode = WAL;");
     this.initSchema();
   }
 
@@ -267,7 +267,7 @@ export class FindingsStore {
         resolveStmt.run(checker, target.kind, target.id);
       }
     });
-    run(input.hits);
+    run.immediate(input.hits);
 
     const rows = this.db
       .query(

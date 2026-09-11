@@ -141,14 +141,18 @@ export class ArtifactStore {
     this.projectSlug = options.projectSlug;
     this.projects = options.projects;
     this.db = new Database(dbPath);
+    this.db.exec("PRAGMA busy_timeout = 5000;"); // V80：先于 journal_mode
     this.db.exec("PRAGMA journal_mode = WAL;");
-    this.db.exec("PRAGMA busy_timeout = 5000;"); // V80（v0.7 C-4）
     this.initSchema();
   }
 
   initSchema(): void {
-    this.db.exec(SCHEMA_SQL);
-    this.migrate();
+    // alpha.6：建表 + 迁移在 IMMEDIATE 事务内（并发首开 ALTER 竞态，见 records.ts initSchema 注释）。
+    const tx = this.db.transaction(() => {
+      this.db.exec(SCHEMA_SQL);
+      this.migrate();
+    });
+    tx.immediate();
   }
 
   // P1 迁移：老库没有 project_slug 列，补列并用旧的自由字符串回填，保证旧数据不炸。
@@ -318,7 +322,7 @@ export class ArtifactStore {
       }
       for (const d of dependencies) insDep.run(d.source_version_id, d.target_version_id);
     });
-    tx();
+    tx.immediate();
     return versions.length;
   }
 

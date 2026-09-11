@@ -37,7 +37,9 @@ describe("V65 · AMiner 拆词兜底", () => {
     const searcher = new LiteratureSearcher(registry);
     const result = await searcher.search("脑机接口 信号解码", { sources: ["aminer"], perSource: 5 });
 
-    expect(result.papers.map((p) => p.ids.aminer)).toEqual(["a2", "a1", "a3"]); // a2 命中 2 词居首
+    // alpha.6（R4 P1-6）：多词查询只取 ≥2 词同时命中——a1/a3 各只命中 1 词被排除，a2 独占。
+    expect(result.papers.map((p) => p.ids.aminer)).toEqual(["a2"]);
+    expect(result.sources.find((s) => s.source === "aminer")!.note).toContain("≥2 词同时命中");
     const status = result.sources.find((s) => s.source === "aminer")!;
     expect(status.outcome).toBe("ok");
     expect(status.note).toContain("拆分查询");
