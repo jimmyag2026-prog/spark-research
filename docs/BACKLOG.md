@@ -3,7 +3,7 @@
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
 > 最后更新：2026-09-11（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
-> 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
+> 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
 > v0.5 规划真源在本地目录 `~/Desktop/AI4S/spark-research-v0.5-plan/TODO_v0.5.md`，刻意未入库，v0.4 完成后评审）
 
@@ -164,6 +164,10 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V74 | **测试套件对用户级 config 不完全隔离** | R1 连带发现：用户 `config set defaultModel` 后 sub_agent.test.ts 的 legacy 断言变红（读了真实 ~/.spark-research）。已修该测试（env 隔离）；**系统性方案待议**：bunfig preload 统一注入临时 SPARK_RESEARCH_DATA_DIR——但要先清点哪些测试有意读真实凭据（RECORDING 模式） |
 
 | V76 | **v0.5 规划期 staged 的 154 个 skill / 29 个 connector 从未在仓库里登记**（存量在仓库外、无版本控制） | **2026-09-11 补登记**。v0.5 规划期用子代理对 OpenScience 313 技能 / 46 connector 做过全量盘点并 staged 出可迁移代码，真源在本地 `~/Desktop/AI4S/spark-research-v0.5-plan/workstreams/`（70MB，**不是 git 仓库、无任何备份**）：`skills/staged/` **154 个** SKILL.md（盘点分级 P0=14 / P1=67 / P2=89 / SKIP=143）· `connectors/staged/` **29 个** connector + 各自 `.test.ts`。<br>**实际落地 3/154 与 4/29**：skill 只进了 cobrapy / pydeseq2 / scanpy（W5-3 β），connector 只进了 biorxiv / clinvar / reactome / string-db（W5-2 γ）。未落地的 25 个 connector：arrayexpress · bindingdb · biogrid · chebi · dbsnp · depmap · expression-atlas · geo · gnomad · gtex · gtopdb · hpa · intact · interpro · kegg · mygene · myvariant · ncbi-gene · opentargets · pdbe · sifts · single-cell-atlas · surechembl · ucsc · wikipathways。<br>**登记的是存量，不是铺量待办。** 口径没变：AD-5「少而深、每个技能必须有 e2e 验证才算完成」，`DEVELOPMENT_PLAN_v0.3.md` 把「追 OpenScience 的 313 skills / 46 connector 数量」明列为不做，v0.6 计划 §明确不做 同样列着「skill/connector 铺量（只集成 B2 点名的，每轮 ≤2–3 个）」。写这一条是因为**仓库里此前没有任何指针指向这批东西**——下一个 session 既可能以为它不存在，也可能反过来以为它已经在仓库里。<br>**迁移前必须知道的两件事**：① 全部 staged 文件标着 `STAGED / UNTESTED`——未接 registry、未跑真实网络、未录 fixture，`REGISTRY_PATCH.md` 开篇即写「本文档描述的操作均未执行」；② `BATCH2_B.md` 记录了一个**横跨十几个 staged 测试文件的共性 bug**：`echoHttp` 以 `content-type: application/json` 应答时 `connector.call()` 拿到的已是解析后的对象，样板里的 `JSON.parse(raw as string)` 必抛 `SyntaxError`——任何一批迁移进来之前先 grep 这个形状。<br>**去向**：按 v0.6 口径由 B2 轮次的真实课题拉动、每轮 ≤2–3 个择优接入，每个都要走 fixture 录制 + 六套件；**不设数量目标**。规划目录本身是否入库（或物化成独立 private repo）另议——当前裸放 Desktop 是唯一副本。 |
+| V77 | OpenRouter 偶发不返回 usage 统计（151 次调用中 1 次），该次成本记未知 | R3-T1 台账实测。**这是「未知不当零」纪律正常工作**，非定价表漏洞。若未知率上升可考虑 tokenizer 估算并显式标 estimated；当前发生率不值得做 |
+| V78 | orchestrator/chat 路径的 LLM 调用未进 usage.jsonl | A5 修复（alpha.7）把 read/review/idea/novelty 四条 HTTP 路由接入计量；chat（OrchestratorAgent 自建 LLMRouter）与 MCP 面仍未接。chat 有 P13 帧级记账落证据图但不进用量台账——口径不一，下轮统一 |
+| V79 | A5 遗留三条 UI 低危 | ① 综述引用 span 看着可点实际没接证据图跳转 ② conclusion review 需先有实验的前置没写在 UI 里 ③ UI 花钱操作无预算参数入口（CLI 有 --budget-usd）。均登记不阻塞发布 |
+| V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
