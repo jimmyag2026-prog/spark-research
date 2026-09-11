@@ -17,11 +17,18 @@
 
 ## 预列核心文献（召回率判据基准）
 
-> ⚠️ 状态：**待冻结**——同 T1 纪律：独立编制、开跑前冻结、执行者不参与。
+> ⚠️ 状态：**已冻结（2026-09-11）**——同 T1 纪律：独立编制、开跑前冻结、执行者不参与。
 
-| # | 标题（预期） | 判据 |
-|---|---|---|
-| — | 待冻结 | — |
+| # | 标题 | 年份 | 来源标识 | 入选理由 |
+|---|---|---|---|---|
+| 1 | SCANPY: large-scale single-cell gene expression data analysis | 2018 | https://doi.org/10.1186/s13059-017-1382-0 | 主流单细胞分析平台，9816被引；内置Leiden聚类作基准 |
+| 2 | From Louvain to Leiden: guaranteeing well-connected communities | 2019 | https://doi.org/10.1038/s41598-019-41695-z | Leiden算法原始论文，5552被引；直接解决任务关键的Leiden vs Louvain对标 |
+| 3 | Fast unfolding of communities in large networks | 2008 | https://doi.org/10.1088/1742-5468/2008/10/p10008 | Louvain算法基础方法，21717被引；community detection领域标志性工作 |
+| 4 | Current best practices in single‐cell RNA‐seq analysis: a tutorial | 2019 | https://doi.org/10.15252/msb.20188746 | 单细胞分析best practice综述，2471被引；涵盖聚类稳定性与参数选择 |
+| 5 | Batch effects in single-cell RNA-sequencing data are corrected by matching mutual nearest neighbors | 2018 | https://doi.org/10.1038/nbt.4091 | 批次效应纠正方法，2792被引；直接支撑"批次效应如何影响稳定性"子问题 |
+| 6 | Normalization and variance stabilization of single-cell RNA-seq data using regularized negative binomial regression | 2019 | https://doi.org/10.1186/s13059-019-1874-1 | 标准化与方差稳定，5096被引；前置处理对聚类稳定性的影响 |
+| 7 | A benchmark of batch-effect correction methods for single-cell RNA sequencing data | 2020 | https://doi.org/10.1186/s13059-019-1850-9 | 批次校正benchmark比较，1247被引；系统性评估批次方法的聚类效果差异 |
+| 8 | Clustering trees: a visualization for evaluating clusterings at multiple resolutions | 2018 | https://doi.org/10.1093/gigascience/giy083 | 分辨率多层级可视化与评估，1211被引；直接支撑"分辨率选择"的判据 |
 
 ## 执行脚本
 
