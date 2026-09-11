@@ -1,0 +1,46 @@
+# v0.6 发布基建：正式版 tag（vX.Y.Z，不含 -alpha 等预发布后缀）推送时，
+# 在两个平台编译单二进制并挂到对应 GitHub Release 的 assets——
+# 让「零预装下载即用」成立（源码/npm 路径都要求预装 Bun，单二进制是唯一例外）。
+#
+# 发布顺序约定（写进流程，别靠记忆）：先 `gh release create vX.Y.Z --notes-file …`
+# （它会创建 tag 并推送 → 触发本 workflow），upload 时 Release 必已存在。
+# 直接 `git push origin vX.Y.Z` 裸 tag 会让 upload 因 Release 不存在而失败。
+name: release
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  build-binaries:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: spark-research-linux-x64
+          - os: macos-latest
+            asset: spark-research-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - name: 构建单二进制（含内嵌前端）
+        run: bun run build
+      - name: 冒烟（版本一致性，防 v0.2.1 事故形状带病发布）
+        run: |
+          V=$(./dist/spark-research --version | tr -d '[:space:]')
+          TAG=${GITHUB_REF_NAME#v}
+          if [ "$V" != "$TAG" ]; then echo "版本不一致: binary=$V tag=$TAG"; exit 1; fi
+      - name: 上传到 Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mv dist/spark-research "dist/${{ matrix.asset }}"
+          gh release upload "$GITHUB_REF_NAME" "dist/${{ matrix.asset }}" --clobber
