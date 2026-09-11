@@ -72,7 +72,7 @@ import { makeServer } from "../helpers/server_scenario";
 describe("HTTP 面 · POST /api/compute/jobs 的 workspaceRoot", () => {
   test("/etc → 400 且消息点名项目目录；项目内相对路径 → 通过校验层（即使后面因别的原因失败也不是 400 路径错）", async () => {
     const fx = makeServer({ slug: "v100-http" });
-    try {
+    {
       const bad = await fx.post<{ error?: string; message?: string }>("/api/compute/jobs", { purpose: "p", command: ["echo", "hi"], workspaceRoot: "/etc", upload: [] });
       expect(bad.status).toBe(400);
       expect(JSON.stringify(bad.body)).toContain("项目目录之内");
@@ -80,8 +80,6 @@ describe("HTTP 面 · POST /api/compute/jobs 的 workspaceRoot", () => {
       expect(escape.status).toBe(400);
       const ok = await fx.post<{ job?: unknown }>("/api/compute/jobs", { purpose: "p", command: ["echo", "hi"], upload: [] });
       expect(ok.status).toBeLessThan(400);
-    } finally {
-      await fx.close?.();
     }
   });
 });
