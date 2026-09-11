@@ -1,9 +1,15 @@
 import { isCredentialMissing } from "../connectors/aminer";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { ConnectorOptions } from "../connectors/base";
-import { dedupePapers, type DedupeOptions } from "./dedupe";
+import { compareMergedPapers, dedupePapers, type DedupeOptions } from "./dedupe";
 import { normalizeResponse } from "./normalize";
-import { DEFAULT_SEARCH_SOURCES, normalizeDoi, type LiteratureSource, type Paper } from "./models";
+import {
+  DEFAULT_SEARCH_SOURCES,
+  normalizeDoi,
+  type LiteratureSource,
+  type Paper,
+  type RankMode,
+} from "./models";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
@@ -31,6 +37,12 @@ export interface LiteratureSearchResult {
   sources: SourceStatus[];
   totalBeforeDedupe: number;
   mergedCount: number;
+  // V67：本次结果实际用的排序档位 + 人类可读的依据说明（AD-12：结果怎么来的要可见）。
+  // 可选：`LiteratureSearcher` 生产路径必填；其它 lane/既有测试里手写的 fixture
+  // （非本 lane 文件所有权，footprint 不许碰）不知道这两个字段，留可选避免逼着
+  // 那些无关测试跟着改——cli.ts 打印时按未设置处理即可，不影响它们各自测的行为。
+  rank?: RankMode;
+  rankNote?: string;
 }
 
 export interface LiteratureSearchOptions extends DedupeOptions {
@@ -39,6 +51,128 @@ export interface LiteratureSearchOptions extends DedupeOptions {
   perSource?: number;
   // 合并去重后最多返回多少条。
   limit?: number;
+  // V67：跨源合并后的排序依据，默认 blended。
+  rank?: RankMode;
+}
+
+// ── V67：跨源合并排序 ──────────────────────────────────────────────────────
+//
+// `dedupePapers`（dedupe.ts，不在本 lane 文件所有权内）内部固定用
+// `compareMergedPapers` 排一次序（命中源数 → 被引 → 年份 → 标题），这就是 R1/R2
+// 实证追出来的问题排序本身：`--rank hits` 必须与它逐字节一致（回归测试钉住），
+// 所以这里**不改 dedupe.ts**，而是拿它已经排好的数组，按 `--rank` 选的档位在
+// search.ts 这一层重新排一次（`hits` 档直接原样返回，不重新 sort，避免任何字节级风险）。
+//
+// 被引数缺失（AMiner search 接口只给区间字符串、部分源没有被引字段）时**不当 0 处理**
+// ——把它当 0 会把「没有这个数据」误判成「已证实 0 被引」，在被引普遍 >0 的结果集里
+// 比真正 0 被引论文排得更差都不奇怪，这正是要避免的「编造」。citations/recent 两档
+// 缺值论文整体退化为 hits 排序（排在有值的论文之后，档内顺序按 hits）；blended 档
+// 缺被引数的论文取本次结果集里**已知被引论文** citationFactor 的中位数作代理
+// （既不因缺数据判死刑，也不会白得只有真被引论文才配拿的分——纯 0/1 二元处理不了这个平衡）。
+
+// 被引数压成对数量级：1000 与 10000 被引不该按十倍算，是量级差距。
+// 系数是可调旋钮——阴性对照①（被引权重置 0）直接把这个常量改成 0 复跑测试用。
+const BLENDED_CITATION_WEIGHT = 1;
+// 年份衰减半衰期（年）：里程碑论文往往是几年前发的，衰减要温和，
+// 不能反而把它们排到检索式直接命中但内容偏题的新论文后面。
+const BLENDED_YEAR_HALF_LIFE = 12;
+
+function knownCitationFactor(citedByCount: number, weight: number): number {
+  return 1 + weight * Math.log1p(Math.max(0, citedByCount));
+}
+
+// 阴性对照②的靶子：删掉这个函数、直接在 rankBlended 里用
+// `paper.citedByCount ?? 0` 代入 knownCitationFactor，就是「把缺被引数当 0 处理」的
+// bug 形态——会让 v67_ranking.test.ts 的退化断言变红（见 docs/devlog/W7-B1.md）。
+function fallbackCitationFactor(papers: Paper[], weight: number): number {
+  const known = papers
+    .map((p) => p.citedByCount)
+    .filter((c): c is number => c !== null)
+    .map((c) => knownCitationFactor(c, weight));
+  if (known.length === 0) return 1; // 整个结果集都没有被引数据：中性，退化为纯 hits×年份。
+  known.sort((a, b) => a - b);
+  const mid = Math.floor(known.length / 2);
+  return known.length % 2 === 0 ? (known[mid - 1]! + known[mid]!) / 2 : known[mid]!;
+}
+
+function yearFactor(year: number | null, now: number, halfLife: number): number {
+  if (year === null) return 1; // 缺年份同理：中性，不按「最老」处理。
+  const age = Math.max(0, now - year);
+  return Math.pow(0.5, age / halfLife);
+}
+
+export function rankBlended(
+  papers: Paper[],
+  options: { citationWeight?: number; yearHalfLife?: number; now?: number } = {},
+): Paper[] {
+  const weight = options.citationWeight ?? BLENDED_CITATION_WEIGHT;
+  const halfLife = options.yearHalfLife ?? BLENDED_YEAR_HALF_LIFE;
+  const now = options.now ?? new Date().getFullYear();
+  const fallback = fallbackCitationFactor(papers, weight);
+  const scored = papers.map((paper) => {
+    const hits = Math.max(1, paper.sources.length);
+    const citation = paper.citedByCount !== null ? knownCitationFactor(paper.citedByCount, weight) : fallback;
+    const year = yearFactor(paper.year, now, halfLife);
+    return { paper, score: hits * citation * year };
+  });
+  scored.sort((a, b) => b.score - a.score || compareMergedPapers(a.paper, b.paper));
+  return scored.map((s) => s.paper);
+}
+
+// 纯按被引数降序；缺值整体退化到 hits 排序（不当 0，不会被强行排进「0 被引」的位置——
+// 排在已知被引论文之后，组内顺序则完全按 hits/年份/标题，即 `compareMergedPapers`）。
+export function rankCitations(papers: Paper[]): Paper[] {
+  const known = papers.filter((p) => p.citedByCount !== null);
+  const unknown = papers.filter((p) => p.citedByCount === null);
+  known.sort((a, b) => b.citedByCount! - a.citedByCount! || compareMergedPapers(a, b));
+  unknown.sort(compareMergedPapers);
+  return [...known, ...unknown];
+}
+
+// 纯按年份降序；缺值同款退化到 hits 排序。
+export function rankRecent(papers: Paper[]): Paper[] {
+  const known = papers.filter((p) => p.year !== null);
+  const unknown = papers.filter((p) => p.year === null);
+  known.sort((a, b) => b.year! - a.year! || compareMergedPapers(a, b));
+  unknown.sort(compareMergedPapers);
+  return [...known, ...unknown];
+}
+
+export interface RankResult {
+  papers: Paper[];
+  note: string;
+}
+
+// 单一入口：`dedupePapers` 已经排过一次序（compareMergedPapers），这里按 `--rank`
+// 选的档位在其输出之上重排；`hits` 档不重新 sort（哪怕语义等价，直接原样返回是对
+// 「逐字节一致」回归测试最强的保证，不留任何浮点/排序稳定性带来的风险）。
+export function applyRank(papers: Paper[], rank: RankMode): RankResult {
+  switch (rank) {
+    case "hits":
+      return {
+        papers,
+        note: "排序依据: hits（命中源数 → 被引 → 年份 → 标题，v0.6 原始行为，未纳入被引/年份加权）",
+      };
+    case "citations":
+      return {
+        papers: rankCitations(papers),
+        note: "排序依据: citations（被引数降序；无被引数据的论文不当 0 处理，整体退化为 hits 排序排在已知被引论文之后）",
+      };
+    case "recent":
+      return {
+        papers: rankRecent(papers),
+        note: "排序依据: recent（年份降序；缺年份的论文不当最老处理，整体退化为 hits 排序排在已知年份论文之后）",
+      };
+    case "blended":
+    default:
+      return {
+        papers: rankBlended(papers),
+        note:
+          "排序依据: blended（命中源数 × 被引数归一化(log, 权重 " +
+          `${BLENDED_CITATION_WEIGHT}) × 年份衰减(半衰期 ${BLENDED_YEAR_HALF_LIFE} 年)；` +
+          "缺被引数据的论文取本次结果集已知被引论文的中位数代理，不当 0 处理）",
+      };
+  }
 }
 
 function errorSummary(error: unknown): string {
@@ -75,17 +209,31 @@ export class LiteratureSearcher {
       all.push(...papers);
     }
 
-    const { papers, mergedCount } = dedupePapers(all, options);
+    const { papers: merged, mergedCount } = dedupePapers(all, options);
+    // 类级默认**不是** DEFAULT_RANK_MODE（blended）——`LiteratureSearcher` 除了 `lit search`
+    // CLI，还有其它内部调用方不显式传 `rank`（如 `ideation/novelty.ts` 的候选检索，不在
+    // 本 lane 文件所有权内）。真跑过一次：把这里改成 `?? DEFAULT_RANK_MODE` 后，
+    // `tests/unit/novelty_e2e.test.ts` 的语义口径 e2e 从绿变红——不是逻辑 bug，是候选集
+    // 顺序变了导致 embedding fixture（按旧候选集录制）缺条目、静默退化成 lexical。
+    // V67 的证据（R1/R2）全部来自 `lit search` 这个人类入口，不是内部检索候选的相关性——
+    // 所以「默认 blended」只在 CLI 层落地（cli.ts 的 parseRank 不给 `--rank` 时回落到
+    // DEFAULT_RANK_MODE 并显式传参），类级默认保持 v0.6 的 "hits"，不静默牵连其它调用方。
+    const rank = options.rank ?? "hits";
+    const { papers: ranked, note: rankNote } = applyRank(merged, rank);
     return {
       query,
-      papers: options.limit ? papers.slice(0, options.limit) : papers,
+      papers: options.limit ? ranked.slice(0, options.limit) : ranked,
       sources: statuses,
       totalBeforeDedupe: all.length,
       mergedCount,
+      rank,
+      rankNote,
     };
   }
 
   // 按 DOI / arXiv id / PMID 取单篇，跨源合并成一条。用于 `lit add`。
+  // 单篇取数没有「排序」这个概念（结果去重后通常就是 0/1 条），rank 固定标 "hits"
+  // 且不重排——与 v0.6 行为一致，`--rank` 不影响 `lit add`（任务书未要求它影响）。
   async fetchById(
     id: string,
     options: { sources?: LiteratureSource[] } & DedupeOptions = {},
@@ -100,7 +248,15 @@ export class LiteratureSearcher {
     }
     // 按 id 取单篇时，命中的结果理论上就是同一篇；仍然过一遍去重把跨源字段合并起来。
     const { papers, mergedCount } = dedupePapers(all, options);
-    return { query: id, papers, sources: statuses, totalBeforeDedupe: all.length, mergedCount };
+    return {
+      query: id,
+      papers,
+      sources: statuses,
+      totalBeforeDedupe: all.length,
+      mergedCount,
+      rank: "hits",
+      rankNote: "按标识符取单篇，不涉及排序档位",
+    };
   }
 
   private async searchOne(

@@ -80,6 +80,19 @@ export const DEFAULT_SOURCE_EXCLUSIONS: readonly DefaultSourceExclusion[] = [
   },
 ];
 
+// ── 检索排序档位（V67：跨源合并后的排序问题，不是覆盖问题）───────────────────
+//
+// R1/R2 三轮实证：任务书检索式下里程碑论文（高被引但只命中 1 个源）沉在结果尾部
+// ——旧默认排序（`dedupe.ts` 的 `compareMergedPapers`，本文件之外，不在本 lane 所有权内）
+// 只看「命中源数 → 首见顺序」，完全不看被引数/年份。`--rank` 让排序依据可选、可解释；
+// 默认 `blended` 档把被引数/年份也纳入，其余三档服务于「我就是想看 xxx」的明确诉求。
+export const RANK_MODES = ["blended", "hits", "citations", "recent"] as const;
+export type RankMode = (typeof RANK_MODES)[number];
+
+// 默认档：v0.6 的纯 hits 排序已被 R1/R2 实证证明会把里程碑论文埋掉，
+// 不能继续拿它当默认（`--rank hits` 仍保留、逐字节复刻 v0.6 行为，只是不再是默认）。
+export const DEFAULT_RANK_MODE: RankMode = "blended";
+
 export interface PaperAuthor {
   name: string;
   affiliation?: string | null;
