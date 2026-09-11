@@ -27,24 +27,23 @@ export function titleFirstWord(title: string): string {
   return titleKey(title).split(" ")[0] || "untitled";
 }
 
-// E-5：bibtex key 保留 Unicode（中文等 CJK 字符）。
-//
-// 旧实现用 `[^a-z0-9]` 砍掉一切非 ASCII 字符——对中文作者/标题，`titleKey()`
-// 归一化后本来是保留汉字的（models.ts 的 `\p{L}\p{N}` 本身就含 `\p{Script=Han}`），
-// 结果到这一步被整个砍空，author 变成 "anon"、word 变成 "untitled"：AMiner 收录的
-// 中文文献入库后 key 全部退化成 `anon2021untitled`、`anon2021untiteda`……冲突后缀
-// 疯狂递增，key 与论文彻底脱钩。改成保留 `\p{Script=Han}`（连同其余 ASCII 字母数字）
-// ——英文标题的行为完全不变，中文标题/作者姓名第一次能生成有辨识度的 key。
-function keepAsciiAndHan(raw: string): string {
-  return raw.replace(/[^a-z0-9\p{Script=Han}]/gu, "");
+// V72（BACKLOG V72，覆盖 E-5 的保留 Unicode 决定）：bibtex key 只允许
+// `[A-Za-z0-9_-]`——汉字等非 ASCII 字符会破坏部分下游 BibTeX 工具链（外部验收
+// R1-T3）。规则：转拼音需要一张可靠的汉字→拼音映射表（多音字、姓名异读都要查表），
+// 没有零依赖的可靠实现（不引入 npm 依赖），本次不做拼音转换；作者姓氏/标题首词里
+// 的非 ASCII 字符直接砍掉，砍空则走既有的 anon/untitled 兜底——退回 E-5 之前的
+// 行为。冲突仍由 assignBibtexKeys 的 a/b/c 后缀区分；英文作者（含 V38 的
+// 「Last F」形态）的输出逐字节不变，因为 ASCII 输入本来就不含被砍掉的字符。
+function asciiOnly(raw: string): string {
+  return raw.replace(/[^a-z0-9]/g, "");
 }
 
 // 单篇的 base key（未处理冲突）。
 export function bibtexBaseKey(paper: Paper): string {
   const surname = paper.authors[0] ? authorSurname(paper.authors[0].name) : "";
-  const author = keepAsciiAndHan(surname) || "anon";
+  const author = asciiOnly(surname) || "anon";
   const year = paper.year !== null ? String(paper.year) : "nd";
-  const word = keepAsciiAndHan(titleFirstWord(paper.title)) || "untitled";
+  const word = asciiOnly(titleFirstWord(paper.title)) || "untitled";
   return `${author}${year}${word}`;
 }
 

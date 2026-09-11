@@ -389,43 +389,43 @@ describe("BibTeX / CSL-JSON 导出", () => {
     expect(toCSLJSON([])).toEqual([]);
   });
 
-  // E-5：CJK 元数据——bibtex key 保留 Unicode（\p{Script=Han}）。
-  // 旧实现 `.replace(/[^a-z0-9]/g, "")` 把汉字整个砍掉：中文作者/标题的 key
-  // 全部退化成 "anon" + "untitled"，AMiner 收录的中文文献 key 与论文彻底脱钩。
-  describe("CJK bibtex key（E-5）", () => {
-    test("中文作者姓名 + 中文标题 → key 保留汉字，不再退化成 anon/untitled", () => {
+  // V72（BACKLOG V72，覆盖 E-5）：bibtex key 只允许 `[A-Za-z0-9_-]`——汉字会破坏
+  // 部分下游 BibTeX 工具链。没有零依赖的可靠拼音表，不做拼音转换；非 ASCII 字符
+  // 直接砍掉，砍空则走 anon/untitled 兜底（退回 E-5 之前的行为，见 v72_bibtex_key.test.ts
+  // 的完整用例）。这里只保留最基础的一条回归，避免与新测试重复断言。
+  describe("CJK bibtex key（V72，覆盖 E-5）", () => {
+    test("中文作者姓名 + 中文标题 → key 退化为 anon<year>untitled（不再嵌入原始汉字）", () => {
       const zh = paper({
         title: "深度学习蛋白质结构预测综述",
         authors: [{ name: "张伟" }],
         year: 2022,
       });
       const key = bibtexBaseKey(zh);
-      expect(key).not.toContain("anon");
-      expect(key).not.toContain("untitled");
-      expect(key).toBe("张伟2022深度学习蛋白质结构预测综述");
+      expect(key).toBe("anon2022untitled");
+      expect(/^[A-Za-z0-9_-]+$/.test(key)).toBe(true);
     });
 
-    test("中文标题首词提取整句（无空格分词），保留完整汉字序列", () => {
+    test("中文标题首词提取整句（无空格分词），保留完整汉字序列（titleFirstWord 本身不做 ASCII 过滤）", () => {
       expect(titleFirstWord("深度学习蛋白质结构预测综述")).toBe("深度学习蛋白质结构预测综述");
     });
 
-    test("中英混合作者名：ASCII 与汉字都保留，其余符号仍被砍掉", () => {
+    test("中英混合作者名：只保留 ASCII 字母，汉字与符号都被砍掉", () => {
       // authorSurname 取姓名最后一个空格分隔段作为「姓」（既有行为，不是本次修的范围）：
-      // "Wei 张#Zhang!" → 姓段 "张#Zhang!" → 归一化后 "张 zhang" → 本次修的 keepAsciiAndHan
-      // 再把符号与空格都砍掉，汉字与 ASCII 字母都保留。
+      // "Wei 张#Zhang!" → 姓段 "张#Zhang!" → 归一化后 "张 zhang" → V72 的 asciiOnly
+      // 把汉字、空格、符号都砍掉，只剩 ASCII 字母 "zhang"。
       const mixed = paper({ title: "Mixed Title", authors: [{ name: "Wei 张#Zhang!" }], year: 2020 });
-      expect(bibtexBaseKey(mixed)).toBe("张zhang2020mixed");
+      expect(bibtexBaseKey(mixed)).toBe("zhang2020mixed");
     });
 
-    test("assignBibtexKeys 对中文文献同样能生成确定性、无冲突的 key 序列", () => {
+    test("assignBibtexKeys 对同名无法转拼音的中文文献，靠 a/b 后缀区分", () => {
       const a = paper({ title: "深度学习综述", authors: [{ name: "张伟" }], year: 2021 });
       const b = paper({ title: "深度学习综述", authors: [{ name: "张伟" }], year: 2021, doi: "10.1/b" });
       const keys = assignBibtexKeys([a, b]);
-      expect(keys[0]).toBe("张伟2021深度学习综述");
-      expect(keys[1]).toBe("张伟2021深度学习综述a");
+      expect(keys[0]).toBe("anon2021untitled");
+      expect(keys[1]).toBe("anon2021untitleda");
     });
 
-    test("toBibTeX 对中文文献输出合法 BibTeX（key 与字段都保留汉字）", () => {
+    test("toBibTeX 对中文文献输出合法 BibTeX（key 是纯 ASCII，字段原文仍保留汉字）", () => {
       const zh = paper({
         title: "深度学习蛋白质结构预测综述",
         authors: [{ name: "张伟" }, { name: "李明" }],
@@ -433,7 +433,7 @@ describe("BibTeX / CSL-JSON 导出", () => {
         venue: "计算机学报",
       });
       const bib = toBibTeX([zh]);
-      expect(bib).toContain("@article{张伟2022深度学习蛋白质结构预测综述,");
+      expect(bib).toContain("@article{anon2022untitled,");
       expect(bib).toContain("author = {张伟 and 李明}");
       expect(bib).toContain("journal = {计算机学报}");
     });
