@@ -465,13 +465,8 @@ export function retractOrphanRecords(records: RecordStore, library: LibraryStore
       continue;
     }
     if (library.get(paperId) !== null) continue; // 论文还在库里，不是孤儿
-    records.update(record.id, {
-      metadata: {
-        retracted: true,
-        retractedAt: new Date().toISOString(),
-        retractedReason: "关联论文已从项目文献库删除",
-      },
-    });
+    // W7-D1：走 tombstone 窄口（日志 op=tombstone），不再用泛用 update()。
+    records.tombstone(record.id, "关联论文已从项目文献库移除");
     retracted.push(record.id);
   }
 

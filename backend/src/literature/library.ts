@@ -162,6 +162,12 @@ export class LibraryStore {
 
   initSchema(): void {
     this.db.exec(SCHEMA_SQL);
+    // v0.7 W7-D1（V30）：删论文改 tombstone——`removed_at` 非空即视为已移除；get/list/count 默认不看。
+    const columns = new Set(
+      (this.db.query("PRAGMA table_info(papers)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!columns.has("removed_at")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_at TEXT");
+    if (!columns.has("removed_reason")) this.db.exec("ALTER TABLE papers ADD COLUMN removed_reason TEXT");
   }
 
   // 入库。已存在同一篇（DOI 相同或标题模糊匹配）时合并字段而不是插重复行。
@@ -172,6 +178,8 @@ export class LibraryStore {
 
     if (existing) {
       const merged = mergePapers(toPaper(existing), paper);
+      // V30：re-add 一篇已 tombstone 的论文 = 复活（去重仍按 DOI/标题命中同一行）。
+      this.db.query("UPDATE papers SET removed_at = NULL, removed_reason = NULL WHERE id = ?").run(existing.id);
       const tags = [...new Set([...existing.tags, ...(options.tags ?? [])])];
       this.db
         .query(
@@ -287,7 +295,7 @@ export class LibraryStore {
   }
 
   get(id: string): LibraryPaper | null {
-    const row = this.db.query("SELECT * FROM papers WHERE id = ?").get(id) as PaperRow | null;
+    const row = this.db.query("SELECT * FROM papers WHERE id = ? AND removed_at IS NULL").get(id) as PaperRow | null;
     return row ? mapRow(row) : null;
   }
 
@@ -320,7 +328,8 @@ export class LibraryStore {
       const like = `%${filter.q.toLowerCase()}%`;
       params.push(like, like);
     }
-    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+    clauses.push("removed_at IS NULL"); // V30：已 tombstone 的行默认不可见
+    const where = ` WHERE ${clauses.join(" AND ")}`;
     // 次序键用 rowid 而不是 id：同一次入库的多篇论文 created_at 完全相同，
     // 用随机 uuid 排序会让 list() 的顺序**每次进程都不一样**。
     // 这不只是显示顺序问题——bibtex key 的冲突后缀（a/b/c）按列表顺序分配，
@@ -335,7 +344,7 @@ export class LibraryStore {
   }
 
   count(): number {
-    return (this.db.query("SELECT COUNT(*) AS n FROM papers").get() as { n: number }).n;
+    return (this.db.query("SELECT COUNT(*) AS n FROM papers WHERE removed_at IS NULL").get() as { n: number }).n;
   }
 
   update(
@@ -369,11 +378,23 @@ export class LibraryStore {
     return this.get(id)!;
   }
 
-  remove(id: string): boolean {
+  /**
+   * V30（v0.7 W7-D1）：**不再硬删**——tombstone。行留着（DOI 去重、re-add 可复活），
+   * `removed_at` 非空后 get/list/count 一律不见它。生产调用方：`lit remove`，它随后必须跑
+   * `retractOrphanRecords()` 把指向该论文的 record 撤回（两步在 CLI 里是同一个动作）。
+   */
+  remove(id: string, reason = "用户移除"): boolean {
     const existing = this.get(id);
     if (!existing) return false;
-    this.db.query("DELETE FROM papers WHERE id = ?").run(id);
+    const now = new Date().toISOString();
+    this.db.query("UPDATE papers SET removed_at = ?, removed_reason = ?, updated_at = ? WHERE id = ?").run(now, reason, now, id);
     return true;
+  }
+
+  /** 含已移除的行（对账/导出用）。 */
+  getIncludingRemoved(id: string): (LibraryPaper & { removedAt: string | null; removedReason: string | null }) | null {
+    const row = this.db.query("SELECT * FROM papers WHERE id = ?").get(id) as (PaperRow & { removed_at: string | null; removed_reason: string | null }) | null;
+    return row ? { ...mapRow(row), removedAt: row.removed_at, removedReason: row.removed_reason } : null;
   }
 
   // ── 引文边 ────────────────────────────────────────────────────────────────

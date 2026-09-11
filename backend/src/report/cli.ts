@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LibraryStore } from "../literature/library";
 import { RECORD_TYPES, type RecordFilter, type RecordType } from "../project/models";
+import { RecordValidationError } from "../project/records";
 import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { buildReport, type ResearchReport } from "./export";
 
@@ -14,6 +15,10 @@ export const REPORT_HELP = `用法:
                                         不给 --out 就打到 stdout
   spark-research report stats [--json]  只看统计：各类 record 与结论卡的评审状态分布
   spark-research report records [--type <t>] [--limit N] [--json]
+  spark-research report records --history <recordId> [--json]
+                                        某条 record 的 append-only 日志（create/update/link/tombstone/repair）
+  spark-research report records --repair <recordId> --to-seq <N> --actor <署名>
+                                        按日志把投影重建到第 N 步（V24 恢复路径，落 op=repair 日志）
                                         列出证据图里的原始 record（含 artifact）——
                                         不用开 sqlite 就能回答「它进证据图了吗」
                                         --type 按类型过滤（${RECORD_TYPES.join(" / ")}）
@@ -160,6 +165,48 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
       case "records": {
         project = resolveProject();
         const records = project.records();
+        // v0.7 W7-D1：日志视图与恢复入口（V24）。`--history <id>` 只读；`--repair <id> --to-seq N --actor X`
+        // 把投影重建到日志第 N 步——需要署名，落一行 op=repair 日志，不删任何历史。
+        const historyId = flagString(flags.history);
+        if (historyId !== undefined) {
+          if (!records.get(historyId)) {
+            err(`❌ record '${historyId}' 不存在`);
+            return 1;
+          }
+          const entries = records.history(historyId);
+          if (flags.json === true) {
+            out(JSON.stringify({ project: project.meta.slug, recordId: historyId, entries }, null, 2));
+            return 0;
+          }
+          out(`record ${historyId.slice(0, 8)} 的日志：${entries.length} 条（append-only，prevHash 成链）`);
+          for (const e of entries) {
+            const who = e.actor ? ` · ${e.actor}` : "";
+            const rev = e.revBefore === null && e.revAfter === null ? "" : ` rev ${e.revBefore ?? "-"}→${e.revAfter ?? "-"}`;
+            out(`  #${String(e.seq).padStart(4)}  ${e.op.padEnd(9)}${rev}${who}  ${e.createdAt}  ${JSON.stringify(e.patch).slice(0, 80)}`);
+          }
+          return 0;
+        }
+        const repairId = flagString(flags.repair);
+        if (repairId !== undefined) {
+          const toSeq = Number(flagString(flags["to-seq"]));
+          const actor = flagString(flags.actor);
+          if (!Number.isInteger(toSeq) || toSeq < 1 || !actor) {
+            err("用法: spark-research report records --repair <recordId> --to-seq <N> --actor <署名>");
+            return 1;
+          }
+          try {
+            const repaired = records.repair(repairId, { toSeq, actor });
+            out(`✅ record ${repairId.slice(0, 8)} 已按日志重建到 #${toSeq}（署名 ${actor}）；投影 rev 已 +1，日志新增一行 op=repair`);
+            out(`   标题：${repaired.title}`);
+            return 0;
+          } catch (error) {
+            if (error instanceof RecordValidationError) {
+              err(`❌ ${error.message}`);
+              return 1;
+            }
+            throw error;
+          }
+        }
         const typeFlag = flagString(flags.type);
         if (typeFlag !== undefined && !RECORD_TYPES.includes(typeFlag as RecordType)) {
           err(`❌ 未知的 record 类型 '${typeFlag}'（可选：${RECORD_TYPES.join(" / ")}）`);
