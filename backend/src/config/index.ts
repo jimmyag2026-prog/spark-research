@@ -377,6 +377,27 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "一个基于半解析数据算出的可疑数字。",
   },
   ...SUB_AGENT_MODEL_SETTINGS,
+  // v0.7 W7-D0 · L0 原始层的两个开关（DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md §〇 已锁定：默认开且本地）。
+  {
+    key: "rawLlm",
+    type: "enum",
+    envVar: "SPARK_RESEARCH_RAW_LLM",
+    defaultValue: "on",
+    allowed: ["on", "off"],
+    summary: "是否把每次 LLM 调用的 prompt 与响应原文落进项目 raw/llm/（永久保留）",
+    effect:
+      "关掉后 agent_run 仍有 systemHash/promptHash 与用量，但原文不可追溯——归一化逻辑一改旧结果就无法重算，回流价值归零。除非磁盘受限，否则不要关。",
+  },
+  {
+    key: "rawUpstreamInline",
+    type: "enum",
+    envVar: "SPARK_RESEARCH_RAW_UPSTREAM_INLINE",
+    defaultValue: "off",
+    allowed: ["on", "off"],
+    summary: "凭据协议源（AMiner/CNKI/万方）的原始响应体是否 inline 存进 raw/connector/",
+    effect:
+      "默认 off：只存 sha256 与字节数（ToS 风险，且这类数据永不进共享集合——AD-16）。开了也不会进 --for-sharing 导出，只影响本地可追溯性。",
+  },
 ];
 
 export function settingSpec(key: string): SettingSpec | undefined {
@@ -624,4 +645,14 @@ export function applyConfigEnvDefaults(options: ConfigOptions = {}): string[] {
     applied.push(spec.envVar);
   }
   return applied;
+}
+
+
+// v0.7 W7-D0 · raw 层开关的统一读法（config_reader_parity 门禁要求可写项必有读者）。
+export function configuredRawLlm(options: ConfigOptions = {}): boolean {
+  return stringOr("rawLlm", "on", options) !== "off";
+}
+
+export function configuredRawUpstreamInline(options: ConfigOptions = {}): boolean {
+  return stringOr("rawUpstreamInline", "off", options) === "on";
 }

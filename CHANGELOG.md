@@ -5,6 +5,48 @@
 
 ---
 
+## [0.7.0-alpha.1] — 2026-09-11
+
+**W7-D0：原始层落地（AD-15）· 来源分级三列（AD-16）· 基线闸清账。** v0.7 方案见
+`docs/DEVELOPMENT_PLAN_v0.7.md`，数据层配套设计见 `DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md`。
+
+### 新增
+
+- **L0 原始层（append-only）**：每个项目新增 `raw/{connector,llm,kernel,device}/<date>.jsonl`
+  ——connector 的脱敏请求参数 + 原始响应体、LLM 的 prompt 与响应原文、kernel 的 source/stdout/
+  stderr、湿实验设备读数，**只追加不改**，行内 `prevHash` 成链，`verify()` 逐行重算可抓篡改。
+  超 64KB 的正文落 `raw/blobs/` 按 sha256 去重。四个埋点各一处（`connectors/base.ts` ·
+  `usage/ledger.ts` · `kernels/manager.ts` · `lab/wet_loop.ts`），全体调用方自动覆盖；没有项目
+  上下文的调用（capabilities 探测、daemon mcp_call）落全局兜底 `<dataDir>/raw/`——不记等于漏。
+- **来源分级三列**：records 表新增 `provenance_class`（upstream / derived / user_authored /
+  model_generated）、`license`（SPDX 表达式；凭据源 `LicenseRef-proprietary-<源>`；用户/模型产出
+  占位 `LicenseRef-spark-user-owned`）、`quality`（把散在 metadata 里的 deterministic / basis /
+  simulated / caveat 收成一列）。老库打开即迁移回填，幂等。18 个生产写入点全部显式声明来源
+  分级，**源码门禁**核每一处，省略即红。
+- `shareable()` 判定（AD-16）：upstream 一律不出门、license 未知不出门、proprietary 不出门。
+  W7-D2 的 `data export --for-sharing` 只认它。
+- 两个配置项：`rawLlm`（默认 on；关掉后 agent_run 仍有 hash 但原文不可追溯）·
+  `rawUpstreamInline`（默认 off；凭据源响应体只存 hash）。两者都过 config_reader_parity 门禁。
+- 门禁 G1（raw 行数 == 台账行数，四类各一）· G2（带假 key 的调用后 grep raw 目录）·
+  G3（篡改任一行 verify 必红）· G6 · G7，**8 条阴性对照全部实跑变红**（devlog W7-D0）。
+
+### 修复
+
+- **chat 路径进用量台账与 raw（V78 主体）**：OrchestratorAgent 此前自建 LLMRouter 直调，
+  usage.jsonl 与 raw/llm 都漏。现在会话绑定项目即经 `usageTrackingLlm`（command=chat）。
+  **残余**：子代理 tool loop 的 `subAgentLlm()` 仍是裸调用（无 sessionId 可绑），登记在 V78。
+- **同项目并发写 `database is locked`（V80）**：records / library / artifacts 三库补
+  `PRAGMA busy_timeout = 5000`（此前只有 findings.db 有）。
+- **v0.6.0 带着一条全套必红的 e2e 发布了（V81）**：⑱ 用量面板改增量断言。CI 不跑 e2e 所以没人看见。
+
+### 如实交代
+
+- **`execution_records` 至今没有生产写入方（V82）**：kernel 的 cell 执行从未落过这张表，
+  所以 raw/kernel 行的 `executionRecordId` 恒 null，行内自带 source/stdout/stderr 与 contentHash。
+- raw/connector 行的 `rateLimitWaitMs` 未接（V63 未动）。
+- `tests/e2e` 的 45 个既有类型错误（V62）本波裁定**豁免并写明理由**（Bun 特有 import 属性），
+  不纳入 typecheck。
+
 ## [0.6.0] — 2026-09-11
 
 **v0.6：装完就能用，用了知道花了多少钱，读论文是真读。**

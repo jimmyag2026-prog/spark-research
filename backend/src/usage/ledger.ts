@@ -1,6 +1,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { ConfigOptions } from "../config";
+import { configuredRawLlm, type ConfigOptions } from "../config";
+import { USER_OWNED_LICENSE } from "../provenance/policy";
+import { redactLlmOptions, type RawSink } from "../raw";
 import { BudgetLedger } from "../llm/budget";
 import { failure } from "../llm/providers/types";
 import type { CallOptions, ChatMessage, LlmResponse } from "../llm/types";
@@ -139,6 +141,14 @@ export interface UsageTrackingOptions {
   /** 项目累计已知成本（含历史 + 本进程）达到即拒绝后续调用。不给 = 只记账不设闸。 */
   budgetUsd?: number;
   configOptions?: ConfigOptions;
+  /**
+   * v0.7 W7-D0 · L0：每次真调用的 prompt/响应原文落 raw/llm/（AD-15）。这里是所有花钱路径
+   * 的必经点（G-3 预算闸也在这里），埋在这一处全体覆盖——不逐模块手写（V46 形状）。
+   * 不给 sink = 不记（测试与无项目上下文）；config `rawLlm=off` 也不记。
+   */
+  rawSink?: RawSink;
+  project?: string | null;
+  sessionId?: string | null;
 }
 
 export interface UsageTrackingLlm {
@@ -156,7 +166,8 @@ export interface UsageTrackingLlm {
  * 拒绝消息里写清已花多少、怎么继续（V36：失败要给下一步）。
  */
 export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLlm {
-  const { llm, store, command, budgetUsd, configOptions } = options;
+  const { llm, store, command, budgetUsd, configOptions, rawSink } = options;
+  const rawOn = rawSink !== undefined && configuredRawLlm(configOptions);
   const priorKnownCostUsd = store.totals().knownCostUsd;
   const ledger = new BudgetLedger(
     budgetUsd !== undefined ? { maxCostUsd: Math.max(0, budgetUsd - priorKnownCostUsd) } : {},
@@ -196,6 +207,32 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
         costUsd: recorded.costUsd,
       });
+      if (rawOn) {
+        // 失败也记：AD-13 的失败响应没有内容，但「问了什么、为什么失败」本身就是过程数据。
+        rawSink!.append({
+          kind: "llm",
+          project: options.project ?? undefined,
+          sessionId: options.sessionId ?? null,
+          command,
+          provenanceClass: "model_generated",
+          license: USER_OWNED_LICENSE,
+          payload: {
+            provider: res.provider,
+            model: res.model,
+            ok: res.ok,
+            failureKind: res.ok ? null : res.error.kind,
+            messages: rawSink!.body(JSON.stringify(messages)),
+            response: res.ok ? rawSink!.body(res.content) : null,
+            usage: {
+              inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
+              outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
+              costUsd: recorded.costUsd,
+              usageUnavailable: Boolean(res.usage.usageUnavailable),
+            },
+            options: redactLlmOptions(typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions),
+          },
+        });
+      }
       return res;
     },
   };

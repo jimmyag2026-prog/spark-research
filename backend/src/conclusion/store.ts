@@ -42,6 +42,7 @@ export class ConclusionStore {
     const evidenceIds = [...new Set(input.evidenceIds ?? [])];
     const record = this.records.create({
       type: "conclusion",
+      provenanceClass: "user_authored",
       title: input.title?.trim() || `结论：${claim.slice(0, 40)}`,
       content: claim,
       // 结论是从证据推出来的，不是观察本身。

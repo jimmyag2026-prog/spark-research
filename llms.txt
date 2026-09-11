@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.6.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0-alpha.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -180,6 +180,8 @@ spark-research mcp    # stdio 传输
 - `subAgentModel_execute`（默认 —，env `SPARK_SUBAGENT_MODEL_EXECUTE`）：子代理类型 'execute' 的独立模型覆盖（不填则退回 defaultModel）
 - `subAgentModel_lab`（默认 —，env `SPARK_SUBAGENT_MODEL_LAB`）：子代理类型 'lab' 的独立模型覆盖（不填则退回 defaultModel）
 - `subAgentModel_review`（默认 —，env `SPARK_SUBAGENT_MODEL_REVIEW`）：子代理类型 'review' 的独立模型覆盖（不填则退回 defaultModel）
+- `rawLlm`（默认 on，env `SPARK_RESEARCH_RAW_LLM`）：是否把每次 LLM 调用的 prompt 与响应原文落进项目 raw/llm/（永久保留）
+- `rawUpstreamInline`（默认 off，env `SPARK_RESEARCH_RAW_UPSTREAM_INLINE`）：凭据协议源（AMiner/CNKI/万方）的原始响应体是否 inline 存进 raw/connector/
 
 ## 用这个工作台时必须知道的几条
 

@@ -99,6 +99,7 @@ function makeLoop(project: Project, deps: LabCliDeps, backendId?: string): WetLa
   return new WetLabLoop({
     records: project.records(),
     artifacts: project.artifacts(),
+    rawSink: project.raw(),
     root: join(project.paths.experimentsDir, "wet"),
     // 默认后端的解析顺序：--backend 显式 > 用户 config.json > 代码默认（P9 配置面收口）。
     backend: deps.backend ?? wetBackend(backendId ?? configuredWetBackend(DEFAULT_WET_BACKEND)),

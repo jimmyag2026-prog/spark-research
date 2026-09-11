@@ -226,6 +226,7 @@ export async function depictSmiles(input: DepictInput, deps: DepictDeps): Promis
     );
 
     const record = deps.records.createFromArtifact(saved, {
+      provenanceClass: "derived",
       evidence: "computed",
       metadata: { kind: "chem_depiction", smiles, canonicalSmiles, formula, molWeight, rdkitVersion },
     });

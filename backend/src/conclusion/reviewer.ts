@@ -112,6 +112,7 @@ export class ConclusionReviewer {
 
     const decision = this.records.create({
       type: "decision",
+      provenanceClass: "user_authored",
       title: `${approved ? "通过" : "否决"}结论 · ${assessment.card.title}`,
       content: renderDecision(assessment, approved, options.actor ?? null, vetoReason, at),
       // 评审是人的判断（即便判据是确定性的，做不做这次评审是人决定的）。

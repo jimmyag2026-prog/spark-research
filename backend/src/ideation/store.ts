@@ -42,6 +42,7 @@ export class IdeaStore {
   create(card: IdeaCard, options: CreateIdeaOptions = {}): StoredIdeaCard {
     const record = this.records.create({
       type: "idea",
+      provenanceClass: "model_generated",
       title: `思路：${ideaTitle(card.hypothesis)}`,
       content: renderIdeaCard(card, "unchecked"),
       // 思路是从文献与讨论里推出来的，不是观察也不是计算结果。

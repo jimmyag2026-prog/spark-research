@@ -223,6 +223,7 @@ export class ProteinAnalysis {
     if (options.persist !== false && this.records) {
       const record: ResearchRecord = this.records.create({
         type: "observation",
+        provenanceClass: "upstream",
         title: `蛋白分析 · ${identity.proteinName}（${identity.accession}）`,
         content: markdown,
         evidence: "sourced",

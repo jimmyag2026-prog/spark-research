@@ -154,6 +154,7 @@ export class LibraryStore {
   constructor(dbPath: string, options: LibraryStoreOptions = {}) {
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;"); // V80（v0.7 C-4）
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.records = options.records;
     this.initSchema();
@@ -240,6 +241,7 @@ export class LibraryStore {
     if (this.records) {
       const record = this.records.create({
         type: "paper",
+        provenanceClass: "upstream",
         title: paper.title,
         content: paper.abstract ?? paper.title,
         evidence: "sourced",

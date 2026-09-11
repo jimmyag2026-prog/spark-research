@@ -7,6 +7,13 @@ import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 import type { ArtifactVersion } from "../artifacts/models";
 import type { Usage } from "../llm/types";
 import {
+  PROVENANCE_CLASSES,
+  USER_OWNED_LICENSE,
+  classForOrigin,
+  licenseForClass,
+  type ProvenanceClass,
+} from "../provenance/policy";
+import {
   EDGE_TYPES,
   EVIDENCE_LABELS,
   ORIGIN_KINDS,
@@ -36,6 +43,10 @@ interface RecordRow {
   artifact_id: string | null;
   metadata: string;
   created_at: string;
+  // v0.7 W7-D0：三列由 migrateProvenanceColumns() 补上（老库 ALTER，与 rev 同一条路径）。
+  provenance_class: string | null;
+  license: string | null;
+  quality: string | null;
 }
 
 // P10-d · D-9：乐观并发版本号。**不**放进 `ResearchRecord`/schema.sql（避免动共享类型、
@@ -135,10 +146,11 @@ function mapRow(row: RecordRow): ResearchRecord {
     ref: row.origin_ref,
     connector: row.origin_connector,
   };
+  const type = row.type as RecordType;
   return {
     id: row.id,
     project: row.project,
-    type: row.type as RecordType,
+    type,
     title: row.title,
     content: row.content,
     evidence: row.evidence as EvidenceLabel,
@@ -146,7 +158,25 @@ function mapRow(row: RecordRow): ResearchRecord {
     artifactId: row.artifact_id,
     metadata: JSON.parse(row.metadata),
     createdAt: row.created_at,
+    // 回填迁移保证列非空；这里的兜底只防「迁移前的行被并发读到」这一瞬。
+    provenanceClass: (row.provenance_class as ProvenanceClass | null) ?? classForOrigin(origin, type),
+    license: row.license ?? null,
+    quality: row.quality ? (JSON.parse(row.quality) as string[]) : [],
   };
+}
+
+/**
+ * v0.7 · 统一质量标签：把写入方已经放在 metadata 里的几个「确定性层输入」收成一列——
+ * V49 deterministic · V66 basis · G4 simulated · V54 caveat。不动 metadata 原样（其他读者
+ * 还在读它），只是多写一列让导出/回流能机器过滤。显式传入的 quality 排前面、去重。
+ */
+export function deriveQuality(metadata: Record<string, unknown>, explicit: string[] = []): string[] {
+  const tags = [...explicit];
+  if (typeof metadata.deterministic === "boolean") tags.push(`deterministic:${metadata.deterministic}`);
+  if (typeof metadata.basis === "string") tags.push(`basis:${metadata.basis}`);
+  if (metadata.simulated === true) tags.push("simulated");
+  if (typeof metadata.caveat === "string" && metadata.caveat) tags.push("caveat");
+  return [...new Set(tags)];
 }
 
 function mapEdgeRow(row: EdgeRow): RecordEdge {
@@ -169,6 +199,9 @@ export class RecordStore {
     this.project = project;
     this.db = new Database(dbPath);
     this.db.exec("PRAGMA journal_mode = WAL;");
+    // V80（v0.7 C-4）：同项目并发写（idea new × idea check）实测 `database is locked`——
+    // findings_store.ts 早就设了 5s busy_timeout，其余三库没有。补齐。
+    this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.initSchema();
   }
@@ -176,6 +209,43 @@ export class RecordStore {
   initSchema(): void {
     this.db.exec(SCHEMA_SQL);
     this.migrateRevColumn();
+    this.migrateProvenanceColumns();
+  }
+
+  // v0.7 W7-D0 · L3 三列。与 rev 同一条路径：schema.sql 不动，这里 ALTER 补列；
+  // 老行按 classForOrigin() 回填（§五 回填规则，幂等——只填 NULL 的行）。license 老行
+  // 按 class 推：upstream 用 connector 的登记许可，其余 user-owned 占位。
+  private migrateProvenanceColumns(): void {
+    const columns = new Set(
+      (this.db.query("PRAGMA table_info(records)").all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    if (!columns.has("provenance_class")) this.db.exec("ALTER TABLE records ADD COLUMN provenance_class TEXT");
+    if (!columns.has("license")) this.db.exec("ALTER TABLE records ADD COLUMN license TEXT");
+    if (!columns.has("quality")) this.db.exec("ALTER TABLE records ADD COLUMN quality TEXT NOT NULL DEFAULT '[]'");
+    const pending = this.db
+      .query("SELECT id, type, origin_kind, origin_ref, origin_connector, session_id, metadata FROM records WHERE provenance_class IS NULL")
+      .all() as Array<Pick<RecordRow, "id" | "type" | "origin_kind" | "origin_ref" | "origin_connector" | "session_id" | "metadata">>;
+    if (pending.length === 0) return;
+    const update = this.db.query("UPDATE records SET provenance_class = ?, license = ?, quality = ? WHERE id = ?");
+    const tx = this.db.transaction((rows: typeof pending) => {
+      for (const r of rows) {
+        const origin: RecordOrigin = {
+          kind: r.origin_kind as RecordOrigin["kind"],
+          ref: r.origin_ref,
+          connector: r.origin_connector,
+          sessionId: r.session_id,
+        };
+        const cls = classForOrigin(origin, r.type as RecordType);
+        let metadata: Record<string, unknown> = {};
+        try {
+          metadata = JSON.parse(r.metadata) as Record<string, unknown>;
+        } catch {
+          metadata = {};
+        }
+        update.run(cls, licenseForClass(cls, origin), JSON.stringify(deriveQuality(metadata)), r.id);
+      }
+    });
+    tx(pending);
   }
 
   // P10-d · D-9：老 records.db 没有 rev 列 —— 不能让老项目打不开。
@@ -217,6 +287,11 @@ export class RecordStore {
       throw new RecordValidationError("record type 'artifact' requires artifactId");
     }
 
+    const provenanceClass = input.provenanceClass ?? classForOrigin(origin, type);
+    if (!PROVENANCE_CLASSES.includes(provenanceClass)) {
+      throw new RecordValidationError(`unknown provenanceClass '${provenanceClass}'`);
+    }
+    const metadata = input.metadata ?? {};
     return this.insertRow({
       type,
       title: input.title ?? "",
@@ -224,8 +299,11 @@ export class RecordStore {
       evidence,
       origin,
       artifactId,
-      metadata: input.metadata ?? {},
+      metadata,
       createdAt: input.createdAt,
+      provenanceClass,
+      license: input.license === undefined ? licenseForClass(provenanceClass, origin) : input.license,
+      quality: deriveQuality(metadata, input.quality),
     });
   }
 
@@ -240,6 +318,9 @@ export class RecordStore {
     artifactId: string | null;
     metadata: Record<string, unknown>;
     createdAt?: string;
+    provenanceClass: ProvenanceClass;
+    license: string | null;
+    quality: string[];
   }): ResearchRecord {
     const id = randomUUID();
     const createdAt = row.createdAt ?? new Date().toISOString();
@@ -247,8 +328,9 @@ export class RecordStore {
       .query(
         `INSERT INTO records
          (id, project, type, title, content, evidence, origin_kind, origin_ref,
-          origin_connector, session_id, artifact_id, metadata, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          origin_connector, session_id, artifact_id, metadata, created_at,
+          provenance_class, license, quality)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -264,6 +346,9 @@ export class RecordStore {
         row.artifactId,
         JSON.stringify(row.metadata),
         createdAt,
+        row.provenanceClass,
+        row.license,
+        JSON.stringify(row.quality),
       );
     return this.get(id)!;
   }
@@ -302,6 +387,10 @@ export class RecordStore {
       artifactId: null,
       metadata,
       createdAt: input.createdAt,
+      // 帧级记账天然是模型产出（§7.1）。
+      provenanceClass: "model_generated",
+      license: USER_OWNED_LICENSE,
+      quality: deriveQuality(metadata),
     });
   }
 
@@ -322,6 +411,7 @@ export class RecordStore {
         ref: artifact.producingCellId,
       },
       artifactId: artifact.id,
+      provenanceClass: extra.provenanceClass ?? "derived",
       metadata: extra.metadata ?? {},
     });
   }
@@ -382,6 +472,10 @@ export class RecordStore {
     if (filter.evidence) {
       clauses.push("evidence = ?");
       params.push(filter.evidence);
+    }
+    if (filter.provenanceClass) {
+      clauses.push("provenance_class = ?");
+      params.push(filter.provenanceClass);
     }
     if (filter.sessionId) {
       clauses.push("session_id = ?");

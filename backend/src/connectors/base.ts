@@ -1,5 +1,8 @@
 import { defaultHttp, HttpTimeoutError, type HttpClient } from "../http/client";
 import { recordApiCall } from "../usage/api_ledger";
+import { configuredRawUpstreamInline } from "../config";
+import { connectorLicense, isProprietaryLicense } from "../provenance/policy";
+import { JsonlRawSink, globalRawSink, redact, type RawSink } from "../raw";
 
 export type ToolResponseType = "json" | "text";
 
@@ -43,6 +46,13 @@ export interface ConnectorOptions {
   // 礼貌头联系邮箱（OpenAlex/CrossRef 的 polite pool）。
   contactEmail?: string;
   userAgent?: string;
+  /**
+   * v0.7 W7-D0 · L0：每次 HTTP 调用的请求参数（脱敏）与原始响应体落 raw/connector/<name>/。
+   * 有项目上下文的构造方传 `project.raw()`；不传则落全局兜底 `<dataDir>/raw/`——**不记等于漏**。
+   */
+  rawSink?: RawSink;
+  /** 触发这次调用的命令（lit-search / lit-add / …），只用于 raw 行的 command 字段。 */
+  command?: string | null;
 }
 
 // 一个普通的 HTTP 数据源客户端基类。
@@ -111,6 +121,48 @@ export class HttpConnector {
     return tool;
   }
 
+  /**
+   * W7-D0 · L0 埋点（与 recordApiCall 同一 finally）。凭据源（license 为 proprietary）的响应体
+   * 默认只存 hash（`rawUpstreamInline=on` 才 inline），且这类行永不进共享集合（AD-16）。
+   * 写盘失败不影响 connector 调用本身（与 api_ledger 同口径），系统性漏记由门禁 G1 对账抓。
+   */
+  private appendRaw(entry: {
+    tool: string;
+    host: string;
+    method: string;
+    params: Record<string, unknown>;
+    status: number | string;
+    latencyMs: number;
+    contentType: string | null;
+    rawText: string | null;
+  }): void {
+    try {
+      const sink = this.options.rawSink ?? globalRawSink();
+      const license = connectorLicense(this.name);
+      const inlineOk = !isProprietaryLicense(license) || configuredRawUpstreamInline();
+      sink.append({
+        kind: "connector",
+        command: this.options.command ?? null,
+        provenanceClass: "upstream",
+        license,
+        payload: {
+          connector: this.name,
+          tool: entry.tool,
+          host: entry.host,
+          method: entry.method,
+          params: redact(entry.params),
+          status: entry.status,
+          latencyMs: entry.latencyMs,
+          contentType: entry.contentType,
+          response:
+            entry.rawText === null ? null : inlineOk ? sink.body(entry.rawText) : JsonlRawSink.hashOnly(entry.rawText),
+        },
+      });
+    } catch {
+      // 见上：不让 raw 落盘失败打断调用。
+    }
+  }
+
   async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.assertKnownTool(toolName);
 
@@ -165,6 +217,9 @@ export class HttpConnector {
     const host = url.host;
     const startedAt = Date.now();
     let status: number | string | undefined;
+    // W7-D0：原始响应体在 JSON.parse 之前先留一份（AD-15）——归一化逻辑一改，旧结果靠它重算。
+    let rawText: string | null = null;
+    let contentType: string | null = null;
     try {
       const response = await this.http.request(url.toString(), {
         method: tool.method ?? "GET",
@@ -172,6 +227,8 @@ export class HttpConnector {
         body: isPost ? JSON.stringify(remaining) : undefined,
       });
       status = response.status;
+      // 有些测试桩/脚手架模板的响应对象不带 headers；raw 行的 contentType 只是元数据，缺了记 null。
+      contentType = response.headers?.["content-type"] ?? null;
       if (!response.ok) {
         // 错误消息只带状态码，绝不回显响应体或请求头（可能含凭据）。
         throw new Error(
@@ -181,11 +238,15 @@ export class HttpConnector {
       // 显式 await（而不是直接 `return response.text()/.json()`）：async 函数里
       // `return somePromise` 会让下面的 finally 在 promise 落定**之前**就执行——
       // 显式 await 才能保证台账记的 latencyMs 包含真正读完响应体的耗时。
-      if (isText) return await response.text();
+      if (isText) {
+        rawText = await response.text();
+        return rawText;
+      }
       // R2 实测（bioRxiv 服务端故障期）：上游可能回 HTTP 200 + 空 body，裸
       // response.json() 抛 "SyntaxError: Unexpected EOF"——用户读不出这是上游的问题。
       // 先取文本再解析，把「空响应」与「非法 JSON」都翻译成指명上游的可读错误。
       const raw = await response.text();
+      rawText = raw;
       if (raw.trim() === "") {
         throw new Error(
           `Connector "${this.name}" tool "${toolName}": 上游返回空响应（HTTP ${response.status}、0 字节）——服务可能临时故障，稍后重试或换源`,
@@ -207,6 +268,16 @@ export class HttpConnector {
         : `error:${error instanceof Error ? error.constructor.name : "Unknown"}`;
       throw error;
     } finally {
+      this.appendRaw({
+        tool: toolName,
+        host,
+        method: tool.method ?? "GET",
+        params: remaining,
+        status: status ?? "error:Unknown",
+        latencyMs: Date.now() - startedAt,
+        contentType,
+        rawText,
+      });
       recordApiCall({
         connector: this.name,
         host,

@@ -346,6 +346,7 @@ export class ReadingCardGenerator {
     // 它的内容锚在一个外部来源上（区别于实验产出的 observed）。见 devlog P3 决策 D1。
     const record = records.create({
       type: "reading",
+      provenanceClass: "model_generated",
       title: `精读卡：${paper.title}`,
       content: renderReadingCard(card),
       evidence: "sourced",
