@@ -37,10 +37,9 @@ export interface SettingSpec {
   // 对应的环境变量；给了就意味着 env 可以临时覆盖。
   envVar: string | null;
   /**
-   * V21（BACKLOG）：已废弃、但仍生效的旧环境变量名（按优先级排列，通常只有一个）。
-   * `resolveSetting()` 只在 `envVar` 没设时才回落到这里，命中时经 `ConfigOptions.warn`
-   * 告警一次——不是静默兼容，也不是直接砍掉（v0.2.1 起 MCP 工具描述已把旧名写给外部
-   * agent 看，改名本身是 breaking change，需要一个可观测的废弃周期）。计划 v0.8 移除。
+   * V21：**已移除**的旧环境变量名。v0.7 是废弃周期（读到 warn 仍生效）；v0.8 起
+   * `resolveSetting()` 读到任一旧名**直接抛错**并指出新名——不再静默生效，也不再 warn 后照用，
+   * 否则用户永远不会改（v0.2.1 起 MCP 工具描述把旧名写给外部 agent 看过，所以错误消息里点名新旧两名）。
    */
   legacyEnvVars?: readonly string[];
   // 默认值。`null` 表示「没有默认，由下游各自决定」。
@@ -518,20 +517,15 @@ export function resolveSetting(key: string, options: ConfigOptions = {}): Resolv
   const warn = options.warn ?? ((m: string) => console.warn(m));
 
   const envRaw = spec.envVar ? env[spec.envVar] : undefined;
-  // V21：新名没设时才看旧名——新名优先，同设时新名赢。命中旧名就 warn 一次
-  // （走 ConfigOptions.warn 这个既有出口，跟上面权限告警同一套注入方式，测试可断言）。
-  let legacyRaw: string | undefined;
-  if (envRaw === undefined || envRaw === "") {
-    for (const legacyVar of spec.legacyEnvVars ?? []) {
-      const v = env[legacyVar];
-      if (v !== undefined && v !== "") {
-        legacyRaw = v;
-        warn(
-          `环境变量 '${legacyVar}' 已废弃，配置项 '${spec.key}' 请改用 '${spec.envVar}'` +
-            `（旧名 v0.7 仍生效，计划 v0.8 起移除）`,
-        );
-        break;
-      }
+  // V21（v0.8 起）：旧名读到即报错——不看新名设没设（设了新名还留着旧名，多半是复制粘贴的陈旧配置，
+  // 同样该清掉）。错误消息点名旧名与新名，给下一步。
+  for (const legacyVar of spec.legacyEnvVars ?? []) {
+    const v = env[legacyVar];
+    if (v !== undefined && v !== "") {
+      throw new Error(
+        `环境变量 '${legacyVar}' 已于 v0.8 移除，配置项 '${spec.key}' 请改用 '${spec.envVar}'` +
+          `（unset ${legacyVar}；值原样搬到新名即可）`,
+      );
     }
   }
   const configRaw = config[spec.key];
@@ -541,9 +535,6 @@ export function resolveSetting(key: string, options: ConfigOptions = {}): Resolv
   if (envRaw !== undefined && envRaw !== "") {
     source = "env";
     raw = envRaw;
-  } else if (legacyRaw !== undefined) {
-    source = "env";
-    raw = legacyRaw;
   } else if (configRaw !== undefined && configRaw !== "") {
     source = "config";
     raw = configRaw;
