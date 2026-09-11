@@ -6,6 +6,9 @@
 
 > 一句话主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。**
 
+**上手指南**：[readme_for_human.md](readme_for_human.md)（人类用户）·
+[readme_for_agent.md](readme_for_agent.md)（AI agent 集成，配合 [llms.txt](llms.txt)）
+
 设计与开发文档：[docs/DESIGN.md](docs/DESIGN.md) · [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) ·
 [docs/BACKLOG.md](docs/BACKLOG.md) · [各阶段 devlog](docs/devlog/)
 
