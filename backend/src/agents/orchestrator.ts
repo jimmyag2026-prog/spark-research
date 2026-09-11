@@ -454,6 +454,35 @@ export class OrchestratorAgent {
     });
   }
 
+  private recordExecution(
+    sessionId: string,
+    input: { kernelId: string; code: string; result: { status: string; stdout?: string; stderr?: string; timedOut?: boolean } },
+  ): void {
+    const project = this.projectForSession(sessionId);
+    if (!project) return;
+    try {
+      const artifacts = project.artifacts();
+      const cellIndex = artifacts.listExecutionsByFrame(sessionId).length;
+      artifacts.saveExecution({
+        frame: sessionId,
+        cellIndex,
+        kernelId: input.kernelId,
+        language: "python",
+        source: input.code,
+        stdout: input.result.stdout ?? "",
+        stderr: input.result.stderr ?? "",
+        status: input.result.timedOut ? "timeout" : input.result.status,
+        filesWritten: [],
+        filesRead: [],
+        wallTime: null,
+        cpuTime: null,
+        peakMemory: null,
+      });
+    } catch {
+      // 记账失败不打断 task（与 raw 埋点同口径）；系统性漏记由 execution_records 的导出计数暴露。
+    }
+  }
+
   private kernelRawFor(sessionId: string | null): KernelExecuteOptions["raw"] {
     const project = sessionId ? this.projectForSession(sessionId) : null;
     if (!project) return undefined;
@@ -698,6 +727,11 @@ export class OrchestratorAgent {
           const kernelId = this.daemon.kernelManager.createKernel("python");
           try {
             const result = await this.daemon.kernelManager.execute(kernelId, code, { raw: this.kernelRawFor(sessionId) });
+            // V82（v0.7 W7-D2）：execution_records 此前从没有生产写入方——code task 是 kernel 执行的唯一
+            // 生产路径，落在这里。frame = sessionId，cell_index = 本会话第几次执行（按已有条数递增）。
+            // raw/kernel 行在 execute() 内先落、拿不到这个 id（executionRecordId 仍 null），两边靠
+            // contentHash 对得上；接线成「先落 execution_record 再喂 raw」留给后续。
+            this.recordExecution(sessionId, { kernelId, code, result });
             const output = result.result ?? result.stdout ?? result.error ?? "";
             this.record(sessionId, "python", "execute", `${task.id}: ${result.status}`);
             return { taskId: task.id, kind: task.kind, ok: result.status === "ok", output: String(output) };

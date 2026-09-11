@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, extname, join, resolve } from "node:path";
-import { copyFileSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 // V27：同 project/records.ts —— schema 走静态 import，编译期进二进制。
 import SCHEMA_SQL from "./schema.sql" with { type: "text" };
 import type {
@@ -269,6 +269,57 @@ export class ArtifactStore {
 
   getLineageGraph(versionId: string): ReturnType<LineageGraph["getGraph"]> {
     return this.buildGraph().getGraph(versionId);
+  }
+
+  // ── v0.7 W7-D2 · 导出/导入 ─────────────────────────────────────────────────
+  /** 全部版本原样行 + 文件内容（base64，二进制安全）。 */
+  exportVersions(): Array<{ row: Record<string, unknown>; contentBase64: string | null }> {
+    const rows = this.db.query("SELECT * FROM artifacts ORDER BY created_at, version").all() as Array<Record<string, unknown>>;
+    return rows.map((row) => {
+      const path = row.storage_path as string;
+      const contentBase64 = existsSync(path) ? readFileSync(path).toString("base64") : null;
+      return { row, contentBase64 };
+    });
+  }
+
+  exportDependencies(): Array<{ source_version_id: string; target_version_id: string }> {
+    return this.db.query("SELECT * FROM dependencies").all() as Array<{ source_version_id: string; target_version_id: string }>;
+  }
+
+  exportExecutions(): ExecutionRecord[] {
+    return (this.db.query("SELECT * FROM execution_records ORDER BY created_at").all() as ExecRow[]).map(mapExecRow);
+  }
+
+  /** 导入到空库：文件落 storageDir、行原样（storage_path / project_slug 改写成本库的）。 */
+  importVersions(
+    versions: Array<{ row: Record<string, unknown>; contentBase64: string | null }>,
+    dependencies: Array<{ source_version_id: string; target_version_id: string }>,
+    projectSlug: string,
+  ): number {
+    const existing = (this.db.query("SELECT COUNT(*) AS n FROM artifacts").get() as { n: number }).n;
+    if (existing > 0) throw new Error(`importVersions 只能导入空 artifacts 库（当前已有 ${existing} 个版本）`);
+    const cols = (this.db.query("PRAGMA table_info(artifacts)").all() as Array<{ name: string }>).map((c) => c.name);
+    const ins = this.db.query(`INSERT INTO artifacts (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`);
+    const insDep = this.db.query("INSERT OR IGNORE INTO dependencies (source_version_id, target_version_id) VALUES (?, ?)");
+    const tx = this.db.transaction(() => {
+      for (const v of versions) {
+        const id = v.row.id as string;
+        const filename = v.row.filename as string;
+        const storagePath = join(this.storageDir, `${id}__${filename}`);
+        if (v.contentBase64 !== null) writeFileSync(storagePath, Buffer.from(v.contentBase64, "base64"));
+        ins.run(
+          ...cols.map((c) => {
+            if (c === "storage_path") return storagePath;
+            if (c === "project_slug") return projectSlug;
+            if (c === "project") return projectSlug;
+            return (v.row[c] ?? null) as string | number | null;
+          }),
+        );
+      }
+      for (const d of dependencies) insDep.run(d.source_version_id, d.target_version_id);
+    });
+    tx();
+    return versions.length;
   }
 
   saveExecution(record: Omit<ExecutionRecord, "id" | "createdAt">): ExecutionRecord {

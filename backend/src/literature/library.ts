@@ -391,6 +391,24 @@ export class LibraryStore {
     return true;
   }
 
+  /** v0.7 W7-D2：全部原样行（含已 tombstone 的）。 */
+  exportRows(): Array<Record<string, unknown>> {
+    return this.db.query("SELECT * FROM papers ORDER BY created_at, rowid").all() as Array<Record<string, unknown>>;
+  }
+
+  /** v0.7 W7-D2：导入到空库，原样行（含 removed_at）。 */
+  importRows(rows: Array<Record<string, unknown>>): number {
+    const existing = (this.db.query("SELECT COUNT(*) AS n FROM papers").get() as { n: number }).n;
+    if (existing > 0) throw new LibraryError(`importRows 只能导入空文献库（当前已有 ${existing} 篇）`);
+    const cols = (this.db.query("PRAGMA table_info(papers)").all() as Array<{ name: string }>).map((c) => c.name);
+    const ins = this.db.query(`INSERT INTO papers (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`);
+    const tx = this.db.transaction(() => {
+      for (const r of rows) ins.run(...cols.map((c) => (r[c] ?? null) as string | number | null));
+    });
+    tx();
+    return rows.length;
+  }
+
   /** 含已移除的行（对账/导出用）。 */
   getIncludingRemoved(id: string): (LibraryPaper & { removedAt: string | null; removedReason: string | null }) | null {
     const row = this.db.query("SELECT * FROM papers WHERE id = ?").get(id) as (PaperRow & { removed_at: string | null; removed_reason: string | null }) | null;

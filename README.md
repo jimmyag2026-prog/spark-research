@@ -240,6 +240,26 @@ research-report · scanpy · pydeseq2 · cobrapy
 
 ---
 
+### 原始层、日志与导出（v0.7）
+
+- **原始层 `raw/`（AD-15）**：每次 connector 调用（脱敏参数 + 原始响应体）、每次 LLM 调用（prompt 与响应原文）、
+  每个 kernel 执行、每个设备读数，落 `raw/{connector,llm,kernel,device}/<date>.jsonl`，只追加不改，行内 prevHash 成链；
+  >64KB 正文落 `raw/blobs/` 去重。默认开、只在本地；`config set rawLlm off` 可关（原文不可追溯，不建议）。
+- **证据图日志 `records_journal`**：records 的每次 create/update/link/tombstone/repair 一行，`report records --history <id>`
+  可看；完整性核验失败后 `report records --repair <id> --to-seq N --actor X` 署名重建。
+- **来源分级三列**：每条 record 带 `provenanceClass`（upstream / derived / user_authored / model_generated）、`license`
+  （SPDX 表达式）、`quality`。**AD-16：upstream 永不进入共享集合。**
+- **导出 / 导入**：`spark-research data export [--for-sharing] [--since ts]` 把项目导成 Hive 分区 JSONL + `manifest.json`
+  （share/schema/table 三级命名、DCAT 字段、每文件 sha256 与 rootHash、增量成链）；`data verify <dir>` 核完整性；
+  `data import <dir> --project <新slug>` 原样重建到空项目。`--for-sharing` 把不可共享的 record 打成 stub 保边、
+  上游 raw 与文献库不出门，排除计数写进 `manifest.excluded`。只有 JSONL，不做 Parquet；DuckDB 直查：
+
+  ```sql
+  SELECT type, count(*) FROM read_json_auto('export/*/records/**/*.jsonl', union_by_name=true) GROUP BY type;
+  SELECT provenance_class, license, count(*) FROM read_json_auto('export/*/records/**/*.jsonl', union_by_name=true) GROUP BY 1,2;
+  SELECT kind, count(*) FROM read_json_auto('export/*/raw/**/*.jsonl', union_by_name=true) GROUP BY kind;
+  ```
+
 ## 测试
 
 ```bash
