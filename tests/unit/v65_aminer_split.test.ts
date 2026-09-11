@@ -68,7 +68,8 @@ describe("V65 · AMiner 拆词兜底", () => {
 
   test("单词 0 命中 → 不拆，note 提示连写概念可用空格分开", async () => {
     const registry = new ScriptedRegistry(() => ({ data: [] }));
-    const searcher = new LiteratureSearcher(registry);
+    // B-2b 之后连写中文会先试分词器；这条钉的是「没有分词器」时的既有行为，显式注入不可用的分词器。
+    const searcher = new LiteratureSearcher(registry, { segmenter: async () => ({ terms: null, reason: "test: 无分词器" }) });
     const result = await searcher.search("脑机接口信号解码", { sources: ["aminer"], perSource: 5 });
     expect(registry.calls.length).toBe(1);
     expect(result.sources[0]!.note).toContain("空格");

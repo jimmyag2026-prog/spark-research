@@ -209,16 +209,20 @@ export class LiteratureSearcher {
   // V65 残余：真实分词器默认 `segmentQuery`（jieba，见 segment.ts）；测试注入假实现
   // 验证「拆词入口」本身的判据（含 CJK / 无空格 / 0 命中三个条件），不依赖真装了 jieba。
   private segmenter: Segmenter;
+  private readonly deepPool: number;
 
   constructor(
     registryOrOptions: ConnectorRegistry | ConnectorOptions = {},
-    options: { segmenter?: Segmenter } = {},
+    options: { segmenter?: Segmenter; deepPool?: number } = {},
   ) {
     this.registry =
       registryOrOptions instanceof ConnectorRegistry
         ? registryOrOptions
         : new ConnectorRegistry(registryOrOptions).registerBuiltins();
     this.segmenter = options.segmenter ?? segmentQuery;
+    // alpha.5 收口：深池档位可注入——fixture cassette 按 perSource=10 录制（FixtureHttp 精确匹配 URL），
+    // 测试场景显式传 10 如实反映录制条件；生产默认 BLENDED_DEEP_POOL。
+    this.deepPool = options.deepPool ?? BLENDED_DEEP_POOL;
   }
 
   async search(query: string, options: LiteratureSearchOptions = {}): Promise<LiteratureSearchResult> {
@@ -227,7 +231,7 @@ export class LiteratureSearcher {
     // 类级默认仍是 "hits"，理由见下面 `applyRank` 调用点之前的既有注释（V67 2.3）。
     const rank = options.rank ?? "hits";
     const deepPoolApplied = options.perSource === undefined && rank === "blended";
-    const perSource = options.perSource ?? (rank === "blended" ? BLENDED_DEEP_POOL : 10);
+    const perSource = options.perSource ?? (rank === "blended" ? this.deepPool : 10);
 
     const settled = await Promise.all(
       sources.map((source) => this.searchOne(source, query, perSource)),
@@ -241,8 +245,8 @@ export class LiteratureSearcher {
       const note =
         deepPoolApplied && status.outcome === "ok"
           ? status.note
-            ? `${status.note}；深池 ${BLENDED_DEEP_POOL}/源（blended 默认）`
-            : `深池 ${BLENDED_DEEP_POOL}/源（blended 默认）`
+            ? `${status.note}；深池 ${this.deepPool}/源（blended 默认）`
+            : `深池 ${this.deepPool}/源（blended 默认）`
           : status.note;
       statuses.push(note === status.note ? status : { ...status, note });
       all.push(...papers);

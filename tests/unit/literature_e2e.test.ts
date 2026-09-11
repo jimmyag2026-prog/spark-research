@@ -38,8 +38,7 @@ function searcherWithS2Credentials(cassette: string, mode: FixtureMode): Literat
         has: (id) => id === "semanticscholar",
         get: (id) => (id === "semanticscholar" ? { api_key: "fixture-test-key" } : null),
       },
-    }).registerBuiltins(),
-  );
+    }).registerBuiltins(), { deepPool: 10 } /* cassette 按 perSource=10 录制 */);
 }
 
 // e2e 回放（无网络，CI 常驻）：跨源检索 → 去重合并 → 入库 → 引文边 → PDF → 导出。
