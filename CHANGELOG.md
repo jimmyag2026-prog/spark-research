@@ -5,6 +5,42 @@
 
 ---
 
+## [0.7.0-alpha.4] — 2026-09-11
+
+**W7-D2：`data export / import / verify`——项目整体可导出（JSONL + manifest）、可核、可重建；`--for-sharing` 把 AD-16 落到产物上。**
+（编号说明：主会话的 D2 先于三条 lane 完成，故 alpha.4 = D2，alpha.5 = 三 lane 收口。）
+
+### 新增
+
+- **`spark-research data export`**：`projects/<slug>/export/<ts>/` 下 Hive 分区 JSONL——
+  `records/type=…/date=…` · `edges/` · `records_journal/date=…` · `raw/kind=…/date=…`（+ `raw/blobs/`）·
+  `artifacts/`（版本行 + 文件 + 依赖 + execution_records）· `library/papers.jsonl`（含已 tombstone 的）·
+  `usage.jsonl`。`manifest.json`：Delta Sharing 三级命名（share = 项目）、DCAT 核心字段、SPDX 许可计数、
+  来源分级计数、每个文件的 sha256 与 `rootHash`；`--since` 增量导出带 `prevManifestHash` 成链。
+  **只有 JSONL，不做 Parquet**（用户裁定）；帮助里给了三条 DuckDB 直查示例。
+- **`data import <dir> --project <新slug>`**：先核每个文件 sha256 与 rootHash，再原样重建到**空**项目
+  （records / edges / journal 保 seq 与 hash 不重算；raw 行原样，链不重算；artifacts 文件与行；文献库行；
+  usage）。`data verify <dir>` 只核不导。
+- **`--for-sharing`（AD-16 的产物面）**：`shareable()` 判否的 record 打成 **stub**（只有 id/type/hash/
+  来源分级，无内容）**保边**；这些 record 的 journal 行同样打桩（seq/prevHash/hash 原样、patch 换骨架）；
+  raw 的 connector 行与整个文献库不出门；被排除的计数写进 `manifest.excluded`。导入侧 `verifyJournal()`
+  对 stub 行只核链不核 hash——stub 标记本身可见。
+- **V82 关闭**：orchestrator 的 code task 现在把每次 kernel 执行落 `execution_records`（frame = 会话，
+  cell_index 递增）——这张表从 v0.1 起第一次有了生产写入方。
+
+### 门禁
+
+- G5：export → 空项目 import → records/edges/journal/raw/artifacts/library 逐条相等，`report export` 的
+  Markdown diff 为空（slug 归一化）；篡改任一文件 `verify` 与 `import` 都拒。
+- G6 导出面：`--for-sharing` 产物里 grep 不到上游内容；stub 保边；导入后边仍在。
+- 5 条阴性对照实跑全红（import 不导 journal / 不导 raw · 放行 upstream · 不丢上游 raw · verify 不核 sha256）。
+
+### 如实交代
+
+- raw 行的 `project` 字段在导入后仍是来源 slug（hash 覆盖了它，改写会断链）——链完整性优先，manifest.share 记着来源。
+- raw/kernel 行的 `executionRecordId` 仍为 null（raw 在 execute() 内先落、拿不到 id）；两边靠 contentHash 对得上，接线留后续。
+- `data import` 只重建到空项目；不做合并。
+
 ## [0.7.0-alpha.3] — 2026-09-11
 
 **W7-D1：证据图之下的 append-only 日志（AD-15 的 L1 半边）· V24 恢复路径 · V30 删论文可达且不硬删。**

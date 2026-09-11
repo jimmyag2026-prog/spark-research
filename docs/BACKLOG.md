@@ -2,7 +2,7 @@
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11 晚（v0.7 W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -171,7 +171,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频<br>✅ **v0.7 W7-D0 已做（C-4）**：records / library / artifacts 三库补 `PRAGMA busy_timeout = 5000`（findings.db 早有）。并发复现脚本进 concurrency 套件的事留给 C-1 一起做 |
 | V81 | **v0.6.0 带着一条全套必红的 e2e 发布了**（⑱ 用量面板；单跑绿、按序跑红） | v0.7 基线闸 0-1 实跑六套件发现：alpha.7（A5 blocker 修复）把 HTTP 的 read/review/co-explore/novelty 路由接入 `llmFor` 计量后，e2e ③④⑤ 会往本项目 usage.jsonl 写行，⑱ 开头「面板必为空态」的断言只在单跑时成立。CI 只跑单测+冒烟不跑 e2e，所以没人看见。**形状 = V58**：验收后改了被验收的东西（HTTP 计量是 A5 之后加的），e2e 全套没重跑。<br>✅ **v0.7 基线闸已修**：⑱ 改成增量断言（before/after 的 calls/unknownCostCalls/knownCostUsd 各 +2/+1/+0.0123），空态只在确实无记录时核。**登记是为了形状**：e2e 之间共用一个项目目录，任何「假设某文件为空」的断言都是顺序敏感的；新 e2e 一律写增量。另：CI 不含 e2e 的缺口进 W7-D0 收口议题（要么进 CI、要么发版检查单明列「本机全套 e2e」） |
 
-| V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表<br>⏸ **W7-D1 未处置**（接线要定 frame/cell_index 语义且牵动 orchestrator）。**去向：W7-D2 与导出一起定**——导出时 execution_records 如实导空表 |
+| V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表<br>⏸ **W7-D1 未处置**（接线要定 frame/cell_index 语义且牵动 orchestrator）。**去向：W7-D2 与导出一起定**——导出时 execution_records 如实导空表<br>✅ **v0.7 W7-D2 已接线**：orchestrator code task 每次 kernel 执行落 `execution_records`（frame=sessionId，cell_index 递增）；`data export` 的 `artifacts/execution_records.jsonl` 从此不再恒空。**残余**：raw/kernel 行的 `executionRecordId` 仍 null（raw 在 execute() 内先落），两边靠 contentHash 对齐 |
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
 > D1/D3 的展开理由见 §post-v0.3；D2（Semantic Scholar key）已归口 v0.3 P16。

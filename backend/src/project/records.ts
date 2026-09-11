@@ -328,6 +328,69 @@ export class RecordStore {
       );
   }
 
+  // ── v0.7 W7-D2 · 导出/导入（L2）──────────────────────────────────────────────
+  // 导出走**原样行**（含 rev、三列），不经 ResearchRecord 映射再反映射——往返逐字节相等的前提。
+  // 导入绕过 journal（日志本身是被导入的对象，重新记一遍会把链弄断）。
+
+  /** 全部 records 原样行（按 created_at, rowid）。 */
+  exportRecordRows(): Array<Record<string, unknown>> {
+    return this.db.query("SELECT * FROM records ORDER BY created_at, rowid").all() as Array<Record<string, unknown>>;
+  }
+
+  exportEdgeRows(): Array<{ source_id: string; target_id: string; type: string; created_at: string }> {
+    return this.db.query("SELECT * FROM record_edges ORDER BY created_at, rowid").all() as Array<{
+      source_id: string;
+      target_id: string;
+      type: string;
+      created_at: string;
+    }>;
+  }
+
+  /**
+   * 导入到**空项目**：records / edges / journal 原样插入（journal 保留 seq 与 hash，链不重算）。
+   * `project` 列改写成本项目 slug（导出时该列已被剥掉，见 data/export.ts）。
+   */
+  importRows(input: {
+    records: Array<Record<string, unknown>>;
+    edges: Array<{ source_id: string; target_id: string; type: string; created_at: string }>;
+    journal: JournalEntry[];
+  }): { records: number; edges: number; journal: number } {
+    const existing = (this.db.query("SELECT COUNT(*) AS n FROM records").get() as { n: number }).n;
+    if (existing > 0) throw new RecordValidationError(`importRows 只能导入空项目（当前已有 ${existing} 条 record）`);
+    const cols = [
+      "id", "project", "type", "title", "content", "evidence", "origin_kind", "origin_ref", "origin_connector",
+      "session_id", "artifact_id", "metadata", "created_at", "rev", "provenance_class", "license", "quality",
+    ];
+    const insRecord = this.db.query(`INSERT INTO records (${cols.join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`);
+    const insEdge = this.db.query("INSERT OR IGNORE INTO record_edges (source_id, target_id, type, created_at) VALUES (?, ?, ?, ?)");
+    const insJournal = this.db.query(
+      `INSERT INTO records_journal (seq, record_id, op, rev_before, rev_after, actor, actor_source, patch, prev_hash, hash, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const tx = this.db.transaction(() => {
+      // journal 表若已有 backfill（空项目打开时不会有，防御一下）先清掉。
+      this.db.exec("DELETE FROM records_journal");
+      for (const r of input.records) {
+        insRecord.run(
+          ...cols.map((c) => {
+            if (c === "project") return this.project;
+            const v = r[c];
+            if (c === "rev") return typeof v === "number" ? v : 1;
+            if (c === "quality") return typeof v === "string" ? v : JSON.stringify(v ?? []);
+            if (c === "metadata") return typeof v === "string" ? v : JSON.stringify(v ?? {});
+            return (v ?? null) as string | number | null;
+          }),
+        );
+      }
+      for (const e of input.edges) insEdge.run(e.source_id, e.target_id, e.type, e.created_at);
+      for (const j of input.journal) {
+        insJournal.run(j.seq, j.recordId, j.op, j.revBefore, j.revAfter, j.actor, j.actorSource, JSON.stringify(j.patch), j.prevHash, j.hash, j.createdAt);
+      }
+    });
+    tx();
+    return { records: input.records.length, edges: input.edges.length, journal: input.journal.length };
+  }
+
   /** 某条 record 的全部日志（按 seq）。 */
   history(recordId: string): JournalEntry[] {
     const rows = this.db
@@ -359,7 +422,10 @@ export class RecordStore {
         prevHash: e.prevHash,
         createdAt: e.createdAt,
       };
-      if (sha256Of(body) !== e.hash) return { ok: false, lines, brokenAt: e.seq, reason: `seq ${e.seq} hash 对不上` };
+      // W7-D2：--for-sharing 导入的日志里，被打桩的行 patch 只剩骨架（内容不出门），
+      // hash 覆盖的是原 patch——这类行只核链不核 hash，且 stub 标记本身是可见的。
+      const isStub = (e.patch as { stub?: unknown }).stub === true;
+      if (!isStub && sha256Of(body) !== e.hash) return { ok: false, lines, brokenAt: e.seq, reason: `seq ${e.seq} hash 对不上` };
       if (e.prevHash !== prev) return { ok: false, lines, brokenAt: e.seq, reason: `seq ${e.seq} prevHash 断链` };
       prev = e.hash;
     }

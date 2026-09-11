@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.7.0-alpha.3，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.7.0-alpha.4，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -441,6 +441,26 @@ research-report · scanpy · pydeseq2 · cobrapy
 状态真源在磁盘，不在内存：编排进程死了任务还在，重启能接回来。
 
 ---
+
+### 原始层、日志与导出（v0.7）
+
+- **原始层 `raw/`（AD-15）**：每次 connector 调用（脱敏参数 + 原始响应体）、每次 LLM 调用（prompt 与响应原文）、
+  每个 kernel 执行、每个设备读数，落 `raw/{connector,llm,kernel,device}/<date>.jsonl`，只追加不改，行内 prevHash 成链；
+  >64KB 正文落 `raw/blobs/` 去重。默认开、只在本地；`config set rawLlm off` 可关（原文不可追溯，不建议）。
+- **证据图日志 `records_journal`**：records 的每次 create/update/link/tombstone/repair 一行，`report records --history <id>`
+  可看；完整性核验失败后 `report records --repair <id> --to-seq N --actor X` 署名重建。
+- **来源分级三列**：每条 record 带 `provenanceClass`（upstream / derived / user_authored / model_generated）、`license`
+  （SPDX 表达式）、`quality`。**AD-16：upstream 永不进入共享集合。**
+- **导出 / 导入**：`spark-research data export [--for-sharing] [--since ts]` 把项目导成 Hive 分区 JSONL + `manifest.json`
+  （share/schema/table 三级命名、DCAT 字段、每文件 sha256 与 rootHash、增量成链）；`data verify <dir>` 核完整性；
+  `data import <dir> --project <新slug>` 原样重建到空项目。`--for-sharing` 把不可共享的 record 打成 stub 保边、
+  上游 raw 与文献库不出门，排除计数写进 `manifest.excluded`。只有 JSONL，不做 Parquet；DuckDB 直查：
+
+  ```sql
+  SELECT type, count(*) FROM read_json_auto('export/*/records/**/*.jsonl', union_by_name=true) GROUP BY type;
+  SELECT provenance_class, license, count(*) FROM read_json_auto('export/*/records/**/*.jsonl', union_by_name=true) GROUP BY 1,2;
+  SELECT kind, count(*) FROM read_json_auto('export/*/raw/**/*.jsonl', union_by_name=true) GROUP BY kind;
+  ```
 
 ## 测试
 
@@ -2318,7 +2338,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11 晚（v0.7 W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2487,7 +2507,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频<br>✅ **v0.7 W7-D0 已做（C-4）**：records / library / artifacts 三库补 `PRAGMA busy_timeout = 5000`（findings.db 早有）。并发复现脚本进 concurrency 套件的事留给 C-1 一起做 |
 | V81 | **v0.6.0 带着一条全套必红的 e2e 发布了**（⑱ 用量面板；单跑绿、按序跑红） | v0.7 基线闸 0-1 实跑六套件发现：alpha.7（A5 blocker 修复）把 HTTP 的 read/review/co-explore/novelty 路由接入 `llmFor` 计量后，e2e ③④⑤ 会往本项目 usage.jsonl 写行，⑱ 开头「面板必为空态」的断言只在单跑时成立。CI 只跑单测+冒烟不跑 e2e，所以没人看见。**形状 = V58**：验收后改了被验收的东西（HTTP 计量是 A5 之后加的），e2e 全套没重跑。<br>✅ **v0.7 基线闸已修**：⑱ 改成增量断言（before/after 的 calls/unknownCostCalls/knownCostUsd 各 +2/+1/+0.0123），空态只在确实无记录时核。**登记是为了形状**：e2e 之间共用一个项目目录，任何「假设某文件为空」的断言都是顺序敏感的；新 e2e 一律写增量。另：CI 不含 e2e 的缺口进 W7-D0 收口议题（要么进 CI、要么发版检查单明列「本机全套 e2e」） |
 
-| V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表<br>⏸ **W7-D1 未处置**（接线要定 frame/cell_index 语义且牵动 orchestrator）。**去向：W7-D2 与导出一起定**——导出时 execution_records 如实导空表 |
+| V82 | **`execution_records` 建好了但没有生产写入方**（V45 家族第 5 例） | v0.7 W7-D0 埋 raw/kernel 时发现：`artifacts.db` 的 `execution_records` 表与 `ArtifactStore.saveExecution()` 只被测试引用，kernel 的 cell 执行（`KernelManager.execute()`，orchestrator 的 code task 是唯一生产调用方）从未往这张表写过——`report stats` 相关统计对它恒空。孤儿门禁抓不到是因为 `artifacts/store.ts` 整体有生产调用方（W3-c 标过的文件粒度上限，与 V30 同形）。**D0 处置**：不顺手接（不在足迹、且接了要定 frame/cell_index 语义），raw/kernel 行 `executionRecordId` 恒 null、行内自带 source/stdout/stderr + contentHash，不依赖它。去向：W7-D1 与 journal 一起定——要么 kernel 执行真落 execution_records 并让 raw 行引用，要么删表<br>⏸ **W7-D1 未处置**（接线要定 frame/cell_index 语义且牵动 orchestrator）。**去向：W7-D2 与导出一起定**——导出时 execution_records 如实导空表<br>✅ **v0.7 W7-D2 已接线**：orchestrator code task 每次 kernel 执行落 `execution_records`（frame=sessionId，cell_index 递增）；`data export` 的 `artifacts/execution_records.jsonl` 从此不再恒空。**残余**：raw/kernel 行的 `executionRecordId` 仍 null（raw 在 execute() 内先落），两边靠 contentHash 对齐 |
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
 > D1/D3 的展开理由见 §post-v0.3；D2（Semantic Scholar key）已归口 v0.3 P16。
@@ -2508,6 +2528,42 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.7.0-alpha.4] — 2026-09-11
+
+**W7-D2：`data export / import / verify`——项目整体可导出（JSONL + manifest）、可核、可重建；`--for-sharing` 把 AD-16 落到产物上。**
+（编号说明：主会话的 D2 先于三条 lane 完成，故 alpha.4 = D2，alpha.5 = 三 lane 收口。）
+
+### 新增
+
+- **`spark-research data export`**：`projects/<slug>/export/<ts>/` 下 Hive 分区 JSONL——
+  `records/type=…/date=…` · `edges/` · `records_journal/date=…` · `raw/kind=…/date=…`（+ `raw/blobs/`）·
+  `artifacts/`（版本行 + 文件 + 依赖 + execution_records）· `library/papers.jsonl`（含已 tombstone 的）·
+  `usage.jsonl`。`manifest.json`：Delta Sharing 三级命名（share = 项目）、DCAT 核心字段、SPDX 许可计数、
+  来源分级计数、每个文件的 sha256 与 `rootHash`；`--since` 增量导出带 `prevManifestHash` 成链。
+  **只有 JSONL，不做 Parquet**（用户裁定）；帮助里给了三条 DuckDB 直查示例。
+- **`data import <dir> --project <新slug>`**：先核每个文件 sha256 与 rootHash，再原样重建到**空**项目
+  （records / edges / journal 保 seq 与 hash 不重算；raw 行原样，链不重算；artifacts 文件与行；文献库行；
+  usage）。`data verify <dir>` 只核不导。
+- **`--for-sharing`（AD-16 的产物面）**：`shareable()` 判否的 record 打成 **stub**（只有 id/type/hash/
+  来源分级，无内容）**保边**；这些 record 的 journal 行同样打桩（seq/prevHash/hash 原样、patch 换骨架）；
+  raw 的 connector 行与整个文献库不出门；被排除的计数写进 `manifest.excluded`。导入侧 `verifyJournal()`
+  对 stub 行只核链不核 hash——stub 标记本身可见。
+- **V82 关闭**：orchestrator 的 code task 现在把每次 kernel 执行落 `execution_records`（frame = 会话，
+  cell_index 递增）——这张表从 v0.1 起第一次有了生产写入方。
+
+### 门禁
+
+- G5：export → 空项目 import → records/edges/journal/raw/artifacts/library 逐条相等，`report export` 的
+  Markdown diff 为空（slug 归一化）；篡改任一文件 `verify` 与 `import` 都拒。
+- G6 导出面：`--for-sharing` 产物里 grep 不到上游内容；stub 保边；导入后边仍在。
+- 5 条阴性对照实跑全红（import 不导 journal / 不导 raw · 放行 upstream · 不丢上游 raw · verify 不核 sha256）。
+
+### 如实交代
+
+- raw 行的 `project` 字段在导入后仍是来源 slug（hash 覆盖了它，改写会断链）——链完整性优先，manifest.share 记着来源。
+- raw/kernel 行的 `executionRecordId` 仍为 null（raw 在 execute() 内先落、拿不到 id）；两边靠 contentHash 对得上，接线留后续。
+- `data import` 只重建到空项目；不做合并。
 
 ## [0.7.0-alpha.3] — 2026-09-11
 

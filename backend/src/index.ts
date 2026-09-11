@@ -16,6 +16,7 @@ import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
 import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
+import { runDataCommand } from "./data/cli";
 import { runConfigCommand } from "./config/cli";
 import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
@@ -72,6 +73,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research conclusion  结论卡（list / show / review —— 只有 approved 进报告结论区）
   spark-research review      findings 状态机（findings [--open] / mark-addressed <id>）
   spark-research report      研究报告导出（export —— 证据图 → Markdown）
+  spark-research data        项目数据导出/导入（JSONL + manifest；--for-sharing 按 AD-16 过滤）
   spark-research capabilities 能力自描述（--json 给 agent，不带则给人看的表格）
   spark-research doctor      环境体检（bun / Python 三档依赖 / provider key / 前端产物），缺什么给修复命令
   spark-research config      用户配置（list / get / set / unset / path）
@@ -537,6 +539,12 @@ function main() {
     }
     case "report": {
       runReportCommand(process.argv.slice(3)).then((code) => {
+        if (code !== 0) process.exitCode = code;
+      });
+      break;
+    }
+    case "data": {
+      runDataCommand(process.argv.slice(3)).then((code) => {
         if (code !== 0) process.exitCode = code;
       });
       break;

@@ -193,6 +193,25 @@ export class JsonlRawSink implements RawSink {
     return { ok: true, lines };
   }
 
+  /**
+   * v0.7 W7-D2：导入——整行原样落盘（hash/prevHash 不重算，链随导出原样带回）。
+   * 调用方保证按导出顺序逐行喂。
+   */
+  importEntry(entry: RawEntry): void {
+    const name = entry.kind === "connector" ? (entry.payload as { connector: string }).connector : null;
+    const file = this.fileFor(entry.kind, name, dateOf(entry.ts));
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, `${JSON.stringify(entry)}\n`, "utf8");
+    this.lastHash.set(file, entry.hash);
+  }
+
+  writeBlob(sha: string, text: string): void {
+    const path = join(this.root, "blobs", sha.slice(0, 2), sha);
+    if (existsSync(path)) return;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, text, "utf8");
+  }
+
   /** blob 内容读回（导出/校验用）。 */
   readBlob(sha: string): string | null {
     const path = join(this.root, "blobs", sha.slice(0, 2), sha);
