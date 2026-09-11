@@ -5,6 +5,35 @@
 
 ---
 
+## [0.7.0-alpha.3] — 2026-09-11
+
+**W7-D1：证据图之下的 append-only 日志（AD-15 的 L1 半边）· V24 恢复路径 · V30 删论文可达且不硬删。**
+
+### 新增
+
+- **`records_journal`**：records 表的每次 `create` / `update` / `link` / `tombstone` / `repair` 在同一事务
+  落一行日志（create 为全量快照、update 为调用方原样 patch），行内 `prevHash` 成链，`verifyJournal()`
+  逐行重算可抓篡改。老库首次打开给既有 record 各落一行 `backfill` 快照——历史从这一刻起可追溯，
+  更早的改写本来就没记录，不编造。9 处状态机调用方一行未改（可变投影之下加不可变日志，不重写状态机）。
+- **`report records --history <id>`**：看一条 record 的完整日志；HTTP `GET /api/records/:id/history` 同源。
+- **`report records --repair <id> --to-seq N --actor <署名>`（V24）**：完整性核验失败后的恢复路径——
+  按日志把投影重建到第 N 步，需要署名，落一行 `op=repair`，不删任何历史。
+- **`lit remove <paperId|doi> [--reason]`（V30）**：删论文这条路终于可达。`LibraryStore.remove()`
+  改 **tombstone**（`removed_at`，行留着；re-add 同一 DOI 即复活），同一动作里跑孤儿对账，指向它的
+  paper/reading record 一律 `tombstone`（不再是泛用 update）。
+
+### 门禁
+
+- G4：随机 46 次写操作后按日志重放 == 投影逐字段相等；篡改任一行 `verifyJournal` 报 brokenAt。
+- 4 条阴性对照实跑全红（update/create 不落日志 · remove 退回硬删 · repair 不落 op=repair），见 devlog W7-D1。
+
+### 如实交代
+
+- V82（`execution_records` 无生产写入方）本波**未处置**：接线要定 frame/cell_index 语义且牵动 orchestrator，
+  留到 W7-D2 与导出一起定（导出时它是一张空表，如实导空）。
+- journal 是**按项目一条链**，不是按 record；导出时整本导。
+- `link` 的幂等重复（INSERT OR IGNORE 没改行）不落日志——边没变。
+
 ## [0.7.0-alpha.2] — 2026-09-11
 
 **alpha.2：五条 lane 并行（sonnet 子代理，各自 worktree），主会话逐条独立复跑测试与阴性对照后合入。**

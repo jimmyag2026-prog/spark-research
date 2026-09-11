@@ -13,6 +13,7 @@ import {
   licenseForClass,
   type ProvenanceClass,
 } from "../provenance/policy";
+import { sha256Of } from "../raw/sink";
 import {
   EDGE_TYPES,
   EVIDENCE_LABELS,
@@ -22,6 +23,8 @@ import {
   type EvidenceLabel,
   type RecordEdge,
   type RecordFilter,
+  type JournalEntry,
+  type JournalOp,
   type RecordGraphData,
   type RecordInput,
   type RecordOrigin,
@@ -179,6 +182,36 @@ export function deriveQuality(metadata: Record<string, unknown>, explicit: strin
   return [...new Set(tags)];
 }
 
+interface JournalRow {
+  seq: number;
+  record_id: string;
+  op: string;
+  rev_before: number | null;
+  rev_after: number | null;
+  actor: string | null;
+  actor_source: string | null;
+  patch: string;
+  prev_hash: string | null;
+  hash: string;
+  created_at: string;
+}
+
+function mapJournalRow(row: JournalRow): JournalEntry {
+  return {
+    seq: row.seq,
+    recordId: row.record_id,
+    op: row.op as JournalOp,
+    revBefore: row.rev_before,
+    revAfter: row.rev_after,
+    actor: row.actor,
+    actorSource: row.actor_source,
+    patch: JSON.parse(row.patch) as Record<string, unknown>,
+    prevHash: row.prev_hash,
+    hash: row.hash,
+    createdAt: row.created_at,
+  };
+}
+
 function mapEdgeRow(row: EdgeRow): RecordEdge {
   return {
     sourceId: row.source_id,
@@ -210,6 +243,188 @@ export class RecordStore {
     this.db.exec(SCHEMA_SQL);
     this.migrateRevColumn();
     this.migrateProvenanceColumns();
+    this.migrateJournal();
+  }
+
+  // v0.7 W7-D1 · records_journal：append-only，与 records 同库同事务。schema.sql 不动
+  //（与 rev / 三列同一条路径）。老库首次打开：给每条既有 record 落一行 op=backfill 全量快照，
+  // 让历史从「这一刻」起可追溯（更早的改写本来就没记录，不编造）。幂等：journal 非空即跳过。
+  private migrateJournal(): void {
+    this.db.exec(`CREATE TABLE IF NOT EXISTS records_journal (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      record_id TEXT NOT NULL,
+      op TEXT NOT NULL,
+      rev_before INTEGER,
+      rev_after INTEGER,
+      actor TEXT,
+      actor_source TEXT,
+      patch TEXT NOT NULL,
+      prev_hash TEXT,
+      hash TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`);
+    this.db.exec("CREATE INDEX IF NOT EXISTS idx_records_journal_record ON records_journal (record_id, seq)");
+    const n = (this.db.query("SELECT COUNT(*) AS n FROM records_journal").get() as { n: number }).n;
+    if (n > 0) return;
+    const rows = this.db.query("SELECT * FROM records ORDER BY created_at, rowid").all() as Array<RecordRow & { rev: number }>;
+    if (rows.length === 0) return;
+    const tx = this.db.transaction((all: typeof rows) => {
+      for (const row of all) {
+        this.journal({ recordId: row.id, op: "backfill", revBefore: null, revAfter: row.rev, patch: this.snapshotOf(row) });
+      }
+    });
+    tx(rows);
+  }
+
+  private snapshotOf(row: RecordRow): Record<string, unknown> {
+    const { rev: _rev, ...rest } = row as RecordRow & { rev?: number };
+    return { ...rest };
+  }
+
+  private lastJournalHash(): string | null {
+    const row = this.db.query("SELECT hash FROM records_journal ORDER BY seq DESC LIMIT 1").get() as { hash: string } | null;
+    return row ? row.hash : null;
+  }
+
+  /** 写一行日志（调用方保证在同一事务内）。hash 覆盖除 hash 外全部字段，prevHash 指向上一行。 */
+  private journal(entry: {
+    recordId: string;
+    op: JournalOp;
+    revBefore: number | null;
+    revAfter: number | null;
+    patch: Record<string, unknown>;
+    actor?: string | null;
+    actorSource?: string | null;
+  }): void {
+    const createdAt = new Date().toISOString();
+    const prevHash = this.lastJournalHash();
+    const body = {
+      recordId: entry.recordId,
+      op: entry.op,
+      revBefore: entry.revBefore,
+      revAfter: entry.revAfter,
+      actor: entry.actor ?? null,
+      actorSource: entry.actorSource ?? null,
+      patch: entry.patch,
+      prevHash,
+      createdAt,
+    };
+    this.db
+      .query(
+        `INSERT INTO records_journal (record_id, op, rev_before, rev_after, actor, actor_source, patch, prev_hash, hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        body.recordId,
+        body.op,
+        body.revBefore,
+        body.revAfter,
+        body.actor,
+        body.actorSource,
+        JSON.stringify(body.patch),
+        prevHash,
+        sha256Of(body),
+        createdAt,
+      );
+  }
+
+  /** 某条 record 的全部日志（按 seq）。 */
+  history(recordId: string): JournalEntry[] {
+    const rows = this.db
+      .query("SELECT * FROM records_journal WHERE record_id = ? ORDER BY seq")
+      .all(recordId) as JournalRow[];
+    return rows.map(mapJournalRow);
+  }
+
+  /** 整本日志（导出用，按 seq）。 */
+  journalEntries(since = 0): JournalEntry[] {
+    const rows = this.db.query("SELECT * FROM records_journal WHERE seq > ? ORDER BY seq").all(since) as JournalRow[];
+    return rows.map(mapJournalRow);
+  }
+
+  /** 逐行重算 hash 与链（门禁 G4 的阴性对照靠它）。 */
+  verifyJournal(): { ok: boolean; lines: number; brokenAt?: number; reason?: string } {
+    let prev: string | null = null;
+    let lines = 0;
+    for (const e of this.journalEntries()) {
+      lines += 1;
+      const body = {
+        recordId: e.recordId,
+        op: e.op,
+        revBefore: e.revBefore,
+        revAfter: e.revAfter,
+        actor: e.actor,
+        actorSource: e.actorSource,
+        patch: e.patch,
+        prevHash: e.prevHash,
+        createdAt: e.createdAt,
+      };
+      if (sha256Of(body) !== e.hash) return { ok: false, lines, brokenAt: e.seq, reason: `seq ${e.seq} hash 对不上` };
+      if (e.prevHash !== prev) return { ok: false, lines, brokenAt: e.seq, reason: `seq ${e.seq} prevHash 断链` };
+      prev = e.hash;
+    }
+    return { ok: true, lines };
+  }
+
+  /**
+   * V24 的恢复路径：把某条 record 的投影重建到日志的第 toSeq 步（含）。只重放 create/backfill/
+   * update/repair 的 patch（link 与 tombstone 不改 title/content/metadata）。需要署名——这是人
+   * 确认后的动作，落一行 op=repair 日志，投影 rev+1。
+   */
+  repair(recordId: string, options: { toSeq: number; actor: string; actorSource?: string }): ResearchRecord {
+    const entries = this.history(recordId).filter((e) => e.seq <= options.toSeq);
+    const base = entries.find((e) => e.op === "create" || e.op === "backfill");
+    if (!base) throw new RecordValidationError(`record '${recordId}' 在 seq ≤ ${options.toSeq} 内没有 create/backfill 日志，无从重建`);
+    if (!options.actor?.trim()) throw new RecordValidationError("repair 需要署名 actor");
+    let title = String(base.patch.title ?? "");
+    let content = String(base.patch.content ?? "");
+    let metadata: Record<string, unknown> =
+      typeof base.patch.metadata === "string" ? (JSON.parse(base.patch.metadata as string) as Record<string, unknown>) : ((base.patch.metadata as Record<string, unknown>) ?? {});
+    for (const e of entries) {
+      if (e.seq <= base.seq) continue;
+      if (e.op === "update" || e.op === "tombstone") {
+        if (typeof e.patch.title === "string") title = e.patch.title;
+        if (typeof e.patch.content === "string") content = e.patch.content;
+        if (e.patch.metadata && typeof e.patch.metadata === "object") metadata = { ...metadata, ...(e.patch.metadata as Record<string, unknown>) };
+      } else if (e.op === "repair") {
+        const snap = e.patch.snapshot as { title: string; content: string; metadata: Record<string, unknown> } | undefined;
+        if (snap) ({ title, content, metadata } = snap);
+      }
+    }
+    const revBefore = this.getRev(recordId);
+    if (revBefore === null) throw new RecordValidationError(`record '${recordId}' not found`);
+    const tx = this.db.transaction(() => {
+      this.db
+        .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ?")
+        .run(title, content, JSON.stringify(metadata), recordId);
+      this.journal({
+        recordId,
+        op: "repair",
+        revBefore,
+        revAfter: revBefore + 1,
+        actor: options.actor,
+        actorSource: options.actorSource ?? "explicit",
+        patch: { toSeq: options.toSeq, snapshot: { title, content, metadata } },
+      });
+    });
+    tx();
+    return this.get(recordId)!;
+  }
+
+  /** V30：撤回（不删）——metadata 打 retracted 标记，日志 op=tombstone。 */
+  tombstone(recordId: string, reason: string, actor: string | null = null): ResearchRecord {
+    const existing = this.get(recordId);
+    if (!existing) throw new RecordValidationError(`record '${recordId}' not found`);
+    const patch = { metadata: { retracted: true, retractedAt: new Date().toISOString(), retractedReason: reason } };
+    const revBefore = this.getRev(recordId)!;
+    const tx = this.db.transaction(() => {
+      this.db
+        .query("UPDATE records SET metadata = ?, rev = rev + 1 WHERE id = ?")
+        .run(JSON.stringify({ ...existing.metadata, ...patch.metadata }), recordId);
+      this.journal({ recordId, op: "tombstone", revBefore, revAfter: revBefore + 1, actor, patch });
+    });
+    tx();
+    return this.get(recordId)!;
   }
 
   // v0.7 W7-D0 · L3 三列。与 rev 同一条路径：schema.sql 不动，这里 ALTER 补列；
@@ -324,32 +539,38 @@ export class RecordStore {
   }): ResearchRecord {
     const id = randomUUID();
     const createdAt = row.createdAt ?? new Date().toISOString();
-    this.db
-      .query(
-        `INSERT INTO records
-         (id, project, type, title, content, evidence, origin_kind, origin_ref,
-          origin_connector, session_id, artifact_id, metadata, created_at,
-          provenance_class, license, quality)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        this.project,
-        row.type,
-        row.title,
-        row.content,
-        row.evidence,
-        row.origin.kind,
-        row.origin.ref ?? null,
-        row.origin.connector ?? null,
-        row.origin.sessionId ?? null,
-        row.artifactId,
-        JSON.stringify(row.metadata),
-        createdAt,
-        row.provenanceClass,
-        row.license,
-        JSON.stringify(row.quality),
-      );
+    const tx = this.db.transaction(() => {
+      this.db
+        .query(
+          `INSERT INTO records
+           (id, project, type, title, content, evidence, origin_kind, origin_ref,
+            origin_connector, session_id, artifact_id, metadata, created_at,
+            provenance_class, license, quality)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          id,
+          this.project,
+          row.type,
+          row.title,
+          row.content,
+          row.evidence,
+          row.origin.kind,
+          row.origin.ref ?? null,
+          row.origin.connector ?? null,
+          row.origin.sessionId ?? null,
+          row.artifactId,
+          JSON.stringify(row.metadata),
+          createdAt,
+          row.provenanceClass,
+          row.license,
+          JSON.stringify(row.quality),
+        );
+      // W7-D1：同一事务落日志（op=create，全量快照）。
+      const inserted = this.db.query("SELECT * FROM records WHERE id = ?").get(id) as RecordRow & { rev: number };
+      this.journal({ recordId: id, op: "create", revBefore: null, revAfter: inserted.rev, patch: this.snapshotOf(inserted) });
+    });
+    tx();
     return this.get(id)!;
   }
 
@@ -444,19 +665,35 @@ export class RecordStore {
     const content = patch.content ?? existing.content;
     const metadataJson = JSON.stringify(metadata);
 
+    // W7-D1：投影改写与日志同一事务；journal 的 patch 是调用方传入的原样 patch（不是全量）。
+    const journalPatch: Record<string, unknown> = {};
+    if (patch.title !== undefined) journalPatch.title = patch.title;
+    if (patch.content !== undefined) journalPatch.content = patch.content;
+    if (patch.metadata !== undefined) journalPatch.metadata = patch.metadata;
+
     if (opts.expectedRev !== undefined) {
-      const result = this.db
-        .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ? AND rev = ?")
-        .run(title, content, metadataJson, id, opts.expectedRev);
-      if (result.changes === 0) {
-        throw new RecordConflictError(id, opts.expectedRev, this.getRev(id));
-      }
+      const expected = opts.expectedRev;
+      const tx = this.db.transaction(() => {
+        const result = this.db
+          .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ? AND rev = ?")
+          .run(title, content, metadataJson, id, expected);
+        if (result.changes === 0) {
+          throw new RecordConflictError(id, expected, this.getRev(id));
+        }
+        this.journal({ recordId: id, op: "update", revBefore: expected, revAfter: expected + 1, patch: journalPatch });
+      });
+      tx();
       return this.get(id)!;
     }
 
-    this.db
-      .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ?")
-      .run(title, content, metadataJson, id);
+    const revBefore = this.getRev(id);
+    const tx = this.db.transaction(() => {
+      this.db
+        .query("UPDATE records SET title = ?, content = ?, metadata = ?, rev = rev + 1 WHERE id = ?")
+        .run(title, content, metadataJson, id);
+      this.journal({ recordId: id, op: "update", revBefore, revAfter: revBefore === null ? null : revBefore + 1, patch: journalPatch });
+    });
+    tx();
     return this.get(id)!;
   }
 
@@ -540,11 +777,18 @@ export class RecordStore {
       throw new RecordValidationError(`target record '${targetId}' not found`);
     }
     const createdAt = new Date().toISOString();
-    this.db
-      .query(
-        "INSERT OR IGNORE INTO record_edges (source_id, target_id, type, created_at) VALUES (?, ?, ?, ?)",
-      )
-      .run(sourceId, targetId, type, createdAt);
+    const tx = this.db.transaction(() => {
+      const result = this.db
+        .query(
+          "INSERT OR IGNORE INTO record_edges (source_id, target_id, type, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .run(sourceId, targetId, type, createdAt);
+      // 幂等的重复 link 不落日志（边没变）。
+      if (result.changes > 0) {
+        this.journal({ recordId: sourceId, op: "link", revBefore: null, revAfter: null, patch: { targetId, type } });
+      }
+    });
+    tx();
     return { sourceId, targetId, type, createdAt };
   }
 

@@ -80,6 +80,16 @@ export function recordRoutes(ctx: ServerContext): Hono {
     });
   });
 
+  // v0.7 W7-D1：某条 record 的日志（append-only，按 seq）。AD-15 的可追溯面。
+  app.get("/:id/history", async (c) => {
+    return ctx.withProject(projectSlug(c), (scope) => {
+      const records = scope.project.records();
+      const id = c.req.param("id");
+      if (!records.get(id)) throw new HttpError(404, `record '${id}' 不存在`);
+      return c.json({ project: scope.project.slug, recordId: id, entries: records.history(id) });
+    });
+  });
+
   app.get("/:id/graph", async (c) => {
     const depth = queryNumber(c, "depth") ?? 2;
     if (depth < 1 || depth > 5) throw new HttpError(400, "depth 取值范围 1-5");

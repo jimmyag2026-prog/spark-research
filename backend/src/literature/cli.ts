@@ -26,7 +26,7 @@ import {
 } from "./models";
 import { PdfDownloader } from "./pdf";
 import { extractPdfText } from "./pdf_text";
-import { ReadingCardGenerator, listReadingCards, renderReadingCard } from "./reading";
+import { ReadingCardGenerator, listReadingCards, renderReadingCard, retractOrphanRecords } from "./reading";
 import { ReviewDraftGenerator, baselinesFrom } from "./review";
 import { LiteratureSearcher } from "./search";
 
@@ -45,6 +45,7 @@ export const LIT_HELP = `用法:
   spark-research lit review [--topic 主题] [--out 文件] [--no-judge]
                                                   由精读卡生成综述草稿并跑 citation-integrity
   spark-research lit export --format bibtex|csl [--out 文件]  导出文献库
+  spark-research lit remove <paperId|doi> [--reason 原因]   移除论文（tombstone，不硬删）并撤回指向它的 record
   spark-research lit sources                      列出可用文献源与凭据状态
   spark-research lit tasks [<task-id>] [--json] [--limit N]
                                                   长任务状态（read --all / review 断开后查这里）
@@ -914,6 +915,29 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           for (const line of renderTaskList(snapshots)) out(line);
         }
         project.close();
+        return 0;
+      }
+
+      // v0.7 W7-D1（V30）：删论文这条路终于可达。tombstone（行留着，可 re-add 复活）+ 同一动作里
+      // 跑孤儿对账：指向该论文的 paper/reading record 一律 tombstone（日志 op=tombstone），
+      // 证据图不留悬空引用，也不硬删任何东西（AD-15）。
+      case "remove": {
+        const ref = positional[0];
+        if (!ref) {
+          err("用法: spark-research lit remove <paperId|doi> [--reason 原因] [--project <slug>]");
+          return 1;
+        }
+        const { project, library } = openLibrary(manager, flagString(flags.project));
+        const paper = library.get(ref) ?? library.list().find((p) => p.doi === ref.toLowerCase()) ?? null;
+        if (!paper) {
+          err(`❌ 文献库里没有 '${ref}'（按 id 或 DOI 查）。已移除过的论文不会再次显示；re-add 可复活。`);
+          return 1;
+        }
+        library.remove(paper.id, flagString(flags.reason) ?? "用户移除");
+        const summary = retractOrphanRecords(project.records(), library);
+        out(`✅ 已移除 ${paper.id.slice(0, 8)}「${paper.title}」（tombstone，未硬删；再次 lit add 同一 DOI 会复活）`);
+        out(`   证据图对账：撤回 ${summary.retracted.length} 条指向它的 record（已撤回 ${summary.alreadyRetracted}，扫描 ${summary.scanned}）`);
+        library.close();
         return 0;
       }
 

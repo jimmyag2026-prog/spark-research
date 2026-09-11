@@ -109,6 +109,27 @@ export interface RecordGraphData {
   edges: RecordEdge[];
 }
 
+// v0.7 W7-D1 · L1 记录日志（DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md §五）：records 是可变投影
+// （状态机需要 CAS 改写），它下面的 records_journal 只追加——每次 create/update/link/
+// tombstone/repair 一行，带 prevHash 链。AD-15：证据图可由日志重建（repair 就是局部重建）。
+export const JOURNAL_OPS = ["create", "backfill", "update", "link", "tombstone", "repair"] as const;
+export type JournalOp = (typeof JOURNAL_OPS)[number];
+
+export interface JournalEntry {
+  seq: number;
+  recordId: string;
+  op: JournalOp;
+  revBefore: number | null;
+  revAfter: number | null;
+  actor: string | null;
+  actorSource: string | null;
+  /** create/backfill：全量快照；update：调用方传入的 patch；link：{targetId,type}；repair：{toSeq}。 */
+  patch: Record<string, unknown>;
+  prevHash: string | null;
+  hash: string;
+  createdAt: string;
+}
+
 export type ProjectStatus = "active" | "archived";
 
 // project.json 的内容；schemaVersion 便于后续迁移。
