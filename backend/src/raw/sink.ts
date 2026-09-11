@@ -185,7 +185,9 @@ export class JsonlRawSink implements RawSink {
         lines += 1;
         if (!entry) return { ok: false, lines, brokenAt: n, reason: `${f.file}: 第 ${n} 行不是合法 JSON` };
         const { hash, ...rest } = entry;
-        if (entryHash(rest) !== hash) return { ok: false, lines, brokenAt: n, reason: `${f.file}: 第 ${n} 行 hash 对不上` };
+        // for-sharing 导入的 llm 行 prompt 只剩 hashOnly（内容不出门），行 hash 覆盖的是原 payload——只核链。
+        const promptHashed = entry.kind === "llm" && "hashOnly" in ((entry.payload as { messages?: object }).messages ?? {});
+        if (!promptHashed && entryHash(rest) !== hash) return { ok: false, lines, brokenAt: n, reason: `${f.file}: 第 ${n} 行 hash 对不上` };
         if (entry.prevHash !== prev) return { ok: false, lines, brokenAt: n, reason: `${f.file}: 第 ${n} 行 prevHash 断链` };
         prev = hash;
       }

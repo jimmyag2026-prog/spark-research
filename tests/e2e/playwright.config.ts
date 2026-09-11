@@ -34,6 +34,9 @@ export default defineConfig({
     // 前端必须先构建（构建产物不入 git），所以这里连着构建一起做。
     command: `bun run build:web && bun ${join(here, "fixture_server.ts")} ${PORT} ${WORKSPACE}`,
     cwd: repo,
+    // alpha.6：fixture 服务器进程的 dataDir 也指到工作区——否则 connector/kernel 的全局兜底 raw
+    // 会写进用户真实 ~/.spark-research（R4 抓到的 324MB 事故的 e2e 半边）。
+    env: { ...process.env, SPARK_RESEARCH_DATA_DIR: join(WORKSPACE, "datadir") },
     url: `http://127.0.0.1:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,

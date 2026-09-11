@@ -23,12 +23,12 @@ import { IdeaStore } from "./store";
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
 
 export const IDEA_HELP = `用法:
-  spark-research idea new [-m "你的思路"] [--session id] [--json]
+  spark-research idea new [-m "你的思路"] [--session id] [--budget-usd N] [--model m] [--project slug] [--json]
                                                   Co-explore 共探 → 产出 Idea 卡入思路库
                                                   不带 -m 时进入多轮交互（/card 定卡，exit 退出）
   spark-research idea list [--status unchecked|checked-novel|checked-incremental|checked-overlap] [--json]
                                                   列出思路库
-  spark-research idea check <record-id> [--sources a,b] [--per-source N] [--out 文件] [--json]
+  spark-research idea check <record-id> [--sources a,b] [--per-source N] [--budget-usd N] [--model m] [--project slug] [--out 文件] [--json]
                                                   跑 novelty check（claim 提取 → 密集检索 → 对比报告 → 回写）
 `;
 
@@ -154,10 +154,13 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   // 两个 CLI 只是消费——不留第二份手写副本（V46 形状）。
   const model = flagString(flags.model) ?? deps.model ?? configuredDefaultModel({ root: deps.root });
 
-  const makeSearcher = (): LiteratureSearcher => {
+  // alpha.6（R4 P0-2）：novelty 检索的 connector raw 落项目目录。
+  const makeSearcher = (project: Project): LiteratureSearcher => {
     if (deps.searcher) return deps.searcher;
     const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
-    return new LiteratureSearcher(new ConnectorRegistry({ http: deps.http, credentials }).registerBuiltins());
+    return new LiteratureSearcher(
+      new ConnectorRegistry({ http: deps.http, credentials, rawSink: project.raw(), command: "novelty-check" }).registerBuiltins(),
+    );
   };
 
   try {
@@ -336,7 +339,7 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
             rawSink: project.raw(),
             project: project.slug,
           }),
-          searcher: makeSearcher(),
+          searcher: makeSearcher(project),
           library,
           records,
           artifacts: project.artifacts(),

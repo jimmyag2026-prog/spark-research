@@ -126,7 +126,7 @@ describe("G6 导出面 · --for-sharing", () => {
     const result = exportProject(project, { forSharing: true, now: () => "2026-09-11T10:00:00.000Z" });
     const m = result.manifest;
     expect(m.forSharing).toBe(true);
-    expect(m.excluded).toEqual({ recordsStubbed: 1, journalStubbed: 1, rawDropped: 1, libraryDropped: 1 });
+    expect(m.excluded).toEqual({ recordsStubbed: 1, journalStubbed: 1, rawDropped: 1, libraryDropped: 1, llmPromptsHashed: 1 });
     expect(m.schemas.library.papers).toBe(0);
     expect(m.schemas.raw.tables).toEqual({ llm: 1 });
     expect(m.schemas.edges.count).toBe(2); // 边保住
@@ -135,7 +135,8 @@ describe("G6 导出面 · --for-sharing", () => {
     let all = "";
     for (const f of m.files) all += readFileSync(join(result.dir, f.path), "utf8");
     expect(all.includes("SECRET-UPSTREAM")).toBe(false);
-    expect(all.includes("Upstream paper")).toBe(false);
+    // alpha.6（R4 P0-3）：stub 保留书目指针（title/DOI）——引用标签不是镜像内容；摘要/正文仍不出门。
+    expect(all.includes("Upstream paper")).toBe(true);
     // stub 行存在且只有骨架
     const paperFile = m.files.find((f) => f.path.startsWith("records/type=paper/"))!;
     const stub = JSON.parse(readFileSync(join(result.dir, paperFile.path), "utf8").trim()) as Record<string, unknown>;

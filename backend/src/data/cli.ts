@@ -74,7 +74,7 @@ export async function runDataCommand(args: string[], deps: DataCliDeps = {}): Pr
           out(`   raw ${Object.entries(m.schemas.raw.tables).map(([k, n]) => `${k} ${n}`).join(" · ") || "0"} · artifacts ${m.schemas.artifacts.versions} · papers ${m.schemas.library.papers} · usage ${m.schemas.usage.present ? "有" : "无"}`);
           out(`   来源分级：${Object.entries(m.provenanceClasses).map(([c, n]) => `${c} ${n}`).join(" · ") || "（无）"}；许可：${Object.entries(m.licenses).map(([l, n]) => `${l} ${n}`).join(" · ") || "（无）"}`);
           if (m.forSharing) {
-            out(`   --for-sharing（AD-16）：打桩 ${m.excluded.recordsStubbed} 条 upstream/不可共享 record · journal 打桩 ${m.excluded.journalStubbed} · raw ${m.excluded.rawDropped} · 文献库 ${m.excluded.libraryDropped}`);
+            out(`   --for-sharing（AD-16）：打桩 ${m.excluded.recordsStubbed} 条 upstream/不可共享 record · journal 打桩 ${m.excluded.journalStubbed} · 上游 raw 丢弃 ${m.excluded.rawDropped} · LLM prompt 只存 hash ${m.excluded.llmPromptsHashed} · 文献库 ${m.excluded.libraryDropped}`);
           }
           out(`   manifest hash ${result.manifestHash.slice(0, 16)}${m.prevManifestHash ? `（上一份 ${m.prevManifestHash.slice(0, 16)}）` : "（首份）"} · rootHash ${m.rootHash.slice(0, 16)}`);
           return 0;

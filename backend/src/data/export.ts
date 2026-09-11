@@ -13,7 +13,7 @@ import { dirname, join, relative } from "node:path";
 import type { Project } from "../project/manager";
 import { LibraryStore } from "../literature/library";
 import { shareable, type ProvenanceClass } from "../provenance/policy";
-import { JsonlRawSink, type RawEntry } from "../raw";
+import { JsonlRawSink, type LlmPayload, type RawEntry } from "../raw";
 import { PACKAGE_VERSION } from "../version";
 import { MANIFEST_SCHEMA_VERSION, manifestHash, rootHashOf, sha256Hex, type ExportManifest } from "./manifest";
 
@@ -95,7 +95,7 @@ export function exportProject(project: Project, options: ExportOptions = {}): Ex
   const licenses: Record<string, number> = {};
   const classes: Record<string, number> = {};
   const recordTables: Record<string, number> = {};
-  const excluded = { recordsStubbed: 0, journalStubbed: 0, rawDropped: 0, libraryDropped: 0 };
+  const excluded = { recordsStubbed: 0, journalStubbed: 0, rawDropped: 0, libraryDropped: 0, llmPromptsHashed: 0 };
   const stubbed = new Set<string>();
 
   // ── records ──
@@ -109,9 +109,14 @@ export function exportProject(project: Project, options: ExportOptions = {}): Ex
     if (forSharing && !shareable({ provenanceClass: cls, license }).ok) {
       stubbed.add(String(row.id));
       excluded.recordsStubbed += 1;
+      // stub 保留**书目指针**（title / DOI 或 URL / 来源 connector）——这是引用标签，不是镜像内容；
+      // 摘要/正文/metadata 一律不出（R4 P0-3：不带 title 会让导入侧报告丢掉全部引用与参考文献）。
       out = {
         id: row.id,
         type: row.type,
+        title: row.title,
+        origin_ref: row.origin_ref ?? null,
+        origin_connector: row.origin_connector ?? null,
         created_at: row.created_at,
         rev: row.rev,
         provenance_class: cls,
@@ -162,9 +167,19 @@ export function exportProject(project: Project, options: ExportOptions = {}): Ex
       excluded.rawDropped += 1;
       continue;
     }
+    let outEntry: RawEntry = entry;
+    if (forSharing && entry.kind === "llm") {
+      // R4 P0-1：LLM 的 prompt（messages）里嵌着上游论文摘要原文——它是 model_generated 行的
+      // 输入，不是产出。for-sharing 下 prompt 只存 hash（hash 覆盖了 payload，行 hash 不再可核，
+      // 与 journal 打桩同一口径：链形状保住、内容不出门、stub 可见）；response 照常带。
+      const payload = entry.payload as LlmPayload;
+      const messagesText = "inline" in payload.messages ? payload.messages.inline : "blob" in payload.messages ? (sink.readBlob(payload.messages.blob) ?? "") : "";
+      outEntry = { ...entry, payload: { ...payload, messages: JsonlRawSink.hashOnly(messagesText) } as LlmPayload };
+      excluded.llmPromptsHashed += 1;
+    }
     rawTables[entry.kind] = (rawTables[entry.kind] ?? 0) + 1;
-    w.line(`raw/kind=${entry.kind}/date=${dateOf(entry.ts)}/part-0.jsonl`, entry);
-    collectBlobs(entry, blobs);
+    w.line(`raw/kind=${entry.kind}/date=${dateOf(entry.ts)}/part-0.jsonl`, outEntry);
+    collectBlobs(outEntry, blobs);
   }
   for (const sha of blobs) {
     const text = sink.readBlob(sha);

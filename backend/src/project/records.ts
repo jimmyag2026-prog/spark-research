@@ -231,19 +231,24 @@ export class RecordStore {
   constructor(dbPath: string, project: string) {
     this.project = project;
     this.db = new Database(dbPath);
-    this.db.exec("PRAGMA journal_mode = WAL;");
-    // V80（v0.7 C-4）：同项目并发写（idea new × idea check）实测 `database is locked`——
-    // findings_store.ts 早就设了 5s busy_timeout，其余三库没有。补齐。
+    // V80：busy_timeout 必须在 journal_mode 之前——切 WAL 本身也要拿锁，否则并发首开就可能 SQLITE_BUSY。
     this.db.exec("PRAGMA busy_timeout = 5000;");
+    this.db.exec("PRAGMA journal_mode = WAL;");
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.initSchema();
   }
 
   initSchema(): void {
-    this.db.exec(SCHEMA_SQL);
-    this.migrateRevColumn();
-    this.migrateProvenanceColumns();
-    this.migrateJournal();
+    // alpha.6（R4 P1-5 真因之一）：建表 + 三段迁移整体放进一个 IMMEDIATE 事务——两个进程并发首开时，
+    // 各自 `PRAGMA table_info` 看到列缺失、同时 ALTER，后来者要么 SQLITE_BUSY（"database is locked"）
+    // 要么 "duplicate column name"。事务内重查列存在性，先到者做完、后到者看到已存在。
+    const tx = this.db.transaction(() => {
+      this.db.exec(SCHEMA_SQL);
+      this.migrateRevColumn();
+      this.migrateProvenanceColumns();
+      this.migrateJournal();
+    });
+    tx.immediate();
   }
 
   // v0.7 W7-D1 · records_journal：append-only，与 records 同库同事务。schema.sql 不动
@@ -273,7 +278,7 @@ export class RecordStore {
         this.journal({ recordId: row.id, op: "backfill", revBefore: null, revAfter: row.rev, patch: this.snapshotOf(row) });
       }
     });
-    tx(rows);
+    tx.immediate(rows);
   }
 
   private snapshotOf(row: RecordRow): Record<string, unknown> {
@@ -387,7 +392,7 @@ export class RecordStore {
         insJournal.run(j.seq, j.recordId, j.op, j.revBefore, j.revAfter, j.actor, j.actorSource, JSON.stringify(j.patch), j.prevHash, j.hash, j.createdAt);
       }
     });
-    tx();
+    tx.immediate();
     return { records: input.records.length, edges: input.edges.length, journal: input.journal.length };
   }
 
@@ -473,7 +478,7 @@ export class RecordStore {
         patch: { toSeq: options.toSeq, snapshot: { title, content, metadata } },
       });
     });
-    tx();
+    tx.immediate();
     return this.get(recordId)!;
   }
 
@@ -489,7 +494,7 @@ export class RecordStore {
         .run(JSON.stringify({ ...existing.metadata, ...patch.metadata }), recordId);
       this.journal({ recordId, op: "tombstone", revBefore, revAfter: revBefore + 1, actor, patch });
     });
-    tx();
+    tx.immediate();
     return this.get(recordId)!;
   }
 
@@ -526,7 +531,7 @@ export class RecordStore {
         update.run(cls, licenseForClass(cls, origin), JSON.stringify(deriveQuality(metadata)), r.id);
       }
     });
-    tx(pending);
+    tx.immediate(pending);
   }
 
   // P10-d · D-9：老 records.db 没有 rev 列 —— 不能让老项目打不开。
@@ -636,7 +641,7 @@ export class RecordStore {
       const inserted = this.db.query("SELECT * FROM records WHERE id = ?").get(id) as RecordRow & { rev: number };
       this.journal({ recordId: id, op: "create", revBefore: null, revAfter: inserted.rev, patch: this.snapshotOf(inserted) });
     });
-    tx();
+    tx.immediate();
     return this.get(id)!;
   }
 
@@ -748,7 +753,7 @@ export class RecordStore {
         }
         this.journal({ recordId: id, op: "update", revBefore: expected, revAfter: expected + 1, patch: journalPatch });
       });
-      tx();
+      tx.immediate();
       return this.get(id)!;
     }
 
@@ -759,7 +764,7 @@ export class RecordStore {
         .run(title, content, metadataJson, id);
       this.journal({ recordId: id, op: "update", revBefore, revAfter: revBefore === null ? null : revBefore + 1, patch: journalPatch });
     });
-    tx();
+    tx.immediate();
     return this.get(id)!;
   }
 
@@ -854,7 +859,7 @@ export class RecordStore {
         this.journal({ recordId: sourceId, op: "link", revBefore: null, revAfter: null, patch: { targetId, type } });
       }
     });
-    tx();
+    tx.immediate();
     return { sourceId, targetId, type, createdAt };
   }
 

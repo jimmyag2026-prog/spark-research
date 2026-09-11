@@ -5,6 +5,52 @@
 
 ---
 
+## [0.7.0-alpha.6] — 2026-09-11
+
+**R4 修复窗口。** R4（四课题零上下文全量复跑，`spark-research-v0.7-plan/R4/`）三条 P0 全在数据层，
+外加一条 R4 证据里挖出的、比 P0 更严重的事故。逐条如实：
+
+### 事故：单测把 324MB raw 写进了用户真实 `~/.spark-research`（V83）
+
+alpha.1 起 raw 层的全局兜底 sink 按 `dataDir()` 现算，单测里大量 connector/内核调用没有项目上下文、
+也没设 `SPARK_RESEARCH_DATA_DIR`——一天下来 43,680 行 connector 回放记录（含脚手架的假 connector）、
+253 行 kernel 记录落进用户真实目录，与 R4 真实课题的行混在一起；`api_calls.jsonl` 从 v0.6 起同样如此
+（59,462 行）。**修**：`bunfig.toml` preload（`tests/preload.ts`）给每个 `bun test` 进程注入临时数据目录，
+落在 `~/.spark-research` 下直接抛错（V74 的系统性修法）；e2e 的 fixture 服务器同样隔离；门禁
+`test_isolation.test.ts`。**已污染的真实目录未动**——归档还是删除等用户裁定（R4 真实行混在里面）。
+
+### R4 P0
+
+- **P0-1 `--for-sharing` 经 raw/llm 泄漏上游摘要**：prompt（messages）里嵌着精读时喂给模型的论文摘要。
+  现在 for-sharing 下 llm 行的 `messages` 只存 hash（response 照常带），`manifest.excluded.llmPromptsHashed`
+  计数；导入侧对这类行只核链。
+- **P0-2 connector/kernel 的 raw 落全局而非项目**：CLI（lit/idea/protein）与 HTTP 检索入口此前在解析
+  项目之前就建 registry。现在 registry 带 `project.raw()` 与 command；解析不出项目才全局兜底。
+- **P0-3 for-sharing 往返报告 diff 非空**：stub 现在保留书目指针（title / DOI 或 URL / 来源 connector），
+  引用标签与参考文献不再消失；**但 for-sharing 往返本就是有损的**（上游正文与文献库不出门），
+  G5「diff 为空」只对普通导出成立——R4 任务书把两者混写了，已更正，A6 分开验。
+
+### R4 P1
+
+- **P1-5 并发 `idea check` 仍 `database is locked`**——V80 的 C-4 只补了 busy_timeout，**真因有两个**：
+  ① bun:sqlite `transaction()` 默认 DEFERRED，读→写升级时后来者立即 SQLITE_BUSY，busy_timeout 不起作用
+  → 写事务一律 `.immediate()`（阴性对照：改回 DEFERRED，两进程 120 次落库出 7 次 locked）；
+  ② 并发首开时各库的 `PRAGMA table_info → ALTER` 迁移竞态（后来者 locked 或 duplicate column）
+  → 建表 + 迁移整体进 IMMEDIATE 事务。两个真实子进程的复现测试进 concurrency 套件（25 → 30）。
+- **P1-4 `lit search --json` 不生效**：现在真是 JSON（`--add` 并用时入库计数进 `added`）。
+- **P1-6 AMiner 拆词合并查准低**：多词查询要求 ≥2 词同时命中，全无才退回单词命中并在 note 说明。
+- **P1-7 召回@10 全线 0/8**：本轮 OpenAlex 会话内 100% 429（深池 30/源 × 四课题并发）。加了
+  `api.openalex.org` 主机限速策略（官方 10 rps）；**礼貌池要 mailto——用户请 `config set contactEmail`**。
+  召回数字要等 429 消退后 A6 复测，V67 不关。
+- **P1-8** `idea new/check --help` 补 `--budget-usd` / `--model` / `--project`。
+
+### 如实交代
+
+- 仿真平台（`exp run`）的执行不在 raw 层（它走 SimulationPlatform 子进程，不是 KernelManager）；产物与
+  observation 带 contentHash，但 raw 的「四类」不含仿真——登记 V85。
+- `lit review` 的「解析引用数 > 判定数」差额未说明去向（R4 P2-10）——登记 V87。
+- AMiner 对中文查询返回的多为中国期刊英文版，T4 预期的中英双发去重场景本轮未出现（P2-11）——登记，不算缺陷。
+
 ## [0.7.0-alpha.5] — 2026-09-11
 
 **alpha.5：第二段三条 lane（B-2 · B-4 · C-1）+ 收口。** PR #73 B-4 · #74 C-1 · #76 B-2 · 收口 PR。

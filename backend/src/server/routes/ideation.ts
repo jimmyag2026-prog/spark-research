@@ -118,7 +118,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
           task.progress(0, 3, "claim 提取");
           const checker = new NoveltyChecker({
             llm: ctx.llmFor(scope.project, "novelty-check"),
-            searcher: ctx.searcher(),
+            searcher: ctx.searcher(slug, "novelty-check"),
             library,
             records,
             artifacts: scope.project.artifacts(),

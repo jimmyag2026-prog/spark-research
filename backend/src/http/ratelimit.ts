@@ -28,6 +28,15 @@ export interface HostRatePolicy {
 // 没有「集体打穿」的风险，也没有可核实来源的具体数字（官方文档未给出），
 // 故不编造条目——无策略的 host 走 request() 的直通分支，行为与未接限速器时一致。
 export const HOST_RATE_POLICIES: Readonly<Record<string, HostRatePolicy>> = {
+  // alpha.6（R4 P1-7）：深池 30/源 × 四课题并发把 OpenAlex 匿名池打成 100% 429。官方上限 10 rps / 10 万天；
+  // 礼貌池要 mailto（config `contactEmail`），未设置时更容易被限。这里按官方 rps 合池，不放宽。
+  "api.openalex.org": {
+    rps: 10,
+    burst: 10,
+    source: "https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication",
+    verifiedDate: "2026-09-11",
+    note: "官方：每秒 10 请求、每天 10 万；带 mailto 进礼貌池。spark-research 的 contactEmail 配置就是那个 mailto。",
+  },
   "eutils.ncbi.nlm.nih.gov": {
     rps: 3,
     burst: 3,

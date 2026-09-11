@@ -45,7 +45,7 @@ export interface ExportManifest {
   licenses: ManifestTableCounts;
   provenanceClasses: ManifestTableCounts;
   /** for-sharing 下被排除/打桩的计数（AD-16 的可见面）。 */
-  excluded: { recordsStubbed: number; journalStubbed: number; rawDropped: number; libraryDropped: number };
+  excluded: { recordsStubbed: number; journalStubbed: number; rawDropped: number; libraryDropped: number; llmPromptsHashed: number };
   /** 所有数据文件（不含 manifest 自身）的 (相对路径, sha256) 排序后再 sha256。 */
   rootHash: string;
   files: Array<{ path: string; sha256: string; bytes: number }>;

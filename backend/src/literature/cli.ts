@@ -11,6 +11,7 @@ import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } 
 import { LlmCitationJudge } from "../reviewer/citation_judge";
 import { CITATION_RULE, citationIntegrity, type CitationJudge } from "../reviewer/rules";
 import { computeFingerprint } from "../reviewer/agent";
+import type { RawSink } from "../raw";
 import { cliTaskRegistry, renderTaskList, renderTaskSnapshot, runCliTask } from "../cli/progress";
 import type { TaskRegistry } from "../server/tasks";
 import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
@@ -416,11 +417,19 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
     }
   }
 
-  const makeSearcher = (): LiteratureSearcher => {
+  // alpha.6（R4 P0-2）：connector 的 raw 记录要落**项目**目录——registry 在解析出项目之后再建，
+  // 带 project.raw()；解析不出项目（极少：没有任何项目）才退到全局兜底，如实。
+  const makeSearcher = (command: string): LiteratureSearcher => {
     if (deps.searcher) return deps.searcher;
     const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
+    let rawSink: RawSink | undefined;
+    try {
+      rawSink = openProjectResolved(manager, flagString(flags.project)).raw();
+    } catch {
+      rawSink = undefined;
+    }
     return new LiteratureSearcher(
-      new ConnectorRegistry({ http: deps.http, credentials }).registerBuiltins(),
+      new ConnectorRegistry({ http: deps.http, credentials, rawSink, command }).registerBuiltins(),
     );
   };
 
@@ -454,7 +463,46 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // （30/源）生效，`--per-source N` 显式覆盖；hits 档保持 perSource=limit（v0.6 逐字节一致）。
         const perSourceFlag = flagString(flags["per-source"]);
         const perSource = perSourceFlag !== undefined ? Number(perSourceFlag) || undefined : rank === "blended" ? undefined : limit;
-        const result = await makeSearcher().search(query, { sources, perSource, limit, rank });
+        const result = await makeSearcher("lit-search").search(query, { sources, perSource, limit, rank });
+
+        // alpha.6（R4 P1-4）：`--json` 此前对 search 不生效（readme_for_agent 说所有查询类子命令都有）。
+        // --add 与 --json 并用时入库照做，结果进 JSON 的 added 字段。
+        let addSummary: { project: string; added: number; merged: number } | null = null;
+        const doAdd = flags.add === true || typeof flags.add === "string";
+        if (doAdd) {
+          const { project, library } = openLibrary(manager, flagString(flags.project));
+          const tags = flagString(flags.tag)?.split(",").map((t) => t.trim()).filter(Boolean) ?? [];
+          let added = 0;
+          let merged = 0;
+          for (const paper of result.papers) {
+            const res = library.add(paper, { tags });
+            res.merged ? merged++ : added++;
+          }
+          library.rebuildCitations();
+          addSummary = { project: project.slug, added, merged };
+          library.close();
+          project.close();
+        }
+        if (flags.json === true) {
+          out(
+            JSON.stringify(
+              {
+                query,
+                rank,
+                rankNote: result.rankNote ?? null,
+                totalBeforeDedupe: result.totalBeforeDedupe,
+                mergedCount: result.mergedCount,
+                shown: result.papers.length,
+                sources: result.sources,
+                papers: result.papers,
+                added: addSummary,
+              },
+              null,
+              2,
+            ),
+          );
+          return 0;
+        }
 
         // 三个数字含义不同，不能混为一谈：原始条数 / 合并掉的条数 / 实际展示条数（受 --limit 截断）。
         const afterDedupe = result.totalBeforeDedupe - result.mergedCount;
@@ -471,20 +519,9 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         out("");
         result.papers.forEach((paper, i) => printPaper(paper, i, out));
 
-        if (flags.add === true || typeof flags.add === "string") {
-          const { project, library } = openLibrary(manager, flagString(flags.project));
-          const tags = flagString(flags.tag)?.split(",").map((t) => t.trim()).filter(Boolean) ?? [];
-          let added = 0;
-          let merged = 0;
-          for (const paper of result.papers) {
-            const res = library.add(paper, { tags });
-            res.merged ? merged++ : added++;
-          }
-          library.rebuildCitations();
+        if (addSummary) {
           out("");
-          out(`✅ 已入库项目 '${project.slug}'：新增 ${added} 篇，合并 ${merged} 篇`);
-          library.close();
-          project.close();
+          out(`✅ 已入库项目 '${addSummary.project}'：新增 ${addSummary.added} 篇，合并 ${addSummary.merged} 篇`);
         }
         return 0;
       }
@@ -513,7 +550,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           return 1;
         }
         const sources = parseSources(flagString(flags.sources));
-        const result = await makeSearcher().fetchById(id, { sources });
+        const result = await makeSearcher("lit-add").fetchById(id, { sources });
         if (result.papers.length === 0) {
           err(`❌ 未能在 ${sources.join("/")} 中找到标识符 '${id}' 对应的论文`);
           printSourceStatus(result.sources, err);

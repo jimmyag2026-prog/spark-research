@@ -10,6 +10,7 @@ import { LibraryStore } from "../literature/library";
 import { LiteratureSearcher } from "../literature/search";
 import { LLMRouter } from "../llm/router";
 import { UsageStore, usageTrackingLlm } from "../usage/ledger";
+import type { RawSink } from "../raw";
 import { ProjectManager, ProjectError, type Project } from "../project/manager";
 import type { CitationJudge } from "../reviewer/rules";
 import { SimulationRegistry } from "../simulation/registry";
@@ -172,10 +173,18 @@ export class ServerContext {
     });
   }
 
-  searcher(): LiteratureSearcher {
+  // alpha.6（R4 P0-2）：给了项目 slug 就把 connector raw 落到该项目目录；解析不出（无项目）才全局兜底。
+  searcher(projectSlug: string | null = null, command = "http-search"): LiteratureSearcher {
     if (this.deps.searcher) return this.deps.searcher;
+    let rawSink: RawSink | undefined;
+    try {
+      const project = projectSlug ? this.projects.open(projectSlug) : this.projects.defaultProject();
+      rawSink = project.raw();
+    } catch {
+      rawSink = undefined;
+    }
     return new LiteratureSearcher(
-      new ConnectorRegistry({ http: this.deps.http, credentials: this.credentials() }).registerBuiltins(),
+      new ConnectorRegistry({ http: this.deps.http, credentials: this.credentials(), rawSink, command }).registerBuiltins(),
     );
   }
 
