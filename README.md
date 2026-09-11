@@ -307,6 +307,13 @@ spark-research capabilities --probe    # 真去探测 openmm / opentrons 装没�
 
 清单**从真实注册表生成**（有双向一致性测试守着），不是手写的。你接进来的东西注册之后自动出现。
 
+### 并发使用与会话绑定（v0.7）
+
+多个终端/agent 同时用一个数据目录时，每个终端先 `export SPARK_RESEARCH_SESSION=<任意名字>`，再
+`spark-research project use <slug>` 只绑定本会话（不改全局指针；`--global` 才改）。项目解析顺序：
+`--project` > env `SPARK_RESEARCH_PROJECT` > 会话绑定 > 全局指针；全局指针的写入带文件锁。不设会话 id 时
+`project use` 退化为改全局指针（有提示）——并发场景请一律带 `--project`。
+
 ### 用户配置
 
 `~/.spark-research/config.json` 是配置真源，优先级 **环境变量 > config.json > 默认值**：

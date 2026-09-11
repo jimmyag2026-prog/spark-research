@@ -10,6 +10,7 @@ import { ProjectManager, ProjectError, type Project, openProjectResolved } from 
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
 import { LlmCitationJudge } from "../reviewer/citation_judge";
 import { CITATION_RULE, citationIntegrity, type CitationJudge } from "../reviewer/rules";
+import { computeFingerprint } from "../reviewer/agent";
 import { cliTaskRegistry, renderTaskList, renderTaskSnapshot, runCliTask } from "../cli/progress";
 import type { TaskRegistry } from "../server/tasks";
 import { exportLibrary, libraryKeyIndex, type ExportFormat } from "./export";
@@ -855,6 +856,22 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           } satisfies CitationIntegrityReviewMetadata) as unknown as Record<string, unknown>,
         });
         out(`  citation-integrity record: ${citationReviewRecord.id}`);
+        // V71（v0.7 alpha.5 收口，根因由 B-4 复现）：此前只往 records 写计数摘要，逐条 finding 从未落
+        // findings.db——`review findings` 读的正是那张库，所以「刚落的 soft finding 看不到」。
+        // fingerprint 复用 reviewer/agent.ts 的口径（citation 类按 key/sentence 身份，不用下标）。
+        if (check.findings.length > 0) {
+          const targetId = draft.artifactId ?? draft.recordId ?? null;
+          if (targetId) {
+            project.findings().reviewTarget({
+              project: project.slug,
+              session: flagString(flags.session) ?? null,
+              target: { kind: draft.artifactId ? "artifact" : "record", id: targetId },
+              checker: CITATION_RULE,
+              hits: check.findings.map((f) => ({ severity: f.severity, fingerprint: computeFingerprint(CITATION_RULE, f), evidence: f.message })),
+            });
+            out(`  findings.db: ${check.findings.length} 条已登记（review findings 可见）`);
+          }
+        }
 
         if (hard.length > 0) {
           err(`⛔ Review vetoed: ${hard.length} 条 hard finding（伪造/库外引用），草稿不可用于交付`);
