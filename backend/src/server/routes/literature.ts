@@ -5,6 +5,7 @@ import { exportLibrary, libraryKeyIndex, type ExportFormat } from "../../literat
 import type { LibraryPaper } from "../../literature/library";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, type LiteratureSource } from "../../literature/models";
 import { PdfDownloader } from "../../literature/pdf";
+import { extractPdfText } from "../../literature/pdf_text";
 import { ReadingCardGenerator, listReadingCards } from "../../literature/reading";
 import { ReviewDraftGenerator, baselinesFrom } from "../../literature/review";
 import { HttpError, type ServerContext } from "../context";
@@ -278,10 +279,14 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             );
           }
           const generator = new ReadingCardGenerator({
-            llm: ctx.llm(),
+            llm: ctx.llmFor(scope.project, "lit-read"),
             library,
             records: scope.project.records(),
             model: ctx.model(),
+            // V66 对齐：CLI 早已全文精读，HTTP 路由此前漏接——UI 读出来的全是摘要卡，
+            // 与 CLI 行为分叉（A5 顺带暴露）。与 literature/cli.ts 同一条注入。
+            fullTextFor: async (p) =>
+              p.pdfPath ? extractPdfText(p.pdfPath) : { ok: false, reason: "库内无 PDF（未下载或不可得）" },
             projectContext: scope.project.meta.description || undefined,
           });
           task.progress(0, targets.length, `精读 ${targets.length} 篇`);
@@ -320,7 +325,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             throw new Error("项目里还没有精读卡。先跑 lit read（或 POST /api/lit/read）");
           }
           task.progress(0, 2, `基于 ${cards.length} 张精读卡生成综述`);
-          const llm = ctx.llm();
+          const llm = ctx.llmFor(scope.project, "lit-review");
           const generator = new ReviewDraftGenerator({
             llm,
             library,

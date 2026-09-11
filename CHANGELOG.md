@@ -5,6 +5,18 @@
 
 ---
 
+## [0.6.0-alpha.7] — 2026-09-11
+
+**A5 浏览器入口验收的两个 blocker 修复。**
+
+- **UI 的 Idea 生成不再永久挂起**：Bun.serve 默认 10 秒请求超时会掐死同步 LLM 路由
+  （后端算完了、前端永远等不到）。idleTimeout 显式设为 255 秒（Bun 上限）并有测试钉住。
+- **HTTP/UI 的 LLM 调用真实入账**：G-3 用量台账此前只接了 CLI——UI 花真钱、用量面板
+  报 $0。现在 read/review/co-explore/novelty 四条 HTTP 路由全部经 llmFor 计量，
+  与 CLI 写同一份 usage.jsonl。
+- **UI 精读接上全文（V66 对齐）**：HTTP read 路由此前漏接 fullTextFor，UI 读出来
+  全是摘要卡、与 CLI 行为分叉。
+
 ## [0.6.0-alpha.6] — 2026-09-11
 
 **R2（T2+T4）修复窗口。** R2 关键数字：中文召回 0/3→3/3（V65 实证）、中英去重 1 正确/0 误/0 漏、引用核验 112 条 0 hard、双课题合计 $0.11。
