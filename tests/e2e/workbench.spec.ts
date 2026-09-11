@@ -610,13 +610,26 @@ test("⑰ 算力面板：只读展示 job，断言没有任何派发/审批按�
 });
 
 test("⑱ 用量面板：往 usage.jsonl 写一行后刷新，面板数字随之变化（面板④）", async ({ page }) => {
+  // v0.7 基线闸（V81）：alpha.7 起 HTTP 的 read/review/co-explore/novelty 路由经 llmFor
+  // 计量——前面 ③④⑤ 已经往本项目的 usage.jsonl 写过行。原先「面板必为空态」的假设
+  // 只在单跑时成立，全套按序跑必红。改成**增量断言**：只断言「追加两行后，后端数字
+  // 与面板同步变化」，空态只在确实没有记录时核（保留「不白屏」这层意图）。
   await page.goto("/");
+  const before = await page.evaluate(
+    async () =>
+      (await (await fetch("/api/usage")).json()) as {
+        calls: number;
+        knownCostUsd: number;
+        unknownCostCalls: number;
+      },
+  );
   await page.getByRole("button", { name: "用量", exact: true }).click();
-
-  // fixture 服务器的 LLM 全是脚本化假件、从不走 usageTrackingLlm，这个项目目前
-  // 还没有任何 usage.jsonl——面板应该诚实地显示空态，不是白屏。
-  await expect(page.locator('[data-testid="llm-usage-card"]')).toHaveCount(0);
-  await expect(page.getByText("还没有 LLM 用量记录")).toBeVisible();
+  if (before.calls === 0) {
+    await expect(page.locator('[data-testid="llm-usage-card"]')).toHaveCount(0);
+    await expect(page.getByText("还没有 LLM 用量记录")).toBeVisible();
+  } else {
+    await expect(page.locator('[data-testid="llm-usage-card"]')).toBeVisible();
+  }
 
   const projectInfo = await page.evaluate(async () => {
     const res = await fetch("/api/projects/current");
@@ -653,13 +666,24 @@ test("⑱ 用量面板：往 usage.jsonl 写一行后刷新，面板数字随之
   await page.reload();
   await page.getByRole("button", { name: "用量", exact: true }).click();
 
+  const after = await page.evaluate(
+    async () =>
+      (await (await fetch("/api/usage")).json()) as {
+        calls: number;
+        knownCostUsd: number;
+        unknownCostCalls: number;
+      },
+  );
+  expect(after.calls).toBe(before.calls + 2);
+  expect(after.unknownCostCalls).toBe(before.unknownCostCalls + 1);
+  expect(after.knownCostUsd).toBeCloseTo(before.knownCostUsd + 0.0123, 6);
+
   const card = page.locator('[data-testid="llm-usage-card"]');
   await expect(card).toBeVisible();
-  await expect(card.locator('[data-testid="known-cost-usd"]')).toContainText("0.0123");
+  await expect(card).toContainText(`调用 ${after.calls} 次`);
+  // 面板显示的已知花费必须是后端算好的那个数（fmtUsd = `$${v.toFixed(4)}`）。
+  await expect(card.locator('[data-testid="known-cost-usd"]')).toContainText(`$${after.knownCostUsd.toFixed(4)}`);
   const warning = page.locator('[data-testid="unknown-cost-warning"]');
   await expect(warning).toBeVisible();
   await expect(warning).toContainText("总花费无法确定报出");
-
-  const after = await page.evaluate(async () => (await fetch("/api/usage")).json());
-  expect((after as { calls: number }).calls).toBe(2);
 });

@@ -2316,7 +2316,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > **这不是一张只进不出的表**——每条都要有去向：吸收进某个阶段、明确推迟、或明确不做并给理由。
-> 最后更新：2026-09-11 晚（v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-11 晚（v0.7 基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2483,6 +2483,8 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V78 | orchestrator/chat 路径的 LLM 调用未进 usage.jsonl | A5 修复（alpha.7）把 read/review/idea/novelty 四条 HTTP 路由接入计量；chat（OrchestratorAgent 自建 LLMRouter）与 MCP 面仍未接。chat 有 P13 帧级记账落证据图但不进用量台账——口径不一，下轮统一 |
 | V79 | A5 遗留三条 UI 低危 | ① 综述引用 span 看着可点实际没接证据图跳转 ② conclusion review 需先有实验的前置没写在 UI 里 ③ UI 花钱操作无预算参数入口（CLI 有 --budget-usd）。均登记不阻塞发布 |
 | V80 | 同项目内并发写操作会遇 SQLite `database is locked` | R3-T4 实测（idea new 与 idea check 并发），串行重试成功。方向：busy_timeout 或写队列；单用户场景低频 |
+
+| V81 | **v0.6.0 带着一条全套必红的 e2e 发布了**（⑱ 用量面板；单跑绿、按序跑红） | v0.7 基线闸 0-1 实跑六套件发现：alpha.7（A5 blocker 修复）把 HTTP 的 read/review/co-explore/novelty 路由接入 `llmFor` 计量后，e2e ③④⑤ 会往本项目 usage.jsonl 写行，⑱ 开头「面板必为空态」的断言只在单跑时成立。CI 只跑单测+冒烟不跑 e2e，所以没人看见。**形状 = V58**：验收后改了被验收的东西（HTTP 计量是 A5 之后加的），e2e 全套没重跑。<br>✅ **v0.7 基线闸已修**：⑱ 改成增量断言（before/after 的 calls/unknownCostCalls/knownCostUsd 各 +2/+1/+0.0123），空态只在确实无记录时核。**登记是为了形状**：e2e 之间共用一个项目目录，任何「假设某文件为空」的断言都是顺序敏感的；新 e2e 一律写增量。另：CI 不含 e2e 的缺口进 W7-D0 收口议题（要么进 CI、要么发版检查单明列「本机全套 e2e」） |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
