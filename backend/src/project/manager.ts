@@ -1,10 +1,12 @@
 import {
   closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
   writeSync,
@@ -199,11 +201,15 @@ export class ProjectManager {
   // state.json 的读-改-写全部经这个口子：拿锁 → 回调内部自己 readState()/writeState()
   // （必须在锁内重新读，不能用调用方在锁外缓存的旧快照——那正是 lost update 的成因）→
   // 释放锁。回调允许什么都不写（纯读一致性场景），但目前所有调用点都是写。
+  private stateLockDepth = 0;
+
   private withStateLock<T>(fn: () => T): T {
     this.acquireStateLock();
+    this.stateLockDepth += 1;
     try {
       return fn();
     } finally {
+      this.stateLockDepth -= 1;
       this.releaseStateLock();
     }
   }
@@ -359,9 +365,34 @@ export class ProjectManager {
     }
   }
 
+  // V96（v0.8 G-5）：原子写。裸 `writeFileSync(state.json)` 是「先截断再写」——进程在两步之间被
+  // kill，state.json 就是空文件/半个 JSON，下次 readState() 只能回退到空状态（currentProject
+  // 丢失、所有 session 绑定丢失）。改成同目录写临时文件 → fsync → rename：rename 在同一文件系统
+  // 内是原子的，读者看到的永远是旧的完整内容或新的完整内容，绝不会是中间态。
+  // 必须在 withStateLock 临界区内调用（读-改-写的锁与写本身同一临界区），锁外调用直接抛。
   private writeState(state: WorkspaceState): void {
+    if (this.stateLockDepth <= 0) {
+      throw new ProjectError("writeState 必须在 withStateLock 临界区内调用（V96）");
+    }
     mkdirSync(this.root, { recursive: true });
-    writeFileSync(this.stateFile, JSON.stringify(state, null, 2) + "\n");
+    const tmp = `${this.stateFile}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    const fd = openSync(tmp, "w");
+    try {
+      writeSync(fd, JSON.stringify(state, null, 2) + "\n");
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    try {
+      renameSync(tmp, this.stateFile);
+    } catch (error) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // 临时文件清不掉不掩盖 rename 的真实错误。
+      }
+      throw error;
+    }
   }
 
   private setStatus(slug: string, status: ProjectStatus): ProjectMeta {
