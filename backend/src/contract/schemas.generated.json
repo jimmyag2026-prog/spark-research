@@ -1,0 +1,1375 @@
+{
+  "$comment": "由 scripts/gen-contract-schemas.ts 从 TS 接口生成；手改无效，改源类型后重跑。",
+  "sources": [
+    "backend/src/server/types.ts",
+    "backend/src/data/manifest.ts"
+  ],
+  "groups": {
+    "http": {
+      "ApiErrorBody": {
+        "$ref": "#/definitions/ApiErrorBody"
+      },
+      "ArtifactListResponse": {
+        "$ref": "#/definitions/ArtifactListResponse"
+      },
+      "ChatRequest": {
+        "$ref": "#/definitions/ChatRequest"
+      },
+      "ChatResponse": {
+        "$ref": "#/definitions/ChatResponse"
+      },
+      "EdgeType": {
+        "$ref": "#/definitions/EdgeType"
+      },
+      "EvidenceLabel": {
+        "$ref": "#/definitions/EvidenceLabel"
+      },
+      "LineageResponse": {
+        "$ref": "#/definitions/LineageResponse"
+      },
+      "ProjectListResponse": {
+        "$ref": "#/definitions/ProjectListResponse"
+      },
+      "ProjectSummary": {
+        "$ref": "#/definitions/ProjectSummary"
+      },
+      "RecordDetailResponse": {
+        "$ref": "#/definitions/RecordDetailResponse"
+      },
+      "RecordGraphResponse": {
+        "$ref": "#/definitions/RecordGraphResponse"
+      },
+      "RecordTimelinePage": {
+        "$ref": "#/definitions/RecordTimelinePage"
+      },
+      "RecordType": {
+        "$ref": "#/definitions/RecordType"
+      },
+      "TaskResponse": {
+        "$ref": "#/definitions/TaskResponse"
+      },
+      "TaskSnapshot": {
+        "$ref": "#/definitions/TaskSnapshot"
+      }
+    },
+    "data": {
+      "ExportManifest": {
+        "$ref": "#/definitions/ExportManifest"
+      },
+      "ManifestTableCounts": {
+        "$ref": "#/definitions/ManifestTableCounts"
+      }
+    }
+  },
+  "definitions": {
+    "ApiErrorBody": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "detail": {}
+      },
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ]
+    },
+    "ArtifactListResponse": {
+      "type": "object",
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "items": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "artifacts"
+      ]
+    },
+    "ArtifactVersion": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "projectSlug": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "filename": {
+          "type": "string"
+        },
+        "version": {
+          "type": "number"
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "checksum": {
+          "type": "string"
+        },
+        "storagePath": {
+          "type": "string"
+        },
+        "extractedCode": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "codeDescription": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "lineageMessages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/LineageMessage"
+          }
+        },
+        "environmentSnapshot": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": {}
+            }
+          ]
+        },
+        "parentVersionId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "producingCellId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "dependencyMappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/DependencyMapping"
+          }
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "project",
+        "projectSlug",
+        "filename",
+        "version",
+        "contentType",
+        "checksum",
+        "storagePath",
+        "extractedCode",
+        "codeDescription",
+        "lineageMessages",
+        "environmentSnapshot",
+        "parentVersionId",
+        "producingCellId",
+        "dependencyMappings",
+        "createdAt"
+      ]
+    },
+    "ChatRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "chat",
+            "coexplore"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sessionId",
+        "message"
+      ]
+    },
+    "ChatResponse": {
+      "type": "object",
+      "properties": {
+        "response": {
+          "type": "string"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {}
+        },
+        "reviewResult": {}
+      },
+      "additionalProperties": false,
+      "required": [
+        "response"
+      ]
+    },
+    "DependencyMapping": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "versionId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "versionId"
+      ]
+    },
+    "EdgeType": {
+      "enum": [
+        "supports",
+        "contradicts",
+        "derives_from",
+        "cites",
+        "supersedes"
+      ]
+    },
+    "EvidenceLabel": {
+      "enum": [
+        "observed",
+        "sourced",
+        "computed",
+        "inferred"
+      ]
+    },
+    "ExportManifest": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "share": {
+          "type": "string",
+          "description": "Delta Sharing 的 share 名 = 项目 slug。"
+        },
+        "generator": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "const": "spark-research"
+            },
+            "version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "range": {
+          "type": "object",
+          "properties": {
+            "since": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "until": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "since",
+            "until"
+          ]
+        },
+        "forSharing": {
+          "type": "boolean"
+        },
+        "prevManifestHash": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "增量导出时指向上一份 manifest 的 hash；首份为 null。"
+        },
+        "dcat": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "issued": {
+              "type": "string"
+            },
+            "modified": {
+              "type": "string"
+            },
+            "publisher": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "license": {
+              "type": "string",
+              "description": "数据集整体许可：for-sharing 时全部行都可出门时取其公约数，否则 mixed。"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "description",
+            "issued",
+            "modified",
+            "publisher",
+            "license"
+          ]
+        },
+        "schemas": {
+          "type": "object",
+          "properties": {
+            "records": {
+              "type": "object",
+              "properties": {
+                "tables": {
+                  "$ref": "#/definitions/ManifestTableCounts"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "tables"
+              ]
+            },
+            "records_journal": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "count"
+              ]
+            },
+            "edges": {
+              "type": "object",
+              "properties": {
+                "count": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "count"
+              ]
+            },
+            "raw": {
+              "type": "object",
+              "properties": {
+                "tables": {
+                  "$ref": "#/definitions/ManifestTableCounts"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "tables"
+              ]
+            },
+            "artifacts": {
+              "type": "object",
+              "properties": {
+                "versions": {
+                  "type": "number"
+                },
+                "dependencies": {
+                  "type": "number"
+                },
+                "executionRecords": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "versions",
+                "dependencies",
+                "executionRecords"
+              ]
+            },
+            "library": {
+              "type": "object",
+              "properties": {
+                "papers": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "papers"
+              ]
+            },
+            "usage": {
+              "type": "object",
+              "properties": {
+                "present": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "present"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "records",
+            "records_journal",
+            "edges",
+            "raw",
+            "artifacts",
+            "library",
+            "usage"
+          ]
+        },
+        "licenses": {
+          "$ref": "#/definitions/ManifestTableCounts"
+        },
+        "provenanceClasses": {
+          "$ref": "#/definitions/ManifestTableCounts"
+        },
+        "excluded": {
+          "type": "object",
+          "properties": {
+            "recordsStubbed": {
+              "type": "number"
+            },
+            "journalStubbed": {
+              "type": "number"
+            },
+            "rawDropped": {
+              "type": "number"
+            },
+            "libraryDropped": {
+              "type": "number"
+            },
+            "llmPromptsHashed": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "recordsStubbed",
+            "journalStubbed",
+            "rawDropped",
+            "libraryDropped",
+            "llmPromptsHashed"
+          ],
+          "description": "for-sharing 下被排除/打桩的计数（AD-16 的可见面）。"
+        },
+        "rootHash": {
+          "type": "string",
+          "description": "所有数据文件（不含 manifest 自身）的 (相对路径, sha256) 排序后再 sha256。"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "path",
+              "sha256",
+              "bytes"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "share",
+        "generator",
+        "createdAt",
+        "range",
+        "forSharing",
+        "prevManifestHash",
+        "dcat",
+        "schemas",
+        "licenses",
+        "provenanceClasses",
+        "excluded",
+        "rootHash",
+        "files"
+      ]
+    },
+    "LineageMessage": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "file": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "read",
+            "write",
+            "message"
+          ]
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "LineageResponse": {
+      "type": "object",
+      "properties": {
+        "graph": {}
+      },
+      "additionalProperties": false,
+      "required": [
+        "graph"
+      ]
+    },
+    "ManifestTableCounts": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {
+        "type": "number"
+      }
+    },
+    "ProjectListResponse": {
+      "type": "object",
+      "properties": {
+        "projects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProjectMeta"
+          }
+        },
+        "current": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "projects",
+        "current"
+      ]
+    },
+    "ProjectMeta": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "number"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "slug",
+        "name",
+        "description",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ProjectSummary": {
+      "type": "object",
+      "properties": {
+        "current": {
+          "type": "boolean"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "records": {
+              "type": "number"
+            },
+            "papers": {
+              "type": "number"
+            },
+            "ideas": {
+              "type": "number"
+            },
+            "dryExperiments": {
+              "type": "number"
+            },
+            "wetExperiments": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "records",
+            "papers",
+            "ideas",
+            "dryExperiments",
+            "wetExperiments"
+          ]
+        },
+        "paths": {
+          "type": "object",
+          "properties": {
+            "root": {
+              "type": "string"
+            },
+            "papersDir": {
+              "type": "string"
+            },
+            "artifactsDir": {
+              "type": "string"
+            },
+            "experimentsDir": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "root",
+            "papersDir",
+            "artifactsDir",
+            "experimentsDir"
+          ]
+        },
+        "schemaVersion": {
+          "type": "number"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "archived"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "current",
+        "counts",
+        "paths",
+        "schemaVersion",
+        "slug",
+        "name",
+        "description",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "RecordDetailResponse": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "record": {
+          "$ref": "#/definitions/ResearchRecord"
+        },
+        "outgoing": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RecordEdge"
+          }
+        },
+        "incoming": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RecordEdge"
+          }
+        },
+        "artifact": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "allOf": [
+                {
+                  "$ref": "#/definitions/ArtifactVersion"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "content"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "record",
+        "outgoing",
+        "incoming",
+        "artifact"
+      ]
+    },
+    "RecordEdge": {
+      "type": "object",
+      "properties": {
+        "sourceId": {
+          "type": "string"
+        },
+        "targetId": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "derives_from",
+            "cites",
+            "supersedes"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "sourceId",
+        "targetId",
+        "type",
+        "createdAt"
+      ]
+    },
+    "RecordGraphResponse": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "rootId": {
+          "type": "string"
+        },
+        "depth": {
+          "type": "number"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResearchRecord"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RecordEdge"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "rootId",
+        "depth",
+        "nodes",
+        "edges"
+      ]
+    },
+    "RecordOrigin": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "session",
+            "cell",
+            "connector",
+            "manual",
+            "import"
+          ]
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "connector": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "RecordTimelinePage": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ResearchRecord"
+          }
+        },
+        "total": {
+          "type": "number"
+        },
+        "offset": {
+          "type": "number"
+        },
+        "limit": {
+          "type": "number"
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "idea",
+              "decision",
+              "experiment",
+              "observation",
+              "reading",
+              "conclusion",
+              "paper",
+              "artifact",
+              "agent_run"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "project",
+        "records",
+        "total",
+        "offset",
+        "limit",
+        "types"
+      ]
+    },
+    "RecordType": {
+      "enum": [
+        "idea",
+        "decision",
+        "experiment",
+        "observation",
+        "reading",
+        "conclusion",
+        "paper",
+        "artifact",
+        "agent_run"
+      ]
+    },
+    "ResearchRecord": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "idea",
+            "decision",
+            "experiment",
+            "observation",
+            "reading",
+            "conclusion",
+            "paper",
+            "artifact",
+            "agent_run"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "evidence": {
+          "enum": [
+            "observed",
+            "sourced",
+            "computed",
+            "inferred"
+          ]
+        },
+        "origin": {
+          "$ref": "#/definitions/RecordOrigin"
+        },
+        "artifactId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {}
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "provenanceClass": {
+          "enum": [
+            "upstream",
+            "derived",
+            "user_authored",
+            "model_generated"
+          ]
+        },
+        "license": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "quality": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "project",
+        "type",
+        "title",
+        "content",
+        "evidence",
+        "origin",
+        "artifactId",
+        "metadata",
+        "createdAt",
+        "provenanceClass",
+        "license",
+        "quality"
+      ]
+    },
+    "TaskEvent": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "number"
+        },
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "state",
+            "progress",
+            "result",
+            "error"
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "data": {}
+      },
+      "additionalProperties": false,
+      "required": [
+        "seq",
+        "at",
+        "type",
+        "message",
+        "data"
+      ]
+    },
+    "TaskProgress": {
+      "type": "object",
+      "properties": {
+        "done": {
+          "type": "number"
+        },
+        "total": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "done",
+        "total",
+        "message"
+      ]
+    },
+    "TaskRecovery": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "reason": {
+          "const": "no-terminal-record-on-disk"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "reason"
+      ]
+    },
+    "TaskResponse": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/definitions/TaskSnapshot"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task"
+      ]
+    },
+    "TaskSnapshot": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "project": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "running",
+            "succeeded",
+            "failed",
+            "orphaned"
+          ]
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "startedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/TaskProgress"
+            }
+          ]
+        },
+        "result": {},
+        "error": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "timeout": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "message"
+              ]
+            }
+          ]
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskEvent"
+          }
+        },
+        "recovered": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/definitions/TaskRecovery"
+            }
+          ]
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "pidStartedAt": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "startTimeUnavailable": {
+          "type": "boolean"
+        },
+        "orphanReason": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "project",
+        "state",
+        "createdAt",
+        "startedAt",
+        "finishedAt",
+        "progress",
+        "result",
+        "error",
+        "events"
+      ]
+    }
+  }
+}
