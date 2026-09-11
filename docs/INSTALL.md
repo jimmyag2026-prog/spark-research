@@ -138,3 +138,17 @@ spark-research doctor --json   # 机器可读，给 agent/脚本判断用
 install`。`--json` 输出里对应 `tiers[].packagingLimitation` 字段，供脚本/agent 判断，不用猜
 文案。判定法：探测失败原因里出现 `/$bunfs/` 这个子串——只有编译产物才会产生这个虚拟路径，
 源码/npm/npx 三条路径下这个子串不会出现在任何真实报错里，不会误伤真实缺依赖的场景。
+
+## 5. 环境变量命名：一律 `SPARK_RESEARCH_*` 前缀（v0.8 起旧名直接报错）
+
+四个超时项的旧名在 v0.7 进入废弃周期（读到 warn 仍生效），**v0.8 起移除**：任一旧名被设置，任何命令启动时
+`resolveSetting` 会直接抛错并指出新名——不会静默落回默认值，也不会 warn 后照用。把值原样搬到新名、`unset` 旧名即可。
+
+| 旧名（v0.8 起报错） | 新名 |
+| --- | --- |
+| `SPARK_HTTP_TIMEOUT_MS` | `SPARK_RESEARCH_HTTP_TIMEOUT_MS` |
+| `SPARK_LLM_TIMEOUT_MS` | `SPARK_RESEARCH_LLM_TIMEOUT_MS` |
+| `SPARK_KERNEL_TIMEOUT_MS` | `SPARK_RESEARCH_KERNEL_TIMEOUT_MS` |
+| `SPARK_TASK_TIMEOUT_MS` | `SPARK_RESEARCH_TASK_TIMEOUT_MS` |
+
+全部配置项与对应环境变量：`spark-research config list`。

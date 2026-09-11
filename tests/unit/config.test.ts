@@ -135,11 +135,9 @@ describe("配置面 · 优先级 env > config.json > 默认值", () => {
   });
 });
 
-// V21（BACKLOG）：SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS 与仓库约定的 SPARK_RESEARCH_*
-// 前缀不一致。v0.2.1 起 MCP 工具描述（exp_run/task_status）已经把 SPARK_TASK_TIMEOUT_MS
-// 写给外部 agent 看，改名是 breaking change——四个 envVar 改成新前缀，旧名经
-// legacyEnvVars 保留一个可观测的废弃周期（读到时 warn，不是直接失效），计划 v0.8 移除。
-describe("配置面 · V21：超时 env 改名为 SPARK_RESEARCH_* 前缀，旧名进入废弃周期", () => {
+// V21：SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS 与仓库约定的 SPARK_RESEARCH_* 前缀不一致。
+// v0.7 为废弃周期（旧名 warn 仍生效）；**v0.8 起旧名读到即抛错**并指出新名（G-6）。
+describe("配置面 · V21：超时 env 旧名 v0.8 起移除，读到即报错并指新名", () => {
   const CASES: Array<{ key: string; newVar: string; oldVar: string }> = [
     { key: "httpTimeoutMs", newVar: "SPARK_RESEARCH_HTTP_TIMEOUT_MS", oldVar: "SPARK_HTTP_TIMEOUT_MS" },
     { key: "llmTimeoutMs", newVar: "SPARK_RESEARCH_LLM_TIMEOUT_MS", oldVar: "SPARK_LLM_TIMEOUT_MS" },
@@ -156,26 +154,22 @@ describe("配置面 · V21：超时 env 改名为 SPARK_RESEARCH_* 前缀，旧�
       expect(warnings).toHaveLength(0);
     });
 
-    test(`'${key}'：旧名 ${oldVar} 仍生效，且触发一次 warn（文案点名旧名与新名）`, () => {
+    test(`'${key}'：旧名 ${oldVar} 读到即抛错，消息点名旧名、新名与"已于 v0.8 移除"`, () => {
       const root = tmpRoot();
-      const warnings: string[] = [];
-      const resolved = resolveSetting(key, { root, env: { [oldVar]: "54321" }, warn: (m) => warnings.push(m) });
-      expect(resolved).toMatchObject({ value: 54321, source: "env" });
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain(oldVar);
-      expect(warnings[0]).toContain(newVar);
+      let message = "";
+      try {
+        resolveSetting(key, { root, env: { [oldVar]: "54321" }, warn: () => {} });
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toContain(oldVar);
+      expect(message).toContain(newVar);
+      expect(message).toContain("v0.8 移除");
     });
 
-    test(`'${key}'：新旧同设时新名赢，且不落到旧名分支（不告警）`, () => {
+    test(`'${key}'：新旧同设也抛错——陈旧配置必须清掉，不再"新名赢"静默放过`, () => {
       const root = tmpRoot();
-      const warnings: string[] = [];
-      const resolved = resolveSetting(key, {
-        root,
-        env: { [newVar]: "11111", [oldVar]: "99999" },
-        warn: (m) => warnings.push(m),
-      });
-      expect(resolved.value).toBe(11111);
-      expect(warnings).toHaveLength(0);
+      expect(() => resolveSetting(key, { root, env: { [newVar]: "11111", [oldVar]: "99999" }, warn: () => {} })).toThrow(oldVar);
     });
   }
 
@@ -187,9 +181,9 @@ describe("配置面 · V21：超时 env 改名为 SPARK_RESEARCH_* 前缀，旧�
     expect(warnings).toHaveLength(0);
   });
 
-  test("旧名生效时下游窄口取值（configuredTaskTimeoutMs 等）也读得到，不只是 resolveSetting", () => {
+  test("下游窄口取值（configuredTaskTimeoutMs 等）遇旧名同样抛错，不是静默落默认值", () => {
     const root = tmpRoot();
-    expect(configuredTaskTimeoutMs(600_000, { root, env: { SPARK_TASK_TIMEOUT_MS: "900000" } })).toBe(900_000);
+    expect(() => configuredTaskTimeoutMs(600_000, { root, env: { SPARK_TASK_TIMEOUT_MS: "900000" } })).toThrow("SPARK_TASK_TIMEOUT_MS");
   });
 });
 
