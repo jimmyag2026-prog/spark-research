@@ -1,4 +1,4 @@
-import { ProjectManager, type Project } from "../project/manager";
+import { ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { depictSmiles } from "./depict";
 
 // `spark-research chem depict "<SMILES>"` —— C5-②（v0.5 W5-1-c）。
@@ -81,7 +81,7 @@ export async function runChemCommand(args: string[], deps: ChemCliDeps = {}): Pr
 
   let project: Project | null = null;
   try {
-    project = manager.defaultProject();
+    project = openProjectResolved(manager, flagString(flags.project));
     const result = await depictSmiles(
       {
         smiles,

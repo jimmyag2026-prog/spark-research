@@ -1,4 +1,4 @@
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { CONCLUSION_REVIEW_STATES, reviewStateLabel, type ConclusionCard, type ConclusionReviewState } from "./models";
 import { ConclusionReviewer, ConclusionReviewError } from "./reviewer";
 import { ConclusionStore, ConclusionStoreError } from "./store";
@@ -107,7 +107,7 @@ export async function runConclusionCommand(args: string[], deps: ConclusionCliDe
   try {
     switch (sub) {
       case "list": {
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const store = new ConclusionStore(project.records());
         const reviewFlag = flagString(flags.review);
         if (reviewFlag && !(CONCLUSION_REVIEW_STATES as readonly string[]).includes(reviewFlag)) {
@@ -132,7 +132,7 @@ export async function runConclusionCommand(args: string[], deps: ConclusionCliDe
           err("用法: spark-research conclusion show <id>");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const reviewer = makeReviewer(project, deps);
         const card = reviewer.store.get(ref);
         if (!card) {
@@ -176,7 +176,7 @@ export async function runConclusionCommand(args: string[], deps: ConclusionCliDe
           err("用法: spark-research conclusion review <id> [--actor 谁] [--veto 理由]");
           return 1;
         }
-        project = manager.defaultProject();
+        project = openProjectResolved(manager, flagString(flags.project));
         const reviewer = makeReviewer(project, deps);
         const card = reviewer.store.get(ref);
         if (!card) {

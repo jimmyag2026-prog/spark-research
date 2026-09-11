@@ -5,6 +5,20 @@
 
 ---
 
+## [0.6.0-alpha.6] — 2026-09-11
+
+**R2（T2+T4）修复窗口。**
+
+- **`--project` 收口到全部 CLI（V64 防线补全）**：R1 只修了 lit/idea/report；R2 零上下文
+  实测当场抓到 exp 是盲区（用户全程带 --project 仍被全局指针出卖，实验记录写进并发
+  会话的另一个项目）。现在 exp/lab/compute/conclusion/chem/proteins/reviewer 全部经
+  `openProjectResolved` 单点解析，并立门禁：CLI 文件禁止裸调 `defaultProject()`。
+- `report export --help` / `idea new --help` 不再真执行/掉进交互 REPL（V39 家族补全，
+  与 lit 同款 switch 前拦截）。
+- connector 上游返回空响应或非法 JSON 时给指明上游的可读错误（R2 撞上 bioRxiv 服务端
+  故障期 HTTP 200+0 字节，此前报裸 SyntaxError）。
+- T2 任务书更正：scanpy 平台不带内置示例数据集（任务书早先说法有误，数据集自备）。
+
 ## [0.6.0-alpha.5] — 2026-09-11
 
 - **中文检索可用了（V65，V8 机制修复）**：AMiner 的 title 检索是词序列匹配，多概念

@@ -6,7 +6,7 @@ import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
 import { LLMRouter } from "../llm/router";
-import { ProjectManager, ProjectError, type Project } from "../project/manager";
+import { ProjectManager, ProjectError, type Project, openProjectResolved } from "../project/manager";
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
 import { LlmCitationJudge } from "../reviewer/citation_judge";
 import { CITATION_RULE, citationIntegrity, type CitationJudge } from "../reviewer/rules";
@@ -355,7 +355,7 @@ export function addNotFoundGuidance(
 // 并发会话会互相改写（R1 双向污染实锤）；在指针加锁/会话隔离落地前，显式 flag 是
 // 让并发使用可靠的最小机制。不给 flag 时行为与从前逐字节一致（走全局指针）。
 function openLibrary(manager: ProjectManager, projectSlug?: string): { project: Project; library: LibraryStore } {
-  const project = projectSlug ? manager.open(projectSlug) : manager.defaultProject();
+  const project = openProjectResolved(manager, projectSlug);
   const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
   return { project, library };
 }
@@ -849,7 +849,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // V35 的第三条腿：进度看得见还不够，**断开之后要查得回来**。
         // 快照由 TaskRegistry 落在 <项目>/tasks/<id>.json（W4-c 的 V11），
         // 新进程用同一个 root 建 registry 就会 hydrate 回来——所以这里只是读，不重跑任何东西。
-        const project = manager.defaultProject();
+        const project = openProjectResolved(manager, flagString(flags.project));
         const registry = deps.taskRegistry ?? cliTaskRegistry(project.paths.root);
         const wanted = positional[0];
         if (wanted) {

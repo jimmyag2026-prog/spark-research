@@ -269,3 +269,11 @@ export class ProjectManager {
     writeFileSync(paths.metaFile, JSON.stringify(meta, null, 2) + "\n");
   }
 }
+
+// R2-P0（V64 防线补全）：`--project` 显式覆盖的**单点**实现。R1 只修了 lit/idea/report
+// 三个 CLI，R2 零上下文实测当场抓到 exp 是盲区——用户全程带 --project 仍被全局指针
+// 出卖，实验记录写进了并发会话的另一个项目。这次把所有 CLI 收到同一个 helper，
+// 并配门禁：CLI 文件里禁止再裸调 manager.defaultProject()（见 r2_p0_project_flag.test.ts）。
+export function openProjectResolved(manager: ProjectManager, projectFlag: string | undefined): Project {
+  return projectFlag ? manager.open(projectFlag) : manager.defaultProject();
+}

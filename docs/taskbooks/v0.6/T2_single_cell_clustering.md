@@ -33,7 +33,7 @@
 ## 执行脚本
 
 按 §4 九步协议。**附加干实验步骤**：精读后用 scanpy 平台跑一次 `sc-cluster`
-（内置示例数据集），产出 observation 进证据图，报告结论引用该 observation。
+（数据集自备：合成一个小型 counts CSV 即可——R2 实测澄清：平台不带内置示例数据集，任务书早先的说法有误），产出 observation 进证据图，报告结论引用该 observation。
 
 ## 成功判据
 

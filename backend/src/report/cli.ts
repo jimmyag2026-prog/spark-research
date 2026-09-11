@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { LibraryStore } from "../literature/library";
 import { RECORD_TYPES, type RecordFilter, type RecordType } from "../project/models";
-import { ProjectError, ProjectManager, type Project } from "../project/manager";
+import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { buildReport, type ResearchReport } from "./export";
 
 // `spark-research report ...` 子命令（P8-gate G7 + S11：证据图可见性）。
@@ -92,9 +92,15 @@ export async function runReportCommand(args: string[], deps: ReportCliDeps = {})
   // 会互相改写）。四个 case 原来各写一遍 defaultProject()，这里收成单点。
   const resolveProject = (): Project => {
     const slug = flagString(flags.project);
-    return slug ? manager.open(slug) : manager.defaultProject();
+    return openProjectResolved(manager, slug);
   };
   try {
+    // V39 家族（R2-T2 点名）：`report export --help` 此前真的执行导出。与 lit 同款：
+    // 在 switch 之前统一拦截，对新加子命令一视同仁。
+    if (rest.includes("--help") || rest.includes("-h")) {
+      out(REPORT_HELP);
+      return 0;
+    }
     switch (sub) {
       case "export": {
         project = resolveProject();

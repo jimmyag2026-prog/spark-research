@@ -181,7 +181,23 @@ export class HttpConnector {
       // 显式 await（而不是直接 `return response.text()/.json()`）：async 函数里
       // `return somePromise` 会让下面的 finally 在 promise 落定**之前**就执行——
       // 显式 await 才能保证台账记的 latencyMs 包含真正读完响应体的耗时。
-      return isText ? await response.text() : await response.json();
+      if (isText) return await response.text();
+      // R2 实测（bioRxiv 服务端故障期）：上游可能回 HTTP 200 + 空 body，裸
+      // response.json() 抛 "SyntaxError: Unexpected EOF"——用户读不出这是上游的问题。
+      // 先取文本再解析，把「空响应」与「非法 JSON」都翻译成指명上游的可读错误。
+      const raw = await response.text();
+      if (raw.trim() === "") {
+        throw new Error(
+          `Connector "${this.name}" tool "${toolName}": 上游返回空响应（HTTP ${response.status}、0 字节）——服务可能临时故障，稍后重试或换源`,
+        );
+      }
+      try {
+        return JSON.parse(raw);
+      } catch {
+        throw new Error(
+          `Connector "${this.name}" tool "${toolName}": 上游响应不是合法 JSON（HTTP ${response.status}、${raw.length} 字节）——服务可能故障或接口变更`,
+        );
+      }
     } catch (error) {
       // status 还没被赋值 = 请求本身没有落地（fetch 抛错/超时），不是一个带状态码
       // 的 HttpResponse——与「上游返回了 4xx/5xx」结构上不同（client.ts 顶部注释

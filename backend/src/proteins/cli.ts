@@ -1,7 +1,7 @@
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import type { HttpClient } from "../http/client";
-import { ProjectManager, type Project } from "../project/manager";
+import { ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { ProteinAnalysis, ProteinAnalysisError, type ProteinAnalysisResult } from "./analysis";
 
 // `spark-research protein <query>` —— R-d-2（v0.4 P11 lane R-d）。
@@ -95,7 +95,7 @@ export async function runProteinCommand(args: string[], deps: ProteinCliDeps = {
 
   let project: Project | null = null;
   try {
-    project = manager.defaultProject();
+    project = openProjectResolved(manager, flagString(flags.project));
     const analysis = new ProteinAnalysis({ registry, records: project.records() });
     const persist = flags["no-persist"] !== true;
     const result = await analysis.analyze(query, { persist });
