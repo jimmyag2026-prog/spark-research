@@ -5,6 +5,12 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// V95：approve/simulate 不再是 HTTP 审批旁路——两个端点现在都要求一次性审批令牌。
+// `issue()` 是纯函数（只依赖 node:fs/crypto/path，见文件顶部大段注释），可以在这个
+// Playwright 测试进程（Node，不是 Bun）里直接 import 调用，不需要像 server/* 那样
+// 顾虑 Bun-only 依赖链（本文件下方 ⑬ 的大段注释记录过那个坑：直接 import
+// `backend/src/server/*` 在收集阶段就会报 `Cannot find package 'bun'`）。
+import { issue as issueApprovalToken } from "../../backend/src/lab/approval_token";
 
 // P7 浏览器全流程 e2e（可回放、无真实网络）：
 //   建项目 → 文献检索入库 → 精读卡 → 综述 → co-explore 出 idea → novelty check
@@ -33,6 +39,35 @@ async function filterByType(page: Page, label: string): Promise<void> {
   const pressed = page.locator('.right .filters .chip[aria-pressed="true"]');
   for (let i = (await pressed.count()) - 1; i >= 0; i--) await pressed.nth(i).click();
   await typeChip(page, label).click();
+}
+
+// V95：approve/simulate 弹窗现在要求一次性审批令牌，真实用户会在终端跑
+// `spark-research lab token <id>` 拿到它。浏览器里没有终端，这里用等价的方式
+// 拿到同一份东西——`GET /api/projects/current` 本来就会把 `paths.root` 吐出来
+// （`server/routes/projects.ts` 的既有能力，不是本 lane 新开的口子），用它定位到
+// 当前项目在磁盘上的目录，再直接调用 `issue()`（与 CLI `lab token` 内部调用的
+// 是同一个函数）铸一枚真正合法、绑定到这个 experimentId 的令牌。**没有绕过任何
+// 门**——CLI 的 TTY 门本身在 tests/unit/lab_cli.test.ts / w8_epsilon_cli_token.test.ts
+// 已经单独打过；这里只是把「人在终端敲完命令、把令牌粘贴进浏览器」这个手工步骤
+// 换成程序做同一件事，为的是让 e2e 能确定性地跑，而不是引入新的旁路。
+async function mintApprovalToken(page: Page, experimentId: string): Promise<string> {
+  const projectSummary = await page.evaluate(async () => {
+    const res = await fetch("/api/projects/current");
+    return (await res.json()) as { project: { paths: { root: string } } };
+  });
+  return issueApprovalToken(projectSummary.project.paths.root, experimentId).token;
+}
+
+// 找到「实验面板」当前唯一一条处于 awaiting_approval 的湿实验 id——与 CLI/HTTP
+// 单测里 `compile()` 助手拿 id 的方式同源（都是读同一个 API），不额外造一套。
+async function awaitingApprovalExperimentId(page: Page, titleContains: string): Promise<string> {
+  const list = await page.evaluate(async () => {
+    const res = await fetch("/api/lab/experiments?state=awaiting_approval");
+    return (await res.json()) as { experiments: Array<{ id: string; title: string }> };
+  });
+  const match = list.experiments.find((e) => e.title.includes(titleContains));
+  if (!match) throw new Error(`没找到标题含「${titleContains}」且处于 awaiting_approval 的湿实验`);
+  return match.id;
 }
 
 test.describe.configure({ mode: "serial" });
@@ -160,7 +195,7 @@ test("⑦ 湿实验编译停在 awaiting_approval，未批准不能执行", asyn
   await expect(panel.getByRole("button", { name: "批准执行…" })).toBeVisible();
 });
 
-test("⑧ approve 弹窗必须填 actor；批准后落 decision record 并可执行", async ({ page }) => {
+test("⑧ approve 弹窗必须填 actor + 一次性令牌；批准后落 decision record 并可执行", async ({ page }) => {
   await page.goto("/");
   const panel = page.locator(".bottom");
   await panel.getByRole("tab", { name: /湿实验/ }).click();
@@ -176,6 +211,17 @@ test("⑧ approve 弹窗必须填 actor；批准后落 decision record 并可执
   await expect(dialog.getByRole("button", { name: "确认批准" })).toBeDisabled();
 
   await dialog.getByPlaceholder("你的名字").fill("张三");
+  // V95：填了署名但还没填一次性令牌——提交按钮依旧必须是禁用的（前端也守这道门，
+  // 不只是等 HTTP 层 403 才发现）。
+  await expect(dialog.getByRole("button", { name: "确认批准" })).toBeDisabled();
+  await expect(dialog.getByText(/一次性审批令牌/)).toBeVisible();
+
+  // 真实用户此刻会去终端跑 `spark-research lab token <id>`；这里用同一个函数
+  // （见文件顶部 mintApprovalToken）铸一枚等价的令牌，贴进输入框。
+  const experimentId = await awaitingApprovalExperimentId(page, "OD 测定");
+  const token = await mintApprovalToken(page, experimentId);
+  await dialog.locator("input.mono").fill(token);
+  await expect(dialog.getByRole("button", { name: "确认批准" })).toBeEnabled();
   await dialog.getByRole("button", { name: "确认批准" }).click();
   await expect(dialog).toBeHidden();
   await waitIdle(page);
@@ -191,12 +237,69 @@ test("⑧ approve 弹窗必须填 actor；批准后落 decision record 并可执
   await expect(page.locator(".right").getByText("inferred").first()).toBeVisible();
 });
 
+test("⑧b approve 用掉的令牌不能拿来执行：同一枚令牌重复使用 → 403，消息原样显示（V95）", async ({ page }) => {
+  // 独立起一条新的湿实验，避免和 ⑧/⑨ 共用的那条状态互相干扰——这条测的是
+  // 「同一枚令牌只能兑现一次，approve 用掉之后不能拿去 simulate」，需要一条
+  // 全新的、还没被 approve 过的实验。
+  await page.goto("/");
+  const panel = page.locator(".bottom");
+  await panel.getByRole("tab", { name: /湿实验/ }).click();
+  await panel.getByRole("button", { name: "＋ 新建" }).click();
+  await panel.getByPlaceholder("标题（可选）").fill("令牌单次消费协议");
+  await panel.getByPlaceholder(/自然语言协议/).fill("取样品50µL加入96孔板，37°C孵育1小时，600nm读取OD");
+  await panel.getByRole("button", { name: "编译 + 过安全门" }).click();
+  await waitIdle(page);
+  await panel.locator(".exp-list .nav-item").filter({ hasText: "令牌单次消费协议" }).first().click();
+
+  const experimentId = await awaitingApprovalExperimentId(page, "令牌单次消费协议");
+  const token = await mintApprovalToken(page, experimentId);
+
+  await panel.getByRole("button", { name: "批准执行…" }).click();
+  const approveDialog = page.getByRole("dialog", { name: /批准执行湿实验/ });
+  await approveDialog.getByPlaceholder("你的名字").fill("张三");
+  await approveDialog.locator("input.mono").fill(token);
+  await approveDialog.getByRole("button", { name: "确认批准" }).click();
+  await expect(approveDialog).toBeHidden();
+  await waitIdle(page);
+  await expect(panel.getByRole("button", { name: "执行（模拟器）" })).toBeEnabled();
+
+  // 同一枚（已经被 approve 消费过的）令牌拿去「执行」——必须 403，且弹窗里显示的
+  // 就是后端原样返回的那句错误消息（不是前端自己编的通用文案）。
+  await panel.getByRole("button", { name: "执行（模拟器）" }).click();
+  const executeDialog = page.getByRole("dialog", { name: /执行湿实验/ });
+  await executeDialog.getByPlaceholder("你的名字").fill("张三");
+  await executeDialog.locator("input.mono").fill(token);
+  await executeDialog.getByRole("button", { name: "确认执行" }).click();
+
+  const toast = page.locator(".toast[data-kind='error']");
+  await expect(toast).toBeVisible();
+  await expect(toast).toContainText("已被使用过");
+  await expect(toast).toContainText("spark-research lab token");
+  // 状态没有被这次被拒的调用推进——实验依旧停在 approved，没有变成 executing/collect。
+  await expect(panel.locator(".node[data-current='true']")).toHaveText(/approved/);
+});
+
 test("⑨ 执行湿实验 → observed observation + 证据子图连得上", async ({ page }) => {
   await page.goto("/");
   const panel = page.locator(".bottom");
   await panel.getByRole("tab", { name: /湿实验/ }).click();
-  await panel.locator(".exp-list .nav-item").first().click();
+  await panel.locator(".exp-list .nav-item").filter({ hasText: "OD 测定" }).first().click();
+
+  // V95：「执行」现在也走弹窗，要求 actor + 一枚未被消费过的一次性令牌
+  // （⑧b 已经用掉了「OD 测定」approve 时铸的那枚——这里必须重新铸一枚）。
+  const odExperimentId = await page.evaluate(async () => {
+    const res = await fetch("/api/lab/experiments?state=approved");
+    const body = (await res.json()) as { experiments: Array<{ id: string; title: string }> };
+    return body.experiments.find((e) => e.title.includes("OD 测定"))!.id;
+  });
+  const executeToken = await mintApprovalToken(page, odExperimentId);
+
   await panel.getByRole("button", { name: "执行（模拟器）" }).click();
+  const executeDialog = page.getByRole("dialog", { name: /执行湿实验/ });
+  await executeDialog.getByPlaceholder("你的名字").fill("张三");
+  await executeDialog.locator("input.mono").fill(executeToken);
+  await executeDialog.getByRole("button", { name: "确认执行" }).click();
+  await expect(executeDialog).toBeHidden();
   await waitIdle(page);
 
   await expect(panel.locator(".node[data-current='true']")).toHaveText(/analyze/, { timeout: 60_000 });

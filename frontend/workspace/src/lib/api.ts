@@ -311,7 +311,13 @@ export const api = {
         withProject(`/api/lab/experiments/${id}/compile`, project),
         body,
       ),
-    approve: (id: string, body: { actor: string; note?: string }, project?: string) =>
+    // V95：approve 不再是 HTTP 审批旁路——body 必须带 approvalToken（一次性令牌，
+    // 来自终端 `spark-research lab token <id>`，TTY 门与 `lab approve` 同一套）。
+    approve: (
+      id: string,
+      body: { actor: string; note?: string; approvalToken: string },
+      project?: string,
+    ) =>
       post<{ experiment: WetExperiment; decisionId: string; decision: ResearchRecord }>(
         withProject(`/api/lab/experiments/${id}/approve`, project),
         body,
@@ -321,8 +327,14 @@ export const api = {
         withProject(`/api/lab/experiments/${id}/reject`, project),
         body,
       ),
-    simulate: (id: string, body: { conclude?: string } = {}, project?: string, onProgress?: (m: string) => void) =>
-      runTask(withProject(`/api/lab/experiments/${id}/simulate`, project), body, onProgress),
+    // V95：simulate 现在也要求 actor + approvalToken（同一枚令牌只能被消费一次——
+    // approve 用掉的令牌不能拿来 simulate，必须另外 `lab token` 一枚）。
+    simulate: (
+      id: string,
+      body: { actor: string; approvalToken: string; note?: string; conclude?: string },
+      project?: string,
+      onProgress?: (m: string) => void,
+    ) => runTask(withProject(`/api/lab/experiments/${id}/simulate`, project), body, onProgress),
   },
 
   records: {
