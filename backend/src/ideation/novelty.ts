@@ -14,6 +14,9 @@ import { citationIntegrity, type CitationIntegrityResult, type CitationJudge } f
 import { EmbeddingRouter } from "../llm/embeddings/router";
 import { isCalibrated, semanticHighAffinity, type SemanticThreshold } from "../llm/embeddings/calibration";
 import { cosine } from "../llm/embeddings/types";
+// W8-1 ζ：默认语义 embedder 从裸 EmbeddingRouter 换成带成本入账的 createTrackedEmbedder()——
+// 见 llm/embeddings.ts 顶部注释与 applySemanticAffinity() 里唯一的改动点。
+import { createTrackedEmbedder, type EmbedAccounting } from "../llm/embeddings";
 import { claimAffinity, paperEmbedText, paperIdentity } from "./affinity";
 import {
   NOVELTY_RATINGS,
@@ -761,6 +764,14 @@ export interface NoveltyDeps {
    * 「哪天真登记了阈值才第一次被执行」的死角。
    */
   semanticThresholds?: Readonly<Record<string, SemanticThreshold>>;
+  /**
+   * W8-1 ζ：默认语义 embedder（`this.deps.embedder === undefined` 时）的成本入账目的地。
+   * 不给 = 沿用 v0.7 行为——embedding 照常调用，但不落 usage.jsonl / raw，`costUsd` 恒 null。
+   * 给了 = 每次真实调用（含失败）都会经 `llm/embeddings.ts` 的 `recordAccounting` 落一行台账。
+   * 只在 `embedder` 未显式传入时生效——测试/调用方自己注入 `embedder` 时这项被忽略
+   * （注入的 embedder 已经是调用方自己决定的完整行为，不该被这里偷偷加一层副作用）。
+   */
+  embedAccounting?: EmbedAccounting;
 }
 
 /** novelty 只需要 EmbeddingRouter 的这两个方法（§1.2.2 的注入位）。 */
@@ -1012,9 +1023,13 @@ export class NoveltyChecker {
       degradedReason,
     });
 
-    // undefined = 按 config 自动接线；null = 调用方显式关掉。
+    // undefined = 按 config 自动接线（W8-1 ζ：经 createTrackedEmbedder() 带成本入账，
+    // deps.embedAccounting 未给时它是对 EmbeddingRouter 的纯直通，行为与 v0.7 逐字节一致）；
+    // null = 调用方显式关掉。
     const embedder: Embedder | null =
-      this.deps.embedder === undefined ? new EmbeddingRouter() : this.deps.embedder;
+      this.deps.embedder === undefined
+        ? createTrackedEmbedder({ accounting: this.deps.embedAccounting })
+        : this.deps.embedder;
     if (embedder === null) return { retrievals, embedding: lexical(null, null, false) };
 
     const modelId = embedder.modelId();
