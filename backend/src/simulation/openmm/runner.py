@@ -19,6 +19,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from simulation.sim_runtime import RunContext, write_csv  # noqa: E402
 
+
+def probe() -> dict:
+    """探测入口（V118）：与 scanpy/pydeseq2/cobrapy 同源——TS 侧 `probeCodeFor` 把**这个文件**当模块
+    加载后调它；能 import openmm、能列出 Platform，就算可用。探测代码与真提交代码同一份，
+    不再在 TS 里维护一份内联探测串（V27 形状根治）。"""
+    import openmm  # noqa: F401
+    from openmm import Platform
+
+    names = [Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())]
+    return {
+        "openmm": openmm.version.version,
+        "platforms": ",".join(names),
+        "python": sys.version.split()[0],
+    }
+
 FORCE_FIELDS = {
     "tip3p": "amber14/tip3p.xml",
     "tip3pfb": "amber14/tip3pfb.xml",

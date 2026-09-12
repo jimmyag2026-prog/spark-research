@@ -11,3 +11,8 @@
 
 ## 复跑（退出码口径）
 typecheck 0 · unit 2430/0（2420+10）· concurrency+timeout 37/0 · e2e 见 PR。
+
+## 追加 · V118 openmm 探测同源
+- `openmm/runner.py` 加 `probe()`（import openmm + 列 Platform）；`openmm/index.ts` `probeCode()` 改走 `probeCodeFor(this.entryPointFor(), "openmm", …)`，三平台 + openmm 探测与真提交同源。
+- `tests/unit/v118_openmm_probe.test.ts` 2 条（源码形状 + 真实探测；.venv 无 openmm 时 skip 并说明）。阴性对照：runner 去掉 probe() → 1/1 红。
+- unit 2432/0 无 skip（P5 契约 OpenMM 侧不再整套 skip）· py 129。

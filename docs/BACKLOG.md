@@ -219,7 +219,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V115 | auth 交互录入不关回显（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（readline 关 echo，几行）<br>✅ **v0.8 R5 窗口已修**（`auth` 录 key 走 readHidden：TTY raw 不回显，管道按行） |
 | V116 | CI bypass token 走 argv + 非常量时间比较（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（`timingSafeEqual` + 允许 env 传入）<br>✅ **v0.8 R5 窗口已修**（sha256+timingSafeEqual 常量时间；`--ci-bypass-token-env <VAR>` 不走 argv） |
 | V117 | HTTP 与 CLI 批量精读跳过语义不一致（V102 拆分 · P3） | 去向：v0.9 |
-| V118 | openmm 探测仍是内联字符串（V51 残余） | runner.py 无 `probe()` 入口，直接换 `probeCodeFor` 会让 P5 契约测试整套 skip（#95 收口实测）。去向：v0.9（python 侧加 probe()） |
+| V118 | openmm 探测仍是内联字符串（V51 残余） | runner.py 无 `probe()` 入口，直接换 `probeCodeFor` 会让 P5 契约测试整套 skip（#95 收口实测）。去向：v0.9（python 侧加 probe()）<br>✅ **v0.8 R5 窗口已修**（openmm runner.py 加 probe()，TS 走 probeCodeFor；P5 契约测试无 skip） |
 | V119 | 聊天式 co-explore 无预算入口（V79③ 残余） | 走 `agents/orchestrator.ts` 自己的 `llmFor`，UI 预算参数够不到闸。去向：**v0.8 R5 修复窗口候选**（orchestrator llmFor 加 budgetUsd/allowUnpriced）<br>✅ **v0.8 R5 窗口已修**（chat/stream 路由透传 budgetUsd/allowUnpriced → orchestrator 按会话记预算；UI 聊天框加预算入口；闸拒绝消息原样回给用户） |
 | V120 | `records_write_race` 偶发 database is locked（alpha.2 收口观察） | #99 复跑时两进程 idea check 式落库 60 次出现一次 locked（382ms 内失败非超时），单独重跑 3/3 绿；机器 load 4–11。去向：**v0.8 A7 前核查**（是否 busy_timeout 未覆盖某条路径） |
 
