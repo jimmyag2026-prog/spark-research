@@ -1,5 +1,8 @@
 import { Hono } from "hono";
 import { LabSafetyError } from "../../lab/orchestrator";
+// V95：approve/simulate 不再是 HTTP 审批旁路——一次性令牌由 `spark-research lab token`
+// （TTY 门与 `lab approve` 同一套）签发，这里只负责校验+单次消费。
+import { ApprovalTokenError, consume as consumeApprovalToken } from "../../lab/approval_token";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS, wetBackend } from "../../lab/wet_backend";
 import {
   ApprovalRequiredError,
@@ -35,6 +38,37 @@ function requireActor(body: Record<string, unknown>): { actor: string; actorSour
     throw new HttpError(400, "approve/reject 必须记名：请求体缺少 actor（HTTP 层不从环境变量猜审批人）");
   }
   return { actor: actor.trim(), actorSource: "http:explicit" };
+}
+
+// V95：approve 与「任何触发执行的路由」（目前是 simulate）现在都要求一次性审批令牌——
+// 令牌只能来自 `spark-research lab token <id>`（TTY 门与 `lab approve` 同一套，见
+// `lab/cli.ts`）。body.approvalToken 或 `X-Spark-Approval-Token` 请求头任选其一；
+// 两者都没有、hash 不对、过期、已经被消费过——一律 403，消息里指路径。
+function requireApprovalTokenValue(body: Record<string, unknown>, header: string | null | undefined): string {
+  const fromBody = body.approvalToken;
+  const token = typeof fromBody === "string" && fromBody.trim() !== "" ? fromBody.trim() : header?.trim();
+  if (!token) {
+    throw new HttpError(
+      403,
+      "approve/simulate 需要一次性审批令牌：请求缺少 approvalToken——" +
+        "在终端跑 `spark-research lab token <experiment-id>` 获取一次性令牌。",
+    );
+  }
+  return token;
+}
+
+// 校验 + 消费令牌；`ApprovalTokenError` 一律映射成 403（缺失/错误/过期/已用，见
+// approval_token.ts 的 consume()）。**必须在真正触发批准/执行之前调用**——
+// approve 分支在 ctx.withProject 回调最前面调用；simulate 因为走 taskResponse
+// 的异步任务出口（未 await 时立刻 202），必须在 `taskResponse()` 之前、同步地
+// 完成校验，否则 403 会被 202 盖住（见下面 /simulate 路由的调用位置）。
+function consumeApprovalTokenOrThrow(projectRoot: string, experimentId: string, token: string): void {
+  try {
+    consumeApprovalToken(projectRoot, experimentId, token);
+  } catch (error) {
+    if (error instanceof ApprovalTokenError) throw new HttpError(403, error.message);
+    throw error;
+  }
 }
 
 function mapLabError(error: unknown): never {
@@ -185,9 +219,14 @@ export function labRoutes(ctx: ServerContext): Hono {
   app.post("/experiments/:id/approve", async (c) => {
     const body = await jsonBody(c);
     const signer = requireActor(body);
+    const approvalToken = requireApprovalTokenValue(body, c.req.header("x-spark-approval-token"));
+    const experimentId = c.req.param("id");
     return ctx.withProject(projectSlug(c), (scope) => {
+      // V95：先 consume 令牌，再谈 approve——令牌校验失败必须 403，不能先跑进
+      // wetLoop().approve() 才发现（那样状态机层面的错误会盖住令牌层面的错误）。
+      consumeApprovalTokenOrThrow(scope.project.paths.root, experimentId, approvalToken);
       try {
-        const { view, decisionId } = scope.wetLoop().approve(c.req.param("id"), {
+        const { view, decisionId } = scope.wetLoop().approve(experimentId, {
           actor: signer.actor,
           actorSource: signer.actorSource,
           note: optionalString(body, "note"),
@@ -233,6 +272,19 @@ export function labRoutes(ctx: ServerContext): Hono {
     const note = optionalString(body, "note");
     const claim = optionalString(body, "conclude");
     const slug = projectSlug(c) ?? null;
+
+    // V95：simulate 是「任何触发执行的路由」里最典型的那个——同样要求 actor +
+    // 一次性审批令牌，且**必须在 taskResponse() 之前、同步校验完**：taskResponse
+    // 默认异步（未带 `await:true` 立刻 202 + 任务句柄），令牌校验放进 run() 里的话，
+    // 403 会先被 202 盖住，调用方要等任务落定才看得到失败——这不符合「缺失/错误/
+    // 过期/已用 → 403」的要求。用 `ctx.withProject` 单开一次作用域只做校验+消费，
+    // 通过后再走原有的 taskResponse/run 流程（run() 内部会自己再开一次 scope，
+    // 与此前行为一致，未改动执行路径本身）。
+    requireActor(body);
+    const approvalToken = requireApprovalTokenValue(body, c.req.header("x-spark-approval-token"));
+    await ctx.withProject(slug, (scope) => {
+      consumeApprovalTokenOrThrow(scope.project.paths.root, ref, approvalToken);
+    });
 
     return taskResponse(c, ctx, body, {
       kind: "lab.simulate",

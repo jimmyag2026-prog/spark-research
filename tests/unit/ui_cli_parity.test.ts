@@ -8,6 +8,7 @@ import { runConclusionCommand } from "../../backend/src/conclusion/cli";
 import { ConclusionStore } from "../../backend/src/conclusion/store";
 import { runUsageApiCommand, runUsageCommand } from "../../backend/src/cli/usage";
 import { runExpCommand } from "../../backend/src/experiment/cli";
+import { issue as issueApprovalToken } from "../../backend/src/lab/approval_token";
 import { runLabCommand } from "../../backend/src/lab/cli";
 import { runLitCommand } from "../../backend/src/literature/cli";
 import { MockDeviceBackend } from "../../backend/src/lab/wet_backend";
@@ -107,8 +108,25 @@ describe("UI ↔ CLI 行为对照", () => {
         title: "OD 测定",
       });
       const id = compiled.body.experiment.id;
-      expect((await fx.post(`/api/lab/experiments/${id}/approve`, { actor: "张三" })).status).toBe(200);
-      expect((await fx.run(`/api/lab/experiments/${id}/simulate`)).task.state).toBe("succeeded");
+      // V95：approve/simulate 现在都要求一次性审批令牌（HTTP 面不再是旁路）——
+      // 与上面 CLI 侧的 V19 终端门是两件独立的事：这里直接调用 issue() 铸令牌，
+      // 不重新测 `lab token` 的 TTY 门（那道门单独测，见 lab_cli.test.ts）。
+      expect(
+        (
+          await fx.post(`/api/lab/experiments/${id}/approve`, {
+            actor: "张三",
+            approvalToken: issueApprovalToken(fx.project.paths.root, id).token,
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await fx.run(`/api/lab/experiments/${id}/simulate`, {
+            actor: "张三",
+            approvalToken: issueApprovalToken(fx.project.paths.root, id).token,
+          })
+        ).task.state,
+      ).toBe("succeeded");
 
       const httpProject = fx.manager.open(fx.project.slug);
       const cliAgain = cli.manager.open("parity-wet");

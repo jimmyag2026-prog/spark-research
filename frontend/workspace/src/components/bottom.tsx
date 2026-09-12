@@ -1,6 +1,13 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js";
 import { api } from "../lib/api";
-import type { DryExperiment, StateMachine, SummaryValue, WetExperiment } from "../lib/types";
+import type {
+  DryExperiment,
+  ResearchRecord,
+  StateMachine,
+  SummaryValue,
+  TaskSnapshot,
+  WetExperiment,
+} from "../lib/types";
 import { useWorkspace, withBusy } from "../state";
 import { Badge, KeyValues, LineChart, Modal, Spinner } from "./ui";
 
@@ -93,40 +100,87 @@ function summaryPoints(summary: Record<string, SummaryValue> | null): number[] {
   return series.map(([, value]) => value as number);
 }
 
+// V95：approve 与「执行」现在都要求一次性审批令牌（HTTP 面不再是旁路——见
+// backend/src/server/routes/lab.ts）。三种动作共用这一个弹窗：
+//   - approve / execute：actor + approvalToken 必填（令牌来自终端
+//     `spark-research lab token <id>`，10 分钟有效、只能用一次——approve 用掉的
+//     令牌不能拿来 execute，必须重新签发一枚）。
+//   - reject：不消费令牌（HTTP 层没有把 reject 列进「触发执行的路由」）。
 function ApprovalDialog(props: {
   experiment: WetExperiment;
-  action: "approve" | "reject";
+  action: "approve" | "reject" | "execute";
   onClose: () => void;
   onDone: () => void;
 }): JSX.Element {
   const ws = useWorkspace();
   const [actor, setActor] = createSignal(localStorage.getItem("spark-actor") ?? "");
   const [note, setNote] = createSignal("");
+  const [approvalToken, setApprovalToken] = createSignal("");
+
+  const requiresToken = () => props.action === "approve" || props.action === "execute";
+  const verb = () => (props.action === "approve" ? "批准" : props.action === "reject" ? "拒绝" : "执行");
 
   const submit = async () => {
     if (!actor().trim()) return;
     if (props.action === "reject" && !note().trim()) return;
+    if (requiresToken() && !approvalToken().trim()) return;
     // 记住署名只是省打字；每次仍然要用户确认——审批不能变成一路回车。
     localStorage.setItem("spark-actor", actor().trim());
-    const result = await withBusy(ws, props.action === "approve" ? "批准中" : "拒绝中", () =>
-      props.action === "approve"
-        ? api.lab.approve(props.experiment.id, { actor: actor().trim(), note: note().trim() || undefined }, ws.slug())
-        : api.lab.reject(props.experiment.id, { actor: actor().trim(), reason: note().trim() }, ws.slug()),
-    );
+    // 三个分支返回的类型天差地别（审批走 decision record，执行走长任务）——显式
+    // 标一个联合返回类型，否则 TS 会按「多处 return 各自的具体类型」推断，
+    // 与 withBusy<T>(fn: () => Promise<T>) 的单一 T 对不上。
+    type ApprovalResult =
+      | { experiment: WetExperiment; decisionId: string; decision: ResearchRecord }
+      | TaskSnapshot;
+    const result = await withBusy<ApprovalResult>(ws, `${verb()}中`, () => {
+      if (props.action === "approve") {
+        return api.lab.approve(
+          props.experiment.id,
+          { actor: actor().trim(), note: note().trim() || undefined, approvalToken: approvalToken().trim() },
+          ws.slug(),
+        );
+      }
+      if (props.action === "reject") {
+        return api.lab.reject(props.experiment.id, { actor: actor().trim(), reason: note().trim() }, ws.slug());
+      }
+      return api.lab.simulate(
+        props.experiment.id,
+        {
+          actor: actor().trim(),
+          approvalToken: approvalToken().trim(),
+          note: note().trim() || undefined,
+        },
+        ws.slug(),
+      );
+    });
     if (!result) return;
-    ws.notify(
-      `${props.action === "approve" ? "已批准" : "已拒绝"} · decision record ${result.decisionId.slice(0, 8)}`,
-    );
+    if (props.action === "execute") {
+      const task = result as TaskSnapshot;
+      if (task.state === "failed") ws.notify(task.error?.message ?? "执行失败", "error");
+      else ws.notify("湿实验执行完成，已产出 observation");
+    } else {
+      const decision = result as { decisionId: string };
+      ws.notify(`${props.action === "approve" ? "已批准" : "已拒绝"} · decision record ${decision.decisionId.slice(0, 8)}`);
+    }
     ws.refreshDomain("wet");
     props.onDone();
   };
 
   const disabled = () =>
-    !actor().trim() || (props.action === "reject" && !note().trim()) || ws.busy() !== null;
+    !actor().trim() ||
+    (props.action === "reject" && !note().trim()) ||
+    (requiresToken() && !approvalToken().trim()) ||
+    ws.busy() !== null;
 
   return (
     <Modal
-      title={props.action === "approve" ? "批准执行湿实验（AD-6）" : "拒绝执行湿实验"}
+      title={
+        props.action === "approve"
+          ? "批准执行湿实验（AD-6）"
+          : props.action === "reject"
+            ? "拒绝执行湿实验"
+            : "执行湿实验（模拟器）"
+      }
       onClose={props.onClose}
       footer={
         <>
@@ -134,11 +188,11 @@ function ApprovalDialog(props: {
             取消
           </button>
           <button
-            class={props.action === "approve" ? "btn btn-primary" : "btn btn-danger"}
+            class={props.action === "reject" ? "btn btn-danger" : "btn btn-primary"}
             onClick={submit}
             disabled={disabled()}
           >
-            {props.action === "approve" ? "确认批准" : "确认拒绝"}
+            确认{verb()}
           </button>
         </>
       }
@@ -218,7 +272,7 @@ function ApprovalDialog(props: {
 
       <label class="col" style={{ gap: "4px" }}>
         <span class="faint">
-          审批人（必填）—— 会记进 decision record，用于审计
+          {props.action === "reject" ? "拒绝人（必填）" : "审批人（必填）"}—— 会记进 decision record，用于审计
         </span>
         <input
           class="input"
@@ -227,8 +281,29 @@ function ApprovalDialog(props: {
           onInput={(e) => setActor(e.currentTarget.value)}
         />
       </label>
+
+      {/* V95：approve/execute 不再是 HTTP 审批旁路——一次性令牌必须先在终端签发
+          （`spark-research lab token <id>`，TTY 门与 `lab approve` 同一套），这里只是
+          填令牌的地方，不提供任何在浏览器里直接拿到令牌的路径。403 的原样消息见
+          withBusy → ws.notify(error.message)。 */}
+      <Show when={requiresToken()}>
+        <label class="col" style={{ gap: "4px" }}>
+          <span class="faint">一次性审批令牌（必填）</span>
+          <input
+            class="input mono"
+            value={approvalToken()}
+            placeholder={`在终端运行 spark-research lab token ${props.experiment.id.slice(0, 8)} 获取`}
+            onInput={(e) => setApprovalToken(e.currentTarget.value)}
+          />
+          <span class="faint" style={{ "font-size": "11px" }}>
+            在终端运行 <code>spark-research lab token {props.experiment.id.slice(0, 8)}</code> 获取一次性令牌
+            （10 分钟内有效，用过一次就失效；{verb()}用掉之后如需再执行，需要重新签发一枚）。
+          </span>
+        </label>
+      </Show>
+
       <label class="col" style={{ gap: "4px" }}>
-        <span class="faint">{props.action === "approve" ? "备注（可选）" : "拒绝理由（必填）"}</span>
+        <span class="faint">{props.action === "reject" ? "拒绝理由（必填）" : "备注（可选）"}</span>
         <textarea class="textarea" value={note()} onInput={(e) => setNote(e.currentTarget.value)} />
       </label>
     </Modal>
@@ -329,18 +404,11 @@ function DryDetail(props: { experiment: DryExperiment }): JSX.Element {
 
 function WetDetail(props: { experiment: WetExperiment }): JSX.Element {
   const ws = useWorkspace();
-  const [dialog, setDialog] = createSignal<"approve" | "reject" | null>(null);
+  // V95：「执行（模拟器）」不再是直接调用——HTTP 层要求 actor + 一次性审批令牌，
+  // 所以「执行」也走 ApprovalDialog（第三种 action），弹窗收集令牌之后才真正调用
+  // api.lab.simulate（见 ApprovalDialog 内部）。
+  const [dialog, setDialog] = createSignal<"approve" | "reject" | "execute" | null>(null);
   const machine = () => ws.wetMachine();
-
-  const simulate = async () => {
-    const task = await withBusy(ws, "执行湿实验", () =>
-      api.lab.simulate(props.experiment.id, {}, ws.slug(), (m) => ws.setBusy(m)),
-    );
-    if (!task) return;
-    if (task.state === "failed") ws.notify(task.error?.message ?? "执行失败", "error");
-    else ws.notify("湿实验执行完成，已产出 observation");
-    ws.refreshDomain("wet");
-  };
 
   return (
     <div class="col">
@@ -407,7 +475,7 @@ function WetDetail(props: { experiment: WetExperiment }): JSX.Element {
       <div class="row wrap">
         <button
           class="btn btn-sm btn-primary"
-          onClick={simulate}
+          onClick={() => setDialog("execute")}
           disabled={ws.busy() !== null || props.experiment.state !== "approved"}
           title={
             props.experiment.state !== "approved"

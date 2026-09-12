@@ -54,6 +54,31 @@ export const CHEMICAL_COMPATIBILITY: Readonly<Record<string, readonly string[]>>
 
 export const MAX_BIOSAFETY_LEVEL = 2;
 
+// V59（BACKLOG）①：`lab compile` 那一屏与 `lab status` 现在共用同一段覆盖范围声明——
+// 之前两处各写一份，`wet_models.ts` 的 `renderWetExperiment()` 里那份在 V55 落地后
+// 变成了假话（还在说「英文协议编译不出步骤」），而 compile 那一屏（**绝大多数人
+// 就是在这一屏看到四行 ✅ 的**）压根没有这段声明。抽成常量：cli.ts 的 `compile`
+// 分支直接引用它打印；`wet_models.ts` 改成引用同一个常量还没做——那是 W8-1 ε
+// 足迹外的文件（收口清单里有对应 diff），本文件先把「唯一真源」立好。
+// **只改文案，不改任何阈值/规则语义**——四条规则的 evaluate() 逻辑一行未动。
+export const SAFETY_COVERAGE_STATEMENT =
+  "覆盖范围口径（**每次改安全门都要同步这段**——它出现在审批决策点上）：\n" +
+  "· `volume_capacity`：唯一全程接编译产物核对的规则，累计溢孔与移液器量程都查。\n" +
+  "· `chemical_compatibility`：认识一个**有限**的试剂词表（中文常见名 + 英文名/分子式）。" +
+  "词表之外的试剂它完全看不见，不是「相容」；且**本规则不看孔位**——只要协议里同时出现过两种" +
+  "不相容试剂就会拦，不检查它们是否真的会混进同一个孔。\n" +
+  "· `concentration_limit`：只在**同句恰好点名一种试剂**时才拿得到浓度（跨句写法拿不到，会落" +
+  "未消费告警）。解析到了但限值表里没有该试剂时**不放行**，理由写「没有规则可查」——" +
+  "「查不到规则」不等于「检查通过」。另外百分比 > 100 一律拦（物理上不存在）。" +
+  "限值表目前只覆盖 4 类试剂（盐酸/硫酸、次氯酸钠、乙醇），其中三类阈值就是 100——" +
+  "与「物理上不可能」重合，**通过只表示「没超物理极限」，不表示「在安全限值内」**。\n" +
+  "· `biosafety`：认识 `BSL-n`、`生物安全N级`、`biosafety level N`，以及口语化的" +
+  "`PN 实验室`/裸 `PN`（P 分级与 BSL 分级是同一件事的两种命名）。能挂到「这句话最终归属的" +
+  "那个步骤」；一句独立的生物安全描述、前面没有步骤可挂时，只报未消费。\n" +
+  "· 自然语言步骤解析中英双语都能编（V55）：中文/英文协议均能编出步骤，混排也支持；" +
+  "试剂词表、温度/时长/体积的量纲解析同样中英通用。\n" +
+  "漏看了什么，看「未被安全门消费的信号」。";
+
 export interface SafetyReport {
   passed: boolean;
   checks: SafetyCheckResult[];
@@ -103,7 +128,11 @@ function toMicroliters(value: unknown, unit: unknown): number | null {
 export const chemicalCompatibilityRule: SafetyRule = {
   id: "chemical_compatibility",
   check: "chemical compatibility",
-  description: "同一协议内不得同时出现互不相容的试剂（强酸 × 次氯酸盐 / 强酸 × 强碱）",
+  // V59（BACKLOG）③：口径必须在描述里就说清楚，不能只在拦截时才说——
+  // 「不看孔位」是这条规则**始终成立**的性质，通过时也一样，不是失败才有的免责声明。
+  description:
+    "同一协议内不得同时出现互不相容的试剂（强酸 × 次氯酸盐 / 强酸 × 强碱）——" +
+    "本规则不看孔位：只要协议里同时出现过这两种试剂就会拦，不检查它们是否真的会混进同一个孔",
   evaluate({ protocol }) {
     const reagents = reagentsOf(protocol);
     const incompatible: string[] = [];
@@ -118,10 +147,15 @@ export const chemicalCompatibilityRule: SafetyRule = {
         if (conflicts) incompatible.push(`${a.name} + ${b.name}`);
       }
     }
+    // V59（BACKLOG）④：旧消息是「incompatible reagents: A + B」——英文残句，
+    // 不给下一步。统一成中文完整句：试剂对 + 本规则不看孔位的说明 + 下一步。
     return {
       check: "chemical compatibility",
       passed: incompatible.length === 0,
-      detail: incompatible.length ? `incompatible reagents: ${incompatible.join(", ")}` : undefined,
+      detail: incompatible.length
+        ? `试剂不相容：${incompatible.join("、")}。本规则不看孔位——只要协议里同时出现过这两种` +
+          `试剂就会拦，不检查它们是否真的会混进同一个孔。下一步：分开配制/分批执行，或改用相容的试剂。`
+        : undefined,
     };
   },
 };
@@ -172,8 +206,22 @@ export const concentrationLimitRule: SafetyRule = {
           `下一步：确认是不是把 mol/L 写成了 %，或者少写了小数点。`,
       );
     }
+    // V59（BACKLOG）④：旧消息是「over-limit reagents: 乙醇 (200)」——英文残句、
+    // 不说限值是多少、不说单位、不给下一步（同一条规则里 impossible/uncovered 两个
+    // 分支已经是中文完整句，这一条明显落后一个数量级）。统一成：数值 + 单位 +
+    // 限值 + 下一步。`unspecified` 口径本来就是「没写单位、按限值表的百分比口径
+    // 理解」（见 protocol.ts extractConcentration），如实标注不是真的写了 %。
     if (overLimit.length) {
-      details.push(`over-limit reagents: ${overLimit.map((r) => `${r.name} (${r.concentration})`).join(", ")}`);
+      details.push(
+        `浓度超过限值：${overLimit
+          .map((r) => {
+            const value =
+              r.concentrationUnit === "percent" ? `${r.concentration}%` : `${r.concentration}（未标注单位，按百分比口径比较）`;
+            return `${r.name}（${value}，上限 ${MAX_CONCENTRATION[r.reagentId!]}%）`;
+          })
+          .join("、")}。下一步：把浓度降到上限以内再重新编译协议；如确有必要使用更高浓度，` +
+          `需要人工复核并调整 MAX_CONCENTRATION（并说明理由）。`,
+      );
     }
     if (uncovered.length) {
       details.push(
@@ -223,26 +271,35 @@ export const volumeCapacityRule: SafetyRule = {
   evaluate({ protocol, program }) {
     const violations: string[] = [];
 
+    // V59（BACKLOG）④：四条 violation 消息统一补上「下一步」——限值与单位本来就有，
+    // 缺的是「知道超标之后该做什么」，与 chemical_compatibility / concentration_limit
+    // 两条同一次改齐。
     if (program) {
       for (const [well, volume] of Object.entries(program.finalWellVolumesUl)) {
         if (volume > PLATE_WELL_CAPACITY_UL) {
           violations.push(
-            `孔 ${well} 累计 ${volume} µL 超过孔板容量 ${PLATE_WELL_CAPACITY_UL} µL`,
+            `孔 ${well} 累计 ${volume} µL 超过孔板容量 ${PLATE_WELL_CAPACITY_UL} µL。` +
+              `下一步：减少这个孔的总加液量，或把样品分装到多个孔。`,
           );
         }
         if (volume < -1e-6) {
-          violations.push(`孔 ${well} 累计体积为负（${volume} µL）——协议里取走的比加进去的多`);
+          violations.push(
+            `孔 ${well} 累计体积为负（${volume} µL）——协议里取走的比加进去的多。` +
+              `下一步：核对协议里这个孔的加液/取液顺序与数量。`,
+          );
         }
       }
       for (const transfer of program.transfers) {
         if (transfer.volumeUl > PIPETTE_MAX_VOLUME_UL) {
           violations.push(
-            `${transfer.stepId}: 单次转移 ${transfer.volumeUl} µL 超过移液器量程 ${PIPETTE_MAX_VOLUME_UL} µL`,
+            `${transfer.stepId}: 单次转移 ${transfer.volumeUl} µL 超过移液器量程 ${PIPETTE_MAX_VOLUME_UL} µL。` +
+              `下一步：把这一步拆成多次转移，每次不超过量程。`,
           );
         }
         if (transfer.volumeUl > 0 && transfer.volumeUl < PIPETTE_MIN_VOLUME_UL) {
           violations.push(
-            `${transfer.stepId}: 单次转移 ${transfer.volumeUl} µL 低于移液器最小量程 ${PIPETTE_MIN_VOLUME_UL} µL`,
+            `${transfer.stepId}: 单次转移 ${transfer.volumeUl} µL 低于移液器最小量程 ${PIPETTE_MIN_VOLUME_UL} µL。` +
+              `下一步：把体积提高到最小量程以上，或换用更小量程的移液器。`,
           );
         }
       }
@@ -254,7 +311,8 @@ export const volumeCapacityRule: SafetyRule = {
         if (volume === null) continue;
         if (volume > PLATE_WELL_CAPACITY_UL) {
           violations.push(
-            `${step.id}: 单次加液 ${volume} µL 超过孔板容量 ${PLATE_WELL_CAPACITY_UL} µL`,
+            `${step.id}: 单次加液 ${volume} µL 超过孔板容量 ${PLATE_WELL_CAPACITY_UL} µL。` +
+              `下一步：减少这一步的加液量，或改用更大容量的孔板。`,
           );
         }
       }

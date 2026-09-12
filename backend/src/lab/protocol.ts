@@ -318,15 +318,26 @@ function allVolumeMentions(sentence: string): string[] {
 // 这直接违反 README 自己立的口径「『用户写了但安全门没看见』的内容绝不静默绿灯通过」。
 // SIGNAL 的职责只是「这句话疑似有浓度描述」，宁可宽一点：抠不出可比的值就落告警，
 // 那正是这个机制存在的理由。
+// V55：signal 正则英文化——「molar concentration」「concentration is/of/= N」是
+// 「摩尔浓度」「浓度为N」最常见的英文对应写法，不加的话英文协议里同样的疏漏会
+// 悄悄产出零告警（未消费信号机制本身「宁可宽一点」的纪律，双语都要守）。
 const CONCENTRATION_SIGNAL =
-  /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z])|g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)|摩尔浓度|质量浓度|\d+\s*[:：]\s*\d+\s*(?:稀释|dilution)|稀释\s*\d+\s*[:：]\s*\d+|浓度\s*(?:为|是|：|:)?\s*\d/i;
+  /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z])|g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)|摩尔浓度|质量浓度|molar concentration|\d+\s*[:：]\s*\d+\s*(?:稀释|dilution)|稀释\s*\d+\s*[:：]\s*\d+|浓度\s*(?:为|是|：|:)?\s*\d|concentration\s*(?:is|of|=|:)?\s*\d/i;
 // 收窄到**明确的配液/试剂措辞**：原来把「加入」「取 N µL」也算进来，于是
 // 「取样品50µL加入96孔板」这种干净协议也报警——正是窄范围验收警告的那种误杀。
-const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液/;
+// V55：英文对应词「prepare」「reagent」「solution」，「reagent kit」同中文「试剂盒」
+// 一样排除在外（试剂盒不是受管化学品本身）。
+const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液|prepare|reagent(?!\s*kit)|solution/i;
 // 通用实验室液体：它们本来就不是受管化学品，报「不在试剂词表内」只会制造噪音。
-// （窄范围验收的教训是两头都要防：漏放要报，误杀也是问题。）
-const GENERIC_LIQUIDS = /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS/i;
-const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]/i;
+// （窄范围验收的教训是两头都要防：漏放要报，误杀也是问题。）V55 补英文对应词。
+const GENERIC_LIQUIDS =
+  /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS|sample|diluent|buffer(?:ed)?|(?:growth |culture )?medium|supernatant|wash(?:ing)? buffer|deionized water|distilled water|purified water/i;
+// V59（BACKLOG）②：生物安全等级的口语写法——「P3 实验室」「裸 P2」是 BSL 分级
+// 之外最常见的第二套命名（P-level 与 BSL-level 历史上是同一件事的两种叫法），
+// 原来只认字面 `BSL-n`/`生物安全N级`/`biosafety level n`，这类写法直接零告警地
+// 静默通过。这里只是多认一种同义写法，**不引入新阈值、不改 MAX_BIOSAFETY_LEVEL**。
+const BIOSAFETY_SIGNAL =
+  /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]|\bP[1-4]\b(?:\s*(?:实验室|lab(?:oratory)?s?))?/i;
 
 // 只有这几种动作会往 opentrons_protocol.ts 里的 `reservoir.wellFor(name)` 送一个
 // 试剂名——只有这些动作产出的步骤需要"识别不出试剂就把原文带下来"这件事。
@@ -381,13 +392,20 @@ function extractConcentration(sentence: string): { value: number; unit: ReagentS
   // （告警里说「单位不认识」而不是「抠不出数字」——窄范围验收发现后者是假话）。
   const other = /(\d+(?:\.\d+)?)\s*(?:g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)/i.exec(sentence);
   if (other) return { value: Number(other[1]), unit: "other" };
-  const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)/.exec(sentence);
-  // 裸数字（「浓度为500」，没给单位）：按限值表的口径理解——V25 起的既有行为。
-  // 跨单位比较的问题出在**认识但不同口径**的单位上（mol/L、g/L），不在这里。
-  if (explicit) return { value: Number(explicit[1]), unit: "unspecified" };
+  // V55：「concentration is/of/= 500」是「浓度为500」的英文对应写法，同样按
+  // 限值表口径理解（unspecified）——跨单位比较的问题出在**认识但不同口径**的
+  // 单位上（mol/L、g/L），不在这里。
+  const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)|concentration\s*(?:is|of|=|:)?\s*(\d+(?:\.\d+)?)/i.exec(
+    sentence,
+  );
+  if (explicit) return { value: Number(explicit[1] ?? explicit[2]), unit: "unspecified" };
   return undefined;
 }
 
+// V59（BACKLOG）②：`P3 实验室`/`P2` 与 `BSL-3` 是同一件事的两种命名——P-level
+// （历史上源自 CDC/NIH 的 Biosafety Level 分级，中文口语常写「P几实验室」）与
+// BSL-level 数字上一一对应，这里只是多识别一种同义写法，**不新增/不改任何阈值**
+// （MAX_BIOSAFETY_LEVEL 仍在 safety.ts，规则语义没有变化）。
 function extractBiosafetyLevel(sentence: string): number | undefined {
   const bsl = /BSL[-\s]?([1-4])/i.exec(sentence);
   if (bsl) return Number(bsl[1]);
@@ -395,6 +413,8 @@ function extractBiosafetyLevel(sentence: string): number | undefined {
   if (zh) return CHINESE_LEVEL_DIGIT[zh[1]!] ?? Number(zh[1]);
   const en = /biosafety\s*level\s*([1-4])/i.exec(sentence);
   if (en) return Number(en[1]);
+  const p = /\bP([1-4])\b(?:\s*(?:实验室|lab(?:oratory)?s?))?/i.exec(sentence);
+  if (p) return Number(p[1]);
   return undefined;
 }
 
