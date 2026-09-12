@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ResearchRecord } from "../project/models";
 import type { SafetyCheckResult } from "./protocol";
+import { SAFETY_COVERAGE_STATEMENT } from "./safety";
 import type { CompiledStep, DeckSlotPlan } from "./opentrons_protocol";
 import type { WetRunLogEntry, WetSummaryValue } from "./wet_backend";
 
@@ -334,18 +335,11 @@ export function renderWetExperiment(view: Omit<WetExperimentView, "record">): st
     // 而它当时说的是 V25 之前的口径（「concentration_limit / biosafety 仍然空转」）——
     // 与 README 和实际行为三方打架。审批人拿到过期口径去做署名批准，是最不该发生的事。
     // 现在按实测重写，**每一条都说清楚它看得见什么、看不见什么**。
+    // W8-1 ε 收口：唯一真源是 safety.ts 的 SAFETY_COVERAGE_STATEMENT（lab compile 那一屏打的同一段），
+    // 这里只加 blockquote 前缀，不再维护第二份文案（旧副本还写着"只吃中文"，V55 之后已是假话）。
     lines.push(
-      "> 覆盖范围口径（**每次改安全门都要同步这段**——它出现在审批决策点上）：\n" +
-        "> · `volume_capacity`：唯一全程接编译产物核对的规则，累计溢孔与移液器量程都查。\n" +
-        "> · `chemical_compatibility`：认识一个**有限**的试剂词表（中文常见名 + 英文名/分子式）。" +
-        "**词表之外的试剂它完全看不见**，不是「相容」。\n" +
-        "> · `concentration_limit`：只在**同句恰好点名一种试剂**时才拿得到浓度（跨句写法拿不到，会落未消费告警）。" +
-        "解析到了但**限值表里没有该试剂**时**不放行**，理由写「没有规则可查」——" +
-        "「查不到规则」不等于「检查通过」。另外百分比 > 100 一律拦（物理上不存在）。\n" +
-        "> · `biosafety`：能挂到「这句话最终归属的那个步骤」；一句独立的生物安全描述、" +
-        "前面没有步骤可挂时，只报未消费。\n" +
-        "> · **自然语言步骤解析目前只吃中文**：英文协议编译不出步骤（会直接报错，不会静默产出空协议）。\n" +
-        "> 漏看了什么，看上面「未被安全门消费的信号」。",
+      SAFETY_COVERAGE_STATEMENT.split("\n").map((l) => `> ${l}`).join("\n") +
+        "\n> 漏看了什么，看上面「未被安全门消费的信号」。",
     );
   }
   if (view.approval) {

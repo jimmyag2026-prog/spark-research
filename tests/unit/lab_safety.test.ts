@@ -130,7 +130,13 @@ describe("对抗 ② 超浓度", () => {
     ]);
     const result = concentrationLimitRule.evaluate({ protocol });
     expect(result.passed).toBe(false);
-    expect(result.detail).toContain("次氯酸钠 (500)");
+    // V59（BACKLOG）④：消息格式改成中文完整句「试剂名（数值，上限 X%）」+ 下一步，
+    // 不再是英文残句「试剂名 (数值)」——断言跟着改成分别检查关键信息都在，不锁死
+    // 具体标点排版。
+    expect(result.detail).toContain("次氯酸钠");
+    expect(result.detail).toContain("500");
+    expect(result.detail).toContain("上限 100%");
+    expect(result.detail).toContain("下一步");
   });
 
   test("恰好等于上限 → 放行（边界不误杀）", () => {
@@ -185,7 +191,13 @@ describe("对抗 ② 超浓度", () => {
     expect(reagent.concentration).toBe(500);
     const result = concentrationLimitRule.evaluate({ protocol });
     expect(result.passed).toBe(false);
-    expect(result.detail).toContain("次氯酸钠 (500)");
+    // V59（BACKLOG）④：消息格式改成中文完整句「试剂名（数值，上限 X%）」+ 下一步，
+    // 不再是英文残句「试剂名 (数值)」——断言跟着改成分别检查关键信息都在，不锁死
+    // 具体标点排版。
+    expect(result.detail).toContain("次氯酸钠");
+    expect(result.detail).toContain("500");
+    expect(result.detail).toContain("上限 100%");
+    expect(result.detail).toContain("下一步");
     // 解析成功即消费：不再落 unconsumed 告警。
     expect(protocol.warnings).toEqual([]);
   });

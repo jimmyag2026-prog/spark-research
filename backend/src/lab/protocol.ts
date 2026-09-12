@@ -94,13 +94,17 @@ function extractTemperature(sentence: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+// V55：时长单位英文化——原来只认「分钟/min」「小时/h」「秒/sec」的裸缩写，「1 hour」
+// 这种最常见的英文写法反而抠不出来（`h(?![a-z])` 的负向先行断言专门是为了不把
+// "hour" 的 h 误当独立缩写，副作用是连"hour"本身也进不去）。这里补上
+// `hours?`/`minutes?`/`seconds?` 完整词形；`过夜`/`隔夜` 补英文 `overnight`。
 function extractDurationSec(sentence: string): number | undefined {
-  if (/过夜|隔夜/.test(sentence)) return 12 * 60 * 60;
-  const minutes = /(\d+(?:\.\d+)?)\s*(?:分钟|min)/i.exec(sentence);
+  if (/过夜|隔夜|overnight/i.test(sentence)) return 12 * 60 * 60;
+  const minutes = /(\d+(?:\.\d+)?)\s*(?:分钟|min(?:ute)?s?)/i.exec(sentence);
   if (minutes) return Math.round(Number(minutes[1]) * 60);
-  const hours = /(\d+(?:\.\d+)?)\s*(?:小时|h(?![a-z]))/i.exec(sentence);
+  const hours = /(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z]))/i.exec(sentence);
   if (hours) return Math.round(Number(hours[1]) * 3600);
-  const seconds = /(\d+(?:\.\d+)?)\s*(?:秒|sec|s(?![a-z]))/i.exec(sentence);
+  const seconds = /(\d+(?:\.\d+)?)\s*(?:秒|sec(?:ond)?s?|s(?![a-z]))/i.exec(sentence);
   if (seconds) return Math.round(Number(seconds[1]));
   return undefined;
 }
@@ -144,22 +148,28 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["配", "配置", "配制", "制备"],
+    // V55：动词关键词英文化——试剂词表（REAGENT_PATTERNS）早就是双语的，但这一层
+    // 步骤解析器原来纯中文，导致纯英文协议**一步都编不出来**（不是拦截，是静默产出
+    // 零步骤协议，validateProtocol 才会报错）。下面六条规则各补对应英文动词，
+    // 与中文关键词并列在同一个数组里——大小写不敏感的匹配见 `compile()` 里的
+    // `lowerClause`。刻意不做完整同义词穷举（不是造一本英文实验动词词典），只补
+    // README 那条示例协议直译后会用到的最常见写法。
+    keywords: ["配", "配置", "配制", "制备", "prepare", "formulate"],
     action: "prepareReagent",
     device: "liquid_handler",
     expectedOutput: "solution volume confirmed",
     paramBuilder: (sentence) => extractVolume(sentence),
   },
   {
-    keywords: ["加", "加入", "添加", "转移"],
+    keywords: ["加", "加入", "添加", "转移", "add", "transfer", "dispense"],
     action: "addSample",
     device: "liquid_handler",
     expectedOutput: "sample dispensed into well",
     paramBuilder: (sentence) => extractVolume(sentence),
   },
   {
-    keywords: ["孵育", "培养", "恒温", "37°c", "37℃"],
-    exclude: ["培养基"],
+    keywords: ["孵育", "培养", "恒温", "37°c", "37℃", "incubate", "incubation"],
+    exclude: ["培养基", "growth medium", "culture medium"],
     action: "incubate",
     device: "incubator",
     expectedOutput: "incubation completed",
@@ -173,7 +183,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["震荡", "振荡", "摇床", "摇动"],
+    keywords: ["震荡", "振荡", "摇床", "摇动", "shake", "shaking", "vortex"],
     action: "shake",
     device: "shaker",
     expectedOutput: "mixing completed",
@@ -186,7 +196,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["离心"],
+    keywords: ["离心", "centrifuge", "centrifugation"],
     action: "centrifuge",
     device: "centrifuge",
     expectedOutput: "pellet separated",
@@ -197,7 +207,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["读数", "读取", "测定", "检测", "酶标"],
+    keywords: ["读数", "读取", "测定", "检测", "酶标", "read", "reading", "measure", "detect"],
     action: "read",
     device: "plate_reader",
     expectedOutput: "OD readings collected",
@@ -225,7 +235,8 @@ const REAGENT_PATTERNS: Array<{ id: string; keywords: string[] }> = [
 // 「参数续句」：只在补充上一步的参数，不是新的一步。
 // 「每步转移 100µL 并混匀 3 次」里的「转移」会命中 addSample，凭空多出一步移液；
 // 而这句话说的其实是上一步梯度稀释的参数。P6 新增，是协议 B 能被正确编译的前提。
-const CONTINUATION_MARKERS = /每步|每级|每次|每个梯度|每孔|其中|即每/;
+// V55：续句标记英文化，加 /i（Chinese 无大小写，加了不影响原有匹配）。
+const CONTINUATION_MARKERS = /每步|每级|每次|每个梯度|每孔|其中|即每|each step|each time|per step|per well|for each/i;
 
 // 续句参数 → 上一步 params 的映射。按上一步的**动作**决定同一个数字该落到哪个键：
 // 「100 µL」对 serialDilute 是每级转移体积，对 addSample 就是加样体积。
@@ -307,15 +318,26 @@ function allVolumeMentions(sentence: string): string[] {
 // 这直接违反 README 自己立的口径「『用户写了但安全门没看见』的内容绝不静默绿灯通过」。
 // SIGNAL 的职责只是「这句话疑似有浓度描述」，宁可宽一点：抠不出可比的值就落告警，
 // 那正是这个机制存在的理由。
+// V55：signal 正则英文化——「molar concentration」「concentration is/of/= N」是
+// 「摩尔浓度」「浓度为N」最常见的英文对应写法，不加的话英文协议里同样的疏漏会
+// 悄悄产出零告警（未消费信号机制本身「宁可宽一点」的纪律，双语都要守）。
 const CONCENTRATION_SIGNAL =
-  /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z])|g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)|摩尔浓度|质量浓度|\d+\s*[:：]\s*\d+\s*(?:稀释|dilution)|稀释\s*\d+\s*[:：]\s*\d+|浓度\s*(?:为|是|：|:)?\s*\d/i;
+  /(\d+(?:\.\d+)?)\s*(?:%|mol\/l|mmol\/l|mM|M(?![a-z])|g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)|摩尔浓度|质量浓度|molar concentration|\d+\s*[:：]\s*\d+\s*(?:稀释|dilution)|稀释\s*\d+\s*[:：]\s*\d+|浓度\s*(?:为|是|：|:)?\s*\d|concentration\s*(?:is|of|=|:)?\s*\d/i;
 // 收窄到**明确的配液/试剂措辞**：原来把「加入」「取 N µL」也算进来，于是
 // 「取样品50µL加入96孔板」这种干净协议也报警——正是窄范围验收警告的那种误杀。
-const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液/;
+// V55：英文对应词「prepare」「reagent」「solution」，「reagent kit」同中文「试剂盒」
+// 一样排除在外（试剂盒不是受管化学品本身）。
+const REAGENT_MENTION_SIGNAL = /配制|试剂(?!盒)|溶液|prepare|reagent(?!\s*kit)|solution/i;
 // 通用实验室液体：它们本来就不是受管化学品，报「不在试剂词表内」只会制造噪音。
-// （窄范围验收的教训是两头都要防：漏放要报，误杀也是问题。）
-const GENERIC_LIQUIDS = /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS/i;
-const BIOSAFETY_SIGNAL = /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]/i;
+// （窄范围验收的教训是两头都要防：漏放要报，误杀也是问题。）V55 补英文对应词。
+const GENERIC_LIQUIDS =
+  /样品|稀释液|缓冲液|培养基|上清|洗涤液|去离子水|蒸馏水|纯水|PBS|sample|diluent|buffer(?:ed)?|(?:growth |culture )?medium|supernatant|wash(?:ing)? buffer|deionized water|distilled water|purified water/i;
+// V59（BACKLOG）②：生物安全等级的口语写法——「P3 实验室」「裸 P2」是 BSL 分级
+// 之外最常见的第二套命名（P-level 与 BSL-level 历史上是同一件事的两种叫法），
+// 原来只认字面 `BSL-n`/`生物安全N级`/`biosafety level n`，这类写法直接零告警地
+// 静默通过。这里只是多认一种同义写法，**不引入新阈值、不改 MAX_BIOSAFETY_LEVEL**。
+const BIOSAFETY_SIGNAL =
+  /BSL[-\s]?[1-4]|生物安全[一二三四1234]级|biosafety\s*level\s*[1-4]|\bP[1-4]\b(?:\s*(?:实验室|lab(?:oratory)?s?))?/i;
 
 // 只有这几种动作会往 opentrons_protocol.ts 里的 `reservoir.wellFor(name)` 送一个
 // 试剂名——只有这些动作产出的步骤需要"识别不出试剂就把原文带下来"这件事。
@@ -333,10 +355,17 @@ function extractReagentRawText(clause: string, ruleKeywords: readonly string[]):
   let residual = clause;
   const volumeMatch = /\d+(?:\.\d+)?\s*(?:mL|uL|µL|μL|毫升|微升)/i.exec(residual);
   if (volumeMatch) residual = residual.replace(volumeMatch[0], "");
-  const matchedKeywords = ruleKeywords.filter((k) => residual.includes(k));
+  // V55：大小写不敏感地找/删关键词残留——ruleKeywords 现在混了英文动词（"add"），
+  // 句首大写「Add 100uL 硝酸」用原来大小写敏感的 `.includes()` 找不到 "add"，
+  // 英文协议的未识别试剂原文会被动词残留污染。用 indexOf 在小写视图上定位，
+  // 再按原始大小写切片删除，不影响残留里其余文本的大小写（中文关键词不受影响，
+  // toLowerCase() 对中文字符是恒等操作）。
+  const lowerResidual = residual.toLowerCase();
+  const matchedKeywords = ruleKeywords.filter((k) => lowerResidual.includes(k.toLowerCase()));
   if (matchedKeywords.length > 0) {
     const longest = matchedKeywords.reduce((a, b) => (b.length > a.length ? b : a));
-    residual = residual.replace(longest, "");
+    const idx = residual.toLowerCase().indexOf(longest.toLowerCase());
+    if (idx >= 0) residual = residual.slice(0, idx) + residual.slice(idx + longest.length);
   }
   residual = residual
     .replace(/[，,、。；;：:]/g, "")
@@ -363,13 +392,20 @@ function extractConcentration(sentence: string): { value: number; unit: ReagentS
   // （告警里说「单位不认识」而不是「抠不出数字」——窄范围验收发现后者是假话）。
   const other = /(\d+(?:\.\d+)?)\s*(?:g\/l|mg\/l|µg\/ml|ug\/ml|ppm|ppb)/i.exec(sentence);
   if (other) return { value: Number(other[1]), unit: "other" };
-  const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)/.exec(sentence);
-  // 裸数字（「浓度为500」，没给单位）：按限值表的口径理解——V25 起的既有行为。
-  // 跨单位比较的问题出在**认识但不同口径**的单位上（mol/L、g/L），不在这里。
-  if (explicit) return { value: Number(explicit[1]), unit: "unspecified" };
+  // V55：「concentration is/of/= 500」是「浓度为500」的英文对应写法，同样按
+  // 限值表口径理解（unspecified）——跨单位比较的问题出在**认识但不同口径**的
+  // 单位上（mol/L、g/L），不在这里。
+  const explicit = /浓度\s*(?:为|是|：|:)?\s*(\d+(?:\.\d+)?)|concentration\s*(?:is|of|=|:)?\s*(\d+(?:\.\d+)?)/i.exec(
+    sentence,
+  );
+  if (explicit) return { value: Number(explicit[1] ?? explicit[2]), unit: "unspecified" };
   return undefined;
 }
 
+// V59（BACKLOG）②：`P3 实验室`/`P2` 与 `BSL-3` 是同一件事的两种命名——P-level
+// （历史上源自 CDC/NIH 的 Biosafety Level 分级，中文口语常写「P几实验室」）与
+// BSL-level 数字上一一对应，这里只是多识别一种同义写法，**不新增/不改任何阈值**
+// （MAX_BIOSAFETY_LEVEL 仍在 safety.ts，规则语义没有变化）。
 function extractBiosafetyLevel(sentence: string): number | undefined {
   const bsl = /BSL[-\s]?([1-4])/i.exec(sentence);
   if (bsl) return Number(bsl[1]);
@@ -377,6 +413,8 @@ function extractBiosafetyLevel(sentence: string): number | undefined {
   if (zh) return CHINESE_LEVEL_DIGIT[zh[1]!] ?? Number(zh[1]);
   const en = /biosafety\s*level\s*([1-4])/i.exec(sentence);
   if (en) return Number(en[1]);
+  const p = /\bP([1-4])\b(?:\s*(?:实验室|lab(?:oratory)?s?))?/i.exec(sentence);
+  if (p) return Number(p[1]);
   return undefined;
 }
 
@@ -504,10 +542,13 @@ export class ProtocolCompiler {
         reagents[0]!.concentrationUnit = concentrationValue.unit;
       }
       const biosafetyValue = extractBiosafetyLevel(clause);
+      // V55：动词关键词匹配改成大小写不敏感——句首大写的英文协议（"Add 50uL..."）
+      // 原来会因为 keywords 里存的是小写 "add" 而匹配不上，整句退化成「无动作」。
+      const lowerClause = clause.toLowerCase();
       const rule = ACTION_RULES.find(
         (r) =>
-          r.keywords.some((k) => clause.includes(k)) &&
-          !(r.exclude ?? []).some((k) => clause.includes(k)),
+          r.keywords.some((k) => lowerClause.includes(k.toLowerCase())) &&
+          !(r.exclude ?? []).some((k) => lowerClause.includes(k.toLowerCase())),
       );
       // 续句（或压根不含动作词但带参数的句子）合并进上一步，而不是新起一步。
       // 「不认识就跳过」会把参数**静默丢掉**，那比多一步更糟——用户写了却没生效。

@@ -4,6 +4,11 @@ import { ExperimentLoop } from "../experiment/loop";
 import { ProjectError, ProjectManager, type Project, openProjectResolved } from "../project/manager";
 import { SimulationRegistry } from "../simulation/registry";
 import { LabSafetyError } from "./orchestrator";
+// V95：一次性 HTTP 审批令牌（见 approval_token.ts 顶部大段注释）。
+import { issue as issueApprovalToken } from "./approval_token";
+// V59①：安全门覆盖范围声明，与 `lab status`（`wet_models.ts` 的 renderWetExperiment）
+// 共用同一个常量——`lab compile` 那一屏是绝大多数人第一次看到安全门结论的地方。
+import { SAFETY_COVERAGE_STATEMENT } from "./safety";
 import { DEFAULT_WET_BACKEND, WET_BACKEND_IDS, wetBackend, type WetLabBackend } from "./wet_backend";
 import { WetLabLoop } from "./wet_loop";
 import {
@@ -25,6 +30,12 @@ export const LAB_HELP = `用法:
                                         → **停在 awaiting_approval**（安全门通过 ≠ 可以执行）
   spark-research lab compile --experiment <id> [--protocol "<新协议>"] [--json]
                                         重新编译已有实验（会作废先前的 approve）
+  spark-research lab token <id> [--json]
+                                        V95：签发一枚一次性 HTTP 审批令牌（10 分钟有效，
+                                        只能被 approve/simulate 等触发执行的路由消费一次）。
+                                        TTY 门与 lab approve **同一套**：必须来自真实交互终端，
+                                        非交互环境同样需要 --ci-bypass-token/--ci-bypass-reason。
+                                        令牌只打印这一次，不会再出现在任何日志/记录里。
   spark-research lab approve <id> [--actor 谁] [--note 备注] [--json]
                                         人工批准执行（AD-6）。落 decision record，记协议 hash。
                                         V19：必须来自真实交互终端（会现场要求输入 'yes' 确认），
@@ -253,9 +264,53 @@ export async function runLabCommand(args: string[], deps: LabCliDeps = {}): Prom
             out("🚨 以下内容安全门没有看见（编译器识别到了信号，但没有规则消费它）：");
             for (const warning of view.unconsumedWarnings) out(`    🚨 ${warning}`);
           }
+          // V59①：绝大多数人是在这一屏（不是 `lab status`）第一次看到四行 ✅ 的——
+          // 覆盖范围声明必须出现在这里，不能只写在 `lab status` 的正文里。
+          out("");
+          out("📋 安全门覆盖范围声明：");
+          for (const line of SAFETY_COVERAGE_STATEMENT.split("\n")) out(`    ${line}`);
           out("");
           out(`⏸  安全门通过 ≠ 可以执行。下一步需要**人工确认**（AD-6）：`);
           out(`   spark-research lab approve ${view.id.slice(0, 8)} --actor <你的名字>`);
+        }
+        return 0;
+      }
+
+      case "token": {
+        // V95：签发一枚一次性 HTTP 审批令牌。TTY 门与 `lab approve` 字面上调用的是
+        // 同一个 `requireApprovalGate`（`../approval/gate.ts` 的 `LAB_APPROVAL_GATE`）——
+        // 判据、两条分支（真实交互终端 / 非交互 CI 旁路）、四种拒绝理由完全复用，
+        // 不重写第二份（复制是 W5-2 β 明确点过的最坏做法）。用 "approve" 这个 action
+        // 字面量只是为了不改 gate.ts 的类型签名（本 lane 足迹不含 gate.ts）——
+        // 签令牌与批准共享同一道「必须是人」的门，这本身就是设计意图，不是文案巧合。
+        const ref = positional[0];
+        if (!ref) {
+          err("用法: spark-research lab token <experiment-id>");
+          return 1;
+        }
+        project = openProjectResolved(manager, flagString(flags.project));
+        const loop = makeLoop(project, deps);
+        const view = loop.get(ref); // 不存在会抛 WetExperimentNotFoundError，走下面统一的 catch。
+        await requireApprovalGate(LAB_APPROVAL_GATE, ref, "approve", deps, flags);
+        const issued = issueApprovalToken(project.paths.root, view.id);
+        if (flags.json === true) {
+          out(
+            JSON.stringify(
+              {
+                experimentId: issued.experimentId,
+                token: issued.token,
+                issuedAt: issued.issuedAt,
+                expiresAt: issued.expiresAt,
+              },
+              null,
+              2,
+            ),
+          );
+        } else {
+          out(`🔑 一次性审批令牌（${issued.expiresAt} 前有效，只能被消费一次）：`);
+          out(`   ${issued.token}`);
+          out("下一步：把它填进 HTTP approve/simulate 请求体的 approvalToken 字段");
+          out("（或 X-Spark-Approval-Token 请求头），连同 actor 一起提交。");
         }
         return 0;
       }
