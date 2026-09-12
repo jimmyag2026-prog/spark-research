@@ -188,3 +188,7 @@ tests/unit/w8_epsilon_protocol.test.ts tests/unit/w8_epsilon_cli_token.test.ts`�
   理论上会误伤一些巧合含有 "P2"/"P3" 等 token 的协议文本（比如某个样品编号恰好叫
   "P2"）。这是任务书明确要求的写法（"裸 P2"），按字面做了，风险如实标注在
   protocol.ts 的注释里。
+
+## 收口补记（主会话，2026-09-12）
+- 合入 lane 交口的两处 diff：`wet_models.ts` 改引用 `SAFETY_COVERAGE_STATEMENT`（唯一真源，去掉"只吃中文"旧副本）；`README.md` 安全门段落改为双语已支持的口径；llms.txt 重新生成。
+- 主会话复跑：typecheck 0 · unit 2419/0（2384+35）· concurrency+timeout 37/0 · e2e 21 · lab 26 · py 129（含 sdk 56）。
