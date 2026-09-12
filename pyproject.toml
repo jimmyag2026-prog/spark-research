@@ -1,6 +1,6 @@
 [project]
 name = "spark-research"
-version = "0.2.0"
+version = "0.8.0a2"
 description = "Spark Research 科研工作台的 Python kernel、仿真与实验室模块"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
