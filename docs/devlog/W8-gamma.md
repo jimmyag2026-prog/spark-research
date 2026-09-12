@@ -153,3 +153,8 @@ AD-12）。实现的是「精读/综述/novelty」三处真实可达的 UI 入�
   `agents/orchestrator.ts`（不在本 lane 足迹内）。
 - V79①的 `onCiteClick` 事件委托那一半只有 e2e/人工验证覆盖，没有专门的 DOM 单测（bun:test
   没有浏览器环境，装 jsdom 超出本 lane 范围）。
+
+## 收口补记（主会话，2026-09-12）
+- 与 ζ（#94）在 `routes/ideation.ts` 的 `embedAccounting` 接线合并无冲突，已核对仍在。
+- V79③ 残余：聊天式 co-explore 走 `agents/orchestrator.ts` 自己的 `llmFor`，UI 预算入口只覆盖精读/综述/novelty 三处；orchestrator 加 budgetUsd 参数登记 BACKLOG（W8-1 收口）。
+- 主会话复跑：typecheck 0 · unit 2370/0 · concurrency+timeout 35/0 · e2e 24 passed rc=0。
