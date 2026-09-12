@@ -5,6 +5,56 @@
 
 ---
 
+## [0.8.0-alpha.2] — 2026-09-12
+
+**W8-1 六条 lane + W8-2 runtime contract / Python SDK 全部合入（原计划的 alpha.3 内容一并落在本 alpha）。**
+七个 sonnet 子代理各自 worktree 并行，主会话逐条独立复跑六套件（退出码口径）后 squash 合入（#93–#100）；
+每条 lane ≥3 组阴性对照实跑变红，见 `docs/devlog/W8-{alpha,beta,gamma,delta,epsilon,zeta,sdk,2-contract}.md`。
+
+### 对外集成面（W8-2）
+
+- **`spark-research contract --json | --write`**（#93）：CLI 命令/子命令/旗标（index.ts switch 对撞 + 各模块 HELP 提取）、
+  HTTP 路由（真实 Hono 路由表 78 条）、响应与导出 manifest 的 JSON Schema（构建期由 TS 接口生成、幂等门禁）、MCP 工具 30 个、
+  配置项（不含凭据值）。输出确定性；12 条契约与真源对撞门禁；Release 挂 `contract.json`。
+- **Python SDK `sdk/python`**（#98）：从契约生成的薄客户端（78 路由 → 78 方法；`Client`/`ApiError`/`ConnectionError`/`wait_task`），
+  `tests/sdk` 56 条对真实 server 往返；生成物幂等 + 版本同步门禁；`docs/SDK.md`。**如实交代**：`data export/import` 无 HTTP 路由故 SDK 无对应方法；
+  SSE 两条路由有方法但 SDK 只解析 JSON。
+
+### 安全 / 审批（ε）
+
+- **V95 HTTP 审批旁路关闭（软件半边，不接设备）**（#100）：`POST /api/lab/experiments/:id/approve|simulate` 需 `actor` + 一次性 `approvalToken`；
+  令牌由 `spark-research lab token <id>`（与 `lab approve` 同一 TTY 门）签发，项目目录 0600、10 分钟、单次消费（并发 20 次只 1 成功）；缺/错/过期/已用 → 403。
+- **V55** 英文协议能编译（步骤解析器双语化）；**V59 软件四条**：`lab compile` 打限值表覆盖声明（唯一真源）、biosafety 认 `P3 实验室`、
+  chemical_compatibility 明说不看孔位、三类消息给限值+单位+下一步。阈值/规则语义未改。
+
+### 检索与核验（α · δ）
+
+- **V67/V86 召回基线（有礼貌池实测）**（#99）：38 次真实调用 OpenAlex 0 次 429；T1–T4 合计 recall@10 blended 8/24 · hits 7/24 · citations 7/24 · recent 0/24；
+  默认档 blended 与 perSource=30 按数据维持。**V87** `lit review` 打「解析 N / 判定 M / 差额：去重 x · 自引 y · 解析失败 z」（穷尽分解）。
+  **V73** AMiner 401 与调用间隔 >30s 强相关 → 单次保守重试（统计相关性，非受控复现）。
+- **V92 中文引用 key 对两道核验门可见**（#95）：库外伪造中文 key 必被抓。**V14** 位置加权豁免改显式白名单。
+  **V51** probe helper 归位 `simulation/probe.ts`（openmm 残余 → V118）。**V13** 取证后裁定关闭（R4 草稿未见一例凭空归因）。
+
+### 数据层与台账（β · ζ）
+
+- **V85** 仿真 prepare/submit/collect 落 raw `kind=simulation`，导出/导入/验证同步（#96）。**V78** 子代理 tool loop 入账。
+  **V63** connector 台账 `rateLimitWaitMs` 真记。**V97** usage `model` 字段守卫。**V99** 台账写盘失败不抛产出、auth/rate_limit 记可证明 $0。
+  **V98** 精读卡 `basis/basisReason` 回读，judge 输入与综述草稿 prompt 均标注材料级别。
+- **V2 关闭**（#94）：语义路由/词面降级早在 v0.5 已交付；本版补 embedding 成本入账（usage `novelty-check:embedding` + raw），CLI/HTTP 接线。
+
+### 体验（γ，#97）
+
+- 精读任务每篇回传进度（V88）· co-explore 雷同卡去重（V89）· 项目下拉显示 slug（V90）· 引用 span 跳证据图 / 结论审阅前置提示 / 精读·综述·novelty UI 预算入口（V79；聊天式 co-explore 残余 → V119）。
+
+### 数字（alpha.1 → alpha.2）
+
+unit 2296 → **2420** · concurrency+timeout 35 → **37** · e2e 20 → **25** · py 73 → **129**（含 sdk 56）· lab 26 · 冒烟 exit 0。
+
+### 归账
+
+- V102 外部 review 杂项**逐条拆分为 V104–V117**（去向各标）；新增残余 V118（openmm probe）、V119（co-explore 预算）、V120（`records_write_race` 偶发 locked，A7 前核查）。
+- V109 本版顺手做：仓库根 `pyproject.toml` 版本随 `package.json` 走（0.8.0a2）+ 同步门禁。
+
 ## [0.8.0-alpha.1] — 2026-09-11
 
 **闸门 G：六条安全/正确性基线清账。** v0.8 方案见 `docs/DEVELOPMENT_PLAN_v0.8.md`；本 alpha 只做闸门 G，
