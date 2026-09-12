@@ -4,7 +4,7 @@ import { CoExploreError } from "../../ideation/coexplore";
 import { HttpError, type ServerContext } from "../context";
 import { sseResponse } from "../sse";
 import type { TaskEvent } from "../tasks";
-import { jsonBody, optionalString, queryNumber, queryString, requireString } from "./shared";
+import { jsonBody, optionalBool, optionalNumber, optionalString, queryNumber, queryString, requireString } from "./shared";
 
 // 会话端点（chat / coexplore）与任务流。
 //
@@ -46,6 +46,9 @@ export function sessionRoutes(ctx: ServerContext): Hono {
         message,
         model: optionalString(body, "model"),
         mode,
+        // V119：UI 预算入口透传（只做类型校验，闸在 usageTrackingLlm）。
+        budgetUsd: optionalNumber(body, "budgetUsd"),
+        allowUnpriced: optionalBool(body, "allowUnpriced"),
       });
     } catch (error) {
       // 模型两次都产不出合契约的 Idea 卡：服务端没坏，是这次生成不可用 → 422 而不是 500。
@@ -95,6 +98,9 @@ export function sessionRoutes(ctx: ServerContext): Hono {
               message,
               model,
               mode,
+              // V119：UI「预算 $」透传（闸在 usageTrackingLlm）。
+              budgetUsd: optionalNumber(body, "budgetUsd"),
+              allowUnpriced: optionalBool(body, "allowUnpriced"),
               // 权威答案的流式增量。provider 不支持流式、或注入的 fake LLM 不调 onDelta 时，
               // 这里就是从不触发——SSE 退化成「只有 result」，与接线前行为一致，不报错。
               onDelta: (chunk: string) => {

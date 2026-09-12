@@ -31,6 +31,8 @@ function SessionStream(): JSX.Element {
   const [mode, setMode] = createSignal<"chat" | "coexplore">("chat");
   const [draft, setDraft] = createSignal("");
   const [sending, setSending] = createSignal(false);
+  // V119：聊天/共探也是花钱操作，给一个与精读/综述同款的预算入口。
+  const [chatBudget, setChatBudget] = createSignal("");
   let scroller: HTMLDivElement | undefined;
 
   const scrollToEnd = () => queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
@@ -53,7 +55,8 @@ function SessionStream(): JSX.Element {
     let streamed = "";
     try {
       await streamChat(
-        { sessionId: SESSION_ID, message: text, mode: mode() },
+        // V119：聊天/共探也有预算入口（与精读/综述/novelty 同一个 BudgetInput）。
+        { sessionId: SESSION_ID, message: text, mode: mode(), budgetUsd: parseBudgetInput(chatBudget()) },
         {
           onDelta: (data) => {
             streamed += data.chunk;
@@ -167,6 +170,7 @@ function SessionStream(): JSX.Element {
               }
             }}
           />
+          <BudgetInput id="chat-budget" value={chatBudget()} onInput={setChatBudget} />
           <button class="btn btn-primary" onClick={send} disabled={sending() || !draft().trim()}>
             {sending() ? "发送中…" : "发送"}
           </button>

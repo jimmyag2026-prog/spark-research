@@ -87,7 +87,7 @@ export const COMPUTE_HELP = `用法:
     可以直接 compute run。plan 的输出会明说走哪条，不用自己推。
                                  **必须来自真实交互终端**（会现场要求输入 'yes'）；
                                  非交互环境（脚本/CI/Bash 工具）默认拒绝，除非同时给出
-                                 --ci-bypass-token <与 SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN 一致>
+                                 --ci-bypass-token <与 SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN 一致>（或 --ci-bypass-token-env <变量名>：从环境变量取值，不走 argv）
                                  与 --ci-bypass-reason "<理由>"（旁路会写进 decision record）。
                                  --run：批准后顺带派发（审批在这一次里被一次性消费）
   spark-research compute reject <jobId> --reason <理由> [--actor 谁] [--json]
