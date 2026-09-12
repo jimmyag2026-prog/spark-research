@@ -338,3 +338,6 @@ Metadata` 类型定义，符合「不改禁止文件」）。
 
 三条对照均**真跑**（先改代码、跑测试记录红、再改回、跑测试确认绿），过程见二、
 三节。
+
+## 收口补记（主会话，2026-09-12）
+- 主会话复跑：typecheck 0 · unit 2384/0（2376+8）· concurrency+timeout 首跑 34/1（`records_write_race` 两进程 idea check 式落库出现一次 database is locked，382ms 内失败非超时；`--timeout 60000` 重跑 35/0）。该 flake 与本 lane 改动无关（cli review 输出段 / citation_judge / aminer），已单独登记到 alpha.2 收口核查项。
