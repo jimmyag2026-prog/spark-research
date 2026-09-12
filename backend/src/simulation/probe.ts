@@ -4,16 +4,20 @@
 //   ② 数据集路径参数 `datasetParam`——三个平台都吃外部数据文件，
 //      而 platform.ts 的参数工具只覆盖数字/枚举/布尔。
 //
-// 为什么它放在 `scanpy/` 而不是 `simulation/` 顶层：W5-3 的文件所有权把本 lane 限死在
-// 三个平台目录 + registry.ts 里（§三·补.8.3 的足迹表），顶层新建文件不在授权范围内。
-// 收口若要把它搬去 `simulation/omics.ts`，是一次**纯移动**，没有语义要改。
+// V51（W8-δ）：从 `scanpy/probe.ts` 搬到这里（`simulation/` 顶层）。原来放在 `scanpy/`
+// 只是 W5-3 β 那条 lane 的文件所有权限死在三个平台目录 + registry.ts 里，顶层新建文件
+// 不在它的授权范围内——原文件头注释也明说了"收口若要把它搬去 simulation/omics.ts，是一次
+// **纯移动**，没有语义要改"。本 lane（W8-δ）文件所有权含 `simulation/probe.ts`（新建），
+// 这里就是那次预告过的纯移动：函数体逐字未改，只是从 `scanpy/probe.ts` 搬到
+// `simulation/probe.ts`，`../models` 的相对路径相应改成 `./models`。
+// 三个平台（scanpy/pydeseq2/cobrapy）各自的 import 行改指这里，见各自文件头。
 //
 // 三份手写副本是明确要躲的形状（V46 的教训：同一件事两份副本，单条 lane 的门禁看不见分叉），
 // 所以宁可要这个别扭的 import 方向，也不要三个几乎一样的 probeCode()。
 
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { SimulationSpecError } from "../models";
+import { SimulationSpecError } from "./models";
 
 /**
  * 生成一段可用性探测代码。
