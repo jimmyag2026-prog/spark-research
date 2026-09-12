@@ -110,8 +110,8 @@ except ConnectionError as e:
 方法的返回值标了具体类型**——`projects_get_projects` → `ProjectListResponse`、
 `records_get_records(_by_id/_by_id_graph)` → `RecordTimelinePage`/`RecordDetailResponse`/
 `RecordGraphResponse`、`lineage_get_lineage_by_versionId` → `LineageResponse`、
-`artifacts_get_artifacts` → `ArtifactListResponse`、`chat_post_chat` → `ChatResponse`、
-`tasks_get_tasks_by_id` → `TaskResponse`——这几条是逐个读了对应 handler 源码、确认响应体
+`artifacts_get_artifacts` → `ArtifactListResponse`、`chat_post_chat` → `ChatResponse`
+——这几条是逐个读了对应 handler 源码、确认响应体
 在**顶层**（没套 `{project: ...}` 这类信封）才标的。契约本身不带"路由 → 响应 schema"的
 映射（`docs/devlog/W8-2-contract.md`「未做 / 留给 SDK lane」已如实写明），实测同一个
 分组内 GET/POST 是否套壳并不一致（比如 `GET /api/projects` 直接是 `ProjectListResponse`，

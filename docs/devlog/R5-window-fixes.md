@@ -16,3 +16,54 @@ typecheck 0 · unit 2430/0（2420+10）· concurrency+timeout 37/0 · e2e 见 PR
 - `openmm/runner.py` 加 `probe()`（import openmm + 列 Platform）；`openmm/index.ts` `probeCode()` 改走 `probeCodeFor(this.entryPointFor(), "openmm", …)`，三平台 + openmm 探测与真提交同源。
 - `tests/unit/v118_openmm_probe.test.ts` 2 条（源码形状 + 真实探测；.venv 无 openmm 时 skip 并说明）。阴性对照：runner 去掉 probe() → 1/1 红。
 - unit 2432/0 无 skip（P5 契约 OpenMM 侧不再整套 skip）· py 129。
+
+## 第二批 · R5 发现的复核与修复（V121–V124）
+
+R5 报告的 3 条 P0/P1 **逐条独立复现**后才动手——一条证伪、两条证实、并挖出真因。
+
+### V124 · R5 P0-3「导出往返 diff 非空」→ **不成立**
+R5 称 4/4 项目 `data export → import → report export` diff 非空（93–198 行），共同点是「Idea 卡与实验卡整节丢失」。
+主会话用最小项目（1 张 idea 卡 + 1 条实验记录）复现：
+- 两侧都带 `--verbose`：diff **0 行**（除生成时间戳）——往返是等价的。
+- 原始带 `--verbose`、副本不带：**精确复现** R5 描述的形状（`# Idea 卡：…` 正文块、实验正文块整块消失）。
+
+被删掉的正是 `--verbose` 才渲染的 `record.content`。R5 自己也记录了「`report records --type idea --json` 底层数据完整」——两件事一致。
+**结论：方法学偏差（两次 export 的旗标不对称），不是产品缺陷。** 不改代码，登记 V124 防止再被登记一次。
+
+### V121 · raw 链在单行 >64KB 时静默断开（R5 P1-4 的真因）
+R5 只看到「`data import` 报 verified:false」。直接验源项目的链，发现**断链发生在写入时**，import 的报告是诚实的：
+
+| 项目 | 断链位置 | 前一行字节数 |
+|---|---|---|
+| r5-t1 | pubmed 第 3 行 | 68444 |
+| r5-t2 | crossref 第 23 行 | 68775 |
+| r5-t2 | pubmed 第 3 行 | 70330 |
+| r5-t3 | pubmed 第 4 行 | 68398 |
+
+全部 4 处断链的前一行都 >64KB，无一例外；r5-t4（无超大行）链完整。真因：`readTail` 固定 64KB 窗口，
+窗口整个落在那一行内部时 `text.indexOf("\n") === -1`，`slice(0)` 把**残行**当完整行返回 → `JSON.parse` 抛错
+→ 被 `catch` 吞成 `last = null` → 下一条 append 写出 `prevHash: null`。llm 链从没踩到，是因为 `body()` 把
+>64KB 正文移进 blobs，行始终很小——connector 的响应体是整段 inline 的。
+
+修：窗口按需放大（64KB → 1MB → 16MB → 整文件），残行不拿去解析；非空文件的最后一行解析不了**直接抛**，
+不再吞成 null 伪造链头。历史断点**不回填**（回填等于伪造）。
+
+### V122 · body.project 被静默忽略（R5 P0-2）
+复现：current 指针 = alpha，`POST /api/chem/depict` 带 `{"project":"beta"}` → 记录落在 **alpha**，响应还回报
+`"project":"alpha"`；同样的调用改用 `?project=beta` 则正确。SDK 生成的正是 body 风格。
+修：`jsonBody()` 把解析好的 body 挂到 context，`projectSlug()` 取值顺序 **query > body > 当前指针**——
+所有写路由都是先 `jsonBody(c)` 再取 slug，所以一处改动覆盖全部 47 个调用点，GET 路由不受影响。
+
+### V123 · SDK 无 body 的 POST 一律 415（R5 P1-6）+ 文档断言过宽（P1-5）
+写方法在 `body=None` 时按 `{}` 发送并带 `Content-Type: application/json`；`docs/SDK.md` 删去
+`tasks_get_tasks_by_id → TaskResponse` 这条与实测不符的断言（实际是 `{"task":{...}}`）。
+
+### 阴性对照（全部实跑）
+| 门禁 | 改法 | 结果 |
+|---|---|---|
+| V121 | `sink.ts` 整体回退到修复前（固定 64KB + 吞解析错误） | **3/3 全红**，且复现 R5 现场形状；还原 3/3 绿 |
+| V122 | `projectSlug` 改回只读 query | 2 pass / 1 fail；还原 3/3 绿 |
+| V123 | `client.py` 去掉写方法补 `{}` 的分支 | 2/2 红；还原 2/2 绿 |
+
+### 复跑（退出码口径）
+typecheck 0 · unit 2438/0 · concurrency+timeout 37/0 · test:sdk 58 passed · e2e/py/lab 见 PR。
