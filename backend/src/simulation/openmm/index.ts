@@ -6,6 +6,7 @@ import SIM_RUNTIME_PY from "../sim_runtime.py" with { type: "text" };
 import OPENMM_PACKAGE_INIT_PY from "./__init__.py" with { type: "text" };
 import RUNNER_PY from "./runner.py" with { type: "text" };
 import { materializeAssetTree } from "../../assets/embedded";
+import { probeCodeFor } from "../probe";
 import {
   SubprocessSimulationPlatform,
   boolParam,
@@ -48,19 +49,9 @@ export class OpenMMPlatform extends SubprocessSimulationPlatform {
     return join(materializeAssetTree("sim-openmm", OPENMM_RUNNER_TREE), "simulation", "openmm", "runner.py");
   }
 
+  // V118：探测与真提交同源——走 runner.py 的 probe()（probeCodeFor），与 scanpy/pydeseq2/cobrapy 一致。
   protected probeCode(): string {
-    return [
-      "import json, sys",
-      "try:",
-      "    import openmm",
-      "    from openmm import Platform",
-      "    names = [Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())]",
-      "    print(json.dumps({'openmm': openmm.version.version, 'platforms': ','.join(names), 'python': sys.version.split()[0]}))",
-      "except Exception as exc:",
-      "    sys.stderr.write('openmm 不可用: %s\\n' % exc)",
-      "    sys.stderr.write('安装：uv pip install openmm（进仓库 .venv，不要动系统 python）\\n')",
-      "    raise SystemExit(1)",
-    ].join("\n");
+    return probeCodeFor(this.entryPointFor(), "openmm", "uv pip install openmm（进仓库 .venv，不要动系统 python）");
   }
 
   protected normalize(_kind: string, params: Record<string, unknown>): NormalizedSpec {
