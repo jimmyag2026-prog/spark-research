@@ -289,7 +289,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             llm: ctx.llmFor(scope.project, "lit-read", null, { budgetUsd, allowUnpriced }),
             library,
             records: scope.project.records(),
-            model: ctx.model(),
+            model: ctx.model(optionalString(body, "model")),
             // V66 对齐：CLI 早已全文精读，HTTP 路由此前漏接——UI 读出来的全是摘要卡，
             // 与 CLI 行为分叉（A5 顺带暴露）。与 literature/cli.ts 同一条注入。
             fullTextFor: async (p) =>
@@ -347,7 +347,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             library,
             records,
             artifacts: scope.project.artifacts(),
-            model: ctx.model(),
+            model: ctx.model(optionalString(body, "model")),
             workDir: scope.project.paths.artifactsDir,
           });
           const draft = await generator.generate(cards, { topic, sessionId });
@@ -358,7 +358,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             draft: draft.markdown,
             knownKeys,
             baselines,
-            judge: useJudge ? (ctx.deps.judge ?? new LlmCitationJudge(llm, ctx.model())) : undefined,
+            judge: useJudge ? (ctx.deps.judge ?? new LlmCitationJudge(llm, ctx.model(optionalString(body, "model")))) : undefined,
             artifactId: draft.artifactId ?? "",
             location: "text/markdown",
           });

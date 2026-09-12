@@ -227,6 +227,13 @@
             "chat",
             "coexplore"
           ]
+        },
+        "budgetUsd": {
+          "type": "number",
+          "description": "V119 的预算闸入口。A7 验收指出：路由**接受**这两个字段，但 `ChatRequest` 没声明，\n于是 `contract --json` 与据其生成的 SDK 都看不到它们——契约以遗漏的方式说了谎。\n契约必须反映真实接口（AD-12）。"
+        },
+        "allowUnpriced": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false,

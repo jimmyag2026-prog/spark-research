@@ -683,3 +683,27 @@ export function configuredRawLlm(options: ConfigOptions = {}): boolean {
 export function configuredRawUpstreamInline(options: ConfigOptions = {}): boolean {
   return stringOr("rawUpstreamInline", "off", options) === "on";
 }
+
+/**
+ * V21 / A7 High-3（V127）：启动期扫描**所有**已移除的旧环境变量名。
+ *
+ * `resolveSetting()` 只在某个设置**被真正读到**时才抛错——`doctor` 这类不碰超时设置的命令
+ * 因此一声不吭地 exit 0，与 `docs/INSTALL.md` 承诺的「任何命令启动时直接报错」不符
+ * （A7 实测：四个旧名跑 doctor 全部 exit 0 无告警）。这个函数把承诺兑现成真。
+ * 返回错误消息数组（空数组 = 没设旧名）；调用方决定怎么呈现。
+ */
+export function legacyEnvViolations(env: Record<string, string | undefined> = process.env): string[] {
+  const out: string[] = [];
+  for (const spec of CONFIG_SETTINGS) {
+    for (const legacyVar of spec.legacyEnvVars ?? []) {
+      const v = env[legacyVar];
+      if (v !== undefined && v !== "") {
+        out.push(
+          `环境变量 '${legacyVar}' 已于 v0.8 移除，配置项 '${spec.key}' 请改用 '${spec.envVar}'` +
+            `（unset ${legacyVar}；值原样搬到新名即可）`,
+        );
+      }
+    }
+  }
+  return out;
+}

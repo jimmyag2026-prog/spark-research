@@ -11,6 +11,13 @@ export interface ChatRequest {
   message: string;
   model?: string;
   mode?: SessionMode;
+  /**
+   * V119 的预算闸入口。A7 验收指出：路由**接受**这两个字段，但 `ChatRequest` 没声明，
+   * 于是 `contract --json` 与据其生成的 SDK 都看不到它们——契约以遗漏的方式说了谎。
+   * 契约必须反映真实接口（AD-12）。
+   */
+  budgetUsd?: number;
+  allowUnpriced?: boolean;
 }
 
 export interface ChatResponse {

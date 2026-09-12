@@ -52,6 +52,12 @@ export async function runDataCommand(args: string[], deps: DataCliDeps = {}): Pr
   const manager = deps.manager ?? new ProjectManager(deps.root);
   const [sub, ...rest] = args;
   const { positional, flags } = parseFlags(rest);
+  // A7 Medium：子命令级 `--help` 之前被当成普通 flag 收走，`data export --help` 会**真的导出**
+  // （验收里因此对一个无关项目产生了真实副作用）。帮助永远不该有副作用：先拦再说。
+  if (args.some((a) => a === "--help" || a === "-h")) {
+    out(DATA_HELP);
+    return 0;
+  }
   try {
     switch (sub) {
       case "export": {

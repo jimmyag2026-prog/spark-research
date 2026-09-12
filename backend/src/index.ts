@@ -18,7 +18,7 @@ import { runConclusionCommand } from "./conclusion/cli";
 import { runReportCommand } from "./report/cli";
 import { runDataCommand } from "./data/cli";
 import { runConfigCommand } from "./config/cli";
-import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions } from "./config";
+import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions, legacyEnvViolations } from "./config";
 import { runCapabilitiesCommand } from "./capabilities/cli";
 // W8-2：运行时契约（CLI/HTTP/MCP/配置/导出 manifest schema），SDK 的生成源。实现在 backend/src/contract/**。
 import { runContractCommand } from "./contract/cli";
@@ -57,6 +57,12 @@ import { ExternalMcpRuntime } from "./extensions/loader";
 // 改成静态 import：Bun 的打包器能分析到这个引用，把 JSON 内容直接编译进二进制，
 // 编译产物和 `bun backend/src/index.ts` 直接跑两种模式都不再依赖运行期文件系统。
 import pkg from "../../package.json";
+
+const AUTH_HELP = `用法: spark-research auth
+
+  交互式配置 provider API Key（会现场提示选 provider 并录入 key，**输入不回显**）。
+  录入的 key 写进 ~/.spark-research/config.json（0600）。也可以直接用环境变量，见 config list。
+`;
 
 const HELP = `Spark Research v${pkg.version}
 开源科学 Agent 平台：干湿闭环 + 自动化实验室
@@ -444,6 +450,14 @@ async function chatOnce(message: string) {
 function main() {
   // config.json 里的非凭据设置补进 env（已有 env 不动）——礼貌头这类在很深的调用栈里
   // 只读 env 的配置靠这一步生效，优先级仍是 env > config.json（P9 配置面收口）。
+  // V21 兑现：旧环境变量名在**任何命令**启动时就拦，而不是等某个设置被读到才抛
+  // （A7 High-3：doctor 不碰超时设置，旧名下静默 exit 0，与 INSTALL.md 的承诺不符）。
+  const legacyViolations = legacyEnvViolations();
+  if (legacyViolations.length > 0) {
+    for (const line of legacyViolations) console.error(`❌ ${line}`);
+    process.exitCode = 1;
+    return;
+  }
   applyConfigEnvDefaults();
   // D-6：启动时权限自检——config.json 里可能躺着 LLM API key，发现权限过宽（非 0600）
   // 立即收紧并告警，而不是等下一次 `config set`/`auth` 写入才顺带修复。
@@ -458,6 +472,11 @@ function main() {
       welcome();
       break;
     case "auth": {
+      // A7 Medium：`auth --help` 之前直接进交互录入流程。帮助永远不该有副作用。
+      if (process.argv.slice(3).some((a) => a === "--help" || a === "-h" || a === "help")) {
+        console.log(AUTH_HELP);
+        break;
+      }
       auth();
       break;
     }
