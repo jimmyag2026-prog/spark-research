@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { join } from "node:path";
+import { UsageStore } from "../../usage/ledger";
 import { CoExploreSession } from "../../ideation/coexplore";
 import type { NoveltyStatus } from "../../ideation/models";
 import { NoveltyChecker } from "../../ideation/novelty";
@@ -127,6 +129,14 @@ export function ideationRoutes(ctx: ServerContext): Hono {
             sources,
             perSource,
             judge: ctx.deps.judge,
+            // W8-1 ζ 收口：embedding 调用入账，与 CLI 同一份 usage.jsonl / raw。
+            embedAccounting: {
+              store: new UsageStore(join(scope.project.paths.root, "usage.jsonl")),
+              command: "novelty-check",
+              rawSink: scope.project.raw(),
+              project: scope.project.slug,
+              sessionId,
+            },
           });
           const result = await checker.check(idea, { sessionId });
           task.progress(3, 3, `评级 ${result.aggregate.status}`);
