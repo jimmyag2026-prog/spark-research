@@ -53,6 +53,19 @@ interface Bucket {
   lastRefill: number;
 }
 
+/**
+ * V63（v0.8 W8-1 β）：`request()` 的返回值在普通 `HttpResponse` 之上多带一个
+ * `rateLimitWaitMs`——这次调用在 `acquire()` 里真实等了多久（无策略/未触发等待时为 0）。
+ * **不改调用方语义**：`RateLimitedHttp implements HttpClient`，`HttpClient.request()`
+ * 的返回类型是 `Promise<HttpResponse>`——`RateLimitedResponse extends HttpResponse`
+ * 是它的子类型，方法返回类型协变，仍然满足接口；不关心这个字段的调用方（绝大多数
+ * `HttpClient` 消费方）原样把它当 `HttpResponse` 用，行为逐字节不变。只有读得懂
+ * `RateLimitedResponse` 形状的调用方（connectors/base.ts）才会去读这个额外字段。
+ */
+export interface RateLimitedResponse extends HttpResponse {
+  rateLimitWaitMs: number;
+}
+
 // 标准令牌桶：容量 = burst，持续按 rps（token/秒）速率补充，封顶容量。
 // 对任意长度为 T 秒的窗口，可消耗的令牌数上限是 `burst + rps * T`——
 // T=1s 时正好对应 HOST_RATE_POLICIES 里 `rps + burst` 的口径
@@ -98,13 +111,17 @@ export class RateLimitedHttp implements HttpClient {
 
   // 拿到 1 个令牌为止——同步的检查+扣减发生在一个不含 await 的代码块里，
   // JS 单线程语义保证了并发调用之间不会插入进来（不需要额外加锁）。
-  private async acquire(host: string, policy: HostRatePolicy): Promise<void> {
+  // V63：返回值从 void 改成「这次真实等了多少毫秒」——用同一个 `this.now()`（测试注入的
+  // 虚拟时钟或生产的 Date.now）在进入前后各采一次样，与 refill() 用的时钟同源，口径一致；
+  // 立刻拿到令牌（无需等待）时返回 0。
+  private async acquire(host: string, policy: HostRatePolicy): Promise<number> {
+    const start = this.now();
     const bucket = this.bucketFor(host, policy);
     for (;;) {
       this.refill(bucket, policy);
       if (bucket.tokens >= 1) {
         bucket.tokens -= 1;
-        return;
+        return Math.max(0, this.now() - start);
       }
       const deficit = 1 - bucket.tokens;
       // 轮询间隔按"还差多少令牌 / 补充速率"折算成毫秒；封顶一个较小的值，
@@ -119,7 +136,7 @@ export class RateLimitedHttp implements HttpClient {
   // 键控是 host，不是 connector：`new URL(url).host` 是唯一的分桶依据。
   // 这是 V26 的核心——阴性对照①就是把这一行的分桶 key 改成调用方传入的 connector id，
   // 验证同主机并发测试会变红（结果贴在 docs/devlog/W5-2-c.md）。
-  async request(url: string, init?: HttpRequestInit): Promise<HttpResponse> {
+  async request(url: string, init?: HttpRequestInit): Promise<RateLimitedResponse> {
     let host: string | null;
     try {
       host = new URL(url).host;
@@ -127,8 +144,12 @@ export class RateLimitedHttp implements HttpClient {
       host = null; // 非法 URL：交给 inner http 的错误处理，不在这里判断。
     }
     const policy = host ? this.policies[host] : undefined;
-    if (policy && host) await this.acquire(host, policy);
-    return this.inner.request(url, init);
+    const rateLimitWaitMs = policy && host ? await this.acquire(host, policy) : 0;
+    const response = await this.inner.request(url, init);
+    // V63：原地挂一个字段而不是 `{...response}` 展开——`BufferedResponse.ok` 是
+    // prototype 上的 getter，spread 只拷贝自有可枚举属性会把它丢掉；`Object.assign`
+    // 保留原型/方法，只加这一个字段，`inner` 返回的对象不会被其他持有者提前读取。
+    return Object.assign(response, { rateLimitWaitMs });
   }
 }
 
