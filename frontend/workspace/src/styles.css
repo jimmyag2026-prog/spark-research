@@ -564,6 +564,15 @@ select {
   color: var(--danger);
   text-decoration: underline wavy;
 }
+/* V79①：只有接了 onCiteClick 的 Markdown 容器（.md-clickable）里，库内引用才真的能点
+   跳证据图——没接的地方（比如没有 onCiteClick 的旧调用点）保持原来的 "help" 光标，
+   不假装可点。 */
+.md-clickable .cite[data-key] {
+  cursor: pointer;
+}
+.md-clickable .cite[data-key]:hover {
+  text-decoration: underline;
+}
 
 /* ── 右栏时间线 ───────────────────────────────────────────────────────────── */
 

@@ -118,8 +118,12 @@ export function LeftPanel(): JSX.Element {
               >
                 <For each={list().projects}>
                   {(item) => (
+                    // V90：只显示 name 时，`data import` 产物如果和原项目重名（常见——
+                    // import 默认沿用来源项目的 dcat.title）在下拉框里长得一模一样，
+                    // 选错项目不会有任何提示。带上 slug——它是真正的唯一标识，import
+                    // 产物哪怕撞名，slug 也不会撞（ProjectManager 建项目时 slug 唯一）。
                     <option value={item.slug}>
-                      {item.name}
+                      {item.name} ({item.slug})
                       {item.status === "archived" ? "（已归档）" : ""}
                     </option>
                   )}

@@ -718,3 +718,124 @@ test("⑱ 用量面板：往 usage.jsonl 写一行后刷新，面板数字随之
   await expect(warning).toBeVisible();
   await expect(warning).toContainText("总花费无法确定报出");
 });
+
+// ── W8-1 γ · V88/V90/V79③（工作台体验三条）───────────────────────────────────
+//
+// 各自新建一个专用项目，不复用 "e2e-lab"——那条链路上的论文早就全部生成过精读卡了
+// （见 ③），复用会撞到 V88/V79③ 都需要的「有未读论文」这个前提，还得先 redoRead。
+// 新建项目走 fixture 已经录制好的同一条 AlphaFold 检索式（DualCassetteSearcher 按
+// query 分派，不区分项目），直接打 HTTP 种入库，跳过重复测一遍 UI 检索。
+
+test("⑰ V88：批量精读任务面板出现 1/3 与 2/3 两个中间态（不再是 0 → 直接跳满）", async ({ page }) => {
+  const PROJECT_V88 = "e2e-gamma-progress";
+  await page.goto("/");
+  await page.getByRole("button", { name: "＋ 新建项目" }).click();
+  const dialog = page.getByRole("dialog", { name: "新建项目" });
+  await dialog.getByPlaceholder("protein-folding").fill(PROJECT_V88);
+  // 这条描述里的 marker 是 fixture_server.ts 认得的信号：只有它才会给精读调用加延迟
+  // （见 fixture_server.ts 的 READING_PROGRESS_MARKER 大注释），目的是让 3 篇精读的
+  // done/total 跨过任务面板 2 秒一次的轮询间隔，不靠运气露出中间态。
+  await dialog.locator("textarea").fill("w88-reading-progress-marker：精读进度面板专用项目，不代表真实研究课题");
+  await dialog.getByRole("button", { name: "创建" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".head .badge").first()).toHaveText(PROJECT_V88);
+
+  const seeded = await page.evaluate(async (project) => {
+    const res = await fetch(`/api/lit/search?project=${encodeURIComponent(project)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: "AlphaFold protein structure prediction",
+        add: true,
+        limit: 3,
+        await: true,
+      }),
+    });
+    return { status: res.status, body: await res.json() };
+  }, PROJECT_V88);
+  expect(seeded.status).toBe(200);
+
+  await page.getByRole("button", { name: /^文献库/ }).click();
+  await page.getByRole("button", { name: "全部生成精读卡" }).click();
+
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  const taskRow = page.locator('[data-testid="task-row"]', { hasText: "精读卡生成" }).first();
+  await expect(taskRow).toBeVisible({ timeout: 15_000 });
+
+  // 面板每 2 秒轮询一次；累积看到过的 done/total 组合，直到任务落定为止。
+  const seenFractions = new Set<string>();
+  await expect
+    .poll(
+      async () => {
+        const text = await taskRow.innerText().catch(() => "");
+        const match = text.match(/(\d+) \/ (\d+)/);
+        if (match) seenFractions.add(`${match[1]}/${match[2]}`);
+        return (await taskRow.innerText().catch(() => "")).match(/(succeeded|failed)/)?.[0] ?? "";
+      },
+      { timeout: 45_000, intervals: [250] },
+    )
+    .toMatch(/succeeded|failed/);
+
+  expect(Array.from(seenFractions)).toEqual(expect.arrayContaining(["1/3", "2/3"]));
+});
+
+test("⑱ V90：项目下拉框文本含 slug（导入产物与原项目重名可区分）", async ({ page }) => {
+  await page.goto("/");
+  const option = page.locator('#project-select option[value="e2e-lab"]');
+  await expect(option).toHaveCount(1);
+  const text = await option.innerText();
+  expect(text).toContain("(e2e-lab)");
+});
+
+test("⑲ V79③：预算 $0.0001 触发闸，任务面板显示闸消息（含下一步）", async ({ page }) => {
+  const PROJECT_BUDGET = "e2e-gamma-budget";
+  await page.goto("/");
+  await page.getByRole("button", { name: "＋ 新建项目" }).click();
+  const dialog = page.getByRole("dialog", { name: "新建项目" });
+  await dialog.getByPlaceholder("protein-folding").fill(PROJECT_BUDGET);
+  await dialog.getByRole("button", { name: "创建" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".head .badge").first()).toHaveText(PROJECT_BUDGET);
+
+  const seeded = await page.evaluate(async (project) => {
+    const res = await fetch(`/api/lit/search?project=${encodeURIComponent(project)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: "AlphaFold protein structure prediction",
+        add: true,
+        limit: 1,
+        await: true,
+      }),
+    });
+    return { status: res.status };
+  }, PROJECT_BUDGET);
+  expect(seeded.status).toBe(200);
+
+  await page.getByRole("button", { name: /^文献库/ }).click();
+  // V79③ 的 UI 入口：精读按钮旁边的「预算 $」输入。
+  await page.getByLabel("预算 $").fill("0.0001");
+  await page.getByRole("button", { name: "全部生成精读卡" }).click();
+
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  const taskRow = page.locator('[data-testid="task-row"]', { hasText: "精读卡生成" }).first();
+  await expect(taskRow).toBeVisible({ timeout: 15_000 });
+  await expect(taskRow).toContainText("failed", { timeout: 15_000 });
+  const errorBox = taskRow.locator(".error-box");
+  await expect(errorBox).toContainText("预算闸");
+  await expect(errorBox).toContainText("下一步");
+});
+
+test("⑳ V79②：结论 review 面板在没有实验时显示前置提示，不是空白", async ({ page }) => {
+  await page.goto("/");
+  // e2e-gamma-budget（⑲刚建的）还没跑过任何实验，也没有任何结论卡——正是 V79② 要求
+  // 「先跑一个实验」这条前置条件该出现的地方。
+  await page.locator("#project-select").selectOption("e2e-gamma-budget");
+  // 左栏导航的「结论」按钮与右栏时间线的过滤 chip 都叫「结论」——限定在左栏导航区域，
+  // 与 ⑭ 里 "产物" 导航同一个消歧写法。
+  await page.locator(".left").getByRole("button", { name: /^结论/ }).click();
+  // 页面上其它面板（湿实验列表、右栏未选中提示）也各自有一个 `.empty`——限定在中栏。
+  const empty = page.locator(".center .empty").first();
+  await expect(empty).toContainText("先跑一个实验");
+  await expect(empty).toContainText("conclude");
+});

@@ -160,8 +160,15 @@ export class ServerContext {
   // A5 blocker②：G-3 的用量台账此前只接了 CLI——HTTP/UI 路径的 LLM 调用完全不入账，
   // 用量面板对着真实花费显示 $0（对「花钱透明」这个卖点是谎报级缺陷）。
   // 所有带项目上下文的 LLM 消费路由一律经这里取 llm，与 CLI 同一份 usage.jsonl。
-  // HTTP 面暂无预算参数（UI 无入口，已登记）；先保证计量真实。
-  llmFor(project: Project, command: string, sessionId: string | null = null): Pick<LLMRouter, "call"> {
+  // V79③（W8-1 γ）：HTTP 面此前没有预算参数入口（UI 无处填），只补计量、不补闸。
+  // 现在 UI 上「预算 $」输入透传到这里——只是把调用方已经决定好的 budgetUsd/allowUnpriced
+  // 原样递给 usageTrackingLlm（闸的判定逻辑在 usage/ledger.ts，不属于本 lane，这里不改判定）。
+  llmFor(
+    project: Project,
+    command: string,
+    sessionId: string | null = null,
+    options: { budgetUsd?: number; allowUnpriced?: boolean } = {},
+  ): Pick<LLMRouter, "call"> {
     return usageTrackingLlm({
       llm: this.llm(),
       store: new UsageStore(join(project.paths.root, "usage.jsonl")),
@@ -170,6 +177,8 @@ export class ServerContext {
       rawSink: project.raw(),
       project: project.slug,
       sessionId,
+      budgetUsd: options.budgetUsd,
+      allowUnpriced: options.allowUnpriced,
     });
   }
 

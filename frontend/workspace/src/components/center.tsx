@@ -20,7 +20,7 @@ import type {
 } from "../lib/types";
 import { useWorkspace, withBusy } from "../state";
 import { IdeaCardView, NoveltyView, ReadingCardView, ReviewView } from "./cards";
-import { Async, Badge, KeyValues, Markdown, Spinner } from "./ui";
+import { Async, Badge, BudgetInput, KeyValues, Markdown, parseBudgetInput, Spinner } from "./ui";
 
 // 中栏：会话流（chat / coexplore，SSE 渲染）+ 各类富渲染视图。
 
@@ -183,6 +183,9 @@ function PapersView(): JSX.Element {
   const ws = useWorkspace();
   const [query, setQuery] = createSignal("");
   const [progress, setProgress] = createSignal("");
+  // V79③：精读卡生成花模型钱，UI 此前没有预算入口——填了就按 --budget-usd 同一条闸走，
+  // 不填（空字符串 → undefined）就是老行为（只计量、不设闸）。
+  const [readBudget, setReadBudget] = createSignal("");
 
   const search = async () => {
     const q = query().trim();
@@ -202,7 +205,10 @@ function PapersView(): JSX.Element {
   };
 
   const readAll = async () => {
-    const task = await withBusy(ws, "生成精读卡", () => api.lit.read({ all: true }, ws.slug(), setProgress));
+    const budgetUsd = parseBudgetInput(readBudget());
+    const task = await withBusy(ws, "生成精读卡", () =>
+      api.lit.read({ all: true, budgetUsd }, ws.slug(), setProgress),
+    );
     setProgress("");
     if (!task) return;
     if (task.state === "failed") {
@@ -235,6 +241,7 @@ function PapersView(): JSX.Element {
         <button class="btn" onClick={readAll} disabled={ws.busy() !== null}>
           全部生成精读卡
         </button>
+        <BudgetInput id="lit-read-budget" value={readBudget()} onInput={setReadBudget} />
         <a class="btn" href={api.lit.exportUrl("bibtex", ws.slug())} download="library.bib">
           导出 BibTeX
         </a>
@@ -285,9 +292,11 @@ function CardsView(): JSX.Element {
   const ws = useWorkspace();
   const [review, setReview] = createSignal<ReviewResult | null>(null);
   const [progress, setProgress] = createSignal("");
+  const [reviewBudget, setReviewBudget] = createSignal("");
 
   const runReview = async () => {
-    const task = await withBusy(ws, "生成综述", () => api.lit.review({}, ws.slug(), setProgress));
+    const budgetUsd = parseBudgetInput(reviewBudget());
+    const task = await withBusy(ws, "生成综述", () => api.lit.review({ budgetUsd }, ws.slug(), setProgress));
     setProgress("");
     if (!task) return;
     if (task.state === "failed") {
@@ -304,6 +313,7 @@ function CardsView(): JSX.Element {
         <button class="btn btn-primary" onClick={runReview} disabled={ws.busy() !== null}>
           由精读卡生成综述
         </button>
+        <BudgetInput id="lit-review-budget" value={reviewBudget()} onInput={setReviewBudget} />
         <Show when={progress()}>
           <Spinner label={progress()} />
         </Show>
@@ -325,11 +335,16 @@ function IdeasView(): JSX.Element {
   const [novelty, setNovelty] = createSignal<NoveltyResult | null>(null);
   const [checking, setChecking] = createSignal<string | null>(null);
   const [progress, setProgress] = createSignal("");
+  // V79③：一张全局预算输入，套用到这个面板里任意一次 novelty check（每张 idea 卡自己
+  // 的「跑 Novelty check」按钮都读这一个值）——不是每张卡各配一个输入框，卡片数量不定，
+  // 一个共享输入更贴近「我这次愿意花多少钱」这句话本身的粒度。
+  const [checkBudget, setCheckBudget] = createSignal("");
 
   const check = async (recordId: string) => {
     setChecking(recordId);
+    const budgetUsd = parseBudgetInput(checkBudget());
     const task: TaskSnapshot | undefined = await withBusy(ws, "Novelty check", () =>
-      api.ideas.check(recordId, ws.slug(), setProgress),
+      api.ideas.check(recordId, ws.slug(), setProgress, { budgetUsd }),
     );
     setChecking(null);
     setProgress("");
@@ -344,6 +359,9 @@ function IdeasView(): JSX.Element {
 
   return (
     <div class="stream">
+      <div class="row">
+        <BudgetInput id="idea-check-budget" value={checkBudget()} onInput={setCheckBudget} />
+      </div>
       <Show when={progress()}>
         <Spinner label={progress()} />
       </Show>
@@ -499,7 +517,14 @@ function ConclusionsView(): JSX.Element {
       <Async
         state={{ loading: ws.conclusions.loading, error: ws.conclusions.error, data: ws.conclusions() }}
         isEmpty={(data) => data.conclusions.length === 0}
-        empty={{ title: "还没有结论卡", hint: "干实验 conclude 或湿实验 conclude 后会生成。" }}
+        // V79②：结论卡是实验 conclude 的产物，review 面板天生要求「先有一个跑完的实验」——
+        // 这条前置条件此前只体现在这个空态的一句 hint 里，容易被当成「没写清楚」（外部
+        // 验收 A5 记的原话）。把 hint 改成先说前置条件、再给下一步动作，两句话都在，
+        // 不是空白也不是报错。
+        empty={{
+          title: "还没有结论卡：先跑一个实验",
+          hint: "结论 review 面板要求项目里至少有一条已 conclude 的实验——干实验或湿实验都行。跑完 conclude 后结论卡会自动出现在这里，再来评审。",
+        }}
       >
         {(data) => (
           <For each={data.conclusions}>
