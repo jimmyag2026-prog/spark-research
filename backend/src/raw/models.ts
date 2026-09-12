@@ -6,7 +6,11 @@
 
 import type { ProvenanceClass } from "../provenance/policy";
 
-export const RAW_KINDS = ["connector", "llm", "kernel", "device"] as const;
+// V85（v0.8 W8-1 β）：`simulation` 是第五个 kind——`exp run` 驱动的 SimulationPlatform
+// 子进程（openmm/pyref/scanpy/pydeseq2/cobrapy）此前不经 KernelManager，raw 完全没记。
+// 落点与其余非 connector kind 同规则（sink.ts 的 fileFor()）：`raw/simulation/<date>.jsonl`，
+// 不按 platform 分子目录（`platform` 字段已经在行内，需要按平台切片时用它过滤即可）。
+export const RAW_KINDS = ["connector", "llm", "kernel", "device", "simulation"] as const;
 export type RawKind = (typeof RAW_KINDS)[number];
 
 /** 超过阈值的响应体/原文落 blobs/，行内只留引用。 */
@@ -56,7 +60,29 @@ export interface DevicePayload {
   reading: unknown;
 }
 
-export type RawPayload = ConnectorPayload | LlmPayload | KernelPayload | DevicePayload;
+// V85：`SubprocessSimulationPlatform`（simulation/platform.ts）的 prepare/submit/collect
+// 三个生命周期阶段各落一行，用同一个 `runId` 串起来（prepare 阶段还没有 runId，取 null）。
+// 与 KernelPayload 同口径：没有独立的 execution_records 写入方，行内自带 params/summary/files，
+// 不只是引用。
+export interface SimulationPayload {
+  platform: string;
+  // adapter 内部的任务种类（如 "damped-oscillator"）；不叫 `kind` 是为了不与外壳的
+  // `RawEntry.kind`（="simulation"）撞名。
+  simKind: string;
+  stage: "prepare" | "submit" | "collect";
+  runId: string | null;
+  specHash: string | null;
+  // prepare 阶段：归一化后的参数（脱敏）。submit/collect 阶段不重复记（已在 prepare 行里）。
+  params: Record<string, unknown> | null;
+  // submit：刚落盘的 RunRecord.state；collect：RunStatus.state。prepare 恒 null。
+  status: string | null;
+  // collect 阶段：SimulationOutputs.summary 的 JSON 序列化（大的走 blob，见 sink.body()）。
+  summary: RawBody | null;
+  // collect 阶段：产出文件清单（文件名/角色/字节数，不含绝对路径）。
+  files: { filename: string; role: string; bytes: number }[] | null;
+}
+
+export type RawPayload = ConnectorPayload | LlmPayload | KernelPayload | DevicePayload | SimulationPayload;
 
 export interface RawEntry {
   v: 1;

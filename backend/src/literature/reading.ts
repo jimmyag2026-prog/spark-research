@@ -187,8 +187,22 @@ export function renderReadingCard(card: ReadingCard): string {
 
 // 给引用核验用的对照摘要：只含卡片里「这篇论文说了什么」的部分，
 // 不含 relationToProject（那是对本项目的推断，不是论文的陈述，拿它当对照会误判）。
-export function cardBaselineText(card: ReadingCard): string {
+//
+// V98（v0.8 W8-1 β）：这是 `review.ts` 里 judge（`CitationBaseline.summary`）唯一
+// 读到的卡片文本——basis 标注必须在这里加，judge 才能拿到「这张卡是全文还是仅摘要」
+// 这个信号（`buildReviewPrompt()` 本身在 review.ts，不在本 lane 足迹内，改不了它）。
+// 参数类型放宽到 `ReadingCard`（可选带 basis/basisReason 的超集，`StoredReadingCard`
+// 是它的子类型）——旧调用点（不带 basis 的裸 `ReadingCard`，见下方既有测试）原样兼容，
+// 不加标注行，行为逐字节不变。
+export function cardBaselineText(card: ReadingCard & Partial<Pick<StoredReadingCard, "basis" | "basisReason">>): string {
+  const basisLine =
+    card.basis === "fulltext"
+      ? "依据: 全文"
+      : card.basis === "abstract"
+        ? `依据: 仅摘要${card.basisReason ? `（${card.basisReason}）` : ""}`
+        : null;
   return [
+    ...(basisLine ? [basisLine] : []),
     `研究问题: ${card.researchQuestion}`,
     `方法: ${card.methods}`,
     `核心结论: ${card.keyFindings.join("; ")}`,
@@ -398,6 +412,13 @@ function cardFromRecord(record: ResearchRecord, keyById: Map<string, string>): S
     recordId: record.id,
     createdAt: record.createdAt,
     model: typeof meta.model === "string" ? meta.model : null,
+    // V98（v0.8 W8-1 β）：`persist()` 一直有把 basis/basisReason 写进 metadata（见上方
+    // `records.create()` 调用），但这个读取路径此前从没把它们读回来——`listReadingCards()`
+    // 拿到的卡片永远 basis===undefined，`cardBaselineText()` 的标注也就永远加不上、
+    // judge 永远看不到「这张卡是全文还是仅摘要」。老 record（V66 之前生成、没有这个
+    // 字段）读到的是 undefined，与「没有 basis 信息」的既有语义一致，不编造。
+    basis: meta.basis === "fulltext" || meta.basis === "abstract" ? meta.basis : undefined,
+    ...(typeof meta.basisReason === "string" ? { basisReason: meta.basisReason } : {}),
   };
 }
 

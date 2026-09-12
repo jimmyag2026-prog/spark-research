@@ -9,7 +9,7 @@ import { existsSync, readFileSync, readdirSync, statSync, copyFileSync } from "n
 import { join } from "node:path";
 import type { Project, ProjectManager } from "../project/manager";
 import { LibraryStore } from "../literature/library";
-import { JsonlRawSink, type RawEntry } from "../raw";
+import { JsonlRawSink, RAW_KINDS, type RawEntry } from "../raw";
 import type { JournalEntry } from "../project/models";
 import { manifestHash, rootHashOf, sha256Hex, type ExportManifest } from "./manifest";
 
@@ -150,7 +150,9 @@ export function importExport(manager: ProjectManager, dir: string, slug: string)
   // 导入后逐链复核并**逐项**报告——A6 把裸 `verified:false` 误读成「没顺带校验」；实际那次是 raw 链真断了。
   const journalCheck = records.verifyJournal();
   const raw: Record<string, { ok: boolean; lines: number; reason?: string }> = {};
-  for (const kind of ["connector", "llm", "kernel", "device"] as const) {
+  // V85：走 RAW_KINDS 单一真源而不是手抄一份 kind 列表——加 "simulation" 那天，这里
+  // 自动跟上，不需要在两处同步改（V46「同一件事两份手写副本」的同款教训）。
+  for (const kind of RAW_KINDS) {
     const v = sink.verify(kind);
     raw[kind] = { ok: v.ok, lines: v.lines, ...(v.reason ? { reason: v.reason } : {}) };
   }

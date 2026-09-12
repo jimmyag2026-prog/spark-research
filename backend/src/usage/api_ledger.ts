@@ -28,12 +28,11 @@ export interface ApiCallEntry {
   status: number | string;
   latencyMs: number;
   /**
-   * backend/src/http/ratelimit.ts 令牌桶的等待时长，单位毫秒。**目前恒为 0**——
-   * `RateLimitedHttp.request()` 只是把等待时间折进了总耗时（`await this.acquire(...)`
-   * 之后才发请求），并没有把「等了多久」这个数字透出给调用方；base.ts 拿到的只是
-   * `HttpClient` 接口（`request(url, init): Promise<HttpResponse>`），看不到桶内部
-   * 状态。要让这个字段有真值，需要改 `RateLimitedHttp` 的返回形状把等待时长带出来
-   * ——那是 ratelimit.ts 的改动，不在本 lane 的文件所有权范围内。如实落 0，不编造。
+   * backend/src/http/ratelimit.ts 令牌桶的等待时长，单位毫秒。
+   * V63（v0.8 W8-1 β）收口：`RateLimitedHttp.request()` 现在把 `acquire()` 里实测的
+   * 等待时长挂在返回的 `RateLimitedResponse.rateLimitWaitMs` 上（见 ratelimit.ts），
+   * `connectors/base.ts` 读回后原样入账。非限速 http（测试桩/fixture、无策略 host）
+   * 没有这个字段或从未等待，落 0——这是真实的 0，不是「测不到」的占位 0。
    */
   rateLimitWaitMs: number;
 }

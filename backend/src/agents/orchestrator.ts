@@ -489,15 +489,34 @@ export class OrchestratorAgent {
     return { sink: project.raw(), project: project.slug, sessionId, command: "chat" };
   }
 
-  private subAgentLlm(): Pick<LLMRouter, "call" | "capabilitiesFor"> {
+  /**
+   * V78 残余（v0.8 W8-1 β）：子代理 tool loop 此前裸调 `llm.call`——不进 usage.jsonl
+   * 也不进 raw/llm/，与 `llmFor()`（chat 主循环，command="chat"）同一处漏记的另一半。
+   * 会话绑定了项目就经 usageTrackingLlm（command="chat:subagent"，与主循环的 "chat"
+   * 区分开，usage 按 command 聚合时子代理花费单独可见）；没绑项目退回裸 llm——没有
+   * 落点，不假装记了（与 llmFor 同口径）。`capabilitiesFor` 的运行期适配逻辑不变
+   * （见上方长注释：narrative_parity.test.ts 的假 LLM 只实现两个方法，不能收紧类型）。
+   */
+  private subAgentLlm(sessionId: string | null): Pick<LLMRouter, "call" | "capabilitiesFor"> {
     const llm = this.llm;
     const withCaps = llm as Partial<Pick<LLMRouter, "capabilitiesFor">>;
-    return {
-      call: (messages, options) => llm.call(messages, options),
-      capabilitiesFor: withCaps.capabilitiesFor
-        ? (model) => withCaps.capabilitiesFor!(model)
-        : () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
-    };
+    const capabilitiesFor = withCaps.capabilitiesFor
+      ? (model: string) => withCaps.capabilitiesFor!(model)
+      : () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true });
+
+    const project = sessionId ? this.projectForSession(sessionId) : null;
+    if (!project) {
+      return { call: (messages, options) => llm.call(messages, options), capabilitiesFor };
+    }
+    const tracked = usageTrackingLlm({
+      llm,
+      store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+      command: "chat:subagent",
+      rawSink: project.raw(),
+      project: project.slug,
+      sessionId,
+    });
+    return { call: (messages, options) => tracked.call(messages, options), capabilitiesFor };
   }
 
   async processRequest(
@@ -780,7 +799,7 @@ export class OrchestratorAgent {
             // **模型从没被告知这些工具存在，自然永远不会调它们**。
             // 这一行是「调用链路已打通」与「agent 能自主使用外部工具」之间的差距。
             const result = await runSubAgent(spec, task.description, {
-              llm: this.subAgentLlm(),
+              llm: this.subAgentLlm(sessionId),
               runner,
               externalSpecs: external?.registry?.specs(),
             });
@@ -1150,7 +1169,7 @@ export class OrchestratorAgent {
     const execute: RoundExecutor = async (plan) => {
       const outcomes: RoundOutcome[] = [];
       for (const item of plan) {
-        const deps: SubAgentDeps = { llm: this.subAgentLlm(), runner, parentBudget: sessionBudget };
+        const deps: SubAgentDeps = { llm: this.subAgentLlm(sessionId), runner, parentBudget: sessionBudget };
         const spec = buildSubAgentSpec(item.subagentType);
         const overrides =
           externalGrants.length > 0 && !spec.readOnly ? { grants: [...spec.grants, ...externalGrants] } : undefined;

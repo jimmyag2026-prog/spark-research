@@ -220,6 +220,11 @@ export class HttpConnector {
     // W7-D0：原始响应体在 JSON.parse 之前先留一份（AD-15）——归一化逻辑一改，旧结果靠它重算。
     let rawText: string | null = null;
     let contentType: string | null = null;
+    // V63：这一层只看得到 `HttpClient` 接口——`RateLimitedHttp.request()` 的返回值
+    // 恰好是 `RateLimitedResponse`（多带 `rateLimitWaitMs`）时才读得到真值；测试桩/
+    // fixture http（StubHttp/FixtureHttp）没有这个字段，`?? 0` 落回旧口径的 0，
+    // 不是所有调用方都必须知道限速器的存在。
+    let rateLimitWaitMs = 0;
     try {
       const response = await this.http.request(url.toString(), {
         method: tool.method ?? "GET",
@@ -227,6 +232,7 @@ export class HttpConnector {
         body: isPost ? JSON.stringify(remaining) : undefined,
       });
       status = response.status;
+      rateLimitWaitMs = (response as { rateLimitWaitMs?: number }).rateLimitWaitMs ?? 0;
       // 有些测试桩/脚手架模板的响应对象不带 headers；raw 行的 contentType 只是元数据，缺了记 null。
       contentType = response.headers?.["content-type"] ?? null;
       if (!response.ok) {
@@ -283,9 +289,10 @@ export class HttpConnector {
         host,
         status: status ?? "error:Unknown",
         latencyMs: Date.now() - startedAt,
-        // rateLimitWaitMs 恒为 0：见 usage/api_ledger.ts 的 ApiCallEntry 字段注释——
-        // 这一层只看到 HttpClient 接口，看不到 RateLimitedHttp 内部令牌桶等了多久。
-        rateLimitWaitMs: 0,
+        // V63：不再恒为 0——`RateLimitedHttp.request()` 现在把令牌桶真实等待的毫秒数
+        // 带在响应对象上（见上方 rateLimitWaitMs 的读取），这里原样入账。非限速 http
+        // （测试桩/fixture）没有这个字段，读回的就是初始值 0，与旧行为一致。
+        rateLimitWaitMs,
       });
     }
   }

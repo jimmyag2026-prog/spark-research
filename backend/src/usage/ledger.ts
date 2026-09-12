@@ -36,6 +36,13 @@ export interface UsageEntry {
   costUsd: number | null;
   /** V94：这次调用的模型在单价表里查不到（发前就知道）。只在 true 时写入。 */
   unpriced?: boolean;
+  /**
+   * V99②：`costUsd` 被强制记成可证明的 0（不是「未知」）时的原因。目前只覆盖
+   * `error.kind ∈ {auth, rate_limit}` 两种——上游在产生任何可计费 token 之前就
+   * 拒绝了请求，$0 是确定的事实，不该和「拿不到 usage / 查不到单价」的真未知
+   * 混进同一个 unknownCostCalls 桶里（那会让「已知花费下界」比实际更保守）。
+   */
+  zeroCostReason?: string;
 }
 
 export interface UsageTotals {
@@ -58,9 +65,39 @@ export class UsageStore {
     return this.file;
   }
 
+  /**
+   * V97（v0.8 W8-1 β）：`entry.model` 在类型上恒是 `string`，但真实调用方有时把一整个
+   * `CallOptions` 对象递进来（`tests/helpers/ideation_scenario.ts` 的 `ScriptedLlm.call()`
+   * 撞过这个 bug——`llm.call(messages, options)` 的第二参是 `string | CallOptions`，
+   * fake 只认字符串分支，序列化后就是一行 `model:"[object Object]"`，usage 台账被写坏）。
+   * 落盘前兜底核一次类型，坏值记 `"(unknown)"` 并计入 `corrupt`（与 readAll() 的
+   * 「坏行不装作没看见」同一计数口径），而不是让一个格式错误的字符串悄悄躺进文件里。
+   *
+   * V99①：写盘失败（磁盘满/权限/只读文件系统）**吞掉 + stderr 告警**，产出（`res`）
+   * 照常由调用方返回——与 `api_ledger.ts` 的 `ApiCallStore.append()` 同一条纪律
+   * （台账是观测，不是业务，不能因为记不下去而让已经发生、已经计费的真实调用失败）；
+   * 这里额外加一条 `console.error`（api_ledger.ts 没加，不在本次改动范围内）——
+   * 静默降级不留痕在这条台账上风险更高：它是预算闸读「已知花费下界」的输入源，
+   * 吞得不出声，下一次判断就会悄悄失真。
+   */
   append(entry: UsageEntry): void {
-    mkdirSync(dirname(this.file), { recursive: true });
-    appendFileSync(this.file, `${JSON.stringify(entry)}\n`, "utf8");
+    let model = entry.model;
+    if (typeof model !== "string") {
+      this.corrupt += 1;
+      console.error(
+        `[usage] UsageStore.append: model 字段不是字符串（收到 ${JSON.stringify(entry.model)}），已记为 "(unknown)"（file=${this.file}）`,
+      );
+      model = "(unknown)";
+    }
+    try {
+      mkdirSync(dirname(this.file), { recursive: true });
+      appendFileSync(this.file, `${JSON.stringify({ ...entry, model })}\n`, "utf8");
+    } catch (error) {
+      console.error(
+        `[usage] UsageStore.append: 写入 ${this.file} 失败（本次 LLM 调用产出仍正常返回，仅这一行台账没记上）：` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   readAll(): UsageEntry[] {
@@ -86,7 +123,11 @@ export class UsageStore {
 
   private corrupt = 0;
 
-  /** readAll 中跳过的坏行数（文件被手改/写坏时不装作没看见）。 */
+  /**
+   * 坏数据计数：readAll() 中跳过的坏行（文件被手改/写坏）+ V97 append() 写入时
+   * model 字段类型不对、被改记成 "(unknown)" 的次数——两种都是「台账里出现了
+   * 不该出现的坏数据」，不装作没看见，合并一个计数器上报。
+   */
   corruptLines(): number {
     return this.corrupt;
   }
@@ -255,6 +296,16 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         provider: res.provider,
         model: res.model,
       });
+      // V99②：auth/rate_limit 失败发生在上游产生任何可计费 token 之前——$0 是可证明的
+      // 事实，不是「查不到/拿不到」那种真未知。两种都覆盖 `recorded.costUsd`（budget.ts
+      // 结算出来的值，通常是 null，因为没有 usage 可结算），避免它们被 totals() 计进
+      // unknownCostCalls，拖累「已知花费下界」的可信度。
+      let costUsd = recorded.costUsd;
+      let zeroCostReason: string | undefined;
+      if (!res.ok && (res.error.kind === "auth" || res.error.kind === "rate_limit")) {
+        costUsd = 0;
+        zeroCostReason = `error.kind=${res.error.kind}：上游在计费前拒绝了请求，可证明 $0`;
+      }
       store.append({
         ts: new Date().toISOString(),
         command,
@@ -263,8 +314,9 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         ok: res.ok,
         inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
         outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
-        costUsd: recorded.costUsd,
+        costUsd,
         ...(unpriced ? { unpriced: true } : {}),
+        ...(zeroCostReason ? { zeroCostReason } : {}),
       });
       if (rawOn) {
         // 失败也记：AD-13 的失败响应没有内容，但「问了什么、为什么失败」本身就是过程数据。
@@ -285,7 +337,8 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
             usage: {
               inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
               outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
-              costUsd: recorded.costUsd,
+              // 与 usage.jsonl 同一份事实：auth/rate_limit 的可证明 $0 覆盖同步反映到 raw/llm。
+              costUsd,
               usageUnavailable: Boolean(res.usage.usageUnavailable),
             },
             options: redactLlmOptions(typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions),

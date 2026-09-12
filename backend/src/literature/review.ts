@@ -74,6 +74,12 @@ export function buildReviewPrompt(cards: StoredReadingCard[], topic?: string): s
     .map((c) =>
       [
         `### [@${c.bibtexKey}] ${c.title}`,
+        // V98（W8-1 β 收口）：草稿生成也要知道材料级别——仅摘要的卡不该被写成"全文证实"。
+        ...(c.basis === "fulltext"
+          ? ["依据: 全文"]
+          : c.basis === "abstract"
+            ? [`依据: 仅摘要${c.basisReason ? `（${c.basisReason}）` : ""}——只能引用摘要层面的结论，不要写成全文细节`]
+            : []),
         `研究问题: ${c.researchQuestion}`,
         `方法: ${c.methods}`,
         `核心结论: ${c.keyFindings.map((f) => `\n  - ${f}`).join("")}`,
