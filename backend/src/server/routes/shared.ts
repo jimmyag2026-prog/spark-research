@@ -81,6 +81,15 @@ export function optionalNumber(body: Record<string, unknown>, field: string): nu
   return num;
 }
 
+// V79③：UI 的「预算 $」输入 / `allowUnpriced` 勾选框透传到 body 的解析——只做类型校验，
+// 闸的判定逻辑在 usage/ledger.ts，这里不碰。
+export function optionalBool(body: Record<string, unknown>, field: string): boolean | undefined {
+  const value = body[field];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") throw new HttpError(400, `字段 ${field} 必须是布尔值`);
+  return value;
+}
+
 // 长任务的统一出口。
 //
 // 默认异步：202 + 任务句柄，客户端轮询 `/api/tasks/:id` 或订阅 SSE。

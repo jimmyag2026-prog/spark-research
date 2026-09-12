@@ -108,6 +108,14 @@ export function buildCoExplorePrompt(
   ].join("\n");
 }
 
+// V89：hypothesis 归一化，供 `save()` 的去重判据用。抹掉大小写、全/半角空白、
+// 中英文常见标点——只是为了识别「同一句话」，不是语义相似度判断，故意保守。
+const NORMALIZE_PUNCTUATION = /[\s　，。！？、,.!?;:；：""''「」『』（）()\-—_]+/g;
+
+export function normalizeHypothesis(text: string): string {
+  return text.toLowerCase().replace(NORMALIZE_PUNCTUATION, "");
+}
+
 // ── 会话 ────────────────────────────────────────────────────────────────────
 
 export interface CoExploreDeps {
@@ -220,11 +228,43 @@ export class CoExploreSession {
   }
 
   // 落库：idea record + supports/contradicts 边。
+  //
+  // V89（review A6 Low）：co-explore 有时会把同一个 hypothesis 存成两张几乎一样的 Idea 卡
+  // （重试 / 双击 / 同一条消息在一个会话里被重复提交）。读遍 coexplore.ts 之后判定：
+  // 当前代码没有任何「一次生成故意产两张卡（主/备假设）」的机制——`turn()` 每次调用只
+  // 产一张卡，`explore()`/HTTP `/api/ideas` 每次请求也只 `save()` 一次。所以两张雷同卡
+  // 不是设计意图，是**重复记录**；对策是去重，不是加 `role: primary|alternate` 的 UI 语义
+  // （models.ts/store.ts 不在本 lane 足迹内，也没有证据支持这个语义真的存在）。
+  //
+  // 去重范围刻意收窄到**同一个 sessionId 内**，不是整个项目的思路库：
+  //   - 真正会触发这条 bug 的场景（网络重试、UI 双击、同一轮对话里客户端把同一条消息
+  //     发了两次）天然共享同一个 sessionId——同一次交互，同一个会话。
+  //   - 两个不相干的会话（甚至同一用户不同时间）各自独立聊到同一个假设，是两条
+  //     真实发生过的思路，不该被硬合并成一条——那是另一种编造信息（假装其中一次
+  //     交互没发生过）。
+  //   - `sessionId` 缺省（CLI 非交互单次调用、多数单测没有会话概念）时完全不做这个
+  //     比对，维持老行为：每次 save 都是新记录。这不是偷懒——没有 sessionId 就没有
+  //     「同一次交互」这个锚点，瞎猜等于制造新的假阳性。
+  // 去重判据：`hypothesis` 归一化（大小写、全半角空白、常见中英文标点都抹掉）后逐字
+  // 相同。只比 hypothesis 不比 critique——同一个假设，讨论正文允许因为重试而略有出入，
+  // 但「这是同一条思路」不该因为措辞不同就被判成两条。
   save(card: IdeaCard, options: { sessionId?: string | null; model?: string | null } = {}): StoredIdeaCard {
     if (!this.deps.records) {
       throw new CoExploreError("没有注入 RecordStore，idea 卡无处落库", { attempts: 0 });
     }
-    return new IdeaStore(this.deps.records, this.deps.library).create(card, {
+    const store = new IdeaStore(this.deps.records, this.deps.library);
+    if (options.sessionId) {
+      const normalized = normalizeHypothesis(card.hypothesis);
+      const duplicate = this.deps.records
+        .list({ type: "idea", sessionId: options.sessionId })
+        .map((record) => store.fromRecord(record))
+        .find(
+          (existing): existing is StoredIdeaCard =>
+            existing !== null && normalizeHypothesis(existing.hypothesis) === normalized,
+        );
+      if (duplicate) return duplicate;
+    }
+    return store.create(card, {
       sessionId: options.sessionId ?? null,
       model: options.model ?? null,
     });

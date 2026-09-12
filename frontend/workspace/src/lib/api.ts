@@ -226,10 +226,18 @@ export const api = {
       project?: string,
       onProgress?: (m: string) => void,
     ) => runTask(withProject("/api/lit/search", project), body, onProgress),
-    read: (body: { paperId?: string; all?: boolean; tag?: string }, project?: string, onProgress?: (m: string) => void) =>
-      runTask(withProject("/api/lit/read", project), body, onProgress),
-    review: (body: { topic?: string }, project?: string, onProgress?: (m: string) => void) =>
-      runTask(withProject("/api/lit/review", project), body, onProgress),
+    read: (
+      // V79③：可选 budgetUsd/allowUnpriced——路由层（server/routes/literature.ts）原样
+      // 透传给 `ctx.llmFor`，闸的判定在 usage/ledger.ts，这里只是把 body 字段声明出来。
+      body: { paperId?: string; all?: boolean; tag?: string; budgetUsd?: number; allowUnpriced?: boolean },
+      project?: string,
+      onProgress?: (m: string) => void,
+    ) => runTask(withProject("/api/lit/read", project), body, onProgress),
+    review: (
+      body: { topic?: string; budgetUsd?: number; allowUnpriced?: boolean },
+      project?: string,
+      onProgress?: (m: string) => void,
+    ) => runTask(withProject("/api/lit/review", project), body, onProgress),
     exportUrl: (format: "bibtex" | "csl", project?: string) =>
       withProject(`/api/lit/export?format=${format}`, project),
   },
@@ -244,12 +252,17 @@ export const api = {
         withProject(`/api/ideas/${id}`, project),
       ),
     coexplore: (
-      body: { message: string; sessionId?: string; persist?: boolean },
+      body: { message: string; sessionId?: string; persist?: boolean; budgetUsd?: number; allowUnpriced?: boolean },
       project?: string,
       onProgress?: (m: string) => void,
     ) => runTask(withProject("/api/ideas", project), body, onProgress),
-    check: (id: string, project?: string, onProgress?: (m: string) => void) =>
-      runTask(withProject(`/api/ideas/${id}/check`, project), {}, onProgress),
+    check: (
+      id: string,
+      project?: string,
+      onProgress?: (m: string) => void,
+      // V79③：novelty check 的「预算 $」入口。
+      options: { budgetUsd?: number; allowUnpriced?: boolean } = {},
+    ) => runTask(withProject(`/api/ideas/${id}/check`, project), options, onProgress),
   },
 
   experiments: {

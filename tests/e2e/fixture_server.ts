@@ -28,6 +28,14 @@ if (!root) {
 
 const projects = new ProjectManager(root);
 
+// V88 e2e：新建项目时把这个字符串放进项目描述（`projectContext`），批量精读的
+// prompt 就会带上它——下面包一层 delay，只在命中它时人为拖慢单次调用。目的是让
+// 3 篇精读的 done/total 中间态跨过任务面板 2s 的轮询间隔，稳定露出来（不这样做的话，
+// ScriptedLlm 是纯同步分派，3 篇精读实际耗时 <10ms，面板两次轮询之间大概率直接从
+// 0 跳到 3，看不出「逐篇回传」这件事本身——即便 V88 的接线是对的）。不影响其余用例：
+// 没有这个 marker 的项目描述，调用照旧同步返回。
+export const READING_PROGRESS_MARKER = "w88-reading-progress-marker";
+
 // 当前项目文献库的 bibtex key。co-explore 的卡必须引用库内 key（P4 硬门），
 // 而 key 要等入库之后才知道，所以每次调用时现查。
 function currentLibraryKeys(): string[] {
@@ -43,7 +51,7 @@ function currentLibraryKeys(): string[] {
   }
 }
 
-const llm = new ScriptedLlm([
+const baseLlm = new ScriptedLlm([
   // ① co-explore：产出 Idea 卡（必须引到库内 key，且至少一条反面证据）
   (user) => {
     if (!user.includes("可用引用 key 白名单")) return null;
@@ -102,6 +110,27 @@ const llm = new ScriptedLlm([
     );
   },
 ]);
+
+// `baseLlm` 本身是同步分派（见 ideation_scenario.ts 的 ScriptedLlm）；这里包一层只在
+// prompt 命中 READING_PROGRESS_MARKER 时插入延迟，其余调用原样透传，不改变现有用例
+// 的时序。
+const llm = {
+  call: (...args: Parameters<typeof baseLlm.call>) => {
+    const messages = args[0];
+    const user = messages
+      .filter((m) => m.role === "user")
+      .map((m) => m.content)
+      .join("\n");
+    if (user.includes(READING_PROGRESS_MARKER)) {
+      // 面板轮询间隔是 2000ms（TasksView，center.tsx）——延迟必须明显大于它，否则两次
+      // 轮询之间可能直接从 done=0 跳到 done=2，把 1/3 这个中间态漏采样掉（不是 bug，
+      // 只是采样点没对上）。2600ms 留了 30% 冗余。
+      return new Promise((resolve) => setTimeout(resolve, 2600)).then(() => baseLlm.call(...args));
+    }
+    return baseLlm.call(...args);
+  },
+  listModels: baseLlm.listModels,
+};
 
 // 两个 cassette 按 query 分派：播文献库用 alphafold 的，novelty 密集检索用它自己的。
 class DualCassetteSearcher {
