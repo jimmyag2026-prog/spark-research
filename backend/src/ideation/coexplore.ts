@@ -236,19 +236,34 @@ export class CoExploreSession {
   // 不是设计意图，是**重复记录**；对策是去重，不是加 `role: primary|alternate` 的 UI 语义
   // （models.ts/store.ts 不在本 lane 足迹内，也没有证据支持这个语义真的存在）。
   //
-  // 去重口径：把 `hypothesis` 归一化（大小写、全半角空白、常见中英文标点都抹掉）后与
-  // 项目里已有的 idea 卡逐条比对，完全相同就直接把已有那条还回去，不新建一条孪生卡。
-  // 只比 hypothesis 不比 critique——同一个假设，讨论正文允许因为重试而略有出入，但
-  // 「这是同一条思路」这件事不该因为措辞不同就被判成两条。真正不同的思路（哪怕表述
-  // 相似）归一化后大概率不会逐字相同，不受影响。
+  // 去重范围刻意收窄到**同一个 sessionId 内**，不是整个项目的思路库：
+  //   - 真正会触发这条 bug 的场景（网络重试、UI 双击、同一轮对话里客户端把同一条消息
+  //     发了两次）天然共享同一个 sessionId——同一次交互，同一个会话。
+  //   - 两个不相干的会话（甚至同一用户不同时间）各自独立聊到同一个假设，是两条
+  //     真实发生过的思路，不该被硬合并成一条——那是另一种编造信息（假装其中一次
+  //     交互没发生过）。
+  //   - `sessionId` 缺省（CLI 非交互单次调用、多数单测没有会话概念）时完全不做这个
+  //     比对，维持老行为：每次 save 都是新记录。这不是偷懒——没有 sessionId 就没有
+  //     「同一次交互」这个锚点，瞎猜等于制造新的假阳性。
+  // 去重判据：`hypothesis` 归一化（大小写、全半角空白、常见中英文标点都抹掉）后逐字
+  // 相同。只比 hypothesis 不比 critique——同一个假设，讨论正文允许因为重试而略有出入，
+  // 但「这是同一条思路」不该因为措辞不同就被判成两条。
   save(card: IdeaCard, options: { sessionId?: string | null; model?: string | null } = {}): StoredIdeaCard {
     if (!this.deps.records) {
       throw new CoExploreError("没有注入 RecordStore，idea 卡无处落库", { attempts: 0 });
     }
     const store = new IdeaStore(this.deps.records, this.deps.library);
-    const normalized = normalizeHypothesis(card.hypothesis);
-    const duplicate = store.list().find((existing) => normalizeHypothesis(existing.hypothesis) === normalized);
-    if (duplicate) return duplicate;
+    if (options.sessionId) {
+      const normalized = normalizeHypothesis(card.hypothesis);
+      const duplicate = this.deps.records
+        .list({ type: "idea", sessionId: options.sessionId })
+        .map((record) => store.fromRecord(record))
+        .find(
+          (existing): existing is StoredIdeaCard =>
+            existing !== null && normalizeHypothesis(existing.hypothesis) === normalized,
+        );
+      if (duplicate) return duplicate;
+    }
     return store.create(card, {
       sessionId: options.sessionId ?? null,
       model: options.model ?? null,
