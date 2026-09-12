@@ -94,13 +94,17 @@ function extractTemperature(sentence: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+// V55：时长单位英文化——原来只认「分钟/min」「小时/h」「秒/sec」的裸缩写，「1 hour」
+// 这种最常见的英文写法反而抠不出来（`h(?![a-z])` 的负向先行断言专门是为了不把
+// "hour" 的 h 误当独立缩写，副作用是连"hour"本身也进不去）。这里补上
+// `hours?`/`minutes?`/`seconds?` 完整词形；`过夜`/`隔夜` 补英文 `overnight`。
 function extractDurationSec(sentence: string): number | undefined {
-  if (/过夜|隔夜/.test(sentence)) return 12 * 60 * 60;
-  const minutes = /(\d+(?:\.\d+)?)\s*(?:分钟|min)/i.exec(sentence);
+  if (/过夜|隔夜|overnight/i.test(sentence)) return 12 * 60 * 60;
+  const minutes = /(\d+(?:\.\d+)?)\s*(?:分钟|min(?:ute)?s?)/i.exec(sentence);
   if (minutes) return Math.round(Number(minutes[1]) * 60);
-  const hours = /(\d+(?:\.\d+)?)\s*(?:小时|h(?![a-z]))/i.exec(sentence);
+  const hours = /(\d+(?:\.\d+)?)\s*(?:小时|hours?|h(?![a-z]))/i.exec(sentence);
   if (hours) return Math.round(Number(hours[1]) * 3600);
-  const seconds = /(\d+(?:\.\d+)?)\s*(?:秒|sec|s(?![a-z]))/i.exec(sentence);
+  const seconds = /(\d+(?:\.\d+)?)\s*(?:秒|sec(?:ond)?s?|s(?![a-z]))/i.exec(sentence);
   if (seconds) return Math.round(Number(seconds[1]));
   return undefined;
 }
@@ -144,22 +148,28 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["配", "配置", "配制", "制备"],
+    // V55：动词关键词英文化——试剂词表（REAGENT_PATTERNS）早就是双语的，但这一层
+    // 步骤解析器原来纯中文，导致纯英文协议**一步都编不出来**（不是拦截，是静默产出
+    // 零步骤协议，validateProtocol 才会报错）。下面六条规则各补对应英文动词，
+    // 与中文关键词并列在同一个数组里——大小写不敏感的匹配见 `compile()` 里的
+    // `lowerClause`。刻意不做完整同义词穷举（不是造一本英文实验动词词典），只补
+    // README 那条示例协议直译后会用到的最常见写法。
+    keywords: ["配", "配置", "配制", "制备", "prepare", "formulate"],
     action: "prepareReagent",
     device: "liquid_handler",
     expectedOutput: "solution volume confirmed",
     paramBuilder: (sentence) => extractVolume(sentence),
   },
   {
-    keywords: ["加", "加入", "添加", "转移"],
+    keywords: ["加", "加入", "添加", "转移", "add", "transfer", "dispense"],
     action: "addSample",
     device: "liquid_handler",
     expectedOutput: "sample dispensed into well",
     paramBuilder: (sentence) => extractVolume(sentence),
   },
   {
-    keywords: ["孵育", "培养", "恒温", "37°c", "37℃"],
-    exclude: ["培养基"],
+    keywords: ["孵育", "培养", "恒温", "37°c", "37℃", "incubate", "incubation"],
+    exclude: ["培养基", "growth medium", "culture medium"],
     action: "incubate",
     device: "incubator",
     expectedOutput: "incubation completed",
@@ -173,7 +183,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["震荡", "振荡", "摇床", "摇动"],
+    keywords: ["震荡", "振荡", "摇床", "摇动", "shake", "shaking", "vortex"],
     action: "shake",
     device: "shaker",
     expectedOutput: "mixing completed",
@@ -186,7 +196,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["离心"],
+    keywords: ["离心", "centrifuge", "centrifugation"],
     action: "centrifuge",
     device: "centrifuge",
     expectedOutput: "pellet separated",
@@ -197,7 +207,7 @@ const ACTION_RULES: ActionRule[] = [
     },
   },
   {
-    keywords: ["读数", "读取", "测定", "检测", "酶标"],
+    keywords: ["读数", "读取", "测定", "检测", "酶标", "read", "reading", "measure", "detect"],
     action: "read",
     device: "plate_reader",
     expectedOutput: "OD readings collected",
@@ -225,7 +235,8 @@ const REAGENT_PATTERNS: Array<{ id: string; keywords: string[] }> = [
 // 「参数续句」：只在补充上一步的参数，不是新的一步。
 // 「每步转移 100µL 并混匀 3 次」里的「转移」会命中 addSample，凭空多出一步移液；
 // 而这句话说的其实是上一步梯度稀释的参数。P6 新增，是协议 B 能被正确编译的前提。
-const CONTINUATION_MARKERS = /每步|每级|每次|每个梯度|每孔|其中|即每/;
+// V55：续句标记英文化，加 /i（Chinese 无大小写，加了不影响原有匹配）。
+const CONTINUATION_MARKERS = /每步|每级|每次|每个梯度|每孔|其中|即每|each step|each time|per step|per well|for each/i;
 
 // 续句参数 → 上一步 params 的映射。按上一步的**动作**决定同一个数字该落到哪个键：
 // 「100 µL」对 serialDilute 是每级转移体积，对 addSample 就是加样体积。
@@ -333,10 +344,17 @@ function extractReagentRawText(clause: string, ruleKeywords: readonly string[]):
   let residual = clause;
   const volumeMatch = /\d+(?:\.\d+)?\s*(?:mL|uL|µL|μL|毫升|微升)/i.exec(residual);
   if (volumeMatch) residual = residual.replace(volumeMatch[0], "");
-  const matchedKeywords = ruleKeywords.filter((k) => residual.includes(k));
+  // V55：大小写不敏感地找/删关键词残留——ruleKeywords 现在混了英文动词（"add"），
+  // 句首大写「Add 100uL 硝酸」用原来大小写敏感的 `.includes()` 找不到 "add"，
+  // 英文协议的未识别试剂原文会被动词残留污染。用 indexOf 在小写视图上定位，
+  // 再按原始大小写切片删除，不影响残留里其余文本的大小写（中文关键词不受影响，
+  // toLowerCase() 对中文字符是恒等操作）。
+  const lowerResidual = residual.toLowerCase();
+  const matchedKeywords = ruleKeywords.filter((k) => lowerResidual.includes(k.toLowerCase()));
   if (matchedKeywords.length > 0) {
     const longest = matchedKeywords.reduce((a, b) => (b.length > a.length ? b : a));
-    residual = residual.replace(longest, "");
+    const idx = residual.toLowerCase().indexOf(longest.toLowerCase());
+    if (idx >= 0) residual = residual.slice(0, idx) + residual.slice(idx + longest.length);
   }
   residual = residual
     .replace(/[，,、。；;：:]/g, "")
@@ -504,10 +522,13 @@ export class ProtocolCompiler {
         reagents[0]!.concentrationUnit = concentrationValue.unit;
       }
       const biosafetyValue = extractBiosafetyLevel(clause);
+      // V55：动词关键词匹配改成大小写不敏感——句首大写的英文协议（"Add 50uL..."）
+      // 原来会因为 keywords 里存的是小写 "add" 而匹配不上，整句退化成「无动作」。
+      const lowerClause = clause.toLowerCase();
       const rule = ACTION_RULES.find(
         (r) =>
-          r.keywords.some((k) => clause.includes(k)) &&
-          !(r.exclude ?? []).some((k) => clause.includes(k)),
+          r.keywords.some((k) => lowerClause.includes(k.toLowerCase())) &&
+          !(r.exclude ?? []).some((k) => lowerClause.includes(k.toLowerCase())),
       );
       // 续句（或压根不含动作词但带参数的句子）合并进上一步，而不是新起一步。
       // 「不认识就跳过」会把参数**静默丢掉**，那比多一步更糟——用户写了却没生效。
