@@ -80,6 +80,11 @@ class Client(GeneratedClient):
                 url = f"{url}?{query}"
         data: bytes | None = None
         headers = {"Accept": "application/json"}
+        # R5 P1-6：写方法即便没有 body 也必须带 Content-Type: application/json——服务端对写请求
+        # 强制校验该头，否则 415。契约里确实存在「无 body 的 POST」（如 /api/lit/papers/:id/pdf），
+        # 之前这类方法 100% 失败，只能退回 CLI。
+        if body is None and method in ("POST", "PUT", "PATCH", "DELETE"):
+            body = {}
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"

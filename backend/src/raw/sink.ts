@@ -9,13 +9,25 @@
 // 除非 config `rawUpstreamInline=on`。
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { RawAppendInput, RawBody, RawEntry, RawFilter, RawKind, RawSink, RawVerifyResult } from "./models";
 import { RAW_KINDS } from "./models";
 
 /** 只读文件最后 maxBytes（大 raw 文件每次 append 不必整读）。 */
-function readTail(file: string, maxBytes: number): string {
+/**
+ * 读文件尾部的若干完整行。
+ *
+ * `complete: false` 表示这个窗口整个落在同一行内部（窗口里一个换行都没有，且不是从文件头开始读）——
+ * 此时拿到的文本是**残行**，调用方必须换更大的窗口重读，绝不能拿它去解析。
+ *
+ * R5 P1-4 真因：原实现固定 64KB 窗口，返回值不区分「完整行」与「残行」。connector 的原始响应体
+ * 是整段 inline 的（llm 那条链因为 `body()` 把 >64KB 移进 blobs 所以从没踩到），一行 68–70KB 时
+ * 窗口里没有任何换行，`text.indexOf("\n") + 1 === 0`，于是把残行当成完整行返回 → JSON.parse 抛错
+ * → 被 catch 吞成 `last = null` → 下一条 append 写了 `prevHash: null`，链就在这里断开。
+ * 实测 R5 四个项目的全部 4 处断链，前一行都是 68444 / 68775 / 70330 / 68398 字节，无一例外。
+ */
+function readTail(file: string, maxBytes: number): { text: string; complete: boolean } {
   const fd = openSync(file, "r");
   try {
     const size = fstatSync(fd).size;
@@ -23,11 +35,29 @@ function readTail(file: string, maxBytes: number): string {
     const buf = Buffer.alloc(size - start);
     readSync(fd, buf, 0, buf.length, start);
     const text = buf.toString("utf8");
-    // 从中间切开时第一行可能是残行——丢掉它，只要最后一整行。
-    return start > 0 ? text.slice(text.indexOf("\n") + 1) : text;
+    if (start === 0) return { text, complete: true };
+    const nl = text.indexOf("\n");
+    // 窗口从行中间切入且整个窗口没有换行 → 全是残行，交给调用方放大窗口重读。
+    if (nl < 0) return { text: "", complete: false };
+    return { text: text.slice(nl + 1), complete: true };
   } finally {
     closeSync(fd);
   }
+}
+
+/** 文件最后一个非空行；窗口按需放大直到拿到完整行（最后一档 = 整个文件）。空文件返回 null。 */
+function readLastLine(file: string): string | null {
+  const size = statSync(file).size;
+  if (size === 0) return null;
+  for (const window of [64 * 1024, 1024 * 1024, 16 * 1024 * 1024, size]) {
+    const { text, complete } = readTail(file, Math.min(window, size));
+    if (!complete) continue;
+    const lines = text.split("\n").filter((l) => l.trim() !== "");
+    const last = lines[lines.length - 1];
+    if (last !== undefined) return last;
+    if (window >= size) break;
+  }
+  return null;
 }
 
 function canonicalize(value: unknown): unknown {
@@ -98,14 +128,17 @@ export class JsonlRawSink implements RawSink {
   private readLastHash(file: string): string | null {
     let last: string | null = null;
     if (existsSync(file)) {
-      const tail = readTail(file, 64 * 1024);
-      const lines = tail.split("\n").filter((l) => l.trim() !== "");
-      const lastLine = lines[lines.length - 1];
-      if (lastLine) {
+      const lastLine = readLastLine(file);
+      if (lastLine !== null) {
+        // 解析不了**不能**当成「文件是空的」——那会写出 prevHash:null 伪造一个链头，把断链
+        // 变成静默数据损坏（R5 P1-4 的放大机制）。读不懂就抛，让调用方看见真实状态。
         try {
           last = (JSON.parse(lastLine) as RawEntry).hash ?? null;
-        } catch {
-          last = null;
+        } catch (error) {
+          throw new Error(
+            `raw sink：${file} 的最后一行无法解析为 RawEntry，拒绝在其后追加（那会伪造链头）。` +
+              `原因：${(error as Error).message}`,
+          );
         }
       }
     }

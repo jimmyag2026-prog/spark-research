@@ -28,8 +28,20 @@ export function queryList(c: Context, name: string): string[] | undefined {
   return raw?.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+// R5 P0-2：写路由的项目归属此前**只看 query**，body 里的 `project` 被静默忽略，请求落进全局
+// current-project 指针指向的项目——SDK 恰恰是 body 风格，等于「显式指定了项目仍然写错地方」，
+// 且响应体还回报了错误的 project 名。这里让 body 成为 query 之后的兜底来源：
+// 优先级 query > body（URL 里写死的最显式），两者都没有才落回当前项目指针。
+// `jsonBody()` 解析完就把 body 挂在 context 上（见下），所有 POST 路由都是先 jsonBody 再取 slug，
+// 所以这一处改动覆盖全部写路由，不必逐个改 47 个调用点。
+const JSON_BODY_KEY = "__sparkJsonBody";
+
 export function projectSlug(c: Context): string | undefined {
-  return queryString(c, "project");
+  const fromQuery = queryString(c, "project");
+  if (fromQuery !== undefined) return fromQuery;
+  const body = (c.get as (k: string) => unknown)(JSON_BODY_KEY) as Record<string, unknown> | undefined;
+  const fromBody = body?.project;
+  return typeof fromBody === "string" && fromBody.trim() !== "" ? fromBody : undefined;
 }
 
 // body 解析：非法 JSON 报 400 而不是 500——这是调用方的错，不是服务端崩了。
@@ -41,6 +53,8 @@ export async function jsonBody<T extends Record<string, unknown>>(c: Context): P
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new HttpError(400, "请求体必须是 JSON 对象");
     }
+    // R5 P0-2：挂到 context 上，供 projectSlug() 兜底读 body.project。
+    (c.set as (k: string, v: unknown) => void)(JSON_BODY_KEY, parsed);
     return parsed as T;
   } catch (error) {
     if (error instanceof HttpError) throw error;
