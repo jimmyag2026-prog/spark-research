@@ -154,3 +154,8 @@ claim it."），`research.txt`/`literature.txt` 目前没有同等措辞。如�
 与 `~/.spark-research/projects/*` 全程只读（`sqlite3 ... select`、`cat`/`grep`），
 未写入任何字节。`bunfig.toml` 的 `SPARK_RESEARCH_DATA_DIR` preload 隔离对这批
 新测试同样生效（未绕过）。
+
+## 收口补记（主会话，2026-09-12）
+- `cobrapy/index.ts`、`pydeseq2/index.ts` 两处过期注释已改指 `../probe.ts`。
+- **openmm 未接 `probeCodeFor`**：收口尝试按 lane 给的 diff 替换 `probeCode()`，实测 openmm 的 `runner.py` 没有 `probe()` 入口（`module 'spark_probe_openmm' has no attribute 'probe'`），探测恒失败 → P5 契约测试整套 13 条 skip。已还原为内联探测。要接上需给 openmm runner 加 `probe()`（python 侧，V51 残余登记 BACKLOG）。
+- 主会话复跑：typecheck 0 · unit 2331 全跑无 skip（见 PR）· concurrency+timeout 35/0。

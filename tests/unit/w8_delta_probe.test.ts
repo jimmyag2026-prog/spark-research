@@ -12,7 +12,7 @@ import { ScanpyPlatform } from "../../backend/src/simulation/scanpy/index.ts";
 
 // V51（W8-δ · lanes/W8-delta.md）：`probeCodeFor`/`datasetParam` 搬到
 // `simulation/probe.ts` 顶层，scanpy/pydeseq2/cobrapy 三个平台的 import 行改指那里
-// （openmm 仍是内联探测字符串——见本 lane 报告「如实交代」一节：openmm/index.ts
+// （openmm 仍是内联探测字符串——收口实测：其 runner.py 没有 probe() 入口，直接换 probeCodeFor 会让 openmm 探测恒失败（P5 契约测试整套 skip），留 V51 残余：openmm/index.ts
 // 除 import 行外的其余内容不在本 lane 文件所有权内，probeCode() 方法体的替换以
 // ≤10 行 diff 交收口合入，不在这里直接改）。
 //

@@ -54,7 +54,7 @@ export class CobraPyPlatform extends SubprocessSimulationPlatform {
     return join(materializeAssetTree("sim-cobrapy", COBRAPY_RUNNER_TREE), "simulation", "cobrapy", "runner.py");
   }
 
-  // 探测走 runner 本身，理由见 ../scanpy/probe.ts 的 probeCodeFor 注释（V27）。
+  // 探测走 runner 本身，理由见 ../probe.ts 的 probeCodeFor 注释（V27）。
   // cobra 这一条尤其要紧：`import cobra` 成功 ≠ 有 LP 求解器，runner 的 probe()
   // 会把 optlang 认得的求解器列出来，一个都没有就算不可用。
   protected probeCode(): string {

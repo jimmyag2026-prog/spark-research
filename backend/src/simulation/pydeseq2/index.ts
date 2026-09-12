@@ -55,7 +55,7 @@ export class PyDESeq2Platform extends SubprocessSimulationPlatform {
     );
   }
 
-  // 探测走 runner 本身，理由见 ../scanpy/probe.ts 的 probeCodeFor 注释（V27）。
+  // 探测走 runner 本身，理由见 ../probe.ts 的 probeCodeFor 注释（V27）。
   protected probeCode(): string {
     return probeCodeFor(this.entryPointFor(), "pydeseq2", PYDESEQ2_INSTALL_HINT);
   }
