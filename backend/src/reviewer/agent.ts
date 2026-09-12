@@ -67,6 +67,25 @@ export interface ReviewerOptions {
 const TRACEABILITY_CHECKER = "traceability";
 const LINEAGE_CHECKER = "lineage";
 
+// V14：位置加权豁免白名单。
+//
+// 旧写法（`applyLocationWeight` 内联 `if (f.rule === CITATION_RULE) return f;`）把「哪些
+// 规则不参与位置加权」这件事藏在一条个例判断里——豁免名单只存在于调用路径的隐式对比中，
+// 读代码的人（以及未来加新规则的人）看不出这是一份需要维护的清单，也没有地方写「为什么
+// 豁免」。显式化成列表 + 逐条注释理由，豁免范围之外的规则一律加权（这与旧行为完全一致，
+// 只是把隐式判断变成显式数据）。
+// export：给 tests/unit/w8_delta_location_weight.test.ts 的阴性对照③用——直接对真实
+// 白名单对象 `.clear()` 再恢复，跑一遍真实 ReviewerAgent.review()，而不是在测试里另写
+// 一份重复的判定逻辑（那样测的是测试自己的实现，不是产品代码）。
+export const LOCATION_WEIGHT_EXEMPT: Set<string> = new Set([
+  // citation-integrity：严重度由规则自身定义——hard=伪造引用（库外 key），
+  // soft=推断类提示（judge 判冲突、强断言无引用）。这三条的分级已经是规则自己
+  // 权衡过的结论，「figure/report 里 soft 升 hard」这条位置加权规则会把 soft
+  // 提示错杀成 veto，与 rules.ts citationIntegrity 头部注释里写明的分级口径直接冲突
+  // （见 rules.ts 第 59–67 行）。
+  CITATION_RULE,
+]);
+
 // 一次「针对某个 (checker, artifact) 的检查是否真的跑过」的记录——即便这一轮零命中，
 // 只要检查真的跑了，也要报给 findings_store 一次「hits=[]」，否则上一轮报的问题在这一轮
 // 被修好之后永远停在 open（reviewTarget 的 resolve 分支需要看到「这一轮查过、确实不在了」
@@ -258,9 +277,8 @@ export class ReviewerAgent {
 
   private applyLocationWeight(findings: Finding[], artifacts: ArtifactVersion[]): Finding[] {
     return findings.map((f) => {
-      // citation-integrity 的严重度由规则自身定义（hard=伪造引用，soft=推断类提示），
-      // 不受「figure/report 里 soft 升 hard」的位置加权影响——否则 soft 提示会变成误杀。
-      if (f.rule === CITATION_RULE) return f;
+      // 白名单命中 → 原样透传，不参与位置加权。见上面 LOCATION_WEIGHT_EXEMPT 的注释。
+      if (f.rule && LOCATION_WEIGHT_EXEMPT.has(f.rule)) return f;
       const artifact = artifacts.find((a) => a.id === f.artifactId);
       if (!artifact || !isFigureOrReport(artifact)) return f;
       if (f.severity === "soft") {

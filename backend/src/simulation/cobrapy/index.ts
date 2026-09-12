@@ -6,7 +6,8 @@ import COBRAPY_PACKAGE_INIT_PY from "./__init__.py" with { type: "text" };
 import RUNNER_PY from "./runner.py" with { type: "text" };
 import { materializeAssetTree } from "../../assets/embedded";
 import { SimulationSpecError } from "../models";
-import { datasetParam, probeCodeFor } from "../scanpy/probe";
+// V51（W8-δ）：probeCodeFor/datasetParam 搬到 simulation/probe.ts 顶层，import 行改指那里。
+import { datasetParam, probeCodeFor } from "../probe";
 import {
   SubprocessSimulationPlatform,
   boolParam,
@@ -53,7 +54,7 @@ export class CobraPyPlatform extends SubprocessSimulationPlatform {
     return join(materializeAssetTree("sim-cobrapy", COBRAPY_RUNNER_TREE), "simulation", "cobrapy", "runner.py");
   }
 
-  // 探测走 runner 本身，理由见 ../scanpy/probe.ts 的 probeCodeFor 注释（V27）。
+  // 探测走 runner 本身，理由见 ../probe.ts 的 probeCodeFor 注释（V27）。
   // cobra 这一条尤其要紧：`import cobra` 成功 ≠ 有 LP 求解器，runner 的 probe()
   // 会把 optlang 认得的求解器列出来，一个都没有就算不可用。
   protected probeCode(): string {
