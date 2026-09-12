@@ -72,7 +72,11 @@ describe("V63 · connectors/base.ts 把 rateLimitWaitMs 写进 api_calls 台账"
 
   class ProbeConnector extends HttpConnector {
     constructor(options: ConnectorOptions) {
-      super("probe", { baseUrl: `https://${HOST}/`, description: "test", tools: [{ name: "ping", endpoint: "ping" }] }, options);
+      super(
+      "probe",
+      { baseUrl: `https://${HOST}/`, description: "test", tools: [{ name: "ping", description: "ping", endpoint: "ping" }] },
+      options,
+    );
     }
   }
 

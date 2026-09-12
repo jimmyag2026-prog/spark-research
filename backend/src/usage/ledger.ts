@@ -36,6 +36,13 @@ export interface UsageEntry {
   costUsd: number | null;
   /** V94：这次调用的模型在单价表里查不到（发前就知道）。只在 true 时写入。 */
   unpriced?: boolean;
+  /**
+   * V99②：`costUsd` 被强制记成可证明的 0（不是「未知」）时的原因。目前只覆盖
+   * `error.kind ∈ {auth, rate_limit}` 两种——上游在产生任何可计费 token 之前就
+   * 拒绝了请求，$0 是确定的事实，不该和「拿不到 usage / 查不到单价」的真未知
+   * 混进同一个 unknownCostCalls 桶里（那会让「已知花费下界」比实际更保守）。
+   */
+  zeroCostReason?: string;
 }
 
 export interface UsageTotals {
@@ -289,6 +296,16 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         provider: res.provider,
         model: res.model,
       });
+      // V99②：auth/rate_limit 失败发生在上游产生任何可计费 token 之前——$0 是可证明的
+      // 事实，不是「查不到/拿不到」那种真未知。两种都覆盖 `recorded.costUsd`（budget.ts
+      // 结算出来的值，通常是 null，因为没有 usage 可结算），避免它们被 totals() 计进
+      // unknownCostCalls，拖累「已知花费下界」的可信度。
+      let costUsd = recorded.costUsd;
+      let zeroCostReason: string | undefined;
+      if (!res.ok && (res.error.kind === "auth" || res.error.kind === "rate_limit")) {
+        costUsd = 0;
+        zeroCostReason = `error.kind=${res.error.kind}：上游在计费前拒绝了请求，可证明 $0`;
+      }
       store.append({
         ts: new Date().toISOString(),
         command,
@@ -297,8 +314,9 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         ok: res.ok,
         inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
         outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
-        costUsd: recorded.costUsd,
+        costUsd,
         ...(unpriced ? { unpriced: true } : {}),
+        ...(zeroCostReason ? { zeroCostReason } : {}),
       });
       if (rawOn) {
         // 失败也记：AD-13 的失败响应没有内容，但「问了什么、为什么失败」本身就是过程数据。
@@ -319,7 +337,8 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
             usage: {
               inputTokens: res.usage.usageUnavailable ? 0 : res.usage.inputTokens,
               outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
-              costUsd: recorded.costUsd,
+              // 与 usage.jsonl 同一份事实：auth/rate_limit 的可证明 $0 覆盖同步反映到 raw/llm。
+              costUsd,
               usageUnavailable: Boolean(res.usage.usageUnavailable),
             },
             options: redactLlmOptions(typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions),

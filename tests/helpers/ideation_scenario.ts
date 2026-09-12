@@ -4,7 +4,7 @@ import { FixtureHttp, type FixtureMode } from "../../backend/src/http/fixture";
 import type { LiteratureSource } from "../../backend/src/literature/models";
 import { LiteratureSearcher } from "../../backend/src/literature/search";
 import { LLMRouter, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
-import { llmExtras } from "../../backend/src/llm/types";
+import { llmExtras, type CallOptions } from "../../backend/src/llm/types";
 
 // P4 双向对照 e2e 的单一真源。
 //
@@ -69,7 +69,14 @@ export class ScriptedLlm {
   readonly prompts: string[] = [];
   constructor(private handlers: Dispatch[]) {}
 
-  call = async (messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+  // V97（v0.8 W8-1 β）：真实 `LLMRouter.call()` 的第二参是 `string | CallOptions`
+  // （`usageTrackingLlm()` 等生产包装器传的就是完整 `CallOptions` 对象，不是裸字符串）。
+  // 这个 fake 此前只认字符串分支——递进来一个 `CallOptions` 对象时，那个对象会被
+  // 原样塞进 `LlmResponse.model`，序列化后 usage.jsonl 里就是一行 `model:"[object Object]"`
+  // （V97 抓到的真实 bug）。这里在第一时间做同一次归一化：字符串原样用，对象取 `.model`
+  // （查不到就退回默认模型名，不是 undefined）。
+  call = async (messages: ChatMessage[], modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+    const model = typeof modelOrOptions === "string" ? modelOrOptions : modelOrOptions.model ?? LLMRouter.DEFAULT_MODEL;
     // 用全部 user 消息拼接分派：重试时最后一条是纠正指令，只看最后一条会错判。
     const user = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
     this.prompts.push(user);
