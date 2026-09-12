@@ -66,3 +66,8 @@
 ## 并行噪音
 
 六条 lane 并行期间，只有 `test:e2e` 第一次撞到端口占用（见上表），非超时类问题（是「端口被占」而不是「探测超时」），单独重跑一次即全绿，已如实记录。
+
+## 收口补记（主会话，2026-09-12）
+- V98 另一半：`literature/review.ts` `buildReviewPrompt()` 也按 basis 标注（仅摘要的卡加"只能引用摘要层面的结论"提醒），`tests/unit/w8_beta_review_prompt_basis.test.ts` 1 条。
+- `data/manifest.ts` 不改的判断成立：`ManifestTableCounts` 索引签名自动含 `simulation` 计数（lane 的 export→import 往返测试已验）。
+- 主会话复跑：typecheck 0 · unit 2357/0 无 skip · concurrency+timeout 35/0。
