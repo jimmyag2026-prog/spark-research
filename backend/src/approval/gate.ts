@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 // 审批动作的**交互终端门**（V19；W5-2 β 从 `lab/cli.ts:150-251` 原样搬出并参数化）。
 //
 // ── 为什么这层存在（原文保留，来源 lab/cli.ts 的 V19 大注释）─────────────────
@@ -117,6 +118,13 @@ function flagString(value: string | true | undefined): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** 常量时间比较：先各自 sha256（定长），再 timingSafeEqual——不因长度差异或前缀匹配长度而泄漏时序。 */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
 export async function requireApprovalGate(
   spec: ApprovalGateSpec,
   ref: string,
@@ -142,7 +150,10 @@ export async function requireApprovalGate(
     return { bypassNote: null };
   }
 
-  const token = flagString(flags["ci-bypass-token"]);
+  // V116（v0.8）：① 比较用常量时间（sha256 后 timingSafeEqual，长度不同也不提前返回）；
+  // ② token 可以不走 argv——`--ci-bypass-token-env <VAR>` 从环境变量取值（argv 会进 ps/shell 历史）。
+  const tokenEnvName = flagString(flags["ci-bypass-token-env"]);
+  const token = tokenEnvName ? env[tokenEnvName] : flagString(flags["ci-bypass-token"]);
   const reason = flagString(flags["ci-bypass-reason"]);
   const expected = env[spec.envVar];
 
@@ -155,7 +166,7 @@ export async function requireApprovalGate(
         `${spec.envVar}，并在命令行显式传 --ci-bypass-token 与 --ci-bypass-reason。`,
     );
   }
-  if (!token || token !== expected) {
+  if (!token || !constantTimeEqual(token, expected)) {
     throw new ApprovalGateError(
       `[${spec.tag}] 非交互终端下${verb}需要 --ci-bypass-token 的值与环境变量 ${spec.envVar} ` +
         `一致——${token ? "两者不匹配。" : "缺少 --ci-bypass-token。"}`,

@@ -22,6 +22,7 @@ import { applyConfigEnvDefaults, dataDir, enforceConfigPermissions } from "./con
 import { runCapabilitiesCommand } from "./capabilities/cli";
 // W8-2：运行时契约（CLI/HTTP/MCP/配置/导出 manifest schema），SDK 的生成源。实现在 backend/src/contract/**。
 import { runContractCommand } from "./contract/cli";
+import { readHidden } from "./cli/hidden_input";
 import { runNewCommand } from "./scaffold/cli";
 import { runMcpStdio } from "./mcp/server";
 import { MCP_TOOLS } from "./mcp/tools";
@@ -253,7 +254,10 @@ async function auth() {
     }
 
     const envName = PROVIDER_API_KEY_ENV[provider]!;
-    const key = await question(`输入 ${envName}: `);
+    // V115：凭据不回显（readline.question 会把 key 打回屏幕）。读的时候先让 readline 让开 stdin。
+    rl.pause();
+    const key = await readHidden(`输入 ${envName}（不回显）: `, { input: process.stdin, output: process.stdout });
+    rl.resume();
     if (key) {
       config[envName] = key;
       config.defaultProvider = provider;

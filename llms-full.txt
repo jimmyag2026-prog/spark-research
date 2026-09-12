@@ -2547,7 +2547,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V101 | extensions `--trust` 指纹只覆盖入口单文件（review P2-2，安全） | 改 helper 文件可绕过 TOFU。修：指纹覆盖静态 import 闭包或目录清单哈希<br>✅ **v0.8.0-alpha.1 已修**（#85，devlog G8-2：目录清单指纹） |
 | V102 | 外部 review 杂项打包（P2/P3 存量，v0.7 评审逐条拆分或明确不做） | · P2-5 HTTP 综述不落 citation-integrity record（CLI/HTTP 语义分叉）· P2-11 固定 4321 端口第二实例裸崩 · P2-13 六个上帝文件（orchestrator 1304 行等）· P2-14 错误 envelope 不统一 · N3 缺 rdkit 时 chem 10 个 fail 而非 skip（与 scanpy/pydeseq2 口径不一）· N4 pyproject.toml 版本 0.2.0 未随版本走（版本同步门禁应扩到它）· P3：pdf_text 单页异常拖垮整篇（逐页 try）· 全文 40k 截断不感知模型 token 且截断仍标 fulltext · 拆词兜底无负缓存（agent 循环可放大配额消耗）且全词失败仍报 ok · rebuildCitations O(N·R·C) · 叙述式引用在核验视野外（prompt 未明令 [@key] 形式）· auth 交互录入不关回显 · CI bypass token 走 argv+非常量时间比较 · HTTP 与 CLI 批量精读跳过语义不一致。真源见 docs/reviews/v0.6.0_external_review.md<br>✅ **v0.8.0-alpha.2 已逐条拆分为 V104–V117**（本条关闭；各条去向见其行） |
 | V103 | 仓库内缺「并发零污染」的可复现测试（review 回归防线建议） | 「四会话 22 分钟零污染」目前只是实测口头证据。修：一条真正的并发 e2e——4 子进程各带/不带 --project 混跑，断言 records 互不串写。#74 的会话绑定落地后此测试同时守护它 <br>✅ **v0.7 C-1 已做**：`tests/concurrency/project_pointer.test.ts` 两个真实子进程各 100 次交替 `project use` + 写 record，零串项目；R4 四课题并发实测零串项目 |
-| V104 | HTTP 综述不落 citation-integrity record（V102 拆分 · P2-5） | CLI `lit review` 落 record，HTTP `POST /api/lit/review` 不落 → 同一能力两种语义。去向：**v0.8 R5 修复窗口候选**（路由透传一个开关即可） |
+| V104 | HTTP 综述不落 citation-integrity record（V102 拆分 · P2-5） | CLI `lit review` 落 record，HTTP `POST /api/lit/review` 不落 → 同一能力两种语义。去向：**v0.8 R5 修复窗口候选**（路由透传一个开关即可）<br>✅ **v0.8 R5 窗口已修**（HTTP 综述落 citation-integrity observation record，响应带 citationReviewRecordId/citationGap） |
 | V105 | 固定 4321 端口第二实例裸崩（V102 拆分 · P2-11） | `server` 端口被占直接抛 EADDRINUSE 栈。去向：v0.9（改成可读错误 + 建议 `server <port>`） |
 | V106 | 六个上帝文件（V102 拆分 · P2-13） | orchestrator.ts 1300+ 行等。去向：**登记不做**（v0.9 视 lane 需要按文件所有权自然拆分，不做纯重构 PR） |
 | V107 | 错误 envelope 不统一（V102 拆分 · P2-14） | `{error}` / `{error,detail}` / 纯文本混用。去向：v0.9（contract 已把 `ApiErrorBody` 钉成 schema，统一时以它为准） |
@@ -2558,11 +2558,11 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V112 | 拆词兜底无负缓存、全词失败仍报 ok（V102 拆分 · P3） | agent 循环可放大配额消耗。去向：v0.9 |
 | V113 | rebuildCitations O(N·R·C)（V102 拆分 · P3） | 去向：v0.9（量级未成瓶颈） |
 | V114 | 叙述式引用在核验视野外（V102 拆分 · P3） | prompt 未明令 `[@key]` 形式。去向：v0.9（与 V13 裁定一并复核） |
-| V115 | auth 交互录入不关回显（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（readline 关 echo，几行） |
-| V116 | CI bypass token 走 argv + 非常量时间比较（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（`timingSafeEqual` + 允许 env 传入） |
+| V115 | auth 交互录入不关回显（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（readline 关 echo，几行）<br>✅ **v0.8 R5 窗口已修**（`auth` 录 key 走 readHidden：TTY raw 不回显，管道按行） |
+| V116 | CI bypass token 走 argv + 非常量时间比较（V102 拆分 · P3，安全） | 去向：**v0.8 R5 修复窗口候选**（`timingSafeEqual` + 允许 env 传入）<br>✅ **v0.8 R5 窗口已修**（sha256+timingSafeEqual 常量时间；`--ci-bypass-token-env <VAR>` 不走 argv） |
 | V117 | HTTP 与 CLI 批量精读跳过语义不一致（V102 拆分 · P3） | 去向：v0.9 |
 | V118 | openmm 探测仍是内联字符串（V51 残余） | runner.py 无 `probe()` 入口，直接换 `probeCodeFor` 会让 P5 契约测试整套 skip（#95 收口实测）。去向：v0.9（python 侧加 probe()） |
-| V119 | 聊天式 co-explore 无预算入口（V79③ 残余） | 走 `agents/orchestrator.ts` 自己的 `llmFor`，UI 预算参数够不到闸。去向：**v0.8 R5 修复窗口候选**（orchestrator llmFor 加 budgetUsd/allowUnpriced） |
+| V119 | 聊天式 co-explore 无预算入口（V79③ 残余） | 走 `agents/orchestrator.ts` 自己的 `llmFor`，UI 预算参数够不到闸。去向：**v0.8 R5 修复窗口候选**（orchestrator llmFor 加 budgetUsd/allowUnpriced）<br>✅ **v0.8 R5 窗口已修**（chat/stream 路由透传 budgetUsd/allowUnpriced → orchestrator 按会话记预算；UI 聊天框加预算入口；闸拒绝消息原样回给用户） |
 | V120 | `records_write_race` 偶发 database is locked（alpha.2 收口观察） | #99 复跑时两进程 idea check 式落库 60 次出现一次 locked（382ms 内失败非超时），单独重跑 3/3 绿；机器 load 4–11。去向：**v0.8 A7 前核查**（是否 busy_timeout 未覆盖某条路径） |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3

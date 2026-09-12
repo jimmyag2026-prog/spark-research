@@ -441,13 +441,20 @@ export class OrchestratorAgent {
    * 与 CLI/HTTP 口径不一。会话绑定了项目就经 usageTrackingLlm（同一份台账、同一个 raw sink，
    * command=chat）；没绑项目退回裸 llm（没有落点，不假装记了）。
    */
+  // V119（v0.8）：聊天式 co-explore / chat 的预算闸——UI「预算 $」透传到这里，按会话记住，
+  // 每次 llmFor 都带上（同一次 chat() 内的多次模型调用共用一个闸）。
+  private readonly sessionBudget = new Map<string, { budgetUsd?: number; allowUnpriced?: boolean }>();
+
   private llmFor(sessionId: string | null): Pick<LLMRouter, "call"> {
     const project = sessionId ? this.projectForSession(sessionId) : null;
     if (!project) return this.llm;
+    const budget = sessionId ? this.sessionBudget.get(sessionId) : undefined;
     return usageTrackingLlm({
       llm: this.llm,
       store: new UsageStore(join(project.paths.root, "usage.jsonl")),
       command: "chat",
+      budgetUsd: budget?.budgetUsd,
+      allowUnpriced: budget?.allowUnpriced,
       rawSink: project.raw(),
       project: project.slug,
       sessionId,
@@ -912,6 +919,10 @@ export class OrchestratorAgent {
     // 记一个空字符串，排查者等于什么都没拿到）。
     if (!res.ok) {
       this.record(sessionId, "orchestrator", "summarize-llm-failed", res.error.message);
+      // V119：预算闸拒绝不是"配置/网络"问题——把闸消息（含下一步）原样带给用户，别让人去查 key。
+      if (res.error.kind === "budget") {
+        return `[orchestrator] 本次调用被预算闸拒绝，未生成结果摘要。${res.error.message}`;
+      }
       return "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。";
     }
     return res.content;
@@ -1049,7 +1060,15 @@ export class OrchestratorAgent {
     // （CoExploreSession 的 prompt/grounding 装配在 ideation/coexplore.ts，不在本
     // 文件所有权内，本 lane 没有替它接 onDelta；见 docs/devlog/W3-a.md）。
     onDelta?: (chunk: string) => void;
+    /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
+    budgetUsd?: number;
+    allowUnpriced?: boolean;
   }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null }> {
+    if (req.budgetUsd !== undefined || req.allowUnpriced !== undefined) {
+      this.sessionBudget.set(req.sessionId, { budgetUsd: req.budgetUsd, allowUnpriced: req.allowUnpriced });
+    } else {
+      this.sessionBudget.delete(req.sessionId);
+    }
     if (req.mode === "coexplore") {
       const result = await this.coexplore(req);
       return {

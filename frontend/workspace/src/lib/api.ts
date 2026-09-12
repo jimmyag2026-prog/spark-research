@@ -136,7 +136,7 @@ export interface StreamHandlers {
 }
 
 export async function streamChat(
-  body: { sessionId: string; message: string; mode?: string },
+  body: { sessionId: string; message: string; mode?: string; budgetUsd?: number; allowUnpriced?: boolean },
   handlers: StreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -406,7 +406,7 @@ export const api = {
   },
 
   session: {
-    chat: (body: { sessionId: string; message: string; mode?: string }) =>
+    chat: (body: { sessionId: string; message: string; mode?: string; budgetUsd?: number; allowUnpriced?: boolean }) =>
       post<{ response: string; ideaRecordId?: string | null; projectSlug: string | null }>(
         "/api/session/chat",
         body,

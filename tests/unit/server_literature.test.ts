@@ -294,6 +294,12 @@ describe("HTTP · lit read / review（fake LLM）", () => {
       expect(result.citation.findings.filter((f) => f.severity === "hard")).toHaveLength(0);
       expect(result.vetoed).toBe(false);
       expect(result.draft.artifactId).toBeTruthy();
+      // V104：HTTP 综述与 CLI 同一语义——落 citation-integrity observation record（阴性对照：路由去掉 records.create → 红）。
+      const withRecord = task.result as { citationReviewRecordId: string; citationGap: { total: number; judged: number } };
+      expect(withRecord.citationReviewRecordId).toBeTruthy();
+      expect(withRecord.citationGap.total).toBeGreaterThanOrEqual(withRecord.citationGap.judged);
+      const obs = await fx.get<{ records: Array<{ id: string; metadata?: { kind?: string } }> }>("/api/records?type=observation");
+      expect(obs.body.records.some((r) => r.id === withRecord.citationReviewRecordId && r.metadata?.kind === "citation-integrity-review")).toBe(true);
     } finally {
       await fx.stop();
     }

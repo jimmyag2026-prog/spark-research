@@ -40,7 +40,7 @@ export const LAB_HELP = `用法:
                                         人工批准执行（AD-6）。落 decision record，记协议 hash。
                                         V19：必须来自真实交互终端（会现场要求输入 'yes' 确认），
                                         非交互环境（脚本/CI/Bash 工具）默认拒绝，除非同时给出
-                                        --ci-bypass-token <与 SPARK_LAB_CI_BYPASS_TOKEN 一致>
+                                        --ci-bypass-token <与 SPARK_LAB_CI_BYPASS_TOKEN 一致>（或 --ci-bypass-token-env <变量名>：从环境变量取值，不走 argv）
                                         与 --ci-bypass-reason "<理由>"（旁路会写进 decision record）
   spark-research lab reject <id> --reason <理由> [--actor 谁] [--json]
                                         人工拒绝。同样落 decision record，同样受 V19 终端门约束

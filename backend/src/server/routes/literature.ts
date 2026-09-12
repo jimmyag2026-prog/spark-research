@@ -1,5 +1,7 @@
 import { Hono } from "hono";
-import { LlmCitationJudge } from "../../reviewer/citation_judge";
+import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../../agents/contract";
+import { explainCitationGap, LlmCitationJudge } from "../../reviewer/citation_judge";
+import { CITATION_RULE } from "../../reviewer/rules";
 import { citationIntegrity } from "../../reviewer/rules";
 import { exportLibrary, libraryKeyIndex, type ExportFormat } from "../../literature/export";
 import type { LibraryPaper } from "../../literature/library";
@@ -350,15 +352,40 @@ export function literatureRoutes(ctx: ServerContext): Hono {
           });
           const draft = await generator.generate(cards, { topic, sessionId });
           task.progress(1, 2, "引用核验中");
+          const knownKeys = libraryKeyIndex(library.list()).keys;
+          const baselines = baselinesFrom(cards);
           const check = await citationIntegrity({
             draft: draft.markdown,
-            knownKeys: libraryKeyIndex(library.list()).keys,
-            baselines: baselinesFrom(cards),
+            knownKeys,
+            baselines,
             judge: useJudge ? (ctx.deps.judge ?? new LlmCitationJudge(llm, ctx.model())) : undefined,
             artifactId: draft.artifactId ?? "",
             location: "text/markdown",
           });
           const hard = check.findings.filter((f) => f.severity === "hard");
+          const soft = check.findings.filter((f) => f.severity === "soft");
+          // V104（v0.8 R5 窗口）：HTTP 与 CLI 同一语义——核验结果落 observation record（W3-c 的
+          // citations_verified stage 判据就是这条 record），此前只有 CLI 落、HTTP 不落。
+          const gap = explainCitationGap(check.citations, knownKeys, baselines);
+          const citationReviewRecord = records.create({
+            type: "observation",
+            provenanceClass: "derived",
+            title: `citation-integrity 核验：${draft.recordId ?? draft.artifactId ?? "草稿未入库"}`,
+            content:
+              `解析引用 ${gap.total} 处，判定 ${gap.judged} 处，` +
+              `${hard.length} 条 hard finding，${soft.length} 条 soft finding` +
+              `；差额：去重 ${gap.duplicate} · 自引 ${gap.selfReference} · 解析失败/库外 ${gap.unresolved}` +
+              (gap.other > 0 ? ` · 其他 ${gap.other}` : ""),
+            evidence: "computed",
+            origin: { kind: "session", sessionId, ref: draft.artifactId ?? null },
+            metadata: ({
+              kind: CITATION_INTEGRITY_REVIEW_KIND,
+              checker: CITATION_RULE,
+              targetRecordId: draft.recordId ?? "",
+              hardFindingCount: hard.length,
+              softFindingCount: soft.length,
+            } satisfies CitationIntegrityReviewMetadata) as unknown as Record<string, unknown>,
+          });
           task.progress(2, 2, hard.length > 0 ? `${hard.length} 条 hard finding` : "引用核验通过");
           return {
             project: scope.project.slug,
@@ -371,6 +398,8 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             },
             cardCount: cards.length,
             citation: check,
+            citationReviewRecordId: citationReviewRecord.id,
+            citationGap: gap,
             // veto 是结果不是异常：草稿要能被读到（否则用户没法修），但必须带着否决结论。
             vetoed: hard.length > 0,
           };
