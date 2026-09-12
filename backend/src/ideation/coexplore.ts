@@ -108,6 +108,14 @@ export function buildCoExplorePrompt(
   ].join("\n");
 }
 
+// V89：hypothesis 归一化，供 `save()` 的去重判据用。抹掉大小写、全/半角空白、
+// 中英文常见标点——只是为了识别「同一句话」，不是语义相似度判断，故意保守。
+const NORMALIZE_PUNCTUATION = /[\s　，。！？、,.!?;:；：""''「」『』（）()\-—_]+/g;
+
+export function normalizeHypothesis(text: string): string {
+  return text.toLowerCase().replace(NORMALIZE_PUNCTUATION, "");
+}
+
 // ── 会话 ────────────────────────────────────────────────────────────────────
 
 export interface CoExploreDeps {
@@ -220,11 +228,28 @@ export class CoExploreSession {
   }
 
   // 落库：idea record + supports/contradicts 边。
+  //
+  // V89（review A6 Low）：co-explore 有时会把同一个 hypothesis 存成两张几乎一样的 Idea 卡
+  // （重试 / 双击 / 同一条消息在一个会话里被重复提交）。读遍 coexplore.ts 之后判定：
+  // 当前代码没有任何「一次生成故意产两张卡（主/备假设）」的机制——`turn()` 每次调用只
+  // 产一张卡，`explore()`/HTTP `/api/ideas` 每次请求也只 `save()` 一次。所以两张雷同卡
+  // 不是设计意图，是**重复记录**；对策是去重，不是加 `role: primary|alternate` 的 UI 语义
+  // （models.ts/store.ts 不在本 lane 足迹内，也没有证据支持这个语义真的存在）。
+  //
+  // 去重口径：把 `hypothesis` 归一化（大小写、全半角空白、常见中英文标点都抹掉）后与
+  // 项目里已有的 idea 卡逐条比对，完全相同就直接把已有那条还回去，不新建一条孪生卡。
+  // 只比 hypothesis 不比 critique——同一个假设，讨论正文允许因为重试而略有出入，但
+  // 「这是同一条思路」这件事不该因为措辞不同就被判成两条。真正不同的思路（哪怕表述
+  // 相似）归一化后大概率不会逐字相同，不受影响。
   save(card: IdeaCard, options: { sessionId?: string | null; model?: string | null } = {}): StoredIdeaCard {
     if (!this.deps.records) {
       throw new CoExploreError("没有注入 RecordStore，idea 卡无处落库", { attempts: 0 });
     }
-    return new IdeaStore(this.deps.records, this.deps.library).create(card, {
+    const store = new IdeaStore(this.deps.records, this.deps.library);
+    const normalized = normalizeHypothesis(card.hypothesis);
+    const duplicate = store.list().find((existing) => normalizeHypothesis(existing.hypothesis) === normalized);
+    if (duplicate) return duplicate;
+    return store.create(card, {
       sessionId: options.sessionId ?? null,
       model: options.model ?? null,
     });

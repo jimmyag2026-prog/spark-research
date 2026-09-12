@@ -168,10 +168,57 @@ export function Modal(props: {
   );
 }
 
+// V79③：花钱操作（精读/综述/novelty check）的「预算 $」输入，三处共用同一个长相。
+// 纯受控输入 + 一个校验函数——不判断预算够不够、也不知道闸长什么样，那些都在
+// usage/ledger.ts；这里只负责把用户填的字符串变成 `budgetUsd?: number` 让路由透传。
+export function parseBudgetInput(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function BudgetInput(props: { id: string; value: string; onInput: (value: string) => void }): JSX.Element {
+  return (
+    <label class="row" style={{ gap: "4px", "align-items": "center" }} for={props.id}>
+      <span class="faint" style={{ "font-size": "11.5px" }}>
+        预算 $
+      </span>
+      <input
+        id={props.id}
+        class="input"
+        type="number"
+        min="0"
+        step="0.01"
+        style={{ width: "84px" }}
+        placeholder="不限"
+        value={props.value}
+        onInput={(e) => props.onInput(e.currentTarget.value)}
+      />
+    </label>
+  );
+}
+
 // Markdown 正文。innerHTML 的内容全部来自 renderMarkdown（先转义再套白名单标记）。
-export function Markdown(props: { source: string; knownKeys?: Set<string> }): JSX.Element {
+//
+// V79①：`[@key]` 引用 span 看着可点，实际没接任何跳转（综述/精读卡/Idea 卡里都一样）。
+// innerHTML 注入的节点不是 Solid 管的 JSX，没法给每个 span 单独挂 onClick——用事件委托：
+// 在外层容器上挂一个 click 处理器，点击时用 `closest("[data-key]")` 找最近的一个带
+// `data-key` 的祖先（markdown.ts 只给「库内可回链」的引用打这个属性）。`onCiteClick`
+// 不给就是老行为（纯文本高亮，不可点），调用方不接就什么都不会发生。
+export function Markdown(props: {
+  source: string;
+  knownKeys?: Set<string>;
+  onCiteClick?: (key: string) => void;
+}): JSX.Element {
   const html = createMemo(() => renderMarkdown(props.source, { knownKeys: props.knownKeys }));
-  return <div class="md" innerHTML={html()} />;
+  const onClick = (event: MouseEvent) => {
+    if (!props.onCiteClick) return;
+    const target = event.target as HTMLElement | null;
+    const cite = target?.closest<HTMLElement>("[data-key]");
+    if (cite?.dataset.key) props.onCiteClick(cite.dataset.key);
+  };
+  return <div class="md" classList={{ "md-clickable": Boolean(props.onCiteClick) }} innerHTML={html()} onClick={onClick} />;
 }
 
 // 轻量折线图（能量曲线一类）。SVG 手绘，不引图表库——P7 范围里科学渲染「以轻量为限」。

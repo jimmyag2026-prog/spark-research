@@ -73,6 +73,10 @@ export interface LibraryPaper {
   readingStatus: "unread" | "reading" | "read" | "skimmed";
   pdfStatus: "absent" | "downloaded" | "unavailable";
   bibtexKey: string | null;
+  // V79①：后端 `/api/lit/papers` 早就透传了这个字段（backend/src/literature/library.ts
+  // 的 LibraryPaper），前端类型此前没声明——综述引用 span 想跳转证据图对应 record，
+  // 就靠它把 bibtexKey 映射回 record id（见 state.tsx 的 recordIdForKey）。
+  recordId: string | null;
 }
 
 export interface ReadingCard {

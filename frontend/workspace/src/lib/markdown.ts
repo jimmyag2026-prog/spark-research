@@ -46,8 +46,15 @@ function inline(escaped: string, options: MarkdownOptions): string {
     // 没给白名单时不下「库外」的判断——不知道就不说，别把中性情况染红。
     const unknown = known ? !known.has(key) : false;
     const cls = unknown ? "cite cite-unknown" : "cite";
-    const title = unknown ? `库外引用 ${key}：无法回链到项目文献库` : `库内引用 ${key}`;
-    return `<span class="${cls}" title="${title}">[@${key}]</span>`;
+    const title = unknown
+      ? `库外引用 ${key}：无法回链到项目文献库`
+      : `库内引用 ${key}（点击跳到证据图对应 record）`;
+    // V79①：只有确认在库内（能回链到一条 paper record）的引用才带 data-key——
+    // 库外引用没有 record 可跳，标了反而让用户点了没反应。key 的合法字符集固定是
+    // `[A-Za-z0-9_\-:]`（见上面 CITE 正则），不含任何 HTML 特殊字符，可以直接嵌进属性值，
+    // 不需要额外转义。Markdown.onCiteClick（ui.tsx）读的就是这个属性。
+    const dataKey = unknown ? "" : ` data-key="${key}"`;
+    return `<span class="${cls}" title="${title}"${dataKey}>[@${key}]</span>`;
   });
 
   out = out.replace(/<<(\d+)>>/g, (_m, i: string) => codes[Number(i)] ?? "");

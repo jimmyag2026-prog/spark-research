@@ -7,6 +7,7 @@ import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES, type LiteratureSource } fro
 import { HttpError, type ServerContext } from "../context";
 import {
   jsonBody,
+  optionalBool,
   optionalNumber,
   optionalString,
   optionalStringList,
@@ -44,6 +45,8 @@ export function ideationRoutes(ctx: ServerContext): Hono {
     const sessionId = optionalString(body, "sessionId") ?? `web_${Date.now()}`;
     const persist = body.persist !== false;
     const slug = projectSlug(c) ?? null;
+    const budgetUsd = optionalNumber(body, "budgetUsd");
+    const allowUnpriced = optionalBool(body, "allowUnpriced") ?? false;
 
     return taskResponse(c, ctx, body, {
       kind: "idea.coexplore",
@@ -55,7 +58,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
           const emptyLibrary = library.count() === 0;
           task.progress(0, 1, emptyLibrary ? "文献库为空：本轮观点只能是推断" : "共探中");
           const session = new CoExploreSession({
-            llm: ctx.llmFor(scope.project, "idea-new"),
+            llm: ctx.llmFor(scope.project, "idea-new", sessionId, { budgetUsd, allowUnpriced }),
             library,
             records: scope.project.records(),
             model: ctx.model(),
@@ -103,6 +106,8 @@ export function ideationRoutes(ctx: ServerContext): Hono {
     const perSource = optionalNumber(body, "perSource") ?? 5;
     const sessionId = optionalString(body, "sessionId") ?? null;
     const slug = projectSlug(c) ?? null;
+    const budgetUsd = optionalNumber(body, "budgetUsd");
+    const allowUnpriced = optionalBool(body, "allowUnpriced") ?? false;
 
     return taskResponse(c, ctx, body, {
       kind: "idea.novelty",
@@ -117,7 +122,7 @@ export function ideationRoutes(ctx: ServerContext): Hono {
           if (!idea) throw new Error(`思路库里没有 record '${ref}'`);
           task.progress(0, 3, "claim 提取");
           const checker = new NoveltyChecker({
-            llm: ctx.llmFor(scope.project, "novelty-check"),
+            llm: ctx.llmFor(scope.project, "novelty-check", sessionId, { budgetUsd, allowUnpriced }),
             searcher: ctx.searcher(slug, "novelty-check"),
             library,
             records,

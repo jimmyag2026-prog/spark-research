@@ -96,6 +96,9 @@ interface WorkspaceValue {
 
   // 库内 bibtex key 白名单：Markdown 渲染据此把库外引用标红。
   knownKeys: Accessor<Set<string>>;
+  // V79①：bibtex key → 对应 paper record id。综述/精读卡里的 `[@key]` 引用 span
+  // 点击后靠它找到该跳到哪条 record（找不到就返回 null，调用方据此决定是否跳转）。
+  recordIdForKey: (key: string) => string | null;
 
   busy: Accessor<string | null>;
   setBusy: (label: string | null) => void;
@@ -180,6 +183,9 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
   const knownKeys = () =>
     new Set((papers()?.papers ?? []).map((p) => p.bibtexKey).filter((k): k is string => Boolean(k)));
 
+  const recordIdForKey = (key: string): string | null =>
+    (papers()?.papers ?? []).find((p) => p.bibtexKey === key)?.recordId ?? null;
+
   const value: WorkspaceValue = {
     project,
     projects,
@@ -212,6 +218,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
     toasts,
     notify,
     knownKeys,
+    recordIdForKey,
     busy,
     setBusy,
   };

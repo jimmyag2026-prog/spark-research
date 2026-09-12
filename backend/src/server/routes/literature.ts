@@ -11,6 +11,7 @@ import { ReviewDraftGenerator, baselinesFrom } from "../../literature/review";
 import { HttpError, type ServerContext } from "../context";
 import {
   jsonBody,
+  optionalBool,
   optionalNumber,
   optionalString,
   optionalStringList,
@@ -260,6 +261,9 @@ export function literatureRoutes(ctx: ServerContext): Hono {
     // 想强制重生成（比如换了模型或改了 prompt）时传 redoRead: true。
     const redoRead = body.redoRead === true;
     const slug = projectSlug(c) ?? null;
+    // V79③：UI「预算 $」输入透传；不给就是老行为（只计量、不设闸）。
+    const budgetUsd = optionalNumber(body, "budgetUsd");
+    const allowUnpriced = optionalBool(body, "allowUnpriced") ?? false;
 
     return taskResponse(c, ctx, body, {
       kind: "lit.read",
@@ -280,7 +284,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             );
           }
           const generator = new ReadingCardGenerator({
-            llm: ctx.llmFor(scope.project, "lit-read"),
+            llm: ctx.llmFor(scope.project, "lit-read", null, { budgetUsd, allowUnpriced }),
             library,
             records: scope.project.records(),
             model: ctx.model(),
@@ -291,7 +295,14 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             projectContext: scope.project.meta.description || undefined,
           });
           task.progress(0, targets.length, `精读 ${targets.length} 篇`);
-          const { cards, failures } = await generator.generateMany(targets.map((p) => p.id));
+          // V88：批量精读此前只在起止各报一次进度（面板 done 全程 0，结束瞬间跳满）——
+          // generateMany 早就支持逐篇 onProgress 回调（CLI 的 `lit read --all` 已经在用，
+          // 见 literature/cli.ts），HTTP 路由这里此前漏接。接上后每篇完成即回传一次
+          // done/total/当前标题，与 CLI 同一条数据源、同一套 TaskRegistry 事件。
+          const { cards, failures } = await generator.generateMany(targets.map((p) => p.id), {
+            onProgress: ({ done, total, ok, title, paperId }) =>
+              task.progress(done, total, `${ok ? "✅" : "❌"} ${title ?? paperId}`),
+          });
           task.progress(targets.length, targets.length, `成功 ${cards.length} / 失败 ${failures.length}`);
           // 全失败要以任务失败呈现——「成功 0 张」不该是绿色的。
           if (cards.length === 0 && failures.length > 0) {
@@ -312,6 +323,8 @@ export function literatureRoutes(ctx: ServerContext): Hono {
     const sessionId = optionalString(body, "sessionId") ?? null;
     const useJudge = body.judge !== false;
     const slug = projectSlug(c) ?? null;
+    const budgetUsd = optionalNumber(body, "budgetUsd");
+    const allowUnpriced = optionalBool(body, "allowUnpriced") ?? false;
 
     return taskResponse(c, ctx, body, {
       kind: "lit.review",
@@ -326,7 +339,7 @@ export function literatureRoutes(ctx: ServerContext): Hono {
             throw new Error("项目里还没有精读卡。先跑 lit read（或 POST /api/lit/read）");
           }
           task.progress(0, 2, `基于 ${cards.length} 张精读卡生成综述`);
-          const llm = ctx.llmFor(scope.project, "lit-review");
+          const llm = ctx.llmFor(scope.project, "lit-review", null, { budgetUsd, allowUnpriced });
           const generator = new ReviewDraftGenerator({
             llm,
             library,

@@ -10,6 +10,16 @@ import { Badge, Markdown } from "./ui";
 // - 结论是被观察/计算出来的，还是推断的（evidence 徽章）
 // - 核验结论是 hard 还是 soft（hard 才是否决，soft 只提示——两者绝不能长一个样）
 
+// V79①：`[@key]` 引用 span 点击 → 跳到证据图对应的 paper record（`ws.selectRecord`
+// 只切选中 record，不改 center 视图——与 bottom.tsx 里「跳去看审批产出的 record」
+// 同一个既有模式，见 state.tsx `selectRecord`）。key 在库外（没有 record 可跳）时
+// `recordIdForKey` 返回 null，直接不动——markdown.ts 那边本来就没给库外引用打
+// `data-key`，这里的 null 分支只是双重保险，不依赖那一层没漏。
+function jumpToCite(ws: { recordIdForKey: (key: string) => string | null; selectRecord: (id: string | null) => void }, key: string): void {
+  const id = ws.recordIdForKey(key);
+  if (id) ws.selectRecord(id);
+}
+
 export function FindingList(props: { findings: CitationFinding[] }): JSX.Element {
   return (
     <Show when={props.findings.length > 0}>
@@ -56,7 +66,11 @@ export function ReadingCardView(props: { card: ReadingCard }): JSX.Element {
           与本项目的关系 <Badge tone="inferred">inferred</Badge>
         </h3>
         {/* relationToProject 是卡片里唯一的推断字段（P3 口径），不参与引用核验的对照基准。 */}
-        <Markdown source={props.card.relationToProject} knownKeys={ws.knownKeys()} />
+        <Markdown
+          source={props.card.relationToProject}
+          knownKeys={ws.knownKeys()}
+          onCiteClick={(key) => jumpToCite(ws, key)}
+        />
       </div>
     </article>
   );
@@ -91,7 +105,11 @@ export function ReviewView(props: { result: ReviewResult }): JSX.Element {
         </Show>
         <FindingList findings={props.result.citation.findings} />
         <hr style={{ border: "none", "border-top": "1px solid var(--border)", margin: "10px 0" }} />
-        <Markdown source={props.result.draft.markdown} knownKeys={ws.knownKeys()} />
+        <Markdown
+          source={props.result.draft.markdown}
+          knownKeys={ws.knownKeys()}
+          onCiteClick={(key) => jumpToCite(ws, key)}
+        />
       </div>
     </article>
   );
@@ -166,7 +184,11 @@ export function NoveltyView(props: { result: NoveltyResult }): JSX.Element {
           <summary class="faint" style={{ cursor: "pointer" }}>
             展开完整报告
           </summary>
-          <Markdown source={props.result.markdown} knownKeys={ws.knownKeys()} />
+          <Markdown
+            source={props.result.markdown}
+            knownKeys={ws.knownKeys()}
+            onCiteClick={(key) => jumpToCite(ws, key)}
+          />
         </details>
       </div>
     </article>
@@ -186,7 +208,11 @@ export function IdeaCardView(props: { card: IdeaCard; onCheck?: () => void; chec
       <div class="card-body">
         <p style={{ margin: "0 0 8px", "font-weight": "600" }}>{props.card.hypothesis}</p>
         <Show when={props.card.critique}>
-          <Markdown source={props.card.critique} knownKeys={ws.knownKeys()} />
+          <Markdown
+            source={props.card.critique}
+            knownKeys={ws.knownKeys()}
+            onCiteClick={(key) => jumpToCite(ws, key)}
+          />
         </Show>
         <div class="row wrap" style={{ "align-items": "flex-start", gap: "16px", "margin-top": "10px" }}>
           <div style={{ flex: "1 1 200px" }}>
