@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.8.0-alpha.2，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.8.0-alpha.3，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2589,6 +2589,41 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.8.0-alpha.3] — 2026-09-12
+
+**R5 四课题零上下文复跑 + 修复窗口。** R5 报告的每条 P0/P1 都由主会话**独立复现后才动手**——一条证伪、两条证实并挖出真因。
+
+### R5 实证回环（四课题，v0.8.0-alpha.2 基线）
+
+- **召回回升**：T1 recall@10 **5/8**（R4 全线 0/8——当时 OpenAlex 匿名池 100% 429）；T2 2/8，T4 标题匹配后 4/8，T3 中文连写复合词 jieba 兜底生效。
+- **R4 的两条 P0 已确认修复**：`data export --for-sharing` 不再泄漏上游摘要（4/4 项目 grep 不命中）；connector/kernel raw 不再落全局目录。
+- **预算闸并发下严格生效**：10 个并发请求在真正调用 LLM 前全部被拒，`knownCostUsd` 前后不变。
+- 判定器 JSON 失败率四课题全 0%（含第二模型 kimi-k2.6）；并发 `--project` 隔离 130 条 record 零串项目；kill -9 → orphaned → 断点续跑不重复花钱。
+
+### 修复（第一批）
+
+- **V104** HTTP 综述与 CLI 同一语义：落 citation-integrity observation record，响应带 `citationReviewRecordId`/`citationGap`。
+- **V115** `auth` 录 key 不回显（TTY raw 逐字读，管道按行）。
+- **V116** CI 旁路 token：sha256 + `timingSafeEqual` 常量时间比较；新增 `--ci-bypass-token-env <VAR>`，token 不必走 argv。
+- **V119** 聊天式 chat/co-explore 接上预算闸（UI 预算入口 → 路由透传 → 按会话记预算）；闸拒绝时把闸消息原样回给用户，不再误报"检查 API key"。
+- **V118** openmm 探测与真提交同源（runner 暴露 `probe()`），四平台口径一致，P5 契约测试不再整套 skip。
+
+### 修复（第二批 · R5 复核）
+
+- **V121 raw 链在单行 >64KB 时静默断开**：`readTail` 固定 64KB 窗口，窗口整个落在该行内部时把**残行**当完整行返回 → `JSON.parse` 抛错被吞成 `last=null` → 下一条写出 `prevHash:null`。真因实证：R5 四处断链的前一行分别是 68444/68775/70330/68398 字节，**全部 >64KB 无一例外**；llm 链免疫（`body()` 把大正文移进 blobs）。修：窗口按需放大（64KB→1MB→16MB→整文件）+ 残行不解析 + 读不懂直接抛。**历史断点不回填**（回填等于伪造）。
+- **V122 HTTP/SDK 的 `body.project` 被静默忽略**：写请求落进全局当前项目指针，响应还回报错误的 project 名——而 SDK 生成的正是 body 风格。修：取值顺序 **query > body > 当前指针**，一处覆盖全部 47 个写路由。
+- **V123 SDK 无 body 的 POST 一律 415**：写方法在 body 为空时按 `{}` 发送并带 JSON 头；`docs/SDK.md` 删去与实测不符的返回类型断言。
+
+### 如实交代
+
+- **V124：R5 报的「导出往返 report diff 非空」复核不成立**——两侧都带 `--verbose` 时 diff 为 0 行，只有旗标不对称才复现它描述的形状。方法学偏差，不是产品缺陷，已登记防止再次登记。
+- V121 的历史断点不回填：R5 那几个项目的 connector 链仍是断的，`data import` 会如实报出行号。
+- R5 验证过程中因 V122 把 3 篇论文误写进无关项目，已 tombstone 撤回。
+
+### 数字（alpha.2 → alpha.3）
+
+unit 2420 → **2438** · concurrency+timeout 37 · e2e 25 · py 129 → **131** · lab 26 · test:sdk 58 · 冒烟 exit 0。
 
 ## [0.8.0-alpha.2] — 2026-09-12
 
