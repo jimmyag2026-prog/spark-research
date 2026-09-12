@@ -87,7 +87,14 @@ class Client(GeneratedClient):
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
-                return json.loads(raw) if raw else None
+                content_type = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                if not raw:
+                    return None
+                # 非 JSON 响应（如 GET / 的前端 HTML、静态资源）：原样交回，不抛 JSONDecodeError——
+                # SDK 是 JSON API 的投影，但契约里确实含这类路由，调用方自己决定怎么用。
+                if content_type and content_type != "application/json":
+                    return {"raw": raw.decode("utf-8", "replace"), "contentType": content_type}
+                return json.loads(raw)
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             payload: Any = {}

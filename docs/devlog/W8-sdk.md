@@ -126,3 +126,7 @@ TypedDict，其余一律 `dict[str, Any]`。这是相对任务书字面表述的
   `"0"` 会被当 falsy 退回 4321，所以没法直接让 CLI 自己选端口；`tests/sdk/conftest.py`
   改成 Python 先 `socket.bind(("127.0.0.1", 0))` 问 OS 要一个真实空闲端口，再把这个端口
   号传给 CLI——效果同"用 0 端口"，只是问端口的一方换了。
+
+## 收口补记（主会话，2026-09-12）
+- 主仓有已 build 的前端，`GET /` 返回 HTML → 生成的 `root_get_root` 在 lane worktree（无前端产物，503）能过、在主仓抛 `JSONDecodeError`。改 `client.py`：2xx 且 Content-Type 非 JSON 时返回 `{"raw", "contentType"}`，不再假设一切响应都是 JSON。
+- 主会话复跑：typecheck 0 · unit 2376/0（2370+6）· test:sdk 56 passed · concurrency+timeout 35/0。
