@@ -31,7 +31,9 @@
     "test:py": "./.venv/bin/python -m pytest tests/ || python3 -m pytest tests/",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
     "gen:llms": "bun scripts/gen-llms-txt.ts",
-    "check:llms": "bun scripts/gen-llms-txt.ts --check"
+    "check:llms": "bun scripts/gen-llms-txt.ts --check",
+    "gen:sdk": "bun scripts/gen-sdk-python.ts",
+    "test:sdk": "./.venv/bin/python -m pytest tests/sdk || python3 -m pytest tests/sdk"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
