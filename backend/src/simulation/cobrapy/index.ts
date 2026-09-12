@@ -6,7 +6,8 @@ import COBRAPY_PACKAGE_INIT_PY from "./__init__.py" with { type: "text" };
 import RUNNER_PY from "./runner.py" with { type: "text" };
 import { materializeAssetTree } from "../../assets/embedded";
 import { SimulationSpecError } from "../models";
-import { datasetParam, probeCodeFor } from "../scanpy/probe";
+// V51（W8-δ）：probeCodeFor/datasetParam 搬到 simulation/probe.ts 顶层，import 行改指那里。
+import { datasetParam, probeCodeFor } from "../probe";
 import {
   SubprocessSimulationPlatform,
   boolParam,

@@ -92,8 +92,22 @@ export function splitSentences(text: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-// 引用标记：[@key]、[@key1; @key2]、[@key1, @key2]。key 允许字母数字与 -_: 。
-const CITATION_TOKEN = /\[@([A-Za-z0-9][A-Za-z0-9_\-:]*(?:\s*[;,]\s*@[A-Za-z0-9][A-Za-z0-9_\-:]*)*)\]/g;
+// 引用标记：[@key]、[@key1; @key2]、[@key1, @key2]。key 允许字母数字、中文（\p{Script=Han}）与 -_: 。
+//
+// V92：库内不少 key 是中文作者名+年份+关键词拼出来的（如 `[@李某2023神经解码]`——
+// bibtex key 生成器直接拿中文字符做 key，不强制转拼音）。旧正则只认 `[A-Za-z0-9...]`，
+// 这类 key 整条引用标记连 `matchAll` 都匹配不到，后果是「这条引用」在 citationIntegrity
+// 眼里压根不存在：既不会因为库外伪造被 hard 挡（① 库外 key 门），也不会被送进 judge
+// 做一致性核验（② judge 输入提取），等于对中文 key 全盘失明——比「库外 key」更糟，
+// 因为连「查过、没通过」的记录都不会留下。
+//
+// 加 `\p{Script=Han}` 到首字符与续字符两处字符类，并给正则加 `u` 标志（Unicode
+// property escape 必须配 `u` 才能解析，否则是语法错误）。`u` 标志本身不改变既有
+// ASCII 字符类的匹配语义（`\-` 在 unicode 模式的字符类里仍是合法的连字符转义），
+// 上面 `regex_test.ts` 的手工验证：中英文混排、多 key 一括号、标点粘连、纯 ASCII
+// key 五种形态全部按预期解析，没有因为加 `u` 标志破坏原有 ASCII 路径。
+const CITATION_TOKEN =
+  /\[@([A-Za-z0-9\p{Script=Han}][A-Za-z0-9\p{Script=Han}_\-:]*(?:\s*[;,]\s*@[A-Za-z0-9\p{Script=Han}][A-Za-z0-9\p{Script=Han}_\-:]*)*)\]/gu;
 
 export function parseCitations(markdown: string): ParsedCitation[] {
   const sentences = splitSentences(stripCode(markdown));
