@@ -223,6 +223,35 @@ export interface UsageTrackingLlm {
  * 不产生新花费**。已完成的产出（精读卡等）由各 pipeline 自己已保存，不受影响；
  * 拒绝消息里写清已花多少、怎么继续（V36：失败要给下一步）。
  */
+/**
+ * A7 Blocker-1（V125）：**跨请求共享的在飞预留**，按 usage.jsonl 路径（= 项目）聚合。
+ *
+ * V93 修的是「一个 ledger 内 N 个并发调用」（CLI 里 `Promise.all` 那种）。但 HTTP 面每个请求都
+ * 新建一个 `usageTrackingLlm` → 新建一个 `BudgetLedger`，在飞预留互相看不见；而闸的另一半
+ * （实时重读 usage.jsonl）只看得到**已结算**的花费。于是 N 个并发请求同时过闸、同时开跑，
+ * 项目累计花费越过各自声明的上限——A7 实测 10 并发 × `budgetUsd=0.03` 实际花掉 $0.0807。
+ *
+ * 这里把在飞额按项目聚合到进程级注册表：同一个 server 进程内的并发请求彼此可见。
+ * **残余（如实记）**：跨进程的在飞预留仍不共享（两个 CLI 进程同时起跑），那一段只能靠
+ * 实时重读已结算花费兜底——上界是「每进程一次调用的估价」。
+ */
+const SHARED_IN_FLIGHT = new Map<string, number>();
+
+function sharedInFlight(key: string): number {
+  return SHARED_IN_FLIGHT.get(key) ?? 0;
+}
+
+function addSharedInFlight(key: string, delta: number): void {
+  const next = sharedInFlight(key) + delta;
+  if (next <= 1e-12) SHARED_IN_FLIGHT.delete(key);
+  else SHARED_IN_FLIGHT.set(key, next);
+}
+
+/** 测试用：清空进程级在飞注册表（每个用例之间互不干扰）。 */
+export function resetSharedInFlightForTests(): void {
+  SHARED_IN_FLIGHT.clear();
+}
+
 export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLlm {
   const { llm, store, command, budgetUsd, configOptions, rawSink } = options;
   const rawOn = rawSink !== undefined && configuredRawLlm(configOptions);
@@ -260,9 +289,11 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
       // 构造时读一次）+ 本进程在飞预留 + 这一次的估价。三者之和越线就拒绝，一分钱不发。
       // 预留在同一个同步段内完成——`Promise.all` 下第 k 个调用的同步前缀跑到这里时，
       // 前 k-1 个已经把估价记进 inFlight 了，集体越闸的窄缝就此封死。
+      const budgetKey = store.path();
       if (budgetUsd !== undefined) {
         const live = store.totals().knownCostUsd;
-        const inFlight = ledger.snapshot().inFlightUsd;
+        // 本 ledger 的在飞 + 同项目其它并发请求的在飞（A7 Blocker-1）。
+        const inFlight = Math.max(ledger.snapshot().inFlightUsd, sharedInFlight(budgetKey));
         const committed = live + inFlight;
         if (committed >= budgetUsd || committed + estimate > budgetUsd) {
           return failure("budget-gate", requestedModel, {
@@ -277,6 +308,7 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         }
       }
       const reservation = ledger.tryReserve(estimate);
+      if (reservation) addSharedInFlight(budgetKey, estimate);
       if (!reservation) {
         // 本进程账本自己的上限（budget − 构造时历史）也越了——与上面同语义，不同路径都拦。
         return failure("budget-gate", requestedModel, {
@@ -290,12 +322,14 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         res = await llm.call(messages, modelOrOptions);
       } catch (error) {
         reservation.release();
+        addSharedInFlight(budgetKey, -estimate);
         throw error;
       }
       const recorded = reservation.settle(res.usage, {
         provider: res.provider,
         model: res.model,
       });
+      addSharedInFlight(budgetKey, -estimate);
       // V99②：auth/rate_limit 失败发生在上游产生任何可计费 token 之前——$0 是可证明的
       // 事实，不是「查不到/拿不到」那种真未知。两种都覆盖 `recorded.costUsd`（budget.ts
       // 结算出来的值，通常是 null，因为没有 usage 可结算），避免它们被 totals() 计进

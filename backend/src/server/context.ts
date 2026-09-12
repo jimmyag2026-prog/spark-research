@@ -206,8 +206,14 @@ export class ServerContext {
   // G-1（v0.6）：解析逻辑收进 config 层的 configuredDefaultModel（CLI/HTTP 共用一份），
   // 这里原来的 resolveSetting 手写版有个差异：value 为 "" 时会返回 ""，下游把空串当
   // 真模型名传给 router——helper 版把 "" 归一成 undefined。
-  model(): string | undefined {
-    return this.deps.model ?? configuredDefaultModel();
+  /**
+   * A7 Blocker-2（V126）：此前忽略请求体里的 `model`，且 `configuredDefaultModel()` 不带 root，
+   * 读的是默认数据目录的 config 而不是本 server 的 `deps.root`——于是「显式传了 model」和
+   * 「config.json 里配了 defaultModel」双双失效，实际落到硬编码默认模型。
+   * 优先级：请求体 override > 注入的 deps.model > 本 server 数据目录的 config。
+   */
+  model(override?: string): string | undefined {
+    return override ?? this.deps.model ?? configuredDefaultModel(this.deps.root ? { root: this.deps.root } : {});
   }
 
   simulationRegistry(project: Project): SimulationRegistry {

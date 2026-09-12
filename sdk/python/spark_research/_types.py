@@ -44,6 +44,8 @@ class _ChatRequestRequired(TypedDict):
 class ChatRequest(_ChatRequestRequired, total=False):
     model: str
     mode: Literal["chat", "coexplore"]
+    budgetUsd: float
+    allowUnpriced: bool
 
 
 class _ChatResponseRequired(TypedDict):
