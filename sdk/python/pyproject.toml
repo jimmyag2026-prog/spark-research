@@ -7,7 +7,7 @@ name = "spark-research-sdk"
 # 版本与仓库根 package.json 的 "version" 同步（PEP 440 转写：`-alpha.N`→`aN`，
 # `-beta.N`→`bN`，`-rc.N`→`rcN`；无预发布后缀原样保留）。
 # tests/unit/w8_sdk_version_sync.test.ts 钉住这两处不漂移。
-version = "0.8.0a2"
+version = "0.8.0a3"
 description = "spark-research server 的 Python 薄客户端（从 runtime contract 生成，HTTP 的薄投影，见 AD-7）"
 readme = "README.md"
 requires-python = ">=3.10"

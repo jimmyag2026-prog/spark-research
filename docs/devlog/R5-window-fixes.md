@@ -67,3 +67,10 @@ R5 只看到「`data import` 报 verified:false」。直接验源项目的链，
 
 ### 复跑（退出码口径）
 typecheck 0 · unit 2438/0 · concurrency+timeout 37/0 · test:sdk 58 passed · e2e/py/lab 见 PR。
+
+### 收口更正（alpha.3 打包时发现）
+`tests/unit/v121_raw_large_line.test.ts` 第一版的 connector payload 是随手编的形状，`tsc --noEmit` 不过。
+**PR #104 描述里的「typecheck 0」取自写这个测试之前的那次运行，是一个过期数字**——如实更正。
+alpha.3 收口时改成真实的 `ConnectorPayload`（`response: { inline: … }`，正是超大单行的来源），
+typecheck 0 且阴性对照重跑仍 3/3 全红 → 还原 3/3 绿。
+教训：新增测试文件后必须重跑 typecheck 再报数，不能复用改代码时的那次结果。

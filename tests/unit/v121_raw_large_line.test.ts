@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonlRawSink } from "../../backend/src/raw";
+import type { ConnectorPayload } from "../../backend/src/raw/models";
 
 // V121（R5 P1-4 真因）：connector 原始响应体是整段 inline 的，一行可以超过 64KB。
 // 旧 readTail 固定 64KB 窗口且不区分「完整行/残行」——窗口整个落在那一行内部时返回残行，
@@ -15,10 +16,18 @@ function sinkAt() {
   return { root, sink: new JsonlRawSink(root, { project: "p" }) };
 }
 
-const connectorPayload = (connector: string, bodyText: string) => ({
+// 真实形状：connector 的响应体是**整段 inline** 的（不像 llm 那样经 body() 移进 blobs），
+// 这正是超大单行的来源。
+const connectorPayload = (connector: string, bodyText: string): ConnectorPayload => ({
   connector,
-  request: { url: "https://example.test/search" },
-  response: { status: 200, body: bodyText },
+  tool: "search",
+  host: "example.test",
+  method: "GET",
+  params: { q: "x" },
+  status: 200,
+  latencyMs: 12,
+  contentType: "application/json",
+  response: { inline: bodyText },
 });
 
 describe("V121 · raw 链对超大单行（>64KB）保持完整", () => {
