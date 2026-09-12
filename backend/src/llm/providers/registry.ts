@@ -296,3 +296,73 @@ export function priceFor(provider: string, model: string, options: ConfigOptions
   if (overrides[key]) return overrides[key]!;
   return PRICING[provider]?.[model] ?? null;
 }
+
+// ── W8-1 ζ：embedding 单价表 ─────────────────────────────────────────────────
+//
+// 与上面的 `PRICING`（chat，input/output 两档）刻意分开：embedding 调用只有一个
+// token 计数（`llm/embeddings/types.ts` 的 `EmbedUsage.tokens`，OpenAI 兼容响应的
+// `usage.total_tokens`），没有 input/output 之分，硬塞进 `ModelPricing` 会让
+// `outputPerMillionUsd` 变成一个没有意义、迟早被误读的字段。
+
+export interface EmbeddingPricing {
+  /** 每 100 万 token 的美元价。 */
+  perMillionUsd: number;
+  /** 定价页 URL，供复核——没有来源的数字不许进这张表。 */
+  source: string;
+  /** WebSearch/WebFetch 核实的日期（ISO date）。 */
+  verifiedDate: string;
+  note?: string;
+}
+
+// 2026-09-12 WebFetch 直读官方定价页 Embedding models 一节（Standard 价，非 batch）。
+// `llm/embeddings/router.ts` 的 `EMBEDDING_BASE_URLS` 目前只登记了 openai / qwen 两个云端
+// provider（+ local）；qwen（DashScope）官方定价页没有单列 text-embedding 系列的美元单价子页，
+// 多方聚合站也查不到一致数字——**查不到就是查不到，不编造**，本表不收录 qwen，`embeddingPriceFor`
+// 对它恒返回 null（不是免费）。`local` 端点同 chat 侧 `PRICING` 的惯例，恒不收录（用户自己的硬件成本）。
+export const EMBEDDING_PRICING: Readonly<Record<string, Readonly<Record<string, EmbeddingPricing>>>> = {
+  openai: {
+    "text-embedding-3-small": {
+      perMillionUsd: 0.02,
+      source: "https://developers.openai.com/api/docs/pricing",
+      verifiedDate: "2026-09-12",
+    },
+    "text-embedding-3-large": {
+      perMillionUsd: 0.13,
+      source: "https://developers.openai.com/api/docs/pricing",
+      verifiedDate: "2026-09-12",
+    },
+  },
+};
+
+/**
+ * 查一个 provider/model 的 embedding 单价。**查不到就是 null，不返回 0**——同 `priceFor` 的铁律。
+ * `model` 传裸模型名（不带 provider 前缀），即 `llm/embeddings/router.ts` 的 `wireModel`，
+ * 不是 `EmbedResponse.model` 回报的 `"<provider>/<model>"` 完整 id——调用方（`llm/embeddings.ts`）
+ * 负责用 `parseEmbeddingModelId` 拆开后再查。
+ *
+ * **没有 config 覆盖机制**（与 `priceFor` 不同）：`priceFor` 的 `SPARK_LLM_PRICING_JSON` 覆盖
+ * 要经 `resolveSetting()`，而那要求 key 先注册进 `config/index.ts` 的 `CONFIG_SETTINGS`——
+ * `config/index.ts` 不在本 lane 允许改动的文件列表里（见 docs/devlog/W8-zeta.md），加一个新覆盖项
+ * 需要先在那边注册 key/envVar，属于收口范围。任务书本身也没要求 embedding 单价可覆盖，
+ * 所以这里先做成纯静态查表，覆盖能力留给收口按需决定要不要补。
+ */
+export function embeddingPriceFor(provider: string, model: string): EmbeddingPricing | null {
+  return EMBEDDING_PRICING[provider]?.[model] ?? null;
+}
+
+/**
+ * embedding「能力位」：哪些 provider 有 OpenAI 兼容的 `/embeddings` 端点。
+ *
+ * **已知的手工重复，有意为之**：真源是 `llm/embeddings/router.ts` 的 `EMBEDDING_BASE_URLS`
+ * （+ 它另外硬编码的 `"local"`）。这里不 import 它——`embeddings/router.ts` 已经反过来 import
+ * 本文件的 `PROVIDER_API_KEY_ENV`（拿 chat provider 的鉴权环境变量名），两边互相 import
+ * 会成环。两难之下选择手工同步 + 如实记录风险（与上面 `PROVIDER_API_KEY_ENV` 那段注释同一个
+ * 决策模式），而不是为了消除一处重复去拆真源模块引入不必要的重构半径。
+ * 改 `EMBEDDING_BASE_URLS` 的 provider 集合时记得同步这里——`tests/unit/w8_zeta_embeddings.test.ts`
+ * 有一条一致性断言，两边 provider 集合对不上就红。
+ */
+export const EMBEDDING_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(["openai", "qwen", "local"]);
+
+export function supportsEmbeddings(provider: string): boolean {
+  return EMBEDDING_CAPABLE_PROVIDERS.has(provider);
+}

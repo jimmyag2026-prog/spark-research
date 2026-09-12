@@ -341,6 +341,14 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
             rawSink: project.raw(),
             project: project.slug,
           }),
+          // W8-1 ζ 收口：embedding 调用入账（usage.jsonl command "novelty-check:embedding" + raw/llm）。
+          embedAccounting: {
+            store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+            command: "novelty-check",
+            rawSink: project.raw(),
+            project: project.slug,
+            sessionId: flagString(flags.session) ?? null,
+          },
           searcher: makeSearcher(project),
           library,
           records,
