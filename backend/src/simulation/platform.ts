@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   SimulationRunError,
   SimulationSpecError,
@@ -16,6 +16,8 @@ import {
   type SimulationSpec,
 } from "./models";
 import { RunStore, isProcessAlive, getProcessStartTime, type RunRecord } from "./run_store";
+import { USER_OWNED_LICENSE } from "../provenance/policy";
+import { JsonlRawSink, globalRawSink, redact, type RawSink } from "../raw";
 
 export * from "./models";
 export { RunStore, isProcessAlive, getProcessStartTime } from "./run_store";
@@ -116,6 +118,37 @@ export interface SubprocessPlatformOptions {
   python?: string;
   // 单次 available() 探测的超时。
   probeTimeoutMs?: number;
+  /**
+   * V85（v0.8 W8-1 β）：prepare/submit/collect 落 raw/simulation/ 用的 sink。
+   * 现有生产调用方（experiment/loop.ts 的 design()/dryRun()/collect()）不在本 lane
+   * 足迹内，改不了它们的调用参数去显式传项目 raw sink——所以这里**默认自动推导**：
+   * 不传就按 `root` 反推项目根（`root` 的形状恒为 `<projectRoot>/experiments/<platformId>`，
+   * 见 registry.ts 的 `join(this.root, id)`），推导不出（没有 project.json，比如
+   * capabilities/doctor 那两个探测用途的 registry）就落全局兜底 `globalRawSink()`——
+   * 与 kernels/manager.ts 的 `raw?.sink ?? globalRawSink()` 同一条兜底纪律。
+   * 显式传入仍然优先（测试/未来接线用）。
+   */
+  raw?: { sink: RawSink; project?: string | null; sessionId?: string | null; command?: string | null };
+}
+
+/**
+ * `platformRoot` 反推项目 raw sink：`<projectRoot>/experiments/<platformId>` → `<projectRoot>/raw`。
+ * 与 project/manager.ts 的 `pathsFor()`（`experimentsDir: join(root,"experiments")`,
+ * `rawDir: join(root,"raw")`）逐字节同构，但这里不 import Project/ProjectManager——
+ * simulation/ 对 project/ 保持零依赖（与本文件其余部分同一条边界纪律）。用
+ * `project.json` 的存在性核验「这确实是个项目根」，不是瞎猜：capabilities/index.ts
+ * 与 doctor/index.ts 那两个用临时目录 / 探测专用 root 构造的 registry 只调
+ * `available()`，从不走到 prepare/submit/collect，但万一将来有人接上，也不会把
+ * raw 行错写进一个不存在项目元数据的目录。
+ */
+function deriveProjectRawSink(platformRoot: string): { sink: RawSink; project: string | null } {
+  const experimentsDir = dirname(platformRoot);
+  const projectRoot = dirname(experimentsDir);
+  if (basename(experimentsDir) === "experiments" && existsSync(join(projectRoot, "project.json"))) {
+    const project = basename(projectRoot);
+    return { sink: new JsonlRawSink(join(projectRoot, "raw"), { project }), project };
+  }
+  return { sink: globalRawSink(), project: null };
 }
 
 // W7-C2（V3）：poll() 里「本进程没有活句柄、但 pid 看着还活着」这条路径专用的核验。
@@ -153,12 +186,58 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
   // 只在「本进程亲自 submit 过」时有值。它不是状态真源（磁盘才是），
   // 只用来补一个磁盘看不出来的信息：子进程已退出但没写 done.json（僵尸进程 pid 仍在）。
   private handles = new Map<string, import("bun").Subprocess>();
+  private readonly rawOptions: SubprocessPlatformOptions["raw"];
 
   constructor(options: SubprocessPlatformOptions) {
     this.root = options.root;
     this.store = new RunStore(join(options.root, "runs"));
     this.python = options.python ?? resolvePython();
     this.probeTimeoutMs = options.probeTimeoutMs ?? 30_000;
+    this.rawOptions = options.raw;
+  }
+
+  // V85：prepare/submit/collect 的唯一落地点。与 kernels/manager.ts 的 appendRaw() 同口径——
+  // 写盘失败不打断仿真本身，系统性漏记由门禁 G1 对账抓；sink **每次现算**（不缓存单例），
+  // 与 raw/index.ts 头部注释、api_ledger.ts 的既有纪律一致（单测里同进程切换
+  // SPARK_RESEARCH_DATA_DIR 时不会读到构造期缓存的旧路径）。
+  private appendRaw(
+    stage: "prepare" | "submit" | "collect",
+    input: {
+      runId: string | null;
+      specHash: string | null;
+      simKind: string;
+      params?: Record<string, unknown> | null;
+      status?: string | null;
+      summaryText?: string | null;
+      files?: { filename: string; role: string; bytes: number }[] | null;
+    },
+  ): void {
+    try {
+      const derived = this.rawOptions?.sink ? null : deriveProjectRawSink(this.root);
+      const sink = this.rawOptions?.sink ?? derived!.sink;
+      const project = this.rawOptions ? (this.rawOptions.project ?? undefined) : (derived!.project ?? undefined);
+      sink.append({
+        kind: "simulation",
+        project,
+        sessionId: this.rawOptions?.sessionId ?? null,
+        command: this.rawOptions?.command ?? null,
+        provenanceClass: "derived",
+        license: USER_OWNED_LICENSE,
+        payload: {
+          platform: this.id,
+          simKind: input.simKind,
+          stage,
+          runId: input.runId,
+          specHash: input.specHash,
+          params: input.params ? redact(input.params) : null,
+          status: input.status ?? null,
+          summary: input.summaryText != null ? sink.body(input.summaryText) : null,
+          files: input.files ?? null,
+        },
+      });
+    } catch {
+      // 见上：raw 落盘失败不打断仿真执行本身。
+    }
   }
 
   // 子类实现：参数归一化 + 预期产出清单。非法参数抛 SimulationSpecError。
@@ -214,7 +293,7 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
     mkdirSync(stageDir, { recursive: true });
     // 幂等：同一个 spec 重复 prepare 得到同一个 stageDir 与同一份 params.json。
     writeFileSync(join(stageDir, "params.json"), JSON.stringify(params, null, 2) + "\n");
-    return {
+    const prepared: PreparedRun = {
       platform: this.id,
       kind: spec.kind,
       specHash,
@@ -225,6 +304,9 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
       label: spec.label ?? null,
       warnings: warnings ?? [],
     };
+    // V85：prepare 阶段落一行——runId 还没有（submit 才产生），specHash 把三个阶段串起来。
+    this.appendRaw("prepare", { runId: null, specHash, simKind: spec.kind, params });
+    return prepared;
   }
 
   async submit(prepared: PreparedRun): Promise<string> {
@@ -283,6 +365,9 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
     this.handles.set(runId, proc);
     // 不 await proc.exited：submit 必须非阻塞（契约 #2）。
     proc.exited.catch(() => {});
+    // V85：submit 阶段落一行——params 已经在 prepare 行里记过，这里不重复记，
+    // 只落 runId/specHash/初始状态（串联三阶段用的是 specHash + runId）。
+    this.appendRaw("submit", { runId, specHash: prepared.specHash, simKind: prepared.kind, status: record.state });
     return runId;
   }
 
@@ -393,7 +478,7 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
       throw new SimulationRunError(`run '${runId}' 缺少预期产出: ${missing.join(", ")}`);
     }
 
-    return {
+    const outputs: SimulationOutputs = {
       runId,
       platform: this.id,
       kind: record.kind,
@@ -404,6 +489,16 @@ export abstract class SubprocessSimulationPlatform implements SimulationPlatform
       finishedAt: done.finishedAt ?? record.finishedAt,
       wallSeconds: done.wallSeconds ?? null,
     };
+    // V85：collect 阶段落一行——摘要与产出清单（不含绝对路径，只留文件名/角色/字节数）。
+    this.appendRaw("collect", {
+      runId,
+      specHash: record.specHash,
+      simKind: record.kind,
+      status: status.state,
+      summaryText: JSON.stringify(outputs.summary),
+      files: files.map((f) => ({ filename: f.filename, role: f.role, bytes: f.bytes })),
+    });
+    return outputs;
   }
 
   async cancel(runId: string): Promise<RunStatus> {

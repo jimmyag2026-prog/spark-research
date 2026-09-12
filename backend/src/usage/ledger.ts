@@ -58,9 +58,39 @@ export class UsageStore {
     return this.file;
   }
 
+  /**
+   * V97（v0.8 W8-1 β）：`entry.model` 在类型上恒是 `string`，但真实调用方有时把一整个
+   * `CallOptions` 对象递进来（`tests/helpers/ideation_scenario.ts` 的 `ScriptedLlm.call()`
+   * 撞过这个 bug——`llm.call(messages, options)` 的第二参是 `string | CallOptions`，
+   * fake 只认字符串分支，序列化后就是一行 `model:"[object Object]"`，usage 台账被写坏）。
+   * 落盘前兜底核一次类型，坏值记 `"(unknown)"` 并计入 `corrupt`（与 readAll() 的
+   * 「坏行不装作没看见」同一计数口径），而不是让一个格式错误的字符串悄悄躺进文件里。
+   *
+   * V99①：写盘失败（磁盘满/权限/只读文件系统）**吞掉 + stderr 告警**，产出（`res`）
+   * 照常由调用方返回——与 `api_ledger.ts` 的 `ApiCallStore.append()` 同一条纪律
+   * （台账是观测，不是业务，不能因为记不下去而让已经发生、已经计费的真实调用失败）；
+   * 这里额外加一条 `console.error`（api_ledger.ts 没加，不在本次改动范围内）——
+   * 静默降级不留痕在这条台账上风险更高：它是预算闸读「已知花费下界」的输入源，
+   * 吞得不出声，下一次判断就会悄悄失真。
+   */
   append(entry: UsageEntry): void {
-    mkdirSync(dirname(this.file), { recursive: true });
-    appendFileSync(this.file, `${JSON.stringify(entry)}\n`, "utf8");
+    let model = entry.model;
+    if (typeof model !== "string") {
+      this.corrupt += 1;
+      console.error(
+        `[usage] UsageStore.append: model 字段不是字符串（收到 ${JSON.stringify(entry.model)}），已记为 "(unknown)"（file=${this.file}）`,
+      );
+      model = "(unknown)";
+    }
+    try {
+      mkdirSync(dirname(this.file), { recursive: true });
+      appendFileSync(this.file, `${JSON.stringify({ ...entry, model })}\n`, "utf8");
+    } catch (error) {
+      console.error(
+        `[usage] UsageStore.append: 写入 ${this.file} 失败（本次 LLM 调用产出仍正常返回，仅这一行台账没记上）：` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   readAll(): UsageEntry[] {
@@ -86,7 +116,11 @@ export class UsageStore {
 
   private corrupt = 0;
 
-  /** readAll 中跳过的坏行数（文件被手改/写坏时不装作没看见）。 */
+  /**
+   * 坏数据计数：readAll() 中跳过的坏行（文件被手改/写坏）+ V97 append() 写入时
+   * model 字段类型不对、被改记成 "(unknown)" 的次数——两种都是「台账里出现了
+   * 不该出现的坏数据」，不装作没看见，合并一个计数器上报。
+   */
   corruptLines(): number {
     return this.corrupt;
   }
