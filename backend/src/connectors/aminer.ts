@@ -118,7 +118,7 @@ export class AMinerConnector extends HttpConnector {
     if (!mapped.title) throw new Error('Connector "aminer" tool "search" 需要参数 query 或 title');
     mapped.page ??= 1;
     mapped.size ??= 10;
-    return this.requestRaw("search", mapped);
+    return this.requestWithAuthRetry("search", mapped);
   }
 
   async getPaper(
@@ -128,6 +128,35 @@ export class AMinerConnector extends HttpConnector {
     const ids = params.ids ?? (params.id ? [String(params.id)] : []);
     if (ids.length === 0) throw new Error('Connector "aminer" tool "getPaper" 需要参数 id 或 ids');
     // 官方限制单次最多 100 个 id。
-    return this.requestRaw("getPaper", { ids: ids.slice(0, 100) });
+    return this.requestWithAuthRetry("getPaper", { ids: ids.slice(0, 100) });
+  }
+
+  // ── V73：间歇 401，历史台账复核后加的保守重试 ────────────────────────────────
+  //
+  // 出处：`docs/devlog/W8-alpha.md`（本 lane）对 `~/.spark-research/
+  // api_calls.polluted-2026-09-11.jsonl` 的只读统计——4907 次 aminer 调用、91 次
+  // 401（1.85%）。两条统计结论：
+  //   1. 91 次 401 里没有任何两次连续出现（run-length 恒为 1）；
+  //   2. 78.9% 的 401 发生在与上一次 aminer 调用间隔 > 30s 之后（对照：200 的
+  //      调用里只有 0.83% 前面隔了这么久）——与「高并发触发限速」相反的方向
+  //      （v0.6 R2 复核过：12 并发 burst 实测 0 个 401，见 `docs/BACKLOG.md`
+  //      V73 行），更像是「AMiner 侧鉴权/会话空闲一段时间后失效，空闲后的
+  //      第一次请求会先吃一次 401」。
+  //
+  // **如实交代**：这是从历史日志回溯出的统计相关性，不是本 lane 现场用受控的
+  // 空闲间隔实验复现出的因果关系——纪律要求只读日志（不得对 `~/.spark-research`
+  // 发起改动性操作之外的实时探测），所以无法在本 lane 内把「空闲 > 30s → 401」
+  // 坐实成因果证据。但效应量足够大（数量级差异，不是噪音），值得当一次「可复现
+  // 的模式」处理：保守修法——401 只重试一次，不无限重试。如果第二次仍然 401
+  // （真凭据失效 / 权限问题），原样抛出，不会被这个重试掩盖成「看起来正常」。
+  private async requestWithAuthRetry(toolName: string, params: Record<string, unknown>): Promise<unknown> {
+    try {
+      return await this.requestRaw(toolName, params);
+    } catch (error) {
+      if (error instanceof Error && /\bHTTP 401\b/.test(error.message)) {
+        return await this.requestRaw(toolName, params);
+      }
+      throw error;
+    }
   }
 }
