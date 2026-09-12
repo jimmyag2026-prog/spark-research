@@ -8,7 +8,7 @@ import type { HttpClient } from "../http/client";
 import { LLMRouter } from "../llm/router";
 import { ProjectManager, ProjectError, type Project, openProjectResolved } from "../project/manager";
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
-import { LlmCitationJudge } from "../reviewer/citation_judge";
+import { explainCitationGap, LlmCitationJudge } from "../reviewer/citation_judge";
 import { CITATION_RULE, citationIntegrity, type CitationJudge } from "../reviewer/rules";
 import { computeFingerprint } from "../reviewer/agent";
 import type { RawSink } from "../raw";
@@ -825,16 +825,28 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
               `草稿完成（引用 ${draft.citedKeys.length} 条）→ 开始 citation-integrity` +
                 (judge ? "（含 LLM 判定）" : "（--no-judge：只做库内 key 机械核对）"),
             );
+            const knownKeys = libraryKeyIndex(library.list()).keys;
+            const baselines = baselinesFrom(cards);
             const check = await citationIntegrity({
               draft: draft.markdown,
-              knownKeys: libraryKeyIndex(library.list()).keys,
-              baselines: baselinesFrom(cards),
+              knownKeys,
+              baselines,
               judge,
               artifactId: draft.artifactId ?? "",
               location: "text/markdown",
             });
-            handle.note(`citation-integrity 完成：解析 ${check.citations.length} 处，判定 ${check.judgedCount} 处`);
-            return { draft, check };
+            // V87：「解析 N / 判定 M」差额分解（去重/自引/解析失败库外），见
+            // citation_judge.ts 的 explainCitationGap 头部注释——同一份 knownKeys/
+            // baselines 喂给 citationIntegrity 与本函数，分桶逻辑镜像 rules.ts 的
+            // judgeable filter，`gap.judged` 因此在无重复引用时与 check.judgedCount
+            // 逐一致；有重复引用时更精确（去重后）。
+            const gap = explainCitationGap(check.citations, knownKeys, baselines);
+            handle.note(
+              `citation-integrity 完成：解析 ${gap.total} 处，判定 ${gap.judged} 处，` +
+                `差额：去重 ${gap.duplicate} · 自引 ${gap.selfReference} · 解析失败/库外 ${gap.unresolved}` +
+                (gap.other > 0 ? ` · 其他 ${gap.other}` : ""),
+            );
+            return { draft, check, gap };
           },
         });
         if (!reviewTask.value) {
@@ -845,7 +857,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           project.close();
           return 1;
         }
-        const { draft, check } = reviewTask.value;
+        const { draft, check, gap } = reviewTask.value;
 
         const target = flagString(flags.out);
         if (target) writeFileSync(target, draft.markdown);
@@ -854,8 +866,16 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         out(`  引用 ${draft.citedKeys.length} 条 · artifact ${draft.artifactId ?? "未入库"} · record ${draft.recordId ?? "未入库"}`);
         out(`  文件: ${target ?? draft.path}`);
         out("");
-        out(`citation-integrity: 解析引用 ${check.citations.length} 处，判定 ${check.judgedCount} 处` +
+        out(`citation-integrity: 解析引用 ${gap.total} 处，判定 ${gap.judged} 处` +
           (check.judgeErrors > 0 ? `（${check.judgeErrors} 处判定失败）` : ""));
+        // V87：差额去向——去重（同句重复引用同一文献）/ 自引（引用出现在它自己的
+        // 参考文献列表行，不是对内容的陈述）/ 解析失败/库外（key 不在库内，或库内但
+        // 没有精读卡对照基准）。三者恒等于「解析 N − 判定 M」（见 explainCitationGap
+        // 头部注释的构造性证明），`other` 只在分桶逻辑漏情形时非 0（几乎不会发生）。
+        out(
+          `  差额：去重 ${gap.duplicate} · 自引 ${gap.selfReference} · 解析失败/库外 ${gap.unresolved}` +
+            (gap.other > 0 ? ` · 其他 ${gap.other}` : ""),
+        );
         const hard = check.findings.filter((f) => f.severity === "hard");
         const soft = check.findings.filter((f) => f.severity === "soft");
         for (const finding of check.findings) {
@@ -879,8 +899,10 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
           provenanceClass: "derived",
           title: `citation-integrity 核验：${draft.recordId ?? draft.artifactId ?? "草稿未入库"}`,
           content:
-            `解析引用 ${check.citations.length} 处，判定 ${check.judgedCount} 处，` +
-            `${hard.length} 条 hard finding，${soft.length} 条 soft finding`,
+            `解析引用 ${gap.total} 处，判定 ${gap.judged} 处，` +
+            `${hard.length} 条 hard finding，${soft.length} 条 soft finding` +
+            `；差额：去重 ${gap.duplicate} · 自引 ${gap.selfReference} · 解析失败/库外 ${gap.unresolved}` +
+            (gap.other > 0 ? ` · 其他 ${gap.other}` : ""),
           evidence: "computed",
           origin: { kind: "session", sessionId: flagString(flags.session) ?? null, ref: draft.artifactId ?? null },
           // RecordInput.metadata 是 Record<string, unknown>（schema 不区分 record 类型）；
