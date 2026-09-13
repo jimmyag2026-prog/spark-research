@@ -26,6 +26,8 @@
     "dev:web": "vite --config frontend/workspace/vite.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p frontend/workspace/tsconfig.json",
     "test": "bun test tests/unit",
+    "test:concurrency": "bun test tests/concurrency",
+    "test:timeout": "bun test tests/timeout",
     "test:integration": "bun test tests/integration",
     "test:lab": "./.venv/bin/python -m pytest tests/lab || python3 -m pytest tests/lab",
     "test:py": "./.venv/bin/python -m pytest tests/ || python3 -m pytest tests/",
