@@ -49,6 +49,40 @@ function sse(eventType: string, dataObj: unknown): string {
   return `event: ${eventType}\ndata: ${JSON.stringify(dataObj)}\n\n`;
 }
 
+/**
+ * V134：a 200-OK response whose body never sends another byte and never closes —
+ * simulates an upstream that accepted the request but then wedged mid-stream.
+ * Never calling `controller.close()`/`controller.enqueue()` again means
+ * `reader.read()` on the resulting stream hangs forever unless something actively
+ * aborts it.
+ */
+function hangingStreamFetch(): typeof fetch {
+  return (async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start() {
+        // 故意什么都不发、也不 close——模拟上游 200 OK 之后挂起。
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+}
+
+/**
+ * V134：a `Response` whose `.json()` never resolves — simulates a 200-OK
+ * non-streaming response whose body is still being received when the upstream
+ * connection wedges.
+ */
+function hangingJsonFetch(): typeof fetch {
+  return (async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start() {
+        // 不发送任何字节、不 close——`response.json()` 会一直等 body 读完。
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }) as unknown as typeof fetch;
+}
+
 function baseRequest(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
   return {
     model: "claude-sonnet-4-5",
@@ -511,6 +545,40 @@ describe("AD-13：ok:false ⇒ content===\"\" 且 error 必填（跨所有失败
       expect(res.error).toBeDefined();
       expect(res.error.message.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("V134：超时覆盖流式/正文读取，不只是 fetch() 本身", () => {
+  test("200 OK 之后流式 body 挂起 → 在 timeoutMs 内返回 timeout 失败，而不是永久挂起", async () => {
+    const adapter = new AnthropicAdapter();
+    const started = Date.now();
+    const res = await adapter.call(
+      baseRequest({
+        fetchImpl: hangingStreamFetch(),
+        timeoutMs: 50,
+        options: { onDelta: () => {} },
+      }),
+    );
+    const elapsed = Date.now() - started;
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("unreachable");
+    expect(res.content).toBe("");
+    expect(res.error.kind).toBe("timeout");
+    expect(res.error.retryable).toBe(true);
+    // 允许一些调度抖动，但必须远小于「永久挂起」——不是卡到测试自身超时。
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  test("200 OK 之后非流式 body 挂起 → 在 timeoutMs 内返回 timeout 失败", async () => {
+    const adapter = new AnthropicAdapter();
+    const started = Date.now();
+    const res = await adapter.call(baseRequest({ fetchImpl: hangingJsonFetch(), timeoutMs: 50 }));
+    const elapsed = Date.now() - started;
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("unreachable");
+    expect(res.content).toBe("");
+    expect(res.error.kind).toBe("timeout");
+    expect(elapsed).toBeLessThan(2_000);
   });
 });
 
