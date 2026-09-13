@@ -1,4 +1,6 @@
 import { ComputeApproval, ApprovalRequiredError } from "./approval";
+// V135：一次性 HTTP 审批令牌（见 approval_token.ts 顶部大段注释）。
+import { issue as issueApprovalToken } from "./approval_token";
 import {
   ComputeAdmissionError,
   ComputeBroker,
@@ -75,6 +77,10 @@ export const COMPUTE_HELP = `用法:
       --gpu <型号>                GPU 型号；--cpus/--memory-gb/--timeout 资源上限
       --network none|unrestricted 默认 none
       --workspace <目录>          上传的根目录（默认当前目录）
+  spark-research compute token <jobId> [--json]
+                                 签发一枚一次性 HTTP 审批令牌（V135，与 approve/reject 同一道
+                                 交互终端门）。填进 HTTP approve/reject 请求体的 approvalToken
+                                 字段（或 X-Spark-Approval-Token 请求头），连同 actor 一起提交。
   spark-research compute approve <jobId> [--actor 谁] [--note 备注] [--run] [--json]
                                  人工批准（AD-6 同构）。落 decision record，记 plan digest。
 
@@ -579,6 +585,31 @@ export async function runComputeCommand(args: string[], deps: ComputeCliDeps = {
                 "三者任一成立才需要人点头)",
             );
           }
+        }
+        return 0;
+      }
+
+      case "token": {
+        // V135：签发一枚一次性 HTTP 审批令牌。TTY 门与 `compute approve` 字面上调用的是
+        // 同一个 `requireApprovalGate`（`COMPUTE_APPROVAL_GATE`）——判据、非交互 CI 旁路
+        // 完全复用，不重写第二份（与 lab/cli.ts 的 `token` case 同一条纪律）。
+        const ref = positional[0];
+        if (!ref) {
+          err("用法: spark-research compute token <jobId>");
+          return 1;
+        }
+        project = openProjectResolved(manager, flagString(flags.project));
+        const scope = openComputeScope(project, deps);
+        const job = scope.broker.poll(ref); // 不存在会抛 UnknownComputeJobError，走下面统一的 catch。
+        await requireApprovalGate(COMPUTE_APPROVAL_GATE, ref, "approve", deps, flags, env);
+        const issued = issueApprovalToken(project.paths.root, job.jobId);
+        if (flags.json === true) {
+          out(JSON.stringify({ jobId: issued.jobId, token: issued.token, issuedAt: issued.issuedAt, expiresAt: issued.expiresAt }, null, 2));
+        } else {
+          out(`🔑 一次性审批令牌（${issued.expiresAt} 前有效，只能被消费一次）：`);
+          out(`   ${issued.token}`);
+          out("下一步：把它填进 HTTP approve/reject 请求体的 approvalToken 字段");
+          out("（或 X-Spark-Approval-Token 请求头），连同 actor 一起提交。");
         }
         return 0;
       }

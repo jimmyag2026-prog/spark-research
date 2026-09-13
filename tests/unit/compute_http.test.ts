@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+// V135：approve/reject 现在要求一次性令牌（与 lab 侧 V95/V136 同构）。`issue()` 是纯函数
+// （node:fs/crypto/path），测试直接调用来铸一枚令牌，不经过 CLI 的 TTY 门。
+import { issue as issueApprovalToken } from "../../backend/src/compute/approval_token";
 import {
   EXECUTION_STATES,
   EXECUTION_TRANSITIONS,
@@ -6,6 +9,12 @@ import {
   dispatchGate,
 } from "../../backend/src/compute/lifecycle";
 import { makeServer, type ServerFixture } from "../helpers/server_scenario";
+
+// fx.project 与服务器进程共用同一个 ProjectManager/root（见 server_scenario.ts），
+// 所以在这里签发的令牌与 HTTP 层 consume() 读到的是同一份 approval_tokens.json。
+function mintToken(fx: ServerFixture, jobId: string): string {
+  return issueApprovalToken(fx.project.paths.root, jobId).token;
+}
 
 // CB-5 接线 · `/api/compute/**` 的 HTTP 投影。
 //
@@ -164,9 +173,11 @@ describe("HTTP · approve / reject 必须记名", () => {
   test("给了 actor → 批准成功，actorSource 记 http:explicit（审计时分得清网页批的还是命令行批的）", async () => {
     const fx = makeServer({ slug: "compute-http" });
     const body = await plan(fx);
+    const token = mintToken(fx, body.job.jobId);
     const res = await fx.post<JobBody>(`/api/compute/jobs/${body.job.jobId}/approve`, {
       actor: "王研究员",
       note: "命令我看过了",
+      approvalToken: token,
     });
     expect(res.status).toBe(200);
     expect(res.body.job.lifecycle.execution).toBe("approved");
@@ -181,8 +192,14 @@ describe("HTTP · approve / reject 必须记名", () => {
   test("重复批准同一个任务 → 403（已经不在 awaiting_approval 了）", async () => {
     const fx = makeServer({ slug: "compute-http" });
     const body = await plan(fx);
-    await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, { actor: "王研究员" });
-    const again = await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, { actor: "王研究员" });
+    await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, {
+      actor: "王研究员",
+      approvalToken: mintToken(fx, body.job.jobId),
+    });
+    const again = await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, {
+      actor: "王研究员",
+      approvalToken: mintToken(fx, body.job.jobId),
+    });
     expect(again.status).toBe(403);
     await fx.stop();
   });
@@ -194,9 +211,33 @@ describe("HTTP · approve / reject 必须记名", () => {
     const ok = await fx.post<JobBody>(`/api/compute/jobs/${body.job.jobId}/reject`, {
       actor: "王研究员",
       reason: "这个命令会把整个数据集传上去",
+      approvalToken: mintToken(fx, body.job.jobId),
     });
     expect(ok.status).toBe(200);
     expect(ok.body.job.lifecycle.execution).toBe("rejected");
+    await fx.stop();
+  });
+
+  // V135：approve/reject 此前只要 actor 非空字符串就放行，与 lab 侧的一次性令牌门
+  // （V95/V136）不对称——本机任意进程 curl 一下就能伪造一条「已批准」记录。
+  test("V135：approve/reject 没有 approvalToken → 403；令牌只能消费一次", async () => {
+    const fx = makeServer({ slug: "compute-http" });
+    const body = await plan(fx);
+    const noToken = await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, { actor: "王研究员" });
+    expect(noToken.status).toBe(403);
+
+    const token = mintToken(fx, body.job.jobId);
+    const ok = await fx.post(`/api/compute/jobs/${body.job.jobId}/approve`, { actor: "王研究员", approvalToken: token });
+    expect(ok.status).toBe(200);
+
+    // 同一枚令牌已被 approve 消费——即使换成 reject，consume() 也先于状态机检查
+    // 命中「已被使用过」，而不是被状态错误盖住。
+    const reused = await fx.post(`/api/compute/jobs/${body.job.jobId}/reject`, {
+      actor: "王研究员",
+      reason: "换个理由",
+      approvalToken: token,
+    });
+    expect(reused.status).toBe(403);
     await fx.stop();
   });
 });
@@ -234,7 +275,11 @@ describe("HTTP · collect", () => {
   test("从未派发过的终态任务（rejected）collect → 409，不假装收到了空产物", async () => {
     const fx = makeServer({ slug: "compute-http" });
     const body = await plan(fx);
-    await fx.post(`/api/compute/jobs/${body.job.jobId}/reject`, { actor: "王研究员", reason: "不批" });
+    await fx.post(`/api/compute/jobs/${body.job.jobId}/reject`, {
+      actor: "王研究员",
+      reason: "不批",
+      approvalToken: mintToken(fx, body.job.jobId),
+    });
     const res = await fx.post<{ error: string }>(`/api/compute/jobs/${body.job.jobId}/collect`, {});
     expect(res.status).toBe(409);
     await fx.stop();
