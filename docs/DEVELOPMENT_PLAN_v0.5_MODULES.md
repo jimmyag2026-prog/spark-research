@@ -1,374 +1,374 @@
-# Spark Research v0.5 · 模块设计与施工计划
+# Spark Research v0.5 · Module Design and Construction Plan
 
-> 制订时间：2026-09-10（PDT）· 起点：`main` v0.4.0（`feb3c8a`，含 v0.5 方案 #30）
-> 上位文档：`docs/DEVELOPMENT_PLAN_v0.5.md`（施工真源，本文**服从**它的 §2 三条硬规则与 §5 波次形态）
-> 素材库：`~/Desktop/AI4S/spark-research-v0.5-plan/`（未入库；本文引用时给相对该目录的路径）
-> 基线实测（本文制订当日，主仓 `main`）：`bun test tests/unit` → **1396 pass / 0 fail / 0 skip**，82 个文件，49.8s
+> Drafted: 2026-09-10 (PDT) · Starting point: `main` v0.4.0 (`feb3c8a`, including v0.5 proposal #30)
+> Upstream document: `docs/DEVELOPMENT_PLAN_v0.5.md` (the construction source of truth; this document **defers** to its §2 three hard rules and §5 wave shape)
+> Material library: `~/Desktop/AI4S/spark-research-v0.5-plan/` (not checked in; paths cited here are relative to that directory)
+> Baseline measurement (as of the day this document was drafted, main repo `main`): `bun test tests/unit` → **1396 pass / 0 fail / 0 skip**, 82 files, 49.8s
 >
-> 本文是**可直接派 lane 的设计**，不是方案复述。凡引用仓库现状一律给文件路径与行号（AD-12 口径），
-> 行号以 `feb3c8a` 为准。
+> This document is a **design that can be dispatched directly to lanes**, not a restatement of the proposal. Wherever the repository's current state is cited, a file path and line number are given (AD-12 convention),
+> with line numbers as of `feb3c8a`.
 
 ---
 
-## 〇、先说结论
+## 0. Conclusions up front
 
-### 0.1 五个关键设计决策
+### 0.1 Five key design decisions
 
-| # | 决策 | 一句话理由 |
+| # | Decision | One-line rationale |
 |---|---|---|
-| **K-1** | `backend/src/compute/` 与 `SimulationPlatform` **并列，不包含**；两者之间只有一座桥 `compute/sim_bridge.ts` | 两者契约不同层：`SimulationPlatform`（`simulation/models.ts:95-105`）是学科域契约（归一化参数 / 预期产出 / `deterministic` 位），`ComputeAdapter` 是执行地契约（哪台机器 / 什么环境 / 怎么审批 / 怎么收割）。把 target 塞进 `SimulationPlatform.submit()` 会破坏契约 #2「submit 非阻塞立刻返回 runId」——审批门横在中间，submit 根本不可能立刻返回。详见 §1.1.9 |
-| **K-2** | **审批语义（decision record + digest 一次性消费 + 执行前重验）从 CB-5 前移进 CB-1**，CB-5 只剩「接线」（CLI/HTTP/MCP_WITHHELD/TTY/ToolBus 计价） | `planned → awaiting_approval → approved → queued` 是 lifecycle 的主干，CB-1 的「穷举转移测试」不含审批消费就是半张表；而且 W5-1 若先造一个「无审批也能派发」的 broker，必然需要一个测试后门，后门会活到生产。这条是异议 X-1，见 §七 |
-| **K-3** | 算力执行状态是**磁盘真源**（`<project>/compute/jobs/<jobId>/job.json`），**不是 record**；证据图只在两处落东西：人做决定（`decision`）与结果进图（`observation` + `artifact`） | v0.4 W3 收口真实踩过：记账类 record 一进图，`NoProgressGuard` 永远看到「有新增」，防烧钱的停机条件被静默废掉（`agents/contract.ts:137-152`）。算力 job 每次 poll 落一条 record 会重演同一件事 |
-| **K-4** | embedding 放 `backend/src/llm/embeddings/`，与 `llm/providers/` **同层、不同契约**；novelty 双留痕（词面 + 语义）；**语义阈值按 embedding 模型逐个标定**，未标定的模型一律回退词面 | 规划目录 `workstreams/provider/V05_PROVIDER_DESIGN.md` §(b) 已论证 chat 契约套不上 embedding；余弦分布因模型而异，一个跨模型的常数阈值就是又一个「0.75 拍出来的」 |
-| **K-5** | 枢纽文件**按波次**判定，而不是一张全版本固定清单：某文件在本波只有一条 lane 要动 → 分给那条 lane；≥2 条 lane 要动 → 摘出收口 | v0.4 的两条教训互相拉扯：不摘出 → `index.ts` 冲突三次；全摘出 → 「建好但没人喂」六次。按波次分配是两者的交集。见 §3.4 |
+| **K-1** | `backend/src/compute/` sits **alongside, not inside,** `SimulationPlatform`; the only connection between the two is a single bridge, `compute/sim_bridge.ts` | The two contracts live at different layers: `SimulationPlatform` (`simulation/models.ts:95-105`) is a discipline-domain contract (normalized parameters / expected outputs / the `deterministic` flag), while `ComputeAdapter` is an execution-site contract (which machine / what environment / how approval works / how results are harvested). Stuffing a target into `SimulationPlatform.submit()` would break contract #2, "submit returns a runId immediately, non-blocking" — with an approval gate in the middle, submit could never return immediately. See §1.1.9 for details |
+| **K-2** | **Approval semantics (decision record + one-time digest consumption + pre-execution re-verification) are moved forward from CB-5 into CB-1**; CB-5 is left with only "wiring" (CLI/HTTP/MCP_WITHHELD/TTY/ToolBus pricing) | `planned → awaiting_approval → approved → queued` is the backbone of the lifecycle; CB-1's "exhaustive transition test" is only half a table if it doesn't include approval consumption. Moreover, if W5-1 first builds a broker that "can dispatch without approval," it will inevitably need a test backdoor, and that backdoor will live on into production. This is objection X-1; see §7 |
+| **K-3** | Compute execution state is the **disk source of truth** (`<project>/compute/jobs/<jobId>/job.json`), **not a record**; the evidence graph only gets written to in two places: when a human makes a decision (`decision`) and when a result enters the graph (`observation` + `artifact`) | v0.4 W3 close-out ran into this for real: once bookkeeping-type records enter the graph, `NoProgressGuard` always sees "there's new activity," and the stop condition meant to prevent runaway spending is silently defeated (`agents/contract.ts:137-152`). A compute job that writes a record on every poll would replay the exact same failure |
+| **K-4** | Embedding lives in `backend/src/llm/embeddings/`, **at the same layer as, but under a different contract from,** `llm/providers/`; novelty keeps a dual trace (lexical + semantic); **the semantic threshold is calibrated per embedding model**, and any uncalibrated model falls back to lexical matching across the board | The planning directory `workstreams/provider/V05_PROVIDER_DESIGN.md` §(b) already established that the chat contract doesn't fit embedding; cosine-similarity distributions vary by model, so a single cross-model constant threshold would just be one more "0.75 pulled out of thin air" |
+| **K-5** | Hub files are decided **wave by wave** rather than via one fixed cross-version list: if only one lane needs to touch a given file in this wave, it's assigned to that lane; if ≥2 lanes need it, it's pulled out into close-out | Two v0.4 lessons pull against each other: not pulling it out → `index.ts` conflicted three times; pulling everything out → "built but nobody wired it up" happened six times. Wave-by-wave assignment is the intersection of the two. See §3.4 |
 
-### 0.2 关键路径
+### 0.2 Critical path
 
 ```
-闸门 F ──► W5-1 α（CB-1 契约+审批语义 · CB-2 local · CB-3 上传面）
-              ──► W5-2 β（CB-5 接线：CLI/HTTP/withheld/TTY/ToolBus 计价） ┐
-              ──► W5-2 α（CB-4 Modal adapter，需 token）                  ┤──► W5-3 α（CB-6 桥 + 真实 SIGKILL e2e）──► 收口
+Gate F ──► W5-1 α (CB-1 contract + approval semantics · CB-2 local · CB-3 upload surface)
+              ──► W5-2 β (CB-5 wiring: CLI/HTTP/withheld/TTY/ToolBus pricing) ┐
+              ──► W5-2 α (CB-4 Modal adapter, needs token)                    ┤──► W5-3 α (CB-6 bridge + real SIGKILL e2e) ──► close-out
 ```
 
-其余全部绕开它并行。**W5-2 α 与 β 互不依赖**（β 接线面对着 CB-1 的接口，不需要 Modal 存在；CI 用 local adapter 走完整审批链）。
+Everything else runs around it in parallel. **W5-2 α and β are mutually independent** (β's wiring faces CB-1's interface and doesn't need Modal to exist; CI walks the full approval chain using the local adapter).
 
-### 0.3 异议清单（详见 §七）
+### 0.3 List of objections (see §7 for detail)
 
-- **X-1** CB-5 的审批语义应前移到 CB-1（方案 §3.1 把它排在 W5-2）——不是降低优先级，是把它做成状态机本体。
-- **X-2** 方案 §5.1 的枢纽文件清单不能整版锁死；应按波次分配（K-5）。
-- **X-3** `daemon/daemon.ts:72-91` 有一套 v0.1 遗留的 `ComputeService`/`DefaultCompute` 与 `compute_submit` permit（`daemon/permissions.ts:8`），方案与 COMPUTE_DESIGN 都没提到；v0.5 引入真的 compute 层后，仓库里会有两个「compute」——必须在收口时二选一。
-- **X-4** 方案 §5 W5-3 δ「runtime contract + Python SDK」在方案全文与规划目录里**没有任何定义**（`grep -in "runtime contract\|python sdk"` 仅命中方案第 261 行自身）。本文不为它编设计，W5-3 δ 改为机动位 + BACKLOG 清扫。
-- **X-5** C5-② 的「kernel 侧」应读作「Python 侧（同一 `.venv`）」而非「经 `PythonKernel`/daemon」——仿真层已有先例「对 daemon 零依赖」（`simulation/platform.ts:23-26`）。
+- **X-1** CB-5's approval semantics should be moved forward into CB-1 (the proposal §3.1 places it in W5-2) — not to lower its priority, but to make it part of the state machine itself.
+- **X-2** The hub-file list in proposal §5.1 cannot be locked down for the whole version; it should be assigned wave by wave (K-5).
+- **X-3** `daemon/daemon.ts:72-91` carries a v0.1 legacy `ComputeService`/`DefaultCompute` and a `compute_submit` permit (`daemon/permissions.ts:8`), which neither the proposal nor COMPUTE_DESIGN mentions; once v0.5 introduces a real compute layer, the repository will have two "computes" — one must be chosen over the other at close-out.
+- **X-4** Proposal §5's W5-3 δ, "runtime contract + Python SDK," **has no definition anywhere** in either the full text of the proposal or the planning directory (`grep -in "runtime contract\|python sdk"` only hits line 261 of the proposal itself). This document does not design for it; W5-3 δ is turned into a floating slot plus BACKLOG cleanup.
+- **X-5** C5-②'s "kernel side" should be read as "the Python side (the same `.venv`)" rather than "via `PythonKernel`/daemon" — the simulation layer already has a precedent of "zero dependency on the daemon" (`simulation/platform.ts:23-26`).
 
 ---
 
-## 一、模块设计
+## 1. Module design
 
-### 1.1 C1 · 远端算力 `backend/src/compute/`
+### 1.1 C1 · Remote compute `backend/src/compute/`
 
-#### 1.1.0 定位与三个前置事实
+#### 1.1.0 Positioning and three prior facts
 
-1. **目录名可以直接用 `compute/`**。v0.1 的 `compute/providers.ts` 已在 P8-G6 连同测试删除（`simulation/platform.ts:112-116` 的注释保留了删除记录），`backend/src/compute/` 今天不存在（`find backend/src -maxdepth 1` 实测）。COMPUTE_DESIGN §2.1 提议的 `compute2/` 没必要。
-2. **但 daemon 里还有一套同名概念**：`daemon/daemon.ts:16` `interface ComputeService { submit / getFrames / libraries }`、`:72-91` `DefaultCompute`（内存 Map 假实现）、`:194` `case "compute_submit"`，以及 `daemon/permissions.ts:8` 把 `compute_submit` 放进 control_repl 的 permit set，`kernels/control_repl.ts:66` 调它。这是 v0.1 遗留的 mock。**处置见异议 X-3**；W5-1 α 不碰 daemon。
-3. **与 `SimulationPlatform` 的关系是并列**（K-1）。`SubprocessSimulationPlatform.submit()`（`simulation/platform.ts:204-251`）今天直接 `Bun.spawn` 本地 python；它就是「target=local」的一个特例实现，但它**不改**——CB-2 的 local adapter 是 `ComputeAdapter` 的独立实现，两者共享的只有 `RunStore` 的磁盘布局思想，不共享代码（AD-4 的教训：契约不同就别硬塞）。
+1. **The directory name can simply be `compute/`.** v0.1's `compute/providers.ts` was already deleted along with its tests in P8-G6 (the comment at `simulation/platform.ts:112-116` preserves a record of the deletion); `backend/src/compute/` does not exist today (confirmed with `find backend/src -maxdepth 1`). The `compute2/` proposed in COMPUTE_DESIGN §2.1 is unnecessary.
+2. **But there is another concept with the same name inside the daemon**: `daemon/daemon.ts:16` `interface ComputeService { submit / getFrames / libraries }`, `:72-91` `DefaultCompute` (an in-memory-Map fake implementation), `:194` `case "compute_submit"`, plus `daemon/permissions.ts:8` putting `compute_submit` into the control_repl permit set, called from `kernels/control_repl.ts:66`. This is a v0.1 leftover mock. **Its disposition is covered in objection X-3**; W5-1 α does not touch the daemon.
+3. **Its relationship to `SimulationPlatform` is one of sitting alongside it** (K-1). `SubprocessSimulationPlatform.submit()` (`simulation/platform.ts:204-251`) today calls `Bun.spawn` directly on local python; it is effectively a special-case implementation of "target=local," but it **is not changed** — CB-2's local adapter is an independent implementation of `ComputeAdapter`, and the two share only the idea behind `RunStore`'s disk layout, not code (the AD-4 lesson: when contracts differ, don't force them together).
 
-#### 1.1.1 文件划分
+#### 1.1.1 File breakdown
 
-| 文件 | 切片 | 内容 | 依赖 |
+| File | Slice | Contents | Dependencies |
 |---|---|---|---|
-| `compute/lifecycle.ts` | CB-1 | 三轴状态机：常量表 + `transition()` 纯函数 + 不变式。**零 IO、零 import 仓库其他模块** | — |
-| `compute/plan.ts` | CB-1 | `ComputePlan` schema、`planDigest()`（canonical JSON，排除 `workspaceRoot`）、`validatePlan()`、成本估算字段的形状 | `simulation/platform.ts` 的 `canonicalJson`（今天是模块私有函数 `:34-42`，**需导出**，1 行改动，α 所有） |
-| `compute/target.ts` | CB-1 | `TargetRef` union、`ComputeAdapter` 接口、`AdapterCapabilities`、`SshHost` schema（只校验、`available:false`） | — |
-| `compute/approval.ts` | CB-1（前移，X-1） | `ComputeApproval`：落 `decision` record、写 `job.json.approval`、`consume()` 原子消费、`verifyDigest()` 执行前重验。**只做语义，不做入口** | `project/records.ts` `RecordStore`（只用既有 `create/link/update`） |
-| `compute/job_store.ts` | CB-1 | 磁盘真源：`<experimentsDir>/compute/jobs/<jobId>/` 目录布局、`job.json` 原子写（临时文件 + rename）、`rev` CAS | — |
-| `compute/uploads.ts` | CB-3 | deny-list / gitignore 感知 / 文件数与字节双限额 / sha256 / symlink 拒绝 / `preflight()` 重验。**纯函数 + 只读 fs** | — |
-| `compute/broker.ts` | CB-1/2 | `ComputeBroker`：`plan → approve → dispatch → poll → collect → release` 编排；admission limit；`recover()`；把 adapter 的 handle 落进 job_store | 上面全部 + `llm/budget.ts` `BudgetLedger`（可选注入） |
-| `compute/adapters/local.ts` | CB-2 | 第一个 `ComputeAdapter`：本地子进程 + `job` 目录作「持久卷」；`recover()` 三分支（还在跑 / 已完成 / 已丢失）照 `SubprocessSimulationPlatform.poll()` 的顺序（**先看 exit-code 文件再看 pid**，`platform.ts:258-300`） | `simulation/platform.ts` 的 `resolvePython()`、`isProcessAlive` |
-| `compute/adapters/modal.ts` | CB-4 | `modal` npm SDK（pin 0.9.0）；client 按凭据摘要池化（上限 4）；Volume 名 `sha256(project\0jobId)[:32]`；ownership tags `spark_job=<jobId>` / `spark_project=<sha256(slug)[:20]>`；ready 哨兵；harvest/reconcile/recover/release；`recoveryFailure()` 分类 | `target.ts` + `connectors/base.ts` 的 `CredentialProvider` |
-| `compute/sim_bridge.ts` | CB-6 | `planFromPrepared(prepared, target)`、`materializeHarvest(runDir, harvest)`：把 `PreparedRun` 翻译成 `ComputePlan`，把收割结果回填成 `RunStore` 认得的 `done.json` + 产出文件 | `simulation/models.ts` 类型 + `plan.ts` |
-| `compute/cli.ts` | CB-5 接线 | `spark-research compute plan/approve/reject/run/status/list/collect/cancel/release/targets` | `approval/gate.ts`（见下） |
-| `approval/gate.ts` | CB-5 接线 | **从 `lab/cli.ts:150-251` 搬出**的 V19 TTY 门 `requireApprovalGate()`，参数化 env 变量名；lab 与 compute 共用一份 | — |
-| `server/routes/compute.ts` | CB-5 接线 | HTTP 投影：`/api/compute/machine`（从 lifecycle 转移表推导，照 `server/routes/lab.ts:52-68` 的 `/machine`）、`/jobs`、`/jobs/:id`、`/jobs/:id/approve`（actor 必填，照 `lab.ts:32-37`）、`/jobs/:id/reject`、`/jobs/:id/collect` | — |
-| `tests/helpers/compute_contract.ts` | CB-1 | 参数化契约测试套件（照 `tests/helpers/simulation_contract.ts:17-37` 的 `SimulationContractCase` 形状）：同一组断言跑 local 与 modal（录制回放） | — |
-| `tests/helpers/compute_driver.ts` | CB-6 | SIGKILL e2e 的被杀进程（照 `tests/helpers/experiment_driver.ts` / `wet_driver.ts`） | — |
+| `compute/lifecycle.ts` | CB-1 | Three-axis state machine: constant tables + a pure `transition()` function + invariants. **Zero IO, zero imports from other modules in the repo** | — |
+| `compute/plan.ts` | CB-1 | `ComputePlan` schema, `planDigest()` (canonical JSON, excluding `workspaceRoot`), `validatePlan()`, the shape of the cost-estimate fields | `simulation/platform.ts`'s `canonicalJson` (today a module-private function at `:34-42`, **needs to be exported**, a 1-line change owned by α) |
+| `compute/target.ts` | CB-1 | `TargetRef` union, the `ComputeAdapter` interface, `AdapterCapabilities`, the `SshHost` schema (validation only, `available:false`) | — |
+| `compute/approval.ts` | CB-1 (moved forward, X-1) | `ComputeApproval`: writes a `decision` record, writes `job.json.approval`, `consume()` atomic consumption, `verifyDigest()` pre-execution re-verification. **Semantics only, no entry point** | `project/records.ts`'s `RecordStore` (uses only the existing `create/link/update`) |
+| `compute/job_store.ts` | CB-1 | Disk source of truth: the `<experimentsDir>/compute/jobs/<jobId>/` directory layout, atomic writes of `job.json` (temp file + rename), `rev` CAS | — |
+| `compute/uploads.ts` | CB-3 | deny-list / gitignore awareness / dual limits on file count and bytes / sha256 / symlink rejection / `preflight()` re-verification. **Pure functions + read-only fs** | — |
+| `compute/broker.ts` | CB-1/2 | `ComputeBroker`: orchestrates `plan → approve → dispatch → poll → collect → release`; admission limit; `recover()`; writes the adapter's handle into job_store | Everything above + `llm/budget.ts`'s `BudgetLedger` (optionally injected) |
+| `compute/adapters/local.ts` | CB-2 | The first `ComputeAdapter`: a local subprocess with the `job` directory acting as a "persistent volume"; `recover()` has three branches (still running / already finished / lost), following the order used by `SubprocessSimulationPlatform.poll()` (**check the exit-code file before the pid**, `platform.ts:258-300`) | `simulation/platform.ts`'s `resolvePython()`, `isProcessAlive` |
+| `compute/adapters/modal.ts` | CB-4 | The `modal` npm SDK (pinned to 0.9.0); clients pooled by credential digest (cap of 4); Volume name `sha256(project\0jobId)[:32]`; ownership tags `spark_job=<jobId>` / `spark_project=<sha256(slug)[:20]>`; a readiness sentinel; harvest/reconcile/recover/release; `recoveryFailure()` classification | `target.ts` + `connectors/base.ts`'s `CredentialProvider` |
+| `compute/sim_bridge.ts` | CB-6 | `planFromPrepared(prepared, target)`, `materializeHarvest(runDir, harvest)`: translates a `PreparedRun` into a `ComputePlan`, and writes harvested results back in the form of `done.json` plus output files that `RunStore` understands | `simulation/models.ts` types + `plan.ts` |
+| `compute/cli.ts` | CB-5 wiring | `spark-research compute plan/approve/reject/run/status/list/collect/cancel/release/targets` | `approval/gate.ts` (see below) |
+| `approval/gate.ts` | CB-5 wiring | The V19 TTY gate `requireApprovalGate()`, **moved out of `lab/cli.ts:150-251`**, with the env variable name parameterized; shared by lab and compute | — |
+| `server/routes/compute.ts` | CB-5 wiring | HTTP projection: `/api/compute/machine` (derived from the lifecycle transition table, following `server/routes/lab.ts:52-68`'s `/machine`), `/jobs`, `/jobs/:id`, `/jobs/:id/approve` (actor required, following `lab.ts:32-37`), `/jobs/:id/reject`, `/jobs/:id/collect` | — |
+| `tests/helpers/compute_contract.ts` | CB-1 | A parameterized contract-test suite (following the `SimulationContractCase` shape at `tests/helpers/simulation_contract.ts:17-37`): the same set of assertions run against local and modal (via record-and-replay) | — |
+| `tests/helpers/compute_driver.ts` | CB-6 | The process killed in the SIGKILL e2e (following `tests/helpers/experiment_driver.ts` / `wet_driver.ts`) | — |
 
-**明确不建**：`compute/adapters/ssh.ts`。`target.ts` 里只有 `SshHost` schema 与 `{ kind: "ssh" }` 联合成员，注册表里标 `available:false, reason:"v0.5 只留槽位"`。火山引擎 / RunPod 连 schema 都不写，记 BACKLOG。
+**Explicitly not built**: `compute/adapters/ssh.ts`. `target.ts` contains only the `SshHost` schema and the `{ kind: "ssh" }` union member; the registry marks it `available:false, reason:"v0.5 leaves only a placeholder slot"`. Volcano Engine / RunPod don't even get a schema written; they go into BACKLOG.
 
-#### 1.1.2 三轴 lifecycle（相对 COMPUTE_DESIGN §1.5 的一处偏离）
+#### 1.1.2 The three-axis lifecycle (one deviation from COMPUTE_DESIGN §1.5)
 
 ```
 execution: planned → awaiting_approval → approved → queued → starting → running
                   ↘ (approvalRequired=false) ↗
            running → succeeded | failed | timed_out | cancelled | interrupted
            awaiting_approval → rejected
-           interrupted → running | succeeded | failed     （recover 后由 adapter 裁定）
-delivery:  none → pending → complete | rejected | failed ；failed → pending（retry_delivery）
+           interrupted → running | succeeded | failed     (decided by the adapter after recover)
+delivery:  none → pending → complete | rejected | failed ; failed → pending (retry_delivery)
 resource:  none → starting → active → closed | unknown
 recoverable: boolean
 ```
 
-**偏离**：上游是 `awaiting_approval → queued`，本文插入 `approved`。理由与湿实验 D-10 一致（`lab/wet_models.ts:30-35`）：「批了」与「动手了」必须是两个状态，approval 在 `approved → queued` 那一次转移里被**一次性消费**（`consumedApproval` 存档），崩溃重启后 approval 已经不在，无法凭空重派。
+**Deviation**: upstream has `awaiting_approval → queued`; this document inserts `approved`. The rationale matches wet-experiment D-10 (`lab/wet_models.ts:30-35`): "approved" and "actually started" must be two distinct states, and the approval is **consumed exactly once**, in the single `approved → queued` transition (archived as `consumedApproval`) — after a crash and restart, the approval is no longer present, so it cannot be re-dispatched out of thin air.
 
-**不变式**（每条一个对抗测试，写在 `tests/unit/compute_lifecycle.test.ts`）：
+**Invariants** (one adversarial test per row, written in `tests/unit/compute_lifecycle.test.ts`):
 
-| # | 不变式 | 违反时 |
+| # | Invariant | On violation |
 |---|---|---|
-| L-1 | 转移表之外的 (state, event) 一律 `throw ComputeStateError`，不顺手纠正 | — |
-| L-2 | `dispatch` 只有两条入边：`approved`（必须携带未消费的 approval，且 `approval.planDigest === job.plan.digest`）或 `planned`（仅当 `plan.approvalRequired === false`） | 任何 `planned → queued` 的 billable plan 必须红 |
-| L-3 | `plan.approvalRequired` 是**派生值**：`adapter.capabilities().billable || plan.network !== "none" || plan.secretRefs.length > 0`；调用方不能传 | 构造 `approvalRequired:false` 的 modal plan → `validatePlan` 红 |
-| L-4 | `resource: active → closed` 在 `recoverable === true` 时 throw（「不许关掉持有唯一可恢复产物副本的资源」，上游 lifecycle.ts:200-205） | — |
-| L-5 | `delivery` 只能在 `execution` 进入终态之后离开 `none` | — |
-| L-6 | `execution` 终态后 `recoverable` 只能由 `delivery=complete` 或 `release` 置 false | — |
-| L-7 | 全部三轴与 `recoverable` 的组合空间由测试**穷举**（笛卡尔积 × 事件表），断言「合法集合 = 显式表」 | 表外任何一条可达路径 → 红 |
+| L-1 | Any (state, event) pair not in the transition table must `throw ComputeStateError`, never be silently corrected | — |
+| L-2 | `dispatch` has only two valid in-edges: `approved` (must carry an unconsumed approval, and `approval.planDigest === job.plan.digest`) or `planned` (only when `plan.approvalRequired === false`) | Any billable plan going `planned → queued` must fail |
+| L-3 | `plan.approvalRequired` is a **derived value**: `adapter.capabilities().billable || plan.network !== "none" || plan.secretRefs.length > 0`; callers cannot pass it in | Constructing a modal plan with `approvalRequired:false` → `validatePlan` must fail |
+| L-4 | `resource: active → closed` must throw when `recoverable === true` ("must not close a resource that is the sole holder of a recoverable artifact copy," upstream lifecycle.ts:200-205) | — |
+| L-5 | `delivery` can only leave `none` after `execution` has entered a terminal state | — |
+| L-6 | Once `execution` is terminal, `recoverable` can only be set to false by `delivery=complete` or by `release` | — |
+| L-7 | The full combination space of the three axes plus `recoverable` is **exhaustively enumerated** by tests (Cartesian product × event table), asserting "the legal set = the explicit table" | Any reachable path outside the table → must fail |
 
-#### 1.1.3 Plan 与 digest
+#### 1.1.3 Plan and digest
 
-抄 COMPUTE_DESIGN §1.2 的字段集，四处 Spark 化：
+Copied from COMPUTE_DESIGN §1.2's field set, Spark-ified in four places:
 
-1. **`command` 是 `string[]`（argv），不是 shell 字符串**。上游用 `bash -lc '<cmd>'`；本文拒绝——被审批的东西不该再经过一次 shell 展开。远端侧由 adapter 生成 `exec` 形式的调用。
-2. **`env` 只允许非密钥**：`validatePlan()` 对 key 名跑 `redactSecrets`（`llm/types.ts:78-83`）同源的模式，命中即拒。密钥只能走 `secretRefs`（符号名）。
-3. **digest 排除 `workspaceRoot`（绝对路径）**，与上游 plan.ts:358-360、Spark `protocolHash` 不含时间戳同一思想。**其余全部进 digest，包括 `estimate`**——价格表变了就该重新批。
-4. **`estimate` 用 PRICING 的纪律**（`llm/providers/registry.ts:19-37`）：`unitPriceUsd` 必须带 `source` + `verifiedDate`，查不到就是 `null`，`upperBoundUsd` 随之 `null`；**绝不填 0**。
+1. **`command` is a `string[]` (argv), not a shell string**. Upstream uses `bash -lc '<cmd>'`; this document rejects that — what gets approved should not go through another round of shell expansion. On the remote side, the adapter generates an `exec`-style call.
+2. **`env` only allows non-secrets**: `validatePlan()` runs the key names through a pattern sourced from the same place as `redactSecrets` (`llm/types.ts:78-83`), rejecting on any hit. Secrets can only travel via `secretRefs` (symbolic names).
+3. **The digest excludes `workspaceRoot` (an absolute path)**, following the same thinking as upstream plan.ts:358-360 and Spark's `protocolHash` excluding timestamps. **Everything else goes into the digest, including `estimate`** — if the pricing table changes, re-approval should be required.
+4. **`estimate` follows PRICING discipline** (`llm/providers/registry.ts:19-37`): `unitPriceUsd` must carry a `source` and a `verifiedDate`; if it can't be looked up, it is `null`, and `upperBoundUsd` follows suit as `null`; **never filled with 0**.
 
-#### 1.1.4 审批：与 `WetLabLoop` 逐条对照（这是 CB-5 的成败判据落点）
+#### 1.1.4 Approval: a line-by-line comparison with `WetLabLoop` (this is where CB-5's pass/fail criteria land)
 
-| 湿实验（已验证机制） | 算力（本设计） | 位置 |
+| Wet experiment (a verified mechanism) | Compute (this design) | Location |
 |---|---|---|
-| `approve()` 只在 `awaiting_approval`；缺 `protocolHash` 拒；`actor` 必填（`wet_loop.ts:371-386`） | 同；缺 `plan.digest` 拒；`actor` 必填 | `compute/approval.ts` |
-| 落 `decision` record：`evidence:"inferred"`、`origin:{kind:"manual"}`、`metadata.kind:"approval"`、`protocolHash`（`wet_loop.ts:387-418`） | 同形；`metadata` 换 `planDigest` / `jobId` / `target` / `estimate` / `warningShown:true` / `uploadsCount` / `uploadBytes`；`derives_from` 边指向 experiment record（若有） | 同上 |
-| `approval` 存进 experiment meta（`wet_models.ts:129`） | 存进 `job.json.approval`（磁盘真源，K-3） | `job_store.ts` |
-| 重新 compile 作废旧 approve（`wet_loop.ts:262-304`） | 重新 `plan()` 得到新 digest → 旧 approval 作废（`job.json.approval=null`，留 `supersededApproval`） | `broker.ts` |
-| `execute()`：状态必须 `approved`、hash 重验、CAS 声明执行权并消费 approval（`wet_loop.ts:508-560`） | `dispatch()`：同四步；CAS 用 `job.json.rev`；**再加第五步**：`uploads.preflight()` 逐文件重验 path/size/sha256（上游 adapter.ts:399-415，`input_changed`） | `broker.ts` + `uploads.ts` |
-| `executing` 撞上并发 → `WetExecutionConflictError`（409） | `queued/starting/running` 撞上并发 → `ComputeDispatchConflictError`（409） | — |
-| 拒绝落 `decision`，`approval=null`（`wet_loop.ts:438-487`） | 同 | — |
-| MCP 不暴露 approve/reject/simulate（`mcp/tools.ts:704-732`） | `MCP_WITHHELD` 追加 `compute_approve` / `compute_run` / `compute_release`（理由见 §1.1.8） | 收口接线 |
-| CLI 审批要 TTY（`lab/cli.ts:150-251`） | 同一份代码搬到 `approval/gate.ts`，compute 的旁路 env 名 `SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN` | W5-2 β |
-| HTTP 审批 actor 必填、`actorSource:"http:explicit"`（`server/routes/lab.ts:32-37`） | 同 | W5-2 β |
+| `approve()` only valid in `awaiting_approval`; rejects if `protocolHash` is missing; `actor` is required (`wet_loop.ts:371-386`) | Same; rejects if `plan.digest` is missing; `actor` is required | `compute/approval.ts` |
+| Writes a `decision` record: `evidence:"inferred"`, `origin:{kind:"manual"}`, `metadata.kind:"approval"`, `protocolHash` (`wet_loop.ts:387-418`) | Same shape; `metadata` replaced with `planDigest` / `jobId` / `target` / `estimate` / `warningShown:true` / `uploadsCount` / `uploadBytes`; a `derives_from` edge points at the experiment record (if one exists) | Same as above |
+| `approval` stored in experiment meta (`wet_models.ts:129`) | Stored in `job.json.approval` (disk source of truth, K-3) | `job_store.ts` |
+| Recompiling invalidates the old approval (`wet_loop.ts:262-304`) | Re-running `plan()` yields a new digest → the old approval is invalidated (`job.json.approval=null`, kept as `supersededApproval`) | `broker.ts` |
+| `execute()`: state must be `approved`, hash re-verified, CAS claims the right to execute and consumes the approval (`wet_loop.ts:508-560`) | `dispatch()`: the same four steps; CAS uses `job.json.rev`; **plus a fifth step**: `uploads.preflight()` re-verifies path/size/sha256 file by file (upstream adapter.ts:399-415, `input_changed`) | `broker.ts` + `uploads.ts` |
+| Concurrent hits on `executing` → `WetExecutionConflictError` (409) | Concurrent hits on `queued/starting/running` → `ComputeDispatchConflictError` (409) | — |
+| Rejection writes a `decision`, `approval=null` (`wet_loop.ts:438-487`) | Same | — |
+| MCP does not expose approve/reject/simulate (`mcp/tools.ts:704-732`) | `MCP_WITHHELD` additionally covers `compute_approve` / `compute_run` / `compute_release` (rationale in §1.1.8) | Close-out wiring |
+| CLI approval requires a TTY (`lab/cli.ts:150-251`) | The same code moved to `approval/gate.ts`; compute's bypass env name is `SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN` | W5-2 β |
+| HTTP approval requires `actor`, `actorSource:"http:explicit"` (`server/routes/lab.ts:32-37`) | Same | W5-2 β |
 
-**「批的是哪一版、批了几次、花了多少」怎么查**：`decision` record 的 `metadata.planDigest` + `jobId`；`spark-research compute status <jobId>` 打印 `approval`/`consumedApproval`/`supersededApproval` 三段；`records timeline --type decision` 直接可查。`observation` record 的 `metadata` 带 `planDigest`、`decisionRecordId`、`actualCostUsd | null`。
+**How to check "which version was approved, how many times, and how much it cost"**: via the `decision` record's `metadata.planDigest` + `jobId`; `spark-research compute status <jobId>` prints the three sections `approval`/`consumedApproval`/`supersededApproval`; `records timeline --type decision` can be queried directly. The `observation` record's `metadata` carries `planDigest`, `decisionRecordId`, and `actualCostUsd | null`.
 
-#### 1.1.5 磁盘真源布局
+#### 1.1.5 Disk source-of-truth layout
 
 ```
 <project>/experiments/compute/jobs/<jobId>/
-  plan.json        审批对象本体（含 digest；只在 plan() 时写，之后只读）
-  job.json         三轴状态 + rev + approval/consumedApproval/supersededApproval + adapterHandle
-  uploads.json     preflight 时刻的 {path,size,sha256} 快照（与 plan.uploads 逐条对账）
-  run.log          远端 tee 回本地（local adapter 直接写这里）
-  exit-code        终态标记（local adapter 由 runner 写；modal 由 harvest 拉回）
-  harvest/         收割下来的 outputs
+  plan.json        the approval object itself (includes the digest; written only at plan() time, read-only after that)
+  job.json         three-axis state + rev + approval/consumedApproval/supersededApproval + adapterHandle
+  uploads.json     the {path,size,sha256} snapshot taken at preflight time (reconciled entry-by-entry against plan.uploads)
+  run.log          remote output tee'd back locally (local adapter writes here directly)
+  exit-code        the terminal-state marker (written by the runner for the local adapter; pulled back by harvest for modal)
+  harvest/         the harvested outputs
 ```
 
-`jobId` 形如 `cj-<base36 时间>-<uuid8>`，与 `RunStore` 的 runId 风格一致（`platform.ts:211`）。
+`jobId` looks like `cj-<base36 timestamp>-<uuid8>`, matching the style of `RunStore`'s runId (`platform.ts:211`).
 
-#### 1.1.6 adapters
+#### 1.1.6 Adapters
 
-- **local**（CB-2）：`run()` = `Bun.spawn(command, { cwd: <job>/workspace, stdout/stderr → fd 文件 })`，与 `platform.ts:218-233` 相同的「落文件不 pipe」理由。`recover()` 顺序：`exit-code` 存在 → 收割；否则 pid 活 → reattach（只轮询）；否则 → `interrupted → failed(recoverable=true)`。**它承担全部契约测试**（CI 零凭据）。`capabilities()` = `{ billable:false, persistentVolume:false, recovery:true, secretRefs:false }`。
-- **modal**（CB-4）：照 COMPUTE_DESIGN §1.3-1.4 逐条实现；`check()` 用 `apps.list()` 之类的只读调用做连通性探测（供 `capabilities --probe`）。e2e 两档：`tests/fixtures/compute/modal/*.json` 录制回放（CI）；真实冒烟手动。**录制层**：SDK 是 gRPC 不走 `HttpClient`，`http/fixture.ts` 的机制套不上——adapter 内部所有 SDK 调用经一个 `ModalGateway` 接口（`createSandbox / getSandbox / readVolume / writeVolume / deleteVolume / listByTag`），测试注入 `RecordedModalGateway`。这是 CB-4 唯一的新机制，写进 lane 任务书。
-- **ssh**：只有 `SshHost` schema（host key 指纹钉死、ProxyJump 逐跳、identity 路径禁 `%$`、user 禁 `@`、并发 1-100），`validateSshHost()` 有单测；`targets()` 列出它但 `available:false`。
+- **local** (CB-2): `run()` = `Bun.spawn(command, { cwd: <job>/workspace, stdout/stderr → fd files })`, for the same "write to files, don't pipe" reason as `platform.ts:218-233`. `recover()` order: `exit-code` exists → harvest; else pid alive → reattach (poll only); else → `interrupted → failed(recoverable=true)`. **It carries the full contract-test suite** (zero credentials in CI). `capabilities()` = `{ billable:false, persistentVolume:false, recovery:true, secretRefs:false }`.
+- **modal** (CB-4): implemented item-by-item per COMPUTE_DESIGN §1.3-1.4; `check()` uses a read-only call such as `apps.list()` for connectivity probing (for `capabilities --probe`). Two tiers of e2e: `tests/fixtures/compute/modal/*.json` record-and-replay (CI); a real manual smoke test. **Recording layer**: the SDK is gRPC, not `HttpClient`, so `http/fixture.ts`'s mechanism doesn't fit — all SDK calls inside the adapter go through a `ModalGateway` interface (`createSandbox / getSandbox / readVolume / writeVolume / deleteVolume / listByTag`), and tests inject a `RecordedModalGateway`. This is CB-4's only new mechanism, and it must be written into the lane's task brief.
+- **ssh**: only the `SshHost` schema exists (host key fingerprint pinned, `ProxyJump` hop-by-hop, identity path forbids `%$`, user forbids `@`, concurrency 1-100), with `validateSshHost()` unit-tested; `targets()` lists it but with `available:false`.
 
-#### 1.1.7 上传面（CB-3）
+#### 1.1.7 Upload surface (CB-3)
 
-纯函数层，输入 `workspaceRoot + requested paths` → 输出 `UploadEntry[]` 或结构化拒绝：
+A pure-function layer: input is `workspaceRoot + requested paths` → output is `UploadEntry[]` or a structured rejection:
 
-- deny-list 目录（`.git .ssh .aws .kube node_modules .venv __pycache__ …`）、路径正则（`.config/(gcloud|gh)`）、密钥文件名正则（`.env* .netrc credentials.json *.pem|key|p12`）——**fail-closed**：显式请求命中即抛 `UploadDeniedError`，不静默跳过。
-- gitignore 感知：优先 `git check-ignore --no-index` 批量；无 git 回退自解析 `.gitignore` + `.git/info/exclude`。
-- 双限额：`COUNT_LIMIT=200` / `BYTES_LIMIT=256 MiB`（数字写成常量并进 capabilities，审批面显示）。
-- symlink 一律不跟（穿过即拒）。
-- `preflight(entries)`：dispatch 前逐文件重验 canonical 路径、size、sha256，任一不符 → `UploadChangedError`（`input_changed`）。
+- Deny-list directories (`.git .ssh .aws .kube node_modules .venv __pycache__ …`), path regexes (`.config/(gcloud|gh)`), secret-filename regexes (`.env* .netrc credentials.json *.pem|key|p12`) — **fail-closed**: an explicit request that hits one of these throws `UploadDeniedError` rather than being silently skipped.
+- gitignore awareness: prefer batched `git check-ignore --no-index`; without git, fall back to self-parsing `.gitignore` + `.git/info/exclude`.
+- Dual limits: `COUNT_LIMIT=200` / `BYTES_LIMIT=256 MiB` (the numbers are written as constants and surfaced in capabilities, shown on the approval screen).
+- symlinks are never followed (traversal through one is rejected).
+- `preflight(entries)`: before dispatch, re-verifies each file's canonical path, size, and sha256; any mismatch → `UploadChangedError` (`input_changed`).
 
-#### 1.1.8 接线面
+#### 1.1.8 Wiring surface
 
-| 入口 | 内容 | 谁做 |
+| Entry point | Contents | Owner |
 |---|---|---|
-| CLI `compute` | `plan`（从 `--command/--upload/--output/--gpu/--timeout` 或 `--from-experiment <id>`）· `approve <jobId>`（TTY 门；`--run` 顺带派发）· `reject` · `run <jobId>`（dispatch）· `status` · `list` · `collect` · `cancel` · `release` · `targets` | W5-2 β |
-| HTTP | `server/routes/compute.ts`，`app.route("/api/compute", …)`（`server/app.ts:223-239` 那一段） | W5-2 β 写文件，`app.ts` 一行由收口接 |
-| MCP 暴露 | `compute_plan`（无副作用，返回 digest + warning + 逐文件清单 + `humanAction`）· `compute_status` · `compute_list` · `compute_collect`（只在 `delivery=pending` 时有意义） | 收口接 `mcp/tools.ts` |
-| **MCP 扣留** | `compute_approve`（花真钱的批准，AD-6 同构）· `compute_run`（派发 = 计费动作本身，与 `lab_simulate` 同构：「只允许从 approved 经人工进入」）· `compute_release`（删远端卷 = 破坏性，与 `project_archive` 同构） | 收口接 `MCP_WITHHELD`；`sub_agent.ts:137-147` 的 `assertNoWithheldGrants` 从同一张表派生，**自动覆盖 AD-14** |
-| ToolBus 计价 | `ToolCallCost.unit: "call" \| "computeSeconds"`（`agents/toolbus.ts:72-93`）；`costOf()` 对 `compute_*` 仍返回 `null`——**agent 经 MCP 只能 plan/查状态，从不派发**，真实花费由 broker 在 harvest 后 `BudgetLedger.record({ costUsd })`（`llm/budget.ts:134`）。broker 的 ledger 由调用方注入（orchestrator 的 `sessionBudget`，`agents/orchestrator.ts:806`） | W5-2 β |
-| capabilities | `CapabilityManifest.compute: { targets: ComputeTargetCapability[] }`，从 adapter 注册表推导；`narrative_parity` 加断言「文档声称 target 数 = 注册表」 | 收口接 `capabilities/index.ts` |
-| 证据图 | 桥路径：沿用 `ExperimentLoop.ingestOutputs()`（`experiment/loop.ts:290-335`）与 observation（`:354-384`），`metadata` 增 `computeTarget / planDigest / computeJobId / decisionRecordId / actualCostUsd`；通用路径（`compute run` 非实验）：一条 `observation`（`kind:"compute_output"`, `evidence:"computed"`）+ harvest 文件各一条 artifact record | W5-3 α |
+| CLI `compute` | `plan` (from `--command/--upload/--output/--gpu/--timeout` or `--from-experiment <id>`) · `approve <jobId>` (TTY gate; `--run` dispatches in the same step) · `reject` · `run <jobId>` (dispatch) · `status` · `list` · `collect` · `cancel` · `release` · `targets` | W5-2 β |
+| HTTP | `server/routes/compute.ts`, `app.route("/api/compute", …)` (the section at `server/app.ts:223-239`) | W5-2 β writes the file; the one line in `app.ts` is wired up at close-out |
+| MCP exposed | `compute_plan` (no side effects; returns digest + warning + a per-file listing + `humanAction`) · `compute_status` · `compute_list` · `compute_collect` (only meaningful when `delivery=pending`) | wired into `mcp/tools.ts` at close-out |
+| **MCP withheld** | `compute_approve` (an approval that spends real money, isomorphic to AD-6) · `compute_run` (dispatch = the billable action itself, isomorphic to `lab_simulate`: "only allowed to enter from `approved` via a human") · `compute_release` (deleting a remote volume = destructive, isomorphic to `project_archive`) | wired into `MCP_WITHHELD` at close-out; `sub_agent.ts:137-147`'s `assertNoWithheldGrants` is derived from the same table, **automatically covering AD-14** |
+| ToolBus pricing | `ToolCallCost.unit: "call" \| "computeSeconds"` (`agents/toolbus.ts:72-93`); `costOf()` still returns `null` for `compute_*` — **an agent going through MCP can only plan / check status, never dispatch**; the real spend is recorded by the broker after harvest via `BudgetLedger.record({ costUsd })` (`llm/budget.ts:134`). The broker's ledger is injected by the caller (the orchestrator's `sessionBudget`, `agents/orchestrator.ts:806`) | W5-2 β |
+| capabilities | `CapabilityManifest.compute: { targets: ComputeTargetCapability[] }`, derived from the adapter registry; `narrative_parity` gains an assertion that "the target count claimed in docs = the registry" | wired into `capabilities/index.ts` at close-out |
+| Evidence graph | Bridge path: reuses `ExperimentLoop.ingestOutputs()` (`experiment/loop.ts:290-335`) and observation (`:354-384`), with `metadata` gaining `computeTarget / planDigest / computeJobId / decisionRecordId / actualCostUsd`; generic path (`compute run` outside of an experiment): one `observation` (`kind:"compute_output"`, `evidence:"computed"`) plus one artifact record per harvested file | W5-3 α |
 
-#### 1.1.9 CB-6 判断：并列 + 桥，不加实验状态
+#### 1.1.9 The CB-6 call: sits alongside, plus a bridge, without adding a new experiment state
 
-**结论：做，作为「桥」，且不动 `EXPERIMENT_STATES`。** 理由：
+**Conclusion: build it, as a "bridge," and do not touch `EXPERIMENT_STATES`.** Rationale:
 
-1. `SimulationPlatform.submit()` 契约 #2 非阻塞（`simulation/models.ts:90-94`）与审批门不相容（K-1）。
-2. 给干实验状态机加 `awaiting_compute_approval` 会触发纪律 13 的全套消费方清扫（前端状态名字符串比较、MCP 描述、llms.txt、SKILL.md）——v0.3.0 就是这么回归的。**v0.5 不冒这个险。**
+1. `SimulationPlatform.submit()`'s contract #2 is non-blocking (`simulation/models.ts:90-94`), which is incompatible with an approval gate (K-1).
+2. Adding `awaiting_compute_approval` to the dry-experiment state machine would trigger the full consumer-side sweep required by discipline rule 13 (frontend state-name string comparisons, MCP descriptions, llms.txt, SKILL.md) — that is exactly how v0.3.0 regressed. **v0.5 does not take this risk.**
 
-**桥的形状**（`compute/sim_bridge.ts` + `experiment/loop.ts` 一个分支 + `experiment/models.ts` 两个字段）：
+**The shape of the bridge** (`compute/sim_bridge.ts` + one branch in `experiment/loop.ts` + two fields in `experiment/models.ts`):
 
-- `ExperimentMeta`（`experiment/models.ts:48-70`）增 `computeTarget: "local" | "modal" | null` 与 `computeJobId: string | null`（可选字段，老 record 缺省 = local，不迁移）。
-- `exp new --target modal` 写入 `computeTarget`。
-- `ExperimentLoop.run()` 在 `dry_run` 分支：`computeTarget` 为 null → 原路径不变；否则 `platform.prepare()` 照旧（本地归一化、`stageDir/params.json`），然后 `planFromPrepared()`：`command = [python, "runner.py", "--params", "params.json", "--outdir", "."]`，`uploads = [runner.py, sim_runtime.py, params.json]`，`outputs = expectedOutputs + ["done.json","progress.json","stdout.log"]`，`resources.gpu` 从 `--gpu` 或 platform 默认（openmm 默认 `null`，用户显式要）。写 `computeJobId`，状态**停在 `dry_run`**，`lastError = null`，`exp status` 显示「算力 job <id> 等待审批：spark-research compute approve <id> --run」。
-- 人批准并派发后，`exp run <id> --resume` → `broker.poll(jobId)` 而不是 `platform.poll(runId)`；`delivery=complete` 后 `materializeHarvest()` 把 harvest 目录回填成 `RunStore` 认得的 `<runs>/<runId>/` （`done.json` + 产出 + `run.json`，`run_store.ts:18-34`），随后 `platform.collect(runId)` **原样工作**，`ingestOutputs()` 原样工作。
-- 因此 `SimulationPlatform` 接口、`SubprocessSimulationPlatform`、`openmm/index.ts`、`pyref` **零改动**；`simulation/registry.ts` 零改动（这也为 W5-3 β 的平台三件套让路）。
+- `ExperimentMeta` (`experiment/models.ts:48-70`) gains `computeTarget: "local" | "modal" | null` and `computeJobId: string | null` (optional fields; old records default to local, with no migration needed).
+- `exp new --target modal` writes `computeTarget`.
+- In `ExperimentLoop.run()`'s `dry_run` branch: if `computeTarget` is null, the original path is unchanged; otherwise `platform.prepare()` proceeds as before (local normalization, `stageDir/params.json`), followed by `planFromPrepared()`: `command = [python, "runner.py", "--params", "params.json", "--outdir", "."]`, `uploads = [runner.py, sim_runtime.py, params.json]`, `outputs = expectedOutputs + ["done.json","progress.json","stdout.log"]`, and `resources.gpu` taken from `--gpu` or the platform default (openmm defaults to `null`, requiring the user to opt in explicitly). `computeJobId` is written, the state **stays at `dry_run`**, `lastError = null`, and `exp status` shows "compute job <id> awaiting approval: spark-research compute approve <id> --run".
+- Once a human approves and dispatches, `exp run <id> --resume` calls `broker.poll(jobId)` instead of `platform.poll(runId)`; once `delivery=complete`, `materializeHarvest()` writes the harvest directory back into the form `RunStore` understands, at `<runs>/<runId>/` (`done.json` + outputs + `run.json`, `run_store.ts:18-34`), after which `platform.collect(runId)` **works unmodified**, and `ingestOutputs()` works unmodified.
+- As a result, the `SimulationPlatform` interface, `SubprocessSimulationPlatform`, `openmm/index.ts`, and `pyref` get **zero changes**; `simulation/registry.ts` gets zero changes (this also clears the way for W5-3 β's three-platform bundle).
 
-**验收**（方案 §3.3 原样）：真实 OpenMM 任务 plan → approve（digest 一次性消费）→ dispatch → 本地进程 SIGKILL → 重启 `exp run --resume` 收割 → observation 进图。CI 版用 local adapter 跑同一条路径（`tests/unit/compute_e2e.test.ts` + `compute_driver.ts`），Modal 版录制回放 + 手动冒烟。
+**Acceptance** (unchanged from proposal §3.3): a real OpenMM task is planned → approved (one-time digest consumption) → dispatched → the local process is SIGKILLed → `exp run --resume` after restart harvests it → the observation enters the graph. The CI version runs the same path with the local adapter (`tests/unit/compute_e2e.test.ts` + `compute_driver.ts`); the Modal version uses record-and-replay plus a manual smoke test.
 
-#### 1.1.10 凭据（AD-2）
+#### 1.1.10 Credentials (AD-2)
 
-- Modal token 存 `credentials.json` 的 `connectors.modal = { token_id, token_secret }`——`CredentialStore` 本来就是按 id 键控的 KV（`daemon/credentials.ts:76-80`），不为 compute 另起存储。
-- adapter 拿到的是 `CredentialProvider`（`connectors/base.ts:31-34`）——与 connector 同一接口，`get("modal")` 只在 broker 所在进程（CLI/server）内解析；kernel 侧 permit set 不变（`python_kernel` 只有 `credentials` 元数据方法）。
-- `secretRefs` 在 dispatch 时刻 `provider.get(ref)` → `modal.secrets.fromObject(...)` → 用完即弃；`job.json`/`plan.json` 只有符号名。测试：把 `credentials.json` 内容当 needle，grep 整个 job 目录与所有 record content → 零命中。
+- The Modal token is stored under `connectors.modal = { token_id, token_secret }` in `credentials.json` — `CredentialStore` is already a KV store keyed by id (`daemon/credentials.ts:76-80`), so no separate store is created for compute.
+- What the adapter receives is a `CredentialProvider` (`connectors/base.ts:31-34`) — the same interface as connectors — and `get("modal")` is only resolved inside the process where the broker lives (CLI/server); the kernel-side permit set is unchanged (`python_kernel` only has the `credentials` metadata method).
+- `secretRefs` are resolved at dispatch time via `provider.get(ref)` → `modal.secrets.fromObject(...)` → discarded immediately after use; `job.json`/`plan.json` only ever contain symbolic names. Test: treat the content of `credentials.json` as a needle and grep the entire job directory and all record content — zero hits.
 
-### 1.2 C4 · embedding 抽象与 novelty 语义化
+### 1.2 C4 · Embedding abstraction and semanticizing novelty
 
-#### 1.2.1 位置与层次
+#### 1.2.1 Location and layering
 
 ```
 backend/src/llm/embeddings/
-  types.ts           EmbeddingAdapter / EmbedRequest / EmbedResponse（AD-13 同构：ok=false ⇒ vectors=null）
-  openai_compat.ts   POST {baseUrl}/v1/embeddings —— 覆盖 openai / qwen(DashScope 兼容模式) / ollama / vLLM / 自建
-  router.ts          EmbeddingRouter：读 config `embeddingModel`（形如 "openai/text-embedding-3-small" / "local/nomic-embed-text"），
-                     解析 provider → apiKey（复用 PROVIDER_API_KEY_ENV，providers/registry.ts）→ baseUrl（复用 router.ts 的 ADAPTERS baseUrl 与 LOCAL_BASE_URL_ENV）
+  types.ts           EmbeddingAdapter / EmbedRequest / EmbedResponse (isomorphic to AD-13: ok=false ⇒ vectors=null)
+  openai_compat.ts   POST {baseUrl}/v1/embeddings — covers openai / qwen (DashScope compatibility mode) / ollama / vLLM / self-hosted
+  router.ts          EmbeddingRouter: reads config `embeddingModel` (of the form "openai/text-embedding-3-small" / "local/nomic-embed-text"),
+                     resolves provider → apiKey (reusing PROVIDER_API_KEY_ENV, providers/registry.ts) → baseUrl (reusing router.ts's ADAPTERS baseUrl and LOCAL_BASE_URL_ENV)
   calibration.ts     SEMANTIC_THRESHOLDS: { [modelId]: { high: number, calibratedOn: string, sampleSize: number, source: "tests/fixtures/novelty/calibration.json" } }
 ```
 
-**与 `ProviderAdapter` 的关系：同层（都是 provider 适配器），不同契约。** 不让 `EmbeddingAdapter extends ProviderAdapter`——`ProviderRequest`（`llm/providers/types.ts:17-25`）有 `messages/options/tools`，embedding 一个都用不上；硬套只会造出一个「messages 恒空」的假请求。**复用的是基础设施**：`failure()`/`llmFailure` 的 AD-13 纪律、`redactSecrets`、`providerApiKeyEnv`、`configuredLlmTimeoutMs`、`fetchImpl` 注入、`HttpClient`（**embedding 走 `http/client.ts` 的 `HttpClient` 而不是裸 fetch**——这样 `http/fixture.ts` 的录制回放零改动可用，见 §1.2.4）。
+**Relationship to `ProviderAdapter`: same layer (both are provider adapters), different contract.** `EmbeddingAdapter` does not `extend ProviderAdapter` — `ProviderRequest` (`llm/providers/types.ts:17-25`) has `messages/options/tools`, none of which embedding uses; forcing the fit would just produce a fake request whose `messages` is permanently empty. **What is reused is the infrastructure**: the AD-13 discipline of `failure()`/`llmFailure`, `redactSecrets`, `providerApiKeyEnv`, `configuredLlmTimeoutMs`, injecting `fetchImpl`, and `HttpClient` (**embedding goes through `http/client.ts`'s `HttpClient` rather than raw fetch** — this makes `http/fixture.ts`'s record-and-replay usable with zero changes, see §1.2.4).
 
-Ollama：规划目录 §(b) 写「原生端点 `/api/embeddings`，是否兼容 `/v1/embeddings` 未核实」。本文的选择：**只实现 OpenAI 兼容形状**（`/v1/embeddings`），Ollama 通过其 OpenAI 兼容层接入；lane β 开工第一件事在本机 Ollama 上核一次这个端点，核不过就加 `ollama_native.ts`（`/api/embed`）——两种都在 β 的所有权内，不影响别人。
+Ollama: the planning directory §(b) states "the native endpoint is `/api/embeddings`; whether it is compatible with `/v1/embeddings` has not been verified." This document's choice: **implement only the OpenAI-compatible shape** (`/v1/embeddings`), with Ollama accessed through its OpenAI-compatible layer; the first thing lane β does when starting work is verify this endpoint against local Ollama, and if it doesn't work, add `ollama_native.ts` (`/api/embed`) — both are within β's ownership and don't affect anyone else.
 
-#### 1.2.2 novelty 怎么消费
+#### 1.2.2 How novelty consumes it
 
-现状：`ideation/affinity.ts:73-98` 的 `coverage()`/`claimAffinity()` 是词面覆盖率；`ideation/novelty.ts:49` `HIGH_AFFINITY = 0.75`；`constrainRating()`（`novelty.ts:391`）用 `candidate.affinity` 约束评级；`NoveltyDeps`（`novelty.ts:617-631`）有 `highAffinity?` 注入位。
+Current state: `ideation/affinity.ts:73-98`'s `coverage()`/`claimAffinity()` is lexical coverage; `ideation/novelty.ts:49` has `HIGH_AFFINITY = 0.75`; `constrainRating()` (`novelty.ts:391`) constrains the rating using `candidate.affinity`; `NoveltyDeps` (`novelty.ts:617-631`) has a `highAffinity?` injection slot.
 
-改动（全部在 β 所有权内）：
+Changes (all within β's ownership):
 
-1. `NoveltyCandidate`（`novelty.ts:159`）增 `semanticAffinity: number | null` 与 `affinityBasis: "semantic" | "lexical"`。
-2. `NoveltyDeps` 增 `embedder?: Pick<EmbeddingRouter, "embed" | "modelId">`。检索完成后一次批量 `embed([...claimTexts, ...candidateTexts])`；`ok=false` → 全部 `semanticAffinity=null`、`affinityBasis="lexical"`，并在报告「口径说明」写明「embedding 不可用（<error.kind>），本次按词面」——**不静默降级**（`feedback_silent_fallback_logging` 同一纪律）。
-3. `constrainRating()` 的门槛取 `basis === "semantic" ? SEMANTIC_THRESHOLDS[modelId].high : HIGH_AFFINITY`；**模型未标定 → 强制 lexical**（`affinityBasis="lexical"`，即便 embed 成功——向量算出来了也不拿来做约束，只在报告里作参考列）。
-4. 报告（`renderNoveltyReport`，`novelty.ts:519`）每个候选两列：词面 / 语义；「口径说明」写清本次的 basis、模型、阈值与标定日期。AD-8「模型原判与校正后都留」不变，再加一层「两种相似度都留」。
+1. `NoveltyCandidate` (`novelty.ts:159`) gains `semanticAffinity: number | null` and `affinityBasis: "semantic" | "lexical"`.
+2. `NoveltyDeps` gains `embedder?: Pick<EmbeddingRouter, "embed" | "modelId">`. Once retrieval is complete, a single batched `embed([...claimTexts, ...candidateTexts])` call is made; if `ok=false`, everything falls back to `semanticAffinity=null`, `affinityBasis="lexical"`, and the report's "methodology note" states "embedding unavailable (<error.kind>); falling back to lexical for this run" — **no silent degradation** (the same discipline as `feedback_silent_fallback_logging`).
+3. `constrainRating()`'s threshold is `basis === "semantic" ? SEMANTIC_THRESHOLDS[modelId].high : HIGH_AFFINITY`; **an uncalibrated model forces lexical** (`affinityBasis="lexical"`, even when embedding succeeds — the vector is computed but not used as a constraint, appearing only as a reference column in the report).
+4. The report (`renderNoveltyReport`, `novelty.ts:519`) shows two columns per candidate: lexical / semantic; the "methodology note" spells out this run's basis, model, threshold, and calibration date. AD-8's "keep both the model's original judgment and the corrected one" is unchanged, with an added layer of "keep both kinds of similarity."
 
-#### 1.2.3 重标定：样本从哪来
+#### 1.2.3 Recalibration: where do the samples come from
 
-这是 C4 真正的难点，规划目录没回答。本文的答案：
+This is C4's real difficulty, and the planning directory doesn't answer it. This document's answer:
 
-| 来源 | 数量 | 怎么构造 |
+| Source | Count | How to construct |
 |---|---|---|
-| **已发表（existing）** | ≥10 claim | 从**既有 fixture 磁带**里挑真实论文（`tests/fixtures/literature/*.json`，P2 起录制的 OpenAlex/EuropePMC/arXiv 真响应；`tests/fixtures/proteins/` 亦可）。每篇写一条**改述**的 claim（不抄标题，换措辞、换语序、允许中文），正样本 = 该论文，负样本 = 同磁带里同领域的 3 篇邻近工作 |
-| **杜撰组合（novel）** | ≥10 claim | 把两个磁带里不相干的方法/对象拼成一条 claim（照 devlog P4 标定表 (b) 的做法），最近邻从全部磁带候选里取 |
-| **P4 原有 2 条** | 2 | 原样保留，作为历史对照 |
+| **Published (existing)** | ≥10 claims | Pick real papers from **existing fixture cassettes** (`tests/fixtures/literature/*.json`, real OpenAlex/EuropePMC/arXiv responses recorded starting at P2; `tests/fixtures/proteins/` also works). Write one **paraphrased** claim per paper (don't copy the title — reword it, reorder it, Chinese is allowed); the positive sample is that paper, and the negative samples are 3 neighboring works in the same field from the same cassette |
+| **Fabricated combinations (novel)** | ≥10 claims | Splice together unrelated methods/subjects from two cassettes into one claim (following the approach in devlog P4's calibration table (b)); nearest neighbors are drawn from the full pool of cassette candidates |
+| **The 2 original from P4** | 2 | Kept as-is, as a historical control |
 
-落盘 `tests/fixtures/novelty/calibration.json`：`{ claim, lang, expected: "existing"|"novel", positives: [paperKey], negatives: [paperKey], cassette }`。
+Written to disk at `tests/fixtures/novelty/calibration.json`: `{ claim, lang, expected: "existing"|"novel", positives: [paperKey], negatives: [paperKey], cassette }`.
 
-**向量从哪来、CI 怎么跑**：embedding adapter 走 `HttpClient` → `FixtureHttp` 录制 `/v1/embeddings` 的响应到 `tests/fixtures/embeddings/<modelId>.json`（`http/fixture.ts` 的 key 是 method + 规范化 URL + body hash，POST body 里的文本经 `bodyHash` 区分，**请求头永远不落盘**——凭据结构上进不了 fixture）。CI 回放，零网络。
+**Where the vectors come from, and how CI runs it**: the embedding adapter goes through `HttpClient` → `FixtureHttp` records the `/v1/embeddings` responses to `tests/fixtures/embeddings/<modelId>.json` (`http/fixture.ts`'s key is method + normalized URL + body hash; text in the POST body is distinguished via `bodyHash`, and **request headers are never written to disk** — credentials structurally cannot end up in a fixture). CI replays them, with zero network access.
 
-**标定测试**（`tests/unit/novelty_calibration.test.ts`）：对每个已标定模型，算 20+ 条 claim 的正/负余弦分布，断言 `SEMANTIC_THRESHOLDS[model].high` 落在「最高负样本」与「最低正样本」之间且**两侧余量各 ≥ 0.05**；`sampleSize` 必须等于 calibration.json 条数（登记表对撞真源，narrative_parity 纪律）。阴性对照：把阈值改 ±0.1 → 红；删 5 条样本 → `sampleSize` 对不上 → 红。
+**Calibration test** (`tests/unit/novelty_calibration.test.ts`): for each calibrated model, compute the positive/negative cosine-similarity distribution over 20+ claims, and assert that `SEMANTIC_THRESHOLDS[model].high` falls between "the highest negative sample" and "the lowest positive sample" with **a margin of ≥ 0.05 on each side**; `sampleSize` must equal the number of entries in calibration.json (registry checked against the source of truth, the narrative_parity discipline). Negative control: shift the threshold by ±0.1 → must fail; delete 5 samples → `sampleSize` mismatch → must fail.
 
-**用哪个模型录**：由 lane β 按用户实际持有的 key 决定——首选 `openai/text-embedding-3-small`（用户若有 `OPENAI_API_KEY`），备选本机 Ollama `nomic-embed-text`（零 key）。**只对录过 fixture 的模型登记阈值**；表里没有的模型永远回退词面（K-4）。
+**Which model to record with**: decided by lane β based on the keys the user actually holds — first choice `openai/text-embedding-3-small` (if the user has `OPENAI_API_KEY`), fallback local Ollama `nomic-embed-text` (zero keys needed). **Thresholds are only registered for models that have a recorded fixture**; any model not in the table always falls back to lexical (K-4).
 
-#### 1.2.4 配置与 capabilities
+#### 1.2.4 Configuration and capabilities
 
-- `CONFIG_SETTINGS` 增 `embeddingModel`（`config/index.ts:99` 那张表；`envVar: "SPARK_RESEARCH_EMBEDDING_MODEL"`，默认 `null` = 词面）。
-- `CapabilityManifest` 增 `embedding: { configured: boolean; model: string | null; calibrated: boolean; threshold: number | null }`——外部 agent 在 novelty 之前就知道本机是词面还是语义（AD-12）。这一段改 `capabilities/index.ts`，收口接。
+- `CONFIG_SETTINGS` gains `embeddingModel` (in the table at `config/index.ts:99`; `envVar: "SPARK_RESEARCH_EMBEDDING_MODEL"`, defaulting to `null` = lexical).
+- `CapabilityManifest` gains `embedding: { configured: boolean; model: string | null; calibrated: boolean; threshold: number | null }` — an external agent knows, before novelty even runs, whether this machine is lexical or semantic (AD-12). This section changes `capabilities/index.ts` and is wired up at close-out.
 
-### 1.3 C5-② · SMILES → 2D 结构图
+### 1.3 C5-② · SMILES → 2D structure diagram
 
-#### 1.3.1 形态
+#### 1.3.1 Shape
 
 ```
 backend/src/chem/
   depict.py     stdin JSON {smiles, width?, height?} → stdout JSON {ok, svg, canonicalSmiles, formula, molWeight, rdkitVersion} | {ok:false, error}
-  depict.ts     depictSmiles(input, deps): 起子进程（resolvePython()，simulation/platform.ts:26-31）→ 校验 SVG（以 "<svg" 开头、无 <script>）→ ArtifactStore.save() → artifact record
+  depict.ts     depictSmiles(input, deps): spawns a subprocess (resolvePython(), simulation/platform.ts:26-31) → validates the SVG (starts with "<svg", no <script>) → ArtifactStore.save() → an artifact record
   cli.ts        spark-research chem depict "<SMILES>" [--name mol] [--json]
 server/routes/chem.ts   POST /api/chem/depict {smiles, name?}
 ```
 
-- **为什么是子进程不是 `PythonKernel`**（异议 X-5）：一次 depict 是 100ms 级的无状态调用，不需要常驻 kernel；走 daemon 会把 `ControlRepl`/permit 一并拖进来（`simulation/platform.ts:23-26` 已为仿真层做过同样判断）。`rdkit>=2023.9` 已在 `pyproject.toml` 依赖里，**零新依赖**。
-- **artifact 通道**：`ArtifactStore.save()`（`artifacts/store.ts:172-232`）已把 `.svg` 映射为 `image/svg+xml`（`:65-82`）。`depict.ts` 先把 SVG 写到 `<project>/artifacts/tmp/<name>.svg` 再 `save()`，`lineageMessages` 记 `{kind:"write", file, content:"rdkit depict <canonicalSmiles>"}`；然后 `records.createFromArtifact(saved, { evidence:"computed", metadata:{ kind:"chem_depiction", smiles, canonicalSmiles, formula, molWeight, rdkitVersion } })`（同 `experiment/loop.ts:316-333` 的用法）。
-- **前端**：`center.tsx:355-400` 的 `ArtifactsView` 只有 `.md` 与 `<pre>` 两个分支。加第三个：`contentType === "image/svg+xml"` → `<img src={"data:image/svg+xml;utf8," + encodeURIComponent(body)} />`。用 `<img>` 而不是 innerHTML：SVG 里即便混入 `<script>` 也不会执行——后端已校验，这是第二道。**不引入任何前端依赖**（AD-7）。
-- **入口**：CLI `chem` 是 `index.ts` 新 `case`；MCP `chem_depict`（`request: POST /api/chem/depict`，`present` 里写「产物 id + 在工作台「产物」页可看」）。
-- **不建 SKILL.md**：这是一个能力原语，不是技能；不占方案 §2.2 的技能配额。以后 chem 类技能集成时再写。
+- **Why a subprocess rather than `PythonKernel`** (objection X-5): a single depict call is a 100ms-scale, stateless invocation that doesn't need a persistent kernel; going through the daemon would drag in `ControlRepl`/permits as well (`simulation/platform.ts:23-26` already made the same call for the simulation layer). `rdkit>=2023.9` is already in the `pyproject.toml` dependencies — **zero new dependencies**.
+- **Artifact channel**: `ArtifactStore.save()` (`artifacts/store.ts:172-232`) already maps `.svg` to `image/svg+xml` (`:65-82`). `depict.ts` first writes the SVG to `<project>/artifacts/tmp/<name>.svg`, then calls `save()`, with `lineageMessages` recording `{kind:"write", file, content:"rdkit depict <canonicalSmiles>"}`; then `records.createFromArtifact(saved, { evidence:"computed", metadata:{ kind:"chem_depiction", smiles, canonicalSmiles, formula, molWeight, rdkitVersion } })` (the same usage as `experiment/loop.ts:316-333`).
+- **Frontend**: `center.tsx:355-400`'s `ArtifactsView` currently has only two branches, `.md` and `<pre>`. Add a third: `contentType === "image/svg+xml"` → `<img src={"data:image/svg+xml;utf8," + encodeURIComponent(body)} />`. Use `<img>` rather than innerHTML: even if a `<script>` got mixed into the SVG, it would not execute — the backend has already validated it, so this is the second line of defense. **No frontend dependency is introduced** (AD-7).
+- **Entry points**: the CLI `chem` is a new `case` in `index.ts`; MCP's `chem_depict` (`request: POST /api/chem/depict`, with `present` stating "artifact id + viewable on the workbench's 'Artifacts' page").
+- **No SKILL.md is created**: this is a capability primitive, not a skill; it does not count against the skill quota in proposal §2.2. It will get one later when chem-type skills are integrated.
 
-#### 1.3.2 验证
+#### 1.3.2 Validation
 
-- 单测：合法 SMILES → SVG 合法 + record 形状；非法 SMILES → `ok:false` 且**不落任何 record/artifact**（阴性对照：让脚本对非法输入吐空 SVG → 断言必须红）；rdkit 缺失 → 可操作的错误信息（照 `PlatformAvailability.reason` 口径）。
-- `ui_cli_parity.test.ts` 加第四组：CLI depict 与 HTTP depict 的 record 指纹一致。
-- Playwright 新增一条「⑭ depict → 产物列表出现 .svg → `img.naturalWidth > 0`」。
+- Unit tests: a valid SMILES → a valid SVG + the correct record shape; an invalid SMILES → `ok:false` and **no record/artifact is written at all** (negative control: make the script emit an empty SVG for invalid input → the assertion must fail); rdkit missing → an actionable error message (following the `PlatformAvailability.reason` convention).
+- `ui_cli_parity.test.ts` gains a fourth group: the record fingerprint from CLI depict and HTTP depict must match.
+- A new Playwright case is added: "⑭ depict → a .svg appears in the artifacts list → `img.naturalWidth > 0`."
 
-### 1.4 C2 / C3 · 集成流水线（可重复 checklist）
+### 1.4 C2 / C3 · Integration pipeline (a repeatable checklist)
 
-#### 1.4.0 前置：V26 限速器（先于任何 NCBI 系 connector）
+#### 1.4.0 Prerequisite: the V26 rate limiter (before any NCBI-family connector)
 
 ```
 backend/src/http/ratelimit.ts
   HOST_RATE_POLICIES: Record<host, { rps: number; burst: number; source: string; verifiedDate: string }>
-  class RateLimitedHttp implements HttpClient   // 装饰器：按 new URL(url).host 取令牌桶，同 host 的所有 connector 共池
+  class RateLimitedHttp implements HttpClient   // decorator: takes a token bucket keyed by new URL(url).host; all connectors on the same host share one pool
   rateLimitedHttp(inner: HttpClient = defaultHttp): HttpClient
 ```
 
-- 键控是 **host**，不是 connector（方案 §0.2·补 的结论）。首批策略：`eutils.ncbi.nlm.nih.gov` 3 rps（匿名，NCBI 官方文档 NBK25497 口径，lane 录入时附 URL 与核实日期）、`rest.kegg.jp` 3 rps、`api.crossref.org` / `api.openalex.org` 按其 polite pool 文档。**没写来源的数字不许进表**（PRICING 同一纪律）。
-- 接线点：`ConnectorRegistry` 构造函数（`connectors/registry.ts:90-92`）`this.options.http ?? rateLimitedHttp()`；注入的 `http`（fixture/stub）**不包**，测试确定性不受影响。
-- 测试：`tests/concurrency/host_ratelimit.test.ts`——`pubmed` + `ncbi` + 一个 staged eutils connector 各 40 并发打一个 `StubHttp` 计时器，断言任意 1s 窗口内落到 `eutils.ncbi.nlm.nih.gov` 的请求 ≤ `rps + burst`；阴性对照：去掉装饰器 → 红；把 key 改成 connector 名 → 三者各自 3 rps 合计 9 → 红。
-- **门禁**：`narrative_parity` 加一条「`BUILTIN_CONNECTORS` 里 `metadata.domain` 属于 `eutils.ncbi.nlm.nih.gov` 的 connector 数 ≥ 2 时，`HOST_RATE_POLICIES` 必须有该 host」——把「先限速再集成」从纪律变成红绿。
+- The key is the **host**, not the connector (the conclusion of proposal §0.2 supplement). First-batch policies: `eutils.ncbi.nlm.nih.gov` at 3 rps (anonymous, per NCBI's official documentation NBK25497 — the lane must attach the URL and verification date when entering it), `rest.kegg.jp` at 3 rps, `api.crossref.org` / `api.openalex.org` per their polite-pool documentation. **A number with no cited source may not go into the table** (the same discipline as PRICING).
+- Wiring point: the `ConnectorRegistry` constructor (`connectors/registry.ts:90-92`) uses `this.options.http ?? rateLimitedHttp()`; an injected `http` (fixture/stub) **is not wrapped**, so test determinism is unaffected.
+- Test: `tests/concurrency/host_ratelimit.test.ts` — `pubmed` + `ncbi` + a staged eutils connector each fire 40 concurrent requests at a `StubHttp` timer, asserting that within any 1s window, requests landing on `eutils.ncbi.nlm.nih.gov` are ≤ `rps + burst`; negative control: remove the decorator → must fail; change the key to the connector name → the three each get 3 rps for a combined 9 → must fail.
+- **Gate check**: `narrative_parity` gains a rule that "when the number of connectors in `BUILTIN_CONNECTORS` whose `metadata.domain` is `eutils.ncbi.nlm.nih.gov` is ≥ 2, `HOST_RATE_POLICIES` must have an entry for that host" — turning "rate-limit before integrating" from a discipline into a red/green check.
 
-#### 1.4.1 分流判据（做在集成第一步，不做在最后）
+#### 1.4.1 Routing criteria (applied at the first step of integration, not the last)
 
-| 判据 | 走 P15 声明式 manifest（`connectors/manifest.ts`，`ext verify` 自动过并发不变式） | 走 TS connector（`HttpConnector` 子类） |
+| Criterion | Goes through the P15 declarative manifest (`connectors/manifest.ts`, `ext verify` automatically covers the concurrency invariant) | Goes through a TS connector (a `HttpConnector` subclass) |
 |---|---|---|
-| 响应 | JSON | XML / text / 200+空 body 分支（BindingDB） |
-| 请求 | 单次 | 多跳（esearch → esummary） |
-| 参数 | 可枚举/可类型化 | 需要运行期改写（`query→term`、固定 `db=`） |
-| 本批候选 | biorxiv（JSON 单跳，`server` 枚举）· string-db（JSON）· reactome（JSON） | clinvar（eutils 两步）· opentargets（GraphQL POST，多实体要拆 tool） |
+| Response | JSON | XML / text / a 200+empty-body branch (BindingDB) |
+| Request | Single call | Multi-hop (esearch → esummary) |
+| Parameters | Enumerable/typeable | Requires runtime rewriting (`query→term`, a fixed `db=`) |
+| This batch's candidates | biorxiv (single-hop JSON, `server` enum) · string-db (JSON) · reactome (JSON) | clinvar (two-step eutils) · opentargets (GraphQL POST, multi-entity requires splitting into tools) |
 
-规划目录的 staged 全部是 TS 形态（`workstreams/connectors/staged/clinvar.ts` 等）。**分流不是为了省事，是为了让能走 manifest 的源自动获得 `ext verify` 的 100 并发不变式**；走不了的照 TS 集成，并发不变式手写进 `tests/concurrency/connector_race.test.ts`。
+The planning directory's staged connectors are all in TS form (`workstreams/connectors/staged/clinvar.ts` etc.). **Routing isn't about convenience — it's about letting sources that can go through the manifest automatically get `ext verify`'s 100-concurrency invariant**; sources that can't go this route are integrated as TS, with the concurrency invariant written by hand into `tests/concurrency/connector_race.test.ts`.
 
-#### 1.4.2 connector 集成 checklist（每个源一份，写进 lane devlog）
-
-```
-□ 0  拉动来源写清：F-1 缺口 / 用户课题 / 已集成能力短板（三选一，写不出来不集成）
-□ 1  分流判据（§1.4.1）填表；决定 manifest 还是 TS
-□ 2  若 host 属 NCBI/KEGG 等限速主机：确认 HOST_RATE_POLICIES 已有该 host（否则先做 §1.4.0）
-□ 3  从 staged/<id>.ts 拷入 backend/src/connectors/<id>.ts；去掉文件头 STAGED/UNTESTED 段；
-     metadata.caveat 只留对用户有用的限制（限速/字段版本差异），删「未测试」字样
-□ 4  staged/<id>.test.ts → tests/unit/connector_<id>.test.ts（string-db → connector_string_db）
-□ 5  FIXTURE_MODE=record bun test tests/unit/connector_<id>.test.ts → tests/fixtures/<domain>/<id>.json；
-     检查 fixture 里无 api_key/mailto 等（http/fixture.ts VOLATILE_QUERY_KEYS 已剔除，但仍人工 grep 一次）
-□ 6  把录制块从 skipIf(!RECORDING) 改成常规回放用例（不许留 skip：方案 §6.1「0 skip」）
-□ 7  注册两处：BUILTIN_CONNECTORS（按域）+ CONNECTOR_CLASSES（connectors/registry.ts:36-88）；
-     新域（pathways/omics）在 BUILTIN_CONNECTORS 加 key，domainOf() 自动认
-□ 8  三道门：
-     ① AD-5 收紧版——本 connector 至少被一条可达入口消费（lit search 的 sources / 某技能 / MCP 工具），
-        且出现在 capabilities --json 的 connectors 里（自动）；只被测试调用 = 不集成
-     ② 并发不变式——manifest 源由 ext verify 自动过；TS 源在 connector_race.test.ts 加一组
-     ③ 存储层写入方——本批 connector 不带存储，标 N/A（若某源要落 paper 进 LibraryStore，
-        登记进 narrative_parity 的 STORE_WRITE_BINDINGS）
-□ 9  narrative_parity「connector 数」断言自动更新；docs/DESIGN.md / README 里若有写死的 connector 数，同 PR 改
-□ 10 消费方清扫（纪律 13）：新增 tool 名进 mcp/tools.ts 描述？llms.txt 重生成 diff 为空？
-□ 11 六套件全量 + 阴性对照（回退 fixture 里一条响应字段 → 归一化测试必须红）
-□ 12 devlog 写：拉动来源、真实网络首测日期、429/403 遭遇与处置
-```
-
-#### 1.4.3 平台型技能集成 checklist（scanpy / pydeseq2 / cobrapy）
-
-规划目录已把三者设计成 `dry-experiment` 的新 `SimulationPlatform`（`workstreams/skills/OVERVIEW.md:10,15`；`staged/scanpy/VALIDATION_PLAN.md` 的「生产入口」段）。**接线点 `simulation/registry.ts:7-9` 实测存在且 W5-3 无人争用**（CB-6 桥不动它，§1.1.9）。
+#### 1.4.2 Connector integration checklist (one per source, written into the lane devlog)
 
 ```
-□ 0  拉动来源（同上）；三件套的拉动 = 方案 §2.3 明示 + AD-4 第三次回本
-□ 1  pyproject.toml 加依赖（scanpy/anndata/leidenalg/igraph…）；实测 uv pip install 耗时与 wheel 可用性，
-     写进 devlog（VALIDATION_PLAN 已要求）
-□ 2  backend/src/simulation/<id>/{index.ts, runner.py}：extends SubprocessSimulationPlatform；
-     runner 用 sim_runtime.RunContext（simulation/sim_runtime.py），done.json 原子写
-□ 3  registry.ts：SIMULATION_PLATFORM_IDS 加 id + switch 加 case
-□ 4  契约测试：tests/unit/<id>_contract.test.ts 用 describeSimulationContract()（tests/helpers/simulation_contract.ts:17-37）；
-     环境不可用整套 skip 并打印原因——但 CI 机器必须装（0 skip 基线），lane 报告必须写明本机跑没跑成
-□ 5  e2e：离线小数据集进 tests/fixtures/<id>/（VALIDATION_PLAN 明确禁止测试期下载）；
-     断言是**科学判据**（scanpy：已知 marker 基因落在某 cluster top 表；pydeseq2：已知差异基因方向；
-     cobrapy：已知模型生长率），不是「跑完没报错」
-□ 6  Python 侧 tests/sim/<id>_runner.test.py
-□ 7  SKILL.md 从 staged 拷入 backend/src/skills/<id>/；frontmatter 的 validation 三个路径必须真实存在（frontmatter.ts 会核）；
-     platforms: [<id>] 必须是已注册 id
-□ 8  三道门：① 入口 = 复用 exp CLI + exp_design/exp_run MCP —— narrative_parity 的 SKILL_ENTRYPOINTS 加一行
-     `"<id>": { cli: ["exp"], mcp: ["exp_design","exp_run"] }`（tests/unit/narrative_parity.test.ts:185）；
-     ② ext verify 不适用（仓内平台）→ 契约测试即门；③ 存储层 N/A
-□ 9  docs/EXTENDING.md 的「N 个技能」数字（narrative_parity.test.ts:476 会对撞）+ skills/README.md 表 + capabilities 自动
-□ 10 六套件 + 阴性对照（把 marker 断言的基因名改错 → 红；删 registry 的 case → 契约测试整套失踪 → 「技能可达性」红）
+□ 0  Write down the pulling source clearly: an F-1 gap / a user's research topic / a shortfall in an already-integrated capability (pick one of the three; if you can't articulate it, don't integrate)
+□ 1  Fill in the routing criteria table (§1.4.1); decide manifest or TS
+□ 2  If the host is a rate-limited one such as NCBI/KEGG: confirm HOST_RATE_POLICIES already has that host (otherwise do §1.4.0 first)
+□ 3  Copy from staged/<id>.ts into backend/src/connectors/<id>.ts; strip the STAGED/UNTESTED header section;
+     keep only user-relevant limitations in metadata.caveat (rate limits/field version differences), remove any "untested" wording
+□ 4  staged/<id>.test.ts → tests/unit/connector_<id>.test.ts (string-db → connector_string_db)
+□ 5  FIXTURE_MODE=record bun test tests/unit/connector_<id>.test.ts → tests/fixtures/<domain>/<id>.json;
+     check the fixture for no api_key/mailto etc. (http/fixture.ts's VOLATILE_QUERY_KEYS already strips these, but grep by hand once anyway)
+□ 6  Turn the recording block from skipIf(!RECORDING) into a regular replay test case (no leftover skips allowed: proposal §6.1's "0 skip")
+□ 7  Register in two places: BUILTIN_CONNECTORS (by domain) + CONNECTOR_CLASSES (connectors/registry.ts:36-88);
+     for a new domain (pathways/omics), add the key in BUILTIN_CONNECTORS and domainOf() picks it up automatically
+□ 8  Three gates:
+     ① a tightened AD-5 — this connector must be consumed by at least one reachable entry point (lit search's sources / a skill / an MCP tool),
+        and must appear in the connectors list of capabilities --json (automatic); being called only from tests = not integrated
+     ② concurrency invariant — manifest sources pass automatically via ext verify; TS sources get a new group added to connector_race.test.ts
+     ③ storage-layer writer — this batch of connectors carries no storage, mark N/A (if some source needs to write papers into LibraryStore,
+        register it in narrative_parity's STORE_WRITE_BINDINGS)
+□ 9  the narrative_parity "connector count" assertion updates automatically; if docs/DESIGN.md / README has a hardcoded connector count, change it in the same PR
+□ 10 Consumer sweep (discipline rule 13): does the new tool name go into the mcp/tools.ts description? does regenerating llms.txt produce an empty diff?
+□ 11 Full run of the six test suites + negative control (revert one response field in the fixture → the normalization test must fail)
+□ 12 Write in the devlog: the pulling source, the date of the first real network test, and any 429/403 encounters and how they were handled
 ```
 
-#### 1.4.4 命令型技能：v0.5 明确不集成
+#### 1.4.3 Platform-skill integration checklist (scanpy / pydeseq2 / cobrapy)
 
-规划目录 OVERVIEW 提到「其余 8 个新增 `chem/seq/data/flow/review/critique/scholar` 命令组」。每一个都要动 `index.ts` + `mcp/tools.ts` + `capabilities`，而 R-d 门禁要求 SKILL.md 一落仓就必须有入口——**它们只能成批在收口窗口接线**。方案 §2.2 上限 8 个技能，三件套占 3，剩 5 个配额留给 F-1 外部验收暴露的真实缺口；本文**不预排**任何命令型技能。
+The planning directory has already designed all three as new `dry-experiment` `SimulationPlatform`s (`workstreams/skills/OVERVIEW.md:10,15`; the "production entry point" section of `staged/scanpy/VALIDATION_PLAN.md`). **The wiring point `simulation/registry.ts:7-9` is confirmed to exist and is uncontested by any lane in W5-3** (the CB-6 bridge doesn't touch it, §1.1.9).
 
-#### 1.4.5 写进 `EXTENDING.md` 的两条规范（收口时改文档，不是代码）
+```
+□ 0  Pulling source (as above); the pull for the three-platform bundle = explicitly stated in proposal §2.3 + AD-4's third payoff
+□ 1  Add dependencies to pyproject.toml (scanpy/anndata/leidenalg/igraph…); measure real uv pip install time and wheel availability,
+     write it into the devlog (VALIDATION_PLAN already requires this)
+□ 2  backend/src/simulation/<id>/{index.ts, runner.py}: extends SubprocessSimulationPlatform;
+     the runner uses sim_runtime.RunContext (simulation/sim_runtime.py), with atomic writes of done.json
+□ 3  registry.ts: add the id to SIMULATION_PLATFORM_IDS + add a case to the switch
+□ 4  Contract test: tests/unit/<id>_contract.test.ts using describeSimulationContract() (tests/helpers/simulation_contract.ts:17-37);
+     if the environment is unavailable, the whole suite skips and prints the reason — but the CI machine must have it installed (the 0-skip baseline), and the lane report must state whether it actually ran on that machine
+□ 5  e2e: an offline small dataset goes into tests/fixtures/<id>/ (VALIDATION_PLAN explicitly forbids downloading during tests);
+     the assertion is a **scientific criterion** (scanpy: known marker genes fall in a cluster's top table; pydeseq2: known direction of differential expression;
+     cobrapy: known model growth rate), not "it ran without erroring"
+□ 6  Python-side tests/sim/<id>_runner.test.py
+□ 7  Copy SKILL.md from staged into backend/src/skills/<id>/; the three paths in frontmatter's validation must genuinely exist (frontmatter.ts checks this);
+     platforms: [<id>] must be an already-registered id
+□ 8  Three gates: ① entry point = reuses the exp CLI + exp_design/exp_run MCP — add a line to narrative_parity's SKILL_ENTRYPOINTS,
+     `"<id>": { cli: ["exp"], mcp: ["exp_design","exp_run"] }` (tests/unit/narrative_parity.test.ts:185);
+     ② ext verify doesn't apply (an in-repo platform) → the contract test is the gate; ③ storage layer N/A
+□ 9  docs/EXTENDING.md's "N skills" number (narrative_parity.test.ts:476 checks this) + the skills/README.md table + capabilities, automatically
+□ 10 Six test suites + negative control (change the gene name in a marker assertion to a wrong one → must fail; delete the registry's case → the whole contract-test suite goes missing → "skill reachability" must fail)
+```
 
-1. **湿实验类技能一律汇入 `wet-protocol` 现有审批门，禁止平行审批通道**（规划目录 BATCH_ROLLUP「集成候选」第 5 条；AD-6 在技能层的推论）。同理：**任何计费型动作一律汇入 `compute` 的审批门**——技能不得自己调 Modal SDK。
-2. per-tool content-type 覆盖（SureChEMBL 的 form-urlencoded）记 BACKLOG，等真实拉动。
+#### 1.4.4 Command-style skills: explicitly not integrated in v0.5
 
-### 1.5 附线的模块设计（简）
+The planning directory's OVERVIEW mentions "the remaining 8 new `chem/seq/data/flow/review/critique/scholar` command groups." Each one requires touching `index.ts` + `mcp/tools.ts` + `capabilities`, and the R-d gate check requires that as soon as a SKILL.md lands in the repo it must have an entry point — **they can only be wired up in batches during a close-out window**. Proposal §2.2 caps the total at 8 skills; the three-platform bundle takes 3, leaving 5 slots reserved for real gaps exposed by the F-1 external acceptance review; this document **does not pre-schedule** any command-style skill.
 
-| 项 | 设计 | 文件 |
+#### 1.4.5 Two rules to write into `EXTENDING.md` (documentation changed at close-out, not code)
+
+1. **Any wet-experiment-type skill must funnel into the existing `wet-protocol` approval gate; parallel approval channels are forbidden** (item 5 of the planning directory's BATCH_ROLLUP "integration candidates"; a corollary of AD-6 at the skill layer). By the same logic: **any billable action must funnel into `compute`'s approval gate** — a skill must not call the Modal SDK on its own.
+2. Per-tool content-type overrides (SureChEMBL's form-urlencoded) go into BACKLOG, pending a real pull.
+
+### 1.5 Peripheral module designs (brief)
+
+| Item | Design | Files |
 |---|---|---|
-| **V25 安全门字段兑现**（W5-1 δ） | 编译器主管线解析浓度（`CONCENTRATION_SIGNAL`，`lab/protocol.ts:275`）为 `ReagentSpec.concentration`（`protocol.ts:3-8` 已有字段）与 `biosafetyLevel` 进 `ProtocolStep.params`；两条规则（`lab/safety.ts:121-160`）从「恒空转」变成真消费；对应的 `unconsumedWarnings` 分支（`protocol.ts:296-307`）**改成只在解析失败时报**，解析成功即消费。阴性对照：把解析器拆掉 → `safety.test` 的「浓度超限必须 fail」红 + `lab_compile.test` 的「已消费不再告警」红 | `lab/protocol.ts` `lab/safety.ts` + 两测试 |
-| **V31/V32**（W5-2 δ） | ① `extensions/mcp_client.ts` 的 `.mcp_calls.jsonl`（`:159-178`）之外，每次外部工具调用再落一条 `observation`（`kind:"external_tool_call"`, `evidence:"sourced"`），**并把 `external_tool_call` 加进 `NON_EVIDENCE_RECORD_TYPES`**（`agents/contract.ts:152`）——它是审计不是进展（K-3）；② `createExternalToolRunner()` 接进 `AgentToolBus.options.runner`。**接线点 `agents/orchestrator.ts` 与 `toolbus.ts` 在 W5-2 无人争用**（β 只加 `unit` 值，与 δ 的 runner 替换不在同一函数）——但两者同文件，见 §3.2 的处置 | `extensions/mcp_client.ts` `agents/contract.ts` `agents/orchestrator.ts`（δ 持有 W5-2） |
-| **F-3 删别名** | `connectors/base.ts:180-186` 三个别名删除；CHANGELOG breaking 段 | 闸门 F，主会话 |
-| **V21 超时前缀** | `SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS` → `SPARK_RESEARCH_*`，旧名保留一版并打 deprecation warning；纪律 11 的一致性断言随改 | 闸门 F 或收口 |
+| **Making the V25 safety-gate fields actually consumed** (W5-1 δ) | The compiler's main pipeline parses concentration (`CONCENTRATION_SIGNAL`, `lab/protocol.ts:275`) into `ReagentSpec.concentration` (a field already present at `protocol.ts:3-8`) and `biosafetyLevel` into `ProtocolStep.params`; the two rules (`lab/safety.ts:121-160`) turn from "permanently a no-op" into real consumption; the corresponding `unconsumedWarnings` branch (`protocol.ts:296-307`) **changes to only report on parse failure**, with successful parsing counting as consumption. Negative control: remove the parser → `safety.test`'s "over-limit concentration must fail" must fail + `lab_compile.test`'s "already-consumed no longer warns" must fail | `lab/protocol.ts` `lab/safety.ts` + two tests |
+| **V31/V32** (W5-2 δ) | ① In addition to `extensions/mcp_client.ts`'s `.mcp_calls.jsonl` (`:159-178`), every external tool call also writes an `observation` record (`kind:"external_tool_call"`, `evidence:"sourced"`), **and `external_tool_call` is added to `NON_EVIDENCE_RECORD_TYPES`** (`agents/contract.ts:152`) — it's an audit trail, not progress (K-3); ② `createExternalToolRunner()` is wired into `AgentToolBus.options.runner`. **The wiring points `agents/orchestrator.ts` and `toolbus.ts` are uncontested in W5-2** (β only adds the `unit` value, which is not in the same function as δ's runner replacement) — but the two are in the same file; see the disposition in §3.2 | `extensions/mcp_client.ts` `agents/contract.ts` `agents/orchestrator.ts` (owned by δ in W5-2) |
+| **F-3 removing aliases** | The three aliases in `connectors/base.ts:180-186` are removed; a CHANGELOG breaking-changes section | Gate F, main session |
+| **V21 timeout prefix** | `SPARK_HTTP/LLM/KERNEL/TASK_TIMEOUT_MS` → `SPARK_RESEARCH_*`; the old names are kept for one version with a deprecation warning; discipline rule 11's consistency assertion is updated accordingly | Gate F or close-out |
 
 ---
 
-## 二、关键接口签名
+## 2. Key interface signatures
 
-> 以下是能直接落进代码的签名，不是伪代码。注释只写「为什么」。
+> What follows are signatures that can be dropped directly into code, not pseudocode. Comments only explain "why."
 
 ### 2.1 `backend/src/compute/lifecycle.ts`
 
@@ -398,17 +398,17 @@ export interface LifecycleState {
   execution: ExecutionState;
   delivery: DeliveryState;
   resource: ResourceState;
-  /** 远端仍持有唯一可恢复产物副本；为 true 时 close 必须抛错（L-4）。 */
+  /** The remote side still holds the sole recoverable copy of the artifact; when true, close must throw (L-4). */
   recoverable: boolean;
 }
 
 export interface TransitionContext {
-  /** plan.approvalRequired 的派生值（L-3）；dispatch 从 planned 直出只在 false 时合法（L-2）。 */
+  /** The derived value of plan.approvalRequired (L-3); dispatch going directly out of planned is only legal when this is false (L-2). */
   approvalRequired: boolean;
-  /** dispatch 时必须携带且 digest 相符（L-2）；其余事件忽略。 */
+  /** Must be present and its digest must match at dispatch time (L-2); ignored for all other events. */
   approval?: { planDigest: string } | null;
   planDigest: string;
-  /** recover 后 adapter 裁定的去向。 */
+  /** The outcome the adapter decides on after recover. */
   recoverOutcome?: "running" | "succeeded" | "failed";
 }
 
@@ -417,10 +417,10 @@ export const DELIVERY_TRANSITIONS: Readonly<Record<DeliveryState, Partial<Record
 export const RESOURCE_TRANSITIONS: Readonly<Record<ResourceState, Partial<Record<LifecycleEvent, ResourceState>>>>;
 
 export function initialLifecycle(): LifecycleState; // { planned, none, none, false }
-/** 纯函数：非法转移一律 throw ComputeStateError；不做顺手纠正（P5 纪律）。 */
+/** A pure function: any illegal transition throws ComputeStateError; there is no silent correction (discipline rule P5). */
 export function transition(state: LifecycleState, event: LifecycleEvent, ctx: TransitionContext): LifecycleState;
 export function isExecutionTerminal(s: ExecutionState): boolean;
-/** /api/compute/machine 由这两个函数推导，不许手写（AD-12 ③）。 */
+/** /api/compute/machine is derived from these two functions; hand-writing it is not allowed (AD-12 ③). */
 export function approvalGate(): { from: "awaiting_approval"; to: "approved"; requires: ["actor"] };
 export function dispatchGate(): { from: "approved"; to: "queued"; consumesApproval: true; verifies: ["planDigest", "uploads"] };
 
@@ -436,32 +436,32 @@ export interface UploadEntry { path: string; size: number; sha256: string }
 
 export interface CostEstimate {
   unit: "computeSeconds";
-  quantity: number;                 // timeoutMinutes * 60 —— 上界，不是预测
-  unitPriceUsd: number | null;      // 查不到 = null，绝不 0
+  quantity: number;                 // timeoutMinutes * 60 — an upper bound, not a prediction
+  unitPriceUsd: number | null;      // null if it can't be looked up, never 0
   upperBoundUsd: number | null;
-  source: string | null;            // 定价页 URL
+  source: string | null;            // the pricing page URL
   verifiedDate: string | null;      // ISO date
 }
 
 export interface ComputePlan {
   schemaVersion: 1;
-  digest: string;                    // sha256(canonicalJson(plan 去掉 digest 与 workspaceRoot))
+  digest: string;                    // sha256(canonicalJson(plan with digest and workspaceRoot removed))
   target: TargetRef;
   purpose: string;
-  command: string[];                 // argv；拒绝 shell 字符串
+  command: string[];                 // argv; shell strings are rejected
   cwd: "/workspace";
-  env: Record<string, string>;       // validatePlan 拒绝密钥样 key
+  env: Record<string, string>;       // validatePlan rejects secret-looking keys
   image: { base: string; pip: string[]; pipLock: { digest: string; requirements: string } | null } | null;
-  secretRefs: string[];              // 符号名；值永不进 plan/job
+  secretRefs: string[];              // symbolic names; values never enter plan/job
   resources: { gpu: string | null; cpus: number; memoryGb: number; timeoutMinutes: number };
   network: "none" | "unrestricted";
   uploads: UploadEntry[];
   uploadBytes: number;
   outputs: string[];                 // glob
-  approvalRequired: boolean;         // 派生（L-3）
+  approvalRequired: boolean;         // derived (L-3)
   estimate: CostEstimate;
-  warning: string;                   // 明文：「此运行使用你的 <target> 账户并可能计费；上界 $X」
-  workspaceRoot: string;             // 绝对路径；排除在 digest 外
+  warning: string;                   // plain text: "this run uses your <target> account and may incur charges; upper bound $X"
+  workspaceRoot: string;             // absolute path; excluded from the digest
 }
 
 export type PlanInput = Omit<ComputePlan, "digest" | "approvalRequired" | "estimate" | "warning" | "uploadBytes" | "schemaVersion" | "cwd">;
@@ -478,7 +478,7 @@ export type PricingLookup = (target: TargetRef, gpu: string | null) => Omit<Cost
 export type TargetRef =
   | { kind: "local" }
   | { kind: "modal"; environment?: string }
-  | { kind: "ssh"; hostId: string };        // v0.5 仅占位，available:false
+  | { kind: "ssh"; hostId: string };        // v0.5 is a placeholder only, available:false
 
 export const TARGET_KINDS = ["local", "modal", "ssh"] as const;
 
@@ -488,7 +488,7 @@ export interface AdapterCapabilities {
   recovery: boolean;
   secretRefs: boolean;
   network: readonly ("none" | "unrestricted")[];
-  gpus: readonly string[];            // 可选 GPU 型号；local 为 []
+  gpus: readonly string[];            // optional GPU model names; [] for local
   uploadLimits: { count: number; bytes: number };
 }
 
@@ -498,10 +498,10 @@ export interface RunHooks {
   signal?: AbortSignal;
 }
 
-/** adapter 持有的远端句柄；整体落 job.json.adapterHandle，重启后原样交回 recover()。 */
+/** The remote handle held by the adapter; written as a whole into job.json.adapterHandle, and handed back unchanged to recover() after a restart. */
 export interface AdapterHandle {
   kind: TargetRef["kind"];
-  /** local: { pid, startedAt }；modal: { sandboxId, volumeName, appName, tags } */
+  /** local: { pid, startedAt }; modal: { sandboxId, volumeName, appName, tags } */
   data: Record<string, string | number | null>;
 }
 
@@ -512,11 +512,11 @@ export interface RunResult {
 }
 
 export interface Harvest {
-  files: Array<{ path: string; bytes: number; sha256: string }>;   // 已落到 <job>/harvest/
+  files: Array<{ path: string; bytes: number; sha256: string }>;   // already written to <job>/harvest/
   logPath: string;
   exitCode: number | null;
   wallSeconds: number | null;
-  /** 远端报的退出码与卷上标记不一致时非空（reconcile），调用方标 delivery=failed。 */
+  /** Non-null when the exit code reported remotely doesn't match the marker on the volume (reconcile); the caller marks delivery=failed. */
   reconcileError: string | null;
 }
 
@@ -524,7 +524,7 @@ export interface DispatchSpec {
   jobId: string;
   plan: ComputePlan;
   jobDir: string;                                 // <project>/experiments/compute/jobs/<jobId>
-  /** 只在 dispatch 时刻由 broker 解析；adapter 用完即弃，不得写入任何文件。 */
+  /** Resolved by the broker only at dispatch time; the adapter discards it immediately after use and must not write it to any file. */
   resolveSecret: (ref: string) => Record<string, string>;
 }
 
@@ -532,16 +532,16 @@ export interface ComputeAdapter {
   readonly kind: TargetRef["kind"];
   readonly description: string;
   capabilities(): AdapterCapabilities;
-  /** 凭据连通性探测（capabilities --probe 档）；不产生任何远端资源。 */
+  /** A credential connectivity probe (used by the capabilities --probe tier); produces no remote resources. */
   check(): Promise<{ ok: boolean; reason: string | null; detail: Record<string, string | number | boolean | null> }>;
-  /** 派发并等到执行终态；日志经 hooks 流回。返回后 delivery 仍是 pending——收割是另一步。 */
+  /** Dispatches and waits until execution reaches a terminal state; logs stream back via hooks. After returning, delivery is still pending — harvesting is a separate step. */
   run(spec: DispatchSpec, hooks: RunHooks): Promise<RunResult>;
-  /** 编排进程重启后：还在跑 → 重挂并等终态；已完成 → 直接返回；已丢失 → 抛 RecoverFailure（分类见下）。 */
+  /** After the orchestrating process restarts: still running → reattach and wait for a terminal state; already finished → return directly; lost → throw RecoverFailure (classification below). */
   recover(spec: Omit<DispatchSpec, "resolveSecret">, handle: AdapterHandle, hooks: RunHooks): Promise<RunResult>;
-  /** 从持久卷/工作目录收割 outputs；**不依赖沙箱还活着**。 */
+  /** Harvests outputs from the persistent volume/working directory; **does not depend on the sandbox still being alive**. */
   collect(spec: Omit<DispatchSpec, "resolveSecret">, handle: AdapterHandle): Promise<Harvest>;
   cancel(spec: Omit<DispatchSpec, "resolveSecret">, handle: AdapterHandle): Promise<void>;
-  /** 删远端卷/工作目录；调用前 broker 已按 L-4 保证 recoverable=false。 */
+  /** Deletes the remote volume/working directory; the caller (broker) has already guaranteed recoverable=false per L-4 before calling this. */
   release(spec: Omit<DispatchSpec, "resolveSecret">, handle: AdapterHandle): Promise<void>;
 }
 
@@ -553,16 +553,16 @@ export interface SshHost {
   hostKeyFingerprint: `SHA256:${string}`; hostKey: string;
   identityPath: string; proxyJump: string[]; concurrency: number; scheduler: "none" | "slurm" | "pbs";
 }
-export function validateSshHost(input: unknown): SshHost;   // 照上游 jobs.ts Host schema 的校验规则
+export function validateSshHost(input: unknown): SshHost;   // follows the validation rules of upstream jobs.ts's Host schema
 ```
 
-### 2.4 `backend/src/compute/approval.ts`（CB-1 内，X-1）
+### 2.4 `backend/src/compute/approval.ts` (within CB-1, X-1)
 
 ```ts
 export interface ComputeApprovalMeta {
   decisionRecordId: string;
   actor: string;
-  actorSource: string;          // "explicit" | "http:explicit" | …，照 AD-6 P7 口径
+  actorSource: string;          // "explicit" | "http:explicit" | …, per the AD-6 P7 convention
   at: string;
   planDigest: string;
   note: string | null;
@@ -573,29 +573,29 @@ export interface RejectInput  { actor: string; actorSource?: string; reason: str
 
 export class ComputeApproval {
   constructor(deps: { records: Pick<RecordStore, "create" | "link">; jobs: ComputeJobStore; now?: () => string });
-  /** awaiting_approval → approved；落 decision record；写 job.json.approval。actor 空 → ApprovalRequiredError。 */
+  /** awaiting_approval → approved; writes a decision record; writes job.json.approval. An empty actor → ApprovalRequiredError. */
   approve(jobId: string, input: ApproveInput): { job: ComputeJobView; decisionId: string };
   reject(jobId: string, input: RejectInput): { job: ComputeJobView; decisionId: string };
   /**
-   * 执行前重验 + 一次性消费：digest 相符 → 同一次 CAS 写入里 approval→consumedApproval；
-   * 不符 → 标 failed 并抛 ApprovalRequiredError（照 wet_loop.ts:522-538）。
-   * 由 broker.dispatch() 调用；不对外暴露成入口。
+   * Pre-execution re-verification + one-time consumption: if the digest matches, approval→consumedApproval within the same CAS write;
+   * if not, mark failed and throw ApprovalRequiredError (following wet_loop.ts:522-538).
+   * Called by broker.dispatch(); not exposed externally as an entry point.
    */
   consume(jobId: string, currentDigest: string, expectedRev: number): ComputeJobView;
 }
 export class ApprovalRequiredError extends Error {}
 ```
 
-### 2.5 `backend/src/compute/job_store.ts` 与 `broker.ts`
+### 2.5 `backend/src/compute/job_store.ts` and `broker.ts`
 
 ```ts
 export interface ComputeJobRecord {
   jobId: string;
   projectSlug: string;
-  experimentId: string | null;          // 桥路径才有
+  experimentId: string | null;          // only present on the bridge path
   target: TargetRef;
   lifecycle: LifecycleState;
-  rev: number;                          // CAS；照 project/records.ts:340-370 的语义
+  rev: number;                          // CAS; follows the semantics of project/records.ts:340-370
   approval: ComputeApprovalMeta | null;
   consumedApproval: ComputeApprovalMeta | null;
   supersededApproval: ComputeApprovalMeta | null;
@@ -603,7 +603,7 @@ export interface ComputeJobRecord {
   adapterHandle: AdapterHandle | null;
   createdAt: string; dispatchedAt: string | null; finishedAt: string | null;
   exitCode: number | null; message: string | null;
-  actualCostUsd: number | null;         // harvest 后填；查不到单价 = null
+  actualCostUsd: number | null;         // filled in after harvest; null if the unit price can't be looked up
 }
 export type ComputeJobView = ComputeJobRecord & { plan: ComputePlan; jobDir: string };
 
@@ -611,7 +611,7 @@ export class ComputeJobStore {
   constructor(root: string);                       // <project>/experiments/compute/jobs
   create(plan: ComputePlan, init: Pick<ComputeJobRecord, "projectSlug" | "experimentId" | "target">): ComputeJobView;
   read(jobId: string): ComputeJobView | null;
-  /** 原子写（临时文件 + rename）+ CAS；rev 不符抛 ComputeJobConflictError。 */
+  /** An atomic write (temp file + rename) + CAS; throws ComputeJobConflictError if rev doesn't match. */
   patch(jobId: string, patch: Partial<ComputeJobRecord>, opts?: { expectedRev?: number }): ComputeJobView;
   list(filter?: { experimentId?: string; execution?: ExecutionState[] }): ComputeJobView[];
   dirOf(jobId: string): string;
@@ -623,23 +623,23 @@ export interface ComputeBrokerDeps {
   approval: ComputeApproval;
   credentials: CredentialProvider;                 // connectors/base.ts:31-34
   pricing: PricingLookup;
-  budget?: Pick<BudgetLedger, "record">;           // 注入 = 花费进账本；不注入 = 只落 job.json
-  admissionLimit?: number;                         // 默认 2；超出即显式失败，不排队
+  budget?: Pick<BudgetLedger, "record">;           // injected = spend is recorded to the ledger; not injected = only written to job.json
+  admissionLimit?: number;                         // defaults to 2; exceeding it fails explicitly rather than queuing
 }
 
 export class ComputeBroker {
   constructor(deps: ComputeBrokerDeps);
   targets(): Array<{ kind: TargetRef["kind"]; available: boolean; reason: string | null; capabilities: AdapterCapabilities | null }>;
-  /** 归一化 + digest + 上传三重过滤；零副作用（不建远端资源、不写凭据）。 */
+  /** Normalization + digest + the triple upload filter; zero side effects (creates no remote resources, writes no credentials). */
   plan(input: PlanInput, ctx: { projectSlug: string; experimentId?: string }): Promise<ComputeJobView>;
-  /** approved → queued；五步：状态/approval 存在/digest 重验/uploads preflight/CAS 消费；然后 adapter.run()。 */
+  /** approved → queued; five steps: state / approval presence / digest re-verification / uploads preflight / CAS consumption; then adapter.run(). */
   dispatch(jobId: string, hooks?: RunHooks): Promise<ComputeJobView>;
-  poll(jobId: string): ComputeJobView;             // 只读磁盘
-  /** 重启后接回：按 adapterHandle 走 adapter.recover()；RecoverFailure 终态类直接标 failed。 */
+  poll(jobId: string): ComputeJobView;             // reads disk only
+  /** Reattaches after a restart: dispatches based on adapterHandle via adapter.recover(); terminal-class RecoverFailure marks it failed directly. */
   recover(jobId: string, hooks?: RunHooks): Promise<ComputeJobView>;
   collect(jobId: string): Promise<{ job: ComputeJobView; harvest: Harvest }>;
   cancel(jobId: string): Promise<ComputeJobView>;
-  release(jobId: string): Promise<ComputeJobView>; // L-4 守在 lifecycle.transition 里
+  release(jobId: string): Promise<ComputeJobView>; // L-4 is guarded inside lifecycle.transition
 }
 ```
 
@@ -651,29 +651,29 @@ export function planFromPrepared(
   target: TargetRef,
   opts: { python: string; runtimePath: string; gpu?: string | null; timeoutMinutes?: number },
 ): PlanInput;
-/** 把 <job>/harvest/ 回填成 RunStore 能读的 <runs>/<runId>/{done.json, outputs..., run.json}；返回 runId。 */
+/** Writes <job>/harvest/ back as <runs>/<runId>/{done.json, outputs..., run.json}, in the form RunStore can read; returns the runId. */
 export function materializeHarvest(runStore: RunStore, prepared: PreparedRun, job: ComputeJobView, harvest: Harvest): string;
 ```
 
-### 2.7 ToolBus 计价（`agents/toolbus.ts:72-93` 的扩展）
+### 2.7 ToolBus pricing (an extension of `agents/toolbus.ts:72-93`)
 
 ```ts
 export type ToolCostUnit = "call" | "computeSeconds";
 export interface ToolCallCost { unit: ToolCostUnit; costUsd: number | null }
-// costOf() 对 compute_* 工具仍返回 { unit:"call", costUsd:null }：agent 经 MCP 不派发，不该在这里计价。
-// 真实花费：ComputeBroker.collect() → deps.budget.record({ inputTokens:0, outputTokens:0, costUsd: actual|null, usageUnavailable:false })
+// costOf() still returns { unit:"call", costUsd:null } for compute_* tools: an agent going through MCP never dispatches, so pricing doesn't belong here.
+// Real spend: ComputeBroker.collect() → deps.budget.record({ inputTokens:0, outputTokens:0, costUsd: actual|null, usageUnavailable:false })
 ```
 
-### 2.8 `backend/src/llm/embeddings/types.ts` 与 `router.ts`
+### 2.8 `backend/src/llm/embeddings/types.ts` and `router.ts`
 
 ```ts
 export interface EmbedRequest {
   model: string;
   input: string[];
-  apiKey: string | null;            // 本地端点为 null
+  apiKey: string | null;            // null for a local endpoint
   baseUrl: string;
   timeoutMs: number;
-  http: HttpClient;                 // http/client.ts —— 让 FixtureHttp 可注入
+  http: HttpClient;                 // http/client.ts — makes FixtureHttp injectable
   signal?: AbortSignal;
 }
 
@@ -683,28 +683,28 @@ export type EmbedResponse =
 
 export interface EmbeddingAdapter {
   readonly id: string;
-  /** 任何失败返回 ok:false，不抛异常（与 ProviderAdapter.call 同约定）。 */
+  /** Any failure returns ok:false rather than throwing (the same convention as ProviderAdapter.call). */
   embed(request: EmbedRequest): Promise<EmbedResponse>;
   batchLimit(): number;
 }
 
 export class EmbeddingRouter {
   constructor(opts?: { env?: Record<string, string | undefined>; http?: HttpClient; fetchImpl?: typeof fetch });
-  /** config embeddingModel 解析结果；null = 未配置（novelty 走词面）。 */
+  /** The result of resolving the config's embeddingModel; null = not configured (novelty falls back to lexical). */
   modelId(): string | null;
   configured(): boolean;
   embed(texts: string[], opts?: { timeoutMs?: number; signal?: AbortSignal }): Promise<EmbedResponse>;
 }
 
-export function cosine(a: number[], b: number[]): number;   // 纯函数，单测钉住数值
+export function cosine(a: number[], b: number[]): number;   // a pure function; unit tests pin down the numeric values
 ```
 
 `calibration.ts`：
 
 ```ts
 export interface SemanticThreshold { high: number; calibratedOn: string; sampleSize: number; source: string }
-export const SEMANTIC_THRESHOLDS: Readonly<Record<string, SemanticThreshold>>;   // 只登记录过 fixture 的模型
-export function semanticHighAffinity(modelId: string | null): number | null;      // 未登记 = null → novelty 强制词面
+export const SEMANTIC_THRESHOLDS: Readonly<Record<string, SemanticThreshold>>;   // only registers models that have a recorded fixture
+export function semanticHighAffinity(modelId: string | null): number | null;      // unregistered = null → novelty forces lexical
 ```
 
 ### 2.9 `backend/src/chem/depict.ts`
@@ -718,7 +718,7 @@ export interface DepictResult {
 export interface DepictFailure { ok: false; error: { kind: "invalid_smiles" | "rdkit_unavailable" | "timeout" | "bad_output"; message: string } }
 export interface DepictDeps { artifacts: ArtifactStore; records: RecordStore; python?: string; timeoutMs?: number; projectSlug: string; sessionId?: string | null }
 export async function depictSmiles(input: DepictInput, deps: DepictDeps): Promise<DepictResult | DepictFailure>;
-export function assertSafeSvg(svg: string): void;   // 以 <svg 开头、无 <script、无 on*= 属性、无 <foreignObject
+export function assertSafeSvg(svg: string): void;   // starts with <svg, no <script, no on*= attributes, no <foreignObject
 ```
 
 ### 2.10 `backend/src/http/ratelimit.ts`
@@ -728,530 +728,492 @@ export interface HostRatePolicy { rps: number; burst: number; source: string; ve
 export const HOST_RATE_POLICIES: Readonly<Record<string, HostRatePolicy>>;
 export class RateLimitedHttp implements HttpClient {
   constructor(inner: HttpClient, policies?: Readonly<Record<string, HostRatePolicy>>, now?: () => number);
-  request(url: string, init?: HttpRequestInit): Promise<HttpResponse>;   // 无策略的 host 直通
-  /** 测试用：某 host 当前桶状态。 */
+  request(url: string, init?: HttpRequestInit): Promise<HttpResponse>;   // a host with no policy passes straight through
+  /** For tests: the current bucket state of a given host. */
   bucketOf(host: string): { tokens: number; lastRefill: number } | null;
 }
 export function rateLimitedHttp(inner?: HttpClient): HttpClient;
 ```
 
-### 2.11 capabilities 增量（`capabilities/index.ts:154-181` 的 `CapabilityManifest`）
+### 2.11 capabilities increment (the `CapabilityManifest` at `capabilities/index.ts:154-181`)
 
 ```ts
 export interface ComputeTargetCapability {
   kind: "local" | "modal" | "ssh";
   description: string;
-  availability: Availability;           // ssh 恒 "placeholder"
+  availability: Availability;           // ssh is always "placeholder"
   reason: string | null;
-  credentialConfigured: boolean | null; // modal: credentials.json 是否有 modal；local: null
+  credentialConfigured: boolean | null; // modal: whether credentials.json has a modal entry; local: null
   billable: boolean; persistentVolume: boolean; recovery: boolean;
   uploadLimits: { count: number; bytes: number };
   probeCache?: "hit" | "miss";
 }
 export interface EmbeddingCapability { configured: boolean; model: string | null; calibrated: boolean; threshold: number | null }
-// CapabilityManifest 增：compute: { targets: ComputeTargetCapability[]; withheld: string[] }; embedding: EmbeddingCapability
+// CapabilityManifest gains: compute: { targets: ComputeTargetCapability[]; withheld: string[] }; embedding: EmbeddingCapability
 ```
 
 ---
 
-## 三、并行波次与 lane 划分
+## 3. Parallel waves and lane assignment
 
-### 3.0 足迹核验方法（重做）
+### 3.0 Footprint-verification method (redone)
 
-规划目录 `TODO_v0.5.md` §「并行开发验证」写于 v0.4 在飞时，核的是「与 P11 四条 lane 的交集」。那些约束已全部解除。本文按**波次 × 文件**列争用矩阵：每个文件在一个波次里被几条 lane 想动。
+The planning directory's `TODO_v0.5.md` §"Parallel development verification" was written while v0.4 was in flight, and it checked "the intersection with P11's four lanes." Those constraints have all been lifted. This document instead lists a contention matrix by **wave × file**: how many lanes want to touch each file within a given wave.
 
-| 文件 | W5-1 想动的 lane | W5-2 | W5-3 | 处置 |
+| File | Lane(s) wanting it in W5-1 | W5-2 | W5-3 | Disposition |
 |---|---|---|---|---|
-| `backend/src/index.ts` | γ（`case "chem"`） | β（`case "compute"`） | — | **每波只有一条** → 分给该 lane |
-| `backend/src/mcp/tools.ts` | γ（`chem_depict`） | β（`compute_*` + 3 条 withheld） | — | 同上 |
-| `backend/src/capabilities/index.ts` | β（embedding 段）· γ（无） | β（compute targets 段） | — | W5-1 分给 β；W5-2 分给 β |
-| `backend/src/server/app.ts` | γ（`/api/chem` 一行） | β（`/api/compute` 一行） | — | 每波一条 → 分给该 lane |
-| `backend/src/config/index.ts` | β（`embeddingModel`） | β（`computeTarget`、`modalEnvironment`）· α（无） | — | 分给 β |
-| `backend/src/agents/toolbus.ts` | — | β（`ToolCostUnit`）· δ（runner 替换在 orchestrator，不在 toolbus） | — | W5-2 分给 β |
-| `backend/src/agents/orchestrator.ts` | — | δ（V32 runner）· β（broker 注入 sessionBudget？**不做**——v0.5 agent 不派发，orchestrator 不需要 broker） | — | W5-2 分给 δ |
-| `backend/src/agents/contract.ts` | — | δ（`NON_EVIDENCE_RECORD_TYPES` 加一项） | — | 分给 δ |
-| `backend/src/connectors/registry.ts` | — | γ（限速器接线 + 首批注册） | γ（第二批） | 分给 γ |
-| `backend/src/literature/normalize.ts` | — | γ（biorxiv 若接进统一检索） | γ | 分给 γ |
-| `backend/src/simulation/registry.ts` | — | — | β（三件套） | 分给 β；α 的桥不动它（§1.1.9） |
-| `backend/src/simulation/platform.ts` | α（导出 `canonicalJson`，1 行） | — | — | 分给 α |
-| `backend/src/experiment/{loop,models,cli}.ts` | — | — | α（桥） | 分给 α |
-| `backend/src/lab/cli.ts` | — | β（搬 TTY 门到 `approval/gate.ts`） | — | 分给 β；δ（V25）在 W5-1 动的是 `lab/protocol.ts`/`safety.ts`，不同波 |
-| `backend/src/project/models.ts`（`RECORD_TYPES`） | — | δ（若 `external_tool_call` 做成新 record type）——**不做**：用 `observation` + `metadata.kind`，不加第 10 类 | — | 无人动 |
-| `tests/unit/narrative_parity.test.ts` | α（compute 模块「等接线」登记）· γ（无：chem 有入口）· β（无） | β（删 α 的登记）· γ（SKILL_ENTRYPOINTS 无）· δ（无） | β（SKILL_ENTRYPOINTS 三行 + EXTENDING 数字） | **只许改登记条目**；W5-1 只有 α 改 → 分给 α；W5-2 只有 β 改 → 分给 β；W5-3 只有 β 改 |
-| `docs/EXTENDING.md`「N 个技能」 | — | — | β | 分给 β |
-| `frontend/workspace/src/components/center.tsx` | γ（svg 分支） | — | — | 分给 γ |
-| `pyproject.toml` | — | — | β | 分给 β |
-| `package.json`（`modal` 依赖） | — | α | — | 分给 α |
-| `llms.txt` | 每波收口 `bun run gen:llms` | | | 收口 |
-| `CHANGELOG / BACKLOG / README / DEVELOPMENT_PLAN*` | 禁止 lane 触碰 | | | 收口 |
+| `backend/src/index.ts` | γ (`case "chem"`) | β (`case "compute"`) | — | **Only one per wave** → assigned to that lane |
+| `backend/src/mcp/tools.ts` | γ (`chem_depict`) | β (`compute_*` + 3 withheld entries) | — | Same as above |
+| `backend/src/capabilities/index.ts` | β (embedding section) · γ (none) | β (compute targets section) | — | Assigned to β in W5-1; assigned to β in W5-2 |
+| `backend/src/server/app.ts` | γ (one `/api/chem` line) | β (one `/api/compute` line) | — | One lane per wave → assigned to that lane |
+| `backend/src/config/index.ts` | β (`embeddingModel`) | β (`computeTarget`, `modalEnvironment`) · α (none) | — | Assigned to β |
+| `backend/src/agents/toolbus.ts` | — | β (`ToolCostUnit`) · δ (the runner replacement is in orchestrator, not toolbus) | — | Assigned to β in W5-2 |
+| `backend/src/agents/orchestrator.ts` | — | δ (V32 runner) · β (injecting sessionBudget into the broker? **Not done** — in v0.5 the agent never dispatches, so the orchestrator doesn't need the broker) | — | Assigned to δ in W5-2 |
+| `backend/src/agents/contract.ts` | — | δ (adds one item to `NON_EVIDENCE_RECORD_TYPES`) | — | Assigned to δ |
+| `backend/src/connectors/registry.ts` | — | γ (rate-limiter wiring + first-batch registration) | γ (second batch) | Assigned to γ |
+| `backend/src/literature/normalize.ts` | — | γ (if biorxiv is wired into unified search) | γ | Assigned to γ |
+| `backend/src/simulation/registry.ts` | — | — | β (the three-platform bundle) | Assigned to β; α's bridge does not touch it (§1.1.9) |
+| `backend/src/simulation/platform.ts` | α (exports `canonicalJson`, 1 line) | — | — | Assigned to α |
+| `backend/src/experiment/{loop,models,cli}.ts` | — | — | α (the bridge) | Assigned to α |
+| `backend/src/lab/cli.ts` | — | β (moves the TTY gate to `approval/gate.ts`) | — | Assigned to β; δ (V25) in W5-1 touches `lab/protocol.ts`/`safety.ts`, a different wave |
+| `backend/src/project/models.ts` (`RECORD_TYPES`) | — | δ (if `external_tool_call` were made a new record type) — **not done**: uses `observation` + `metadata.kind` instead, no 10th type is added | — | Nobody touches it |
+| `tests/unit/narrative_parity.test.ts` | α (registers the compute module's "awaiting wiring" entry) · γ (none: chem has an entry point) · β (none) | β (removes α's registration) · γ (no SKILL_ENTRYPOINTS entries) · δ (none) | β (three SKILL_ENTRYPOINTS lines + the EXTENDING number) | **Only registry-entry edits are allowed**; in W5-1 only α edits it → assigned to α; in W5-2 only β edits it → assigned to β; in W5-3 only β edits it |
+| `docs/EXTENDING.md` "N skills" | — | — | β | Assigned to β |
+| `frontend/workspace/src/components/center.tsx` | γ (the svg branch) | — | — | Assigned to γ |
+| `pyproject.toml` | — | — | β | Assigned to β |
+| `package.json` (the `modal` dependency) | — | α | — | Assigned to α |
+| `llms.txt` | `bun run gen:llms` at each wave's close-out | | | Close-out |
+| `CHANGELOG / BACKLOG / README / DEVELOPMENT_PLAN*` | No lane may touch these | | | Close-out |
 
-**结论**：v0.5 三波里，**没有一个文件在同一波被两条 lane 争用**（矩阵每行每列 ≤1）。所以方案 §5.1 那张「整版摘出」清单在 v0.5 实际上可以按波次下放（X-2）。**唯一需要收口统一做的是 `llms.txt` 重生成与四份禁碰文档。** 代价：每波开工前主会话必须重跑这张矩阵——lane 任务书里的所有权表就是矩阵的切片。
+**Conclusion**: across v0.5's three waves, **no single file is contested by two lanes within the same wave** (every row/column in the matrix is ≤1). So the "pull the whole thing out" list in proposal §5.1 can, in practice, be assigned wave-by-wave in v0.5 (X-2). **The only thing that genuinely needs to be done centrally at close-out is regenerating `llms.txt` and the four off-limits documents.** The cost: the main session must re-run this matrix before each wave starts — the ownership tables in the lane task briefs are just slices of the matrix.
 
 ### 3.1 W5-1
 
-| lane | 任务 | 模型建议 | 独占文件 |
+| Lane | Task | Suggested model | Files owned exclusively |
 |---|---|---|---|
-| **α** C1 契约 + 审批语义 + local + 上传面（CB-1/2/3） | §1.1.1 表中 `compute/{lifecycle,plan,target,approval,job_store,uploads,broker}.ts` + `adapters/local.ts` + 契约测试 helper | Opus | `backend/src/compute/**`（除 `cli.ts`/`sim_bridge.ts`/`adapters/modal.ts`）· `backend/src/simulation/platform.ts`（**只许**导出 `canonicalJson`）· `package.json`（**只许**加 `modal` devDependency，pin 0.9.0；本波不 import）· `tests/unit/compute_*.test.ts` · `tests/helpers/compute_contract.ts` · `tests/unit/narrative_parity.test.ts`（**只许**在 `ALLOWED_ORPHANS` 加「等接线」条目）· `docs/devlog/W5-1-a.md` |
-| **β** C4 embedding + novelty 重标定 | §1.2 全部 | Opus | `backend/src/llm/embeddings/**` · `backend/src/ideation/{novelty,affinity}.ts` · `backend/src/config/index.ts`（**只许**加 `embeddingModel`）· `backend/src/capabilities/index.ts`（**只许**加 `embedding` 段）· `tests/unit/{novelty,novelty_e2e,novelty_calibration,embeddings}.test.ts` · `tests/fixtures/{embeddings,novelty}/**` · `docs/devlog/W5-1-b.md` |
-| **γ** C5-② SMILES→SVG | §1.3 全部 | Sonnet | `backend/src/chem/**` · `backend/src/server/routes/chem.ts` · `backend/src/server/app.ts`（**只许**加一行 `app.route("/api/chem", …)` 与 import）· `backend/src/index.ts`（**只许**加 `case "chem"`）· `backend/src/mcp/tools.ts`（**只许**追加 `chem_depict` 一条）· `frontend/workspace/src/components/center.tsx`（**只许** ArtifactsView 加 svg 分支）· `frontend/workspace/src/lib/types.ts`（若需 contentType 字段）· `tests/unit/{chem_depict,chem_cli,chem_http,chem_mcp}.test.ts` · `tests/unit/ui_cli_parity.test.ts`（**只许**加一组）· `tests/e2e/workbench.spec.ts`（**只许**追加 ⑭）· `docs/devlog/W5-1-c.md` |
-| **δ** V25 安全门字段兑现 | §1.5 第一行 | Sonnet | `backend/src/lab/protocol.ts` · `backend/src/lab/safety.ts` · `backend/src/skills/wet-protocol/SKILL.md`（覆盖范围一节）· `README.md` 的「安全门当前的真实覆盖范围」一段（**唯一**允许 lane 动 README 的例外，因为那段是 V25 的叙事，收口再改会漂移）· `tests/unit/{lab_safety,lab_compile}.test.ts` · `tests/lab/protocol_agent.test.py`（若 python 侧解析）· `docs/devlog/W5-1-d.md` |
+| **α** C1 contract + approval semantics + local + upload surface (CB-1/2/3) | `compute/{lifecycle,plan,target,approval,job_store,uploads,broker}.ts` from the table in §1.1.1 + `adapters/local.ts` + the contract-test helper | Opus | `backend/src/compute/**` (except `cli.ts`/`sim_bridge.ts`/`adapters/modal.ts`) · `backend/src/simulation/platform.ts` (**only** allowed to export `canonicalJson`) · `package.json` (**only** allowed to add the `modal` devDependency, pinned to 0.9.0; no import this wave) · `tests/unit/compute_*.test.ts` · `tests/helpers/compute_contract.ts` · `tests/unit/narrative_parity.test.ts` (**only** allowed to add an "awaiting wiring" entry to `ALLOWED_ORPHANS`) · `docs/devlog/W5-1-a.md` |
+| **β** C4 embedding + novelty recalibration | All of §1.2 | Opus | `backend/src/llm/embeddings/**` · `backend/src/ideation/{novelty,affinity}.ts` · `backend/src/config/index.ts` (**only** allowed to add `embeddingModel`) · `backend/src/capabilities/index.ts` (**only** allowed to add the `embedding` section) · `tests/unit/{novelty,novelty_e2e,novelty_calibration,embeddings}.test.ts` · `tests/fixtures/{embeddings,novelty}/**` · `docs/devlog/W5-1-b.md` |
+| **γ** C5-② SMILES→SVG | All of §1.3 | Sonnet | `backend/src/chem/**` · `backend/src/server/routes/chem.ts` · `backend/src/server/app.ts` (**only** allowed to add one `app.route("/api/chem", …)` line plus the import) · `backend/src/index.ts` (**only** allowed to add `case "chem"`) · `backend/src/mcp/tools.ts` (**only** allowed to append `chem_depict`) · `frontend/workspace/src/components/center.tsx` (**only** allowed to add the svg branch to ArtifactsView) · `frontend/workspace/src/lib/types.ts` (if a contentType field is needed) · `tests/unit/{chem_depict,chem_cli,chem_http,chem_mcp}.test.ts` · `tests/unit/ui_cli_parity.test.ts` (**only** allowed to add one group) · `tests/e2e/workbench.spec.ts` (**only** allowed to append ⑭) · `docs/devlog/W5-1-c.md` |
+| **δ** Making the V25 safety-gate fields actually consumed | Row 1 of §1.5 | Sonnet | `backend/src/lab/protocol.ts` · `backend/src/lab/safety.ts` · `backend/src/skills/wet-protocol/SKILL.md` (the coverage section) · `README.md`'s "the safety gate's current real coverage" paragraph (**the only** exception allowing a lane to touch README, because that paragraph is V25's narrative and would drift if left to close-out) · `tests/unit/{lab_safety,lab_compile}.test.ts` · `tests/lab/protocol_agent.test.py` (if the Python-side parsing is touched) · `docs/devlog/W5-1-d.md` |
 
-**α 的「等接线」登记**：`compute/broker.ts`、`compute/adapters/local.ts` 在 W5-1 没有生产调用方（CLI 在 W5-2 β）→ 按 v0.4 §5.3·补 登记 `ALLOWED_ORPHANS`：「等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条」。`lifecycle/plan/target/approval/job_store/uploads` 被 `broker.ts` import，不是孤儿。
+**α's "awaiting wiring" registration**: `compute/broker.ts` and `compute/adapters/local.ts` have no production caller in W5-1 (the CLI is in W5-2 β) → per v0.4 §5.3 supplement, register in `ALLOWED_ORPHANS`: "awaiting wiring: this entry must be deleted once W5-2 β's `compute/cli.ts` is wired up." `lifecycle/plan/target/approval/job_store/uploads` are imported by `broker.ts` and are therefore not orphans.
 
 ### 3.2 W5-2
 
-| lane | 任务 | 模型 | 独占文件 |
+| Lane | Task | Model | Files owned exclusively |
 |---|---|---|---|
-| **α** CB-4 Modal adapter | §1.1.6 modal；`ModalGateway` 录制层；`check()`；录制回放 fixture；**需用户提供 token**——没有 token 时本 lane 只能交付「gateway 接口 + 录制层 + 用假 gateway 过契约测试」，真实录制留给收口后的手动冒烟（如实写进报告） | Opus | `backend/src/compute/adapters/modal.ts` · `backend/src/compute/adapters/modal_gateway.ts` · `tests/unit/compute_modal.test.ts` · `tests/fixtures/compute/modal/**` · `docs/devlog/W5-2-a.md` |
-| **β** CB-5 接线 | `compute/cli.ts` · `approval/gate.ts`（从 `lab/cli.ts:150-251` 搬出并让 lab 改用）· `server/routes/compute.ts` + `app.ts` 一行 · `index.ts` `case "compute"` · `mcp/tools.ts` 四个暴露工具 + **三条 `MCP_WITHHELD`** · `toolbus.ts` `ToolCostUnit` · `config/index.ts` `computeTarget`/`modalEnvironment` · `capabilities/index.ts` `compute` 段 · 删 α 的 `ALLOWED_ORPHANS` 登记 · AD-14 对抗测试三条（子代理调 `compute_approve/run/release` 必拒）· TTY 门测试（piping 必拒） | Opus | 上列文件 + `backend/src/lab/cli.ts`（**只许**把 gate 换成 import）· `tests/unit/{compute_cli,compute_http,compute_mcp,approval_gate,toolbus}.test.ts`（toolbus 只加用例）· `tests/unit/sub_agent.test.ts`（只加对抗用例）· `tests/unit/narrative_parity.test.ts`（只删登记 + 加「target 数」断言）· `docs/devlog/W5-2-b.md` |
-| **γ** V26 限速器 + C2 第一批（≤4，按 F-1 结果；默认 clinvar · biorxiv · reactome · string-db） | §1.4.0 + §1.4.2 checklist ×4 | Sonnet | `backend/src/http/ratelimit.ts` · `backend/src/connectors/{registry,clinvar,biorxiv,reactome,string-db}.ts`（或按 REGISTRY_PATCH 并入域文件——**二选一在任务书里定死**，本文定：独立文件）· `backend/src/literature/{normalize,search}.ts`（biorxiv 进统一检索时）· `tests/concurrency/{host_ratelimit,connector_race}.test.ts` · `tests/unit/connector_*.test.ts` · `tests/fixtures/{genomics,literature,pathways}/**` · `docs/devlog/W5-2-c.md` |
-| **δ** V31/V32 | §1.5 第二行 | Sonnet | `backend/src/extensions/mcp_client.ts` · `backend/src/agents/{orchestrator,contract}.ts` · `tests/unit/{mcp_client,orchestrator,contract}.test.ts` · `docs/devlog/W5-2-d.md` |
+| **α** CB-4 Modal adapter | §1.1.6's modal; the `ModalGateway` recording layer; `check()`; record-and-replay fixtures; **requires the user to supply a token** — without a token, this lane can only deliver "gateway interface + recording layer + passing the contract tests with a fake gateway," with real recording left to a manual smoke test after close-out (must be stated honestly in the report) | Opus | `backend/src/compute/adapters/modal.ts` · `backend/src/compute/adapters/modal_gateway.ts` · `tests/unit/compute_modal.test.ts` · `tests/fixtures/compute/modal/**` · `docs/devlog/W5-2-a.md` |
+| **β** CB-5 wiring | `compute/cli.ts` · `approval/gate.ts` (moved out of `lab/cli.ts:150-251`, with lab switched to use it) · `server/routes/compute.ts` + one line in `app.ts` · `index.ts`'s `case "compute"` · four MCP-exposed tools in `mcp/tools.ts` + **three `MCP_WITHHELD` entries** · `toolbus.ts`'s `ToolCostUnit` · `config/index.ts`'s `computeTarget`/`modalEnvironment` · `capabilities/index.ts`'s `compute` section · removing α's `ALLOWED_ORPHANS` registration · three AD-14 adversarial tests (a subagent calling `compute_approve/run/release` must be rejected) · a TTY-gate test (piping must be rejected) | Opus | The files above + `backend/src/lab/cli.ts` (**only** allowed to swap the gate for an import) · `tests/unit/{compute_cli,compute_http,compute_mcp,approval_gate,toolbus}.test.ts` (toolbus only gains test cases) · `tests/unit/sub_agent.test.ts` (only gains adversarial cases) · `tests/unit/narrative_parity.test.ts` (only removes the registration + adds the "target count" assertion) · `docs/devlog/W5-2-b.md` |
+| **γ** The V26 rate limiter + C2 first batch (≤4, per the F-1 outcome; defaulting to clinvar · biorxiv · reactome · string-db) | §1.4.0 + the §1.4.2 checklist ×4 | Sonnet | `backend/src/http/ratelimit.ts` · `backend/src/connectors/{registry,clinvar,biorxiv,reactome,string-db}.ts` (or merged into domain files per REGISTRY_PATCH — **the choice must be locked in the task brief**; this document decides on separate files) · `backend/src/literature/{normalize,search}.ts` (when biorxiv is wired into unified search) · `tests/concurrency/{host_ratelimit,connector_race}.test.ts` · `tests/unit/connector_*.test.ts` · `tests/fixtures/{genomics,literature,pathways}/**` · `docs/devlog/W5-2-c.md` |
+| **δ** V31/V32 | Row 2 of §1.5 | Sonnet | `backend/src/extensions/mcp_client.ts` · `backend/src/agents/{orchestrator,contract}.ts` · `tests/unit/{mcp_client,orchestrator,contract}.test.ts` · `docs/devlog/W5-2-d.md` |
 
-**β 与 δ 同波都碰 `agents/`**：β 只动 `toolbus.ts`，δ 只动 `orchestrator.ts` + `contract.ts`——不同文件，矩阵无争用。任务书里各自写死「不得越到对方文件」。
+**β and δ both touch `agents/` in the same wave**: β only touches `toolbus.ts`, δ only touches `orchestrator.ts` + `contract.ts` — different files, no contention in the matrix. Each task brief locks in "must not stray into the other lane's files."
 
 ### 3.3 W5-3
 
-| lane | 任务 | 模型 | 独占文件 |
+| Lane | Task | Model | Files owned exclusively |
 |---|---|---|---|
-| **α** CB-6 桥 + 真实 e2e | `compute/sim_bridge.ts` · `experiment/{loop,models,cli}.ts` 分支 · `compute_driver.ts` · `compute_e2e.test.ts`（local，SIGKILL）· Modal 真实冒烟（有 token 时）· observation metadata 增量 | Opus | 上列 + `backend/src/server/routes/experiments.ts`（`target` 字段透传）· `backend/src/mcp/tools.ts`（**只许**给 `exp_design` 加 `target` 参数与描述）· `tests/unit/{experiment,experiment_cli,server_experiments}.test.ts` · `docs/devlog/W5-3-a.md` |
-| **β** C3 平台三件套 | §1.4.3 checklist ×3 | Opus | `backend/src/simulation/{registry.ts,scanpy/**,pydeseq2/**,cobrapy/**}` · `backend/src/skills/{scanpy,pydeseq2,cobrapy}/**` · `backend/src/skills/README.md` · `docs/EXTENDING.md`（**只许**改「N 个技能」数字）· `pyproject.toml` · `tests/unit/{scanpy,pydeseq2,cobrapy}_{contract,e2e}.test.ts` · `tests/sim/*_runner.test.py` · `tests/fixtures/{scanpy,pydeseq2,cobrapy}/**` · `tests/unit/narrative_parity.test.ts`（**只许**加三行 `SKILL_ENTRYPOINTS`）· `docs/devlog/W5-3-b.md` |
-| **γ** C2 第二批（≤4，**只在 F-1 或 W5-2 末外部验收给出拉动时才开**；否则本 lane 空置） | §1.4.2 | Sonnet | 同 W5-2 γ 的模式 |
-| **δ** 机动位 + BACKLOG 清扫（X-4） | 吸收前两波溢出；V3/V8/V9/V13/V14/V24 逐条「吸收或明确不做」的**实施**（决定权在主会话评审） | Sonnet | 按溢出项临时指派 |
+| **α** The CB-6 bridge + real e2e | `compute/sim_bridge.ts` · a branch in `experiment/{loop,models,cli}.ts` · `compute_driver.ts` · `compute_e2e.test.ts` (local, SIGKILL) · a real Modal smoke test (if a token is available) · the observation-metadata increment | Opus | The above + `backend/src/server/routes/experiments.ts` (passing through the `target` field) · `backend/src/mcp/tools.ts` (**only** allowed to add a `target` parameter and its description to `exp_design`) · `tests/unit/{experiment,experiment_cli,server_experiments}.test.ts` · `docs/devlog/W5-3-a.md` |
+| **β** C3 three-platform bundle | The §1.4.3 checklist ×3 | Opus | `backend/src/simulation/{registry.ts,scanpy/**,pydeseq2/**,cobrapy/**}` · `backend/src/skills/{scanpy,pydeseq2,cobrapy}/**` · `backend/src/skills/README.md` · `docs/EXTENDING.md` (**only** allowed to change the "N skills" number) · `pyproject.toml` · `tests/unit/{scanpy,pydeseq2,cobrapy}_{contract,e2e}.test.ts` · `tests/sim/*_runner.test.py` · `tests/fixtures/{scanpy,pydeseq2,cobrapy}/**` · `tests/unit/narrative_parity.test.ts` (**only** allowed to add three `SKILL_ENTRYPOINTS` lines) · `docs/devlog/W5-3-b.md` |
+| **γ** C2 second batch (≤4, **only opened if F-1 or the W5-2-end external acceptance review calls for it**; otherwise this lane stays empty) | §1.4.2 | Sonnet | Same pattern as W5-2 γ |
+| **δ** Floating slot + BACKLOG cleanup (X-4) | Absorbs overflow from the first two waves; the **implementation** of "absorb or explicitly drop" decisions for V3/V8/V9/V13/V14/V24, item by item (the decision itself is made in main-session review) | Sonnet | Assigned ad hoc based on overflow items |
 
-### 3.4 枢纽文件清单核实
+### 3.4 Hub-file list verification
 
-方案 §5.1 列了 9 个。核实结果：
+Proposal §5.1 lists 9 files. Verification results:
 
-| 方案清单 | v0.5 实际争用 | 处置 |
+| Proposal's list | Actual contention in v0.5 | Disposition |
 |---|---|---|
-| `index.ts` `mcp/tools.ts` `server/app.ts` `capabilities/**` | 每波仅一条 lane（§3.0 矩阵） | **按波次下放**（X-2） |
-| `agents/orchestrator.ts` `agents/toolbus.ts` | W5-2 各一条 lane，不同文件 | 下放 |
-| `connectors/registry.ts` `literature/normalize.ts` | 只有 γ | 下放给 γ |
-| `narrative_parity.test.ts` | 每波一条 lane 改登记 | 下放，**规则不变：只许加/删登记条目** |
-| **增补** `config/index.ts` | W5-1 β、W5-2 β | 下放给 β |
-| **增补** `docs/EXTENDING.md`、`skills/README.md`、`pyproject.toml` | W5-3 β | 下放 |
-| **增补** `llms.txt` | 每波 | **收口** `bun run gen:llms` |
-| **增补** `CHANGELOG.md` `BACKLOG.md` `README.md`（V25 段除外）`DEVELOPMENT_PLAN*` | — | **收口** |
+| `index.ts` `mcp/tools.ts` `server/app.ts` `capabilities/**` | Only one lane per wave (the §3.0 matrix) | **Assigned wave-by-wave** (X-2) |
+| `agents/orchestrator.ts` `agents/toolbus.ts` | One lane each in W5-2, different files | Delegated |
+| `connectors/registry.ts` `literature/normalize.ts` | Only γ | Delegated to γ |
+| `narrative_parity.test.ts` | One lane per wave editing the registry | Delegated, **rule unchanged: only registry-entry additions/removals allowed** |
+| **Added** `config/index.ts` | W5-1 β, W5-2 β | Delegated to β |
+| **Added** `docs/EXTENDING.md`, `skills/README.md`, `pyproject.toml` | W5-3 β | Delegated |
+| **Added** `llms.txt` | Every wave | **Close-out**: `bun run gen:llms` |
+| **Added** `CHANGELOG.md` `BACKLOG.md` `README.md` (except the V25 section) `DEVELOPMENT_PLAN*` | — | **Close-out** |
 
-### 3.5 依赖边与关键路径
+### 3.5 Dependency edges and critical path
 
 ```
-闸门 F ─┬─► W5-1 α ──► W5-2 β ──┬─► W5-3 α（桥 + e2e）──► 收口 ──► v0.5.0
-        │            W5-2 α ────┘（真实 Modal 冒烟需要它；CI 路径不需要）
-        ├─► W5-1 β（独立）
-        ├─► W5-1 γ（独立）
-        ├─► W5-1 δ（独立）
-        ├─► W5-2 γ（V26 → 第一批 connector；不依赖 W5-1）
-        ├─► W5-2 δ（独立）
-        └─► W5-3 β（只依赖 simulation/registry 空窗，W5-3 无人争用）
+Gate F ─┬─► W5-1 α ──► W5-2 β ──┬─► W5-3 α (bridge + e2e) ──► close-out ──► v0.5.0
+        │            W5-2 α ────┘ (needed for the real Modal smoke test; not needed on the CI path)
+        ├─► W5-1 β (independent)
+        ├─► W5-1 γ (independent)
+        ├─► W5-1 δ (independent)
+        ├─► W5-2 γ (V26 → first-batch connectors; does not depend on W5-1)
+        ├─► W5-2 δ (independent)
+        └─► W5-3 β (depends only on the simulation/registry gap being open; uncontested in W5-3)
 
-关键路径：F → W5-1 α → W5-2 β → W5-3 α → 收口。三个收口尾巴（每波一次）各自串行。
+Critical path: F → W5-1 α → W5-2 β → W5-3 α → close-out. The three close-out tails (one per wave) are each serial.
 ```
 
-**每波收口清单**（主会话，不可省）：合 integration → `bun run gen:llms` → 独立重跑各 lane 报告的阴性对照 → 六套件全量 → 检查 `ALLOWED_ORPHANS` 对称 → devlog/CHANGELOG。
+**The close-out checklist for each wave** (main session, not optional): merge the integration branch → `bun run gen:llms` → independently re-run the negative controls from each lane's report → the full six test suites → check `ALLOWED_ORPHANS` symmetry → devlog/CHANGELOG.
 
-### 3.6 零上下文外部验收插入点（方案 §6.3 原样）
+### 3.6 Zero-context external acceptance review insertion points (unchanged from proposal §6.3)
 
-闸门 F（基线）· **W5-2 末**（提交一个算力任务并读回结论，含审批；由未参与开发的人/会话执行——用 local target 即可验证审批链路，不必等 Modal）· 发布前（干净机器）。
+Gate F (baseline) · **end of W5-2** (submit a compute task and read back the conclusion, including approval; performed by a person/session not involved in development — using the local target is sufficient to verify the approval chain, no need to wait for Modal) · pre-release (a clean machine).
 
 ---
 
-## 四、每条 lane 的验证设计
+## 4. Verification design for each lane
 
-| lane | 阴性对照 ①（回退实现必红） | 阴性对照 ② | 阶段门 |
+| Lane | Negative control ① (reverting the fix must fail) | Negative control ② | Stage gates |
 |---|---|---|---|
-| **W5-1 α** | 把 `dispatch` 的 `approved` 入边改成也接受 `awaiting_approval` → `compute_lifecycle.test` L-2 用例红 | 让 `consume()` 不清空 `approval` → `compute_approval.test`「重启后不能凭旧 approval 重派」红；`uploads.test`：篡改一个已 preflight 文件一字节 → `UploadChangedError` 必抛，注释掉 sha256 比对 → 红 | typecheck · unit · concurrency（新增 `compute_dispatch_once.test.ts`：N=30 并发 dispatch 同一 approved job → 恰好 1 次，照 `tests/concurrency/approve_once.test.ts`）· timeout · e2e · py · lab |
-| **W5-1 β** | 阈值 ±0.1 → `novelty_calibration.test` 余量断言红 | 让 `EmbedResponse.ok=false` 时 `vectors` 变 `[]` 而不是 `null` → 类型层编译错 + 运行期「降级必须写进口径说明」用例红；把未标定模型也当语义用 → 「未标定强制词面」用例红 | 六套件；`novelty_e2e` 在 fixture 回放下必须 0 skip |
-| **W5-1 γ** | 让 `depict.py` 对非法 SMILES 吐空 `<svg/>` → 「非法输入不落 record」红 | 前端 svg 分支改回 `<pre>` → Playwright ⑭ `naturalWidth>0` 红；`assertSafeSvg` 放行 `<script>` → 单测红 | 六套件 + `ui_cli_parity` 新组 |
-| **W5-1 δ** | 拆掉浓度解析 → `lab_safety.test`「50% H2SO4 超限必 fail」红 | 解析成功仍报 unconsumed 告警 → `lab_compile.test`「已消费不告警」红 | 六套件（`test:lab` 必跑） |
-| **W5-2 α** | `recover()` 不验 ownership tag 就 reattach → 「他人 sandbox 必拒」用例红（`RecordedModalGateway` 回放一条 tag 不符的 sandbox） | `harvest()` 不做 reconcile → 「卷上 exit-code 与 sandbox 报告不一致必报」红 | 六套件；契约测试 helper 在 modal 上跑录制回放 |
-| **W5-2 β** | 从 `MCP_WITHHELD` 删掉 `compute_run` → `sub_agent.test` AD-14 对抗用例红 + `narrative_parity`「withheld 与暴露不重叠」仍绿但「/api/compute/machine 从转移表推导」的 `consumesApproval` 断言红 | `approval/gate.ts` 的 isTTY 判定改成只看 stdin → `approval_gate.test`「stdout 重定向必拒」红；`echo yes \| compute approve` 必拒 | 六套件；独立重跑 `bun backend/src/index.ts compute approve x </dev/null` 必拒（主会话手工，纪律 6） |
-| **W5-2 γ** | 去掉 `RateLimitedHttp` 装饰 → `host_ratelimit.test` 红 | 把桶 key 改成 connector 名 → 合计 9 rps → 红；fixture 里改一个字段名 → 归一化用例红 | 六套件；每个 connector 真实网络首测记录（FIXTURE_MODE=record 的终端输出进 devlog） |
-| **W5-2 δ** | 不把 `external_tool_call` 加进 `NON_EVIDENCE_RECORD_TYPES` → `contract.test`「外部工具审计不算进展」红（照 `contract.ts:137-152` 的用例形状） | runner 替换后不落 record → `mcp_client.test`「四个分支都落 observation」红 | 六套件 |
-| **W5-3 α** | SIGKILL 后 `exp run --resume` 不经 `broker.recover()` 直接 `dispatch()` → 「重派必须要新审批」红 | `materializeHarvest` 漏写 `done.json` → `platform.collect()` 抛「标记 completed 但结果缺失」→ e2e 红 | 六套件 + 真实 Modal 冒烟（有 token）；SIGKILL e2e 在 local 必过 |
-| **W5-3 β** | 改错 marker 基因名 → e2e 红 | 删 registry 的 `case "scanpy"` → 契约测试整套 skip → **0 skip 基线红** + 「技能可达性」红 | 六套件；`test:py` 含新 runner 测试；devlog 写明本机 uv install 耗时 |
+| **W5-1 α** | Change `dispatch`'s `approved` in-edge to also accept `awaiting_approval` → the L-2 case in `compute_lifecycle.test` must fail | Make `consume()` not clear `approval` → `compute_approval.test`'s "must not be able to re-dispatch on a stale approval after a restart" must fail; `uploads.test`: tamper with one byte of a file already preflighted → `UploadChangedError` must throw; comment out the sha256 comparison → must fail | typecheck · unit · concurrency (a new `compute_dispatch_once.test.ts`: N=30 concurrent dispatches of the same approved job → exactly 1 succeeds, following `tests/concurrency/approve_once.test.ts`) · timeout · e2e · py · lab |
+| **W5-1 β** | Shift the threshold by ±0.1 → the margin assertion in `novelty_calibration.test` must fail | Make `vectors` become `[]` instead of `null` when `EmbedResponse.ok=false` → a type-level compile error + a runtime case ("degradation must be written into the methodology note") must fail; treat an uncalibrated model as semantic anyway → the "uncalibrated forces lexical" case must fail | Six test suites; `novelty_e2e` must have 0 skips under fixture replay |
+| **W5-1 γ** | Make `depict.py` emit an empty `<svg/>` for invalid SMILES → "invalid input writes no record" must fail | Revert the frontend svg branch to `<pre>` → Playwright ⑭'s `naturalWidth>0` must fail; make `assertSafeSvg` allow `<script>` through → the unit test must fail | Six test suites + the new `ui_cli_parity` group |
+| **W5-1 δ** | Rip out the concentration parser → `lab_safety.test`'s "50% H2SO4 over the limit must fail" must fail | Successful parsing still reports an unconsumed warning → `lab_compile.test`'s "consumed no longer warns" must fail | Six test suites (`test:lab` must run) |
+| **W5-2 α** | Make `recover()` reattach without verifying the ownership tag → the "must reject someone else's sandbox" case must fail (`RecordedModalGateway` replays a sandbox with a mismatched tag) | Make `harvest()` skip reconcile → "must flag a mismatch between the on-volume exit code and the sandbox's report" must fail | Six test suites; the contract-test helper runs record-and-replay against modal |
+| **W5-2 β** | Remove `compute_run` from `MCP_WITHHELD` → the AD-14 adversarial case in `sub_agent.test` must fail + `narrative_parity`'s "withheld and exposed don't overlap" stays green but the `consumesApproval` assertion for "/api/compute/machine is derived from the transition table" must fail | Change `approval/gate.ts`'s isTTY check to look only at stdin → `approval_gate.test`'s "must reject when stdout is redirected" must fail; `echo yes \| compute approve` must be rejected | Six test suites; independently re-running `bun backend/src/index.ts compute approve x </dev/null` must be rejected (done manually by the main session, discipline rule 6) |
+| **W5-2 γ** | Remove the `RateLimitedHttp` decorator → `host_ratelimit.test` must fail | Change the bucket key to the connector name → the three combined give 9 rps → must fail; change one field name in a fixture → the normalization case must fail | Six test suites; the real first network test for each connector is logged (the terminal output of `FIXTURE_MODE=record` goes into the devlog) |
+| **W5-2 δ** | Don't add `external_tool_call` to `NON_EVIDENCE_RECORD_TYPES` → `contract.test`'s "external tool audit trail doesn't count as progress" must fail (following the case shape at `contract.ts:137-152`) | After the runner replacement, no record is written → `mcp_client.test`'s "all four branches write an observation" must fail | Six test suites |
+| **W5-3 α** | After SIGKILL, make `exp run --resume` call `dispatch()` directly instead of going through `broker.recover()` → "re-dispatch must require a new approval" must fail | `materializeHarvest` omits writing `done.json` → `platform.collect()` throws "marked completed but the result is missing" → the e2e must fail | Six test suites + a real Modal smoke test (if a token is available); the SIGKILL e2e must pass on local |
+| **W5-3 β** | Change a marker gene name to a wrong one → the e2e must fail | Remove the registry's `case "scanpy"` → the entire contract-test suite disappears via skip → **the 0-skip baseline must fail** + "skill reachability" must fail | Six test suites; `test:py` includes the new runner tests; the devlog records how long `uv install` took on this machine |
 
-所有 lane 通用：**报告里必须写明哪些套件没能在本 lane 跑成**（v0.4 §5.2 ⑨），主会话按纪律 6 独立重跑至少一条阴性对照。
+Common to all lanes: **the report must state which suites could not be run successfully in this lane** (v0.4 §5.2 ⑨), and the main session independently re-runs at least one negative control per discipline rule 6.
 
 ---
 
-## 五、风险与已知陷阱
+## 5. Risks and known pitfalls
 
-### 5.1 v0.4 踩过的四个坑，本设计怎么避
+### 5.1 The four pitfalls hit in v0.4, and how this design avoids them
 
-| 坑 | v0.4 实况 | v0.5 的规避 |
+| Pitfall | What actually happened in v0.4 | How v0.5 avoids it |
 |---|---|---|
-| **建好但没人喂**（6 次） | ledger、findings_store、contract、anthropic adapter… | ① K-5：入口文件按波次下放，lane 自己接自己的线（γ 的 chem、β 的 compute 命令都在本 lane 内闭环）；② 唯一的跨波「等接线」只有 W5-1 α → W5-2 β，登记 `ALLOWED_ORPHANS` 且 W5-2 β 任务书第一条就是删登记；③ `STORE_WRITE_BINDINGS` 加 `compute/job_store.ts:create ← compute/broker.ts`、`CONTRACT_RECORD_PRODUCERS` 加 `kind:"compute_output" ← compute/broker.ts`（按能力而非按文件的门禁） |
-| **枢纽文件锁给单条 lane 让别人只能留接线** | P11 R-b 的 router | 矩阵证明 v0.5 每波每文件 ≤1 lane（§3.0）；**开工前主会话重跑矩阵**，出现 ≥2 才摘出 |
-| **二进制是另一个运行时** | W1-d 全绿、产物全坏（V27） | 闸门 F-4 定性；若定「修」，`compute/adapters/local.ts` 与 `chem/depict.py`、新 runner **不得**用 `import.meta.dir` 找脚本以外的资产，且发布前跑 V28 冒烟（构建 → `--version`/`capabilities --json`/`doctor`/`chem depict`）；若定「永久不发单二进制」，INSTALL.md §3 删除，本文所有 `import.meta.dir` 用法维持 |
-| **记账 record 污染进展口径** | W3 收口 `agent_run` 让 noProgress 失效 | K-3：算力状态不进图；V31 的 `external_tool_call` 显式进 `NON_EVIDENCE_RECORD_TYPES`；**新规则写进 `agents/contract.ts` 注释**：「任何 lane 新增 record `kind`/type，必须回答它算不算进展」 |
+| **Built but nobody wired it up** (6 times) | The ledger, findings_store, contract, the anthropic adapter… | ① K-5: entry-point files are delegated wave by wave, with each lane wiring up its own work (γ's chem and β's compute commands both close the loop within their own lane); ② the only cross-wave "awaiting wiring" case is W5-1 α → W5-2 β, registered in `ALLOWED_ORPHANS`, and the very first item in W5-2 β's task brief is to delete that registration; ③ `STORE_WRITE_BINDINGS` gains `compute/job_store.ts:create ← compute/broker.ts`, and `CONTRACT_RECORD_PRODUCERS` gains `kind:"compute_output" ← compute/broker.ts` (a gate check keyed on capability rather than on file) |
+| **A hub file locked to a single lane, forcing everyone else to leave stub wiring** | P11 R-b's router | The matrix proves that in v0.5 every file has ≤1 lane per wave (§3.0); **the main session re-runs the matrix before each wave starts**, and only pulls a file out if it hits ≥2 |
+| **The binary is a different runtime** | W1-d was all-green while the artifact was entirely broken (V27) | Gate F-4 makes a ruling; if "fix" is chosen, `compute/adapters/local.ts`, `chem/depict.py`, and the new runner **must not** use `import.meta.dir` to locate assets outside the script, and a V28 smoke test runs before release (build → `--version`/`capabilities --json`/`doctor`/`chem depict`); if "permanently drop the single-binary distribution" is chosen, INSTALL.md §3 is deleted, and every `import.meta.dir` usage in this document is kept as-is |
+| **Bookkeeping records pollute the progress signal** | The `agent_run` close-out in W3 defeated noProgress | K-3: compute state never enters the graph; V31's `external_tool_call` is explicitly added to `NON_EVIDENCE_RECORD_TYPES`; **a new rule is written into the comments of `agents/contract.ts`**: "any lane adding a new record `kind`/type must answer whether it counts as progress" |
 
-### 5.2 新风险
+### 5.2 New risks
 
-| 风险 | 影响 | 缓解 |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| Modal token 迟迟不到 → W5-2 α 只能交假 gateway | 真实 e2e 推迟 | CI 路径不依赖它（local adapter 走完整审批链）；α 报告如实写「未真实录制」；发布判据里「真实 Modal 冒烟」单列，不许用回放冒充 |
-| `modal` SDK 0.9.0 `close()` 不关 gRPC 通道等怪癖 | 长驻 server 积累连接 | client 池化照抄；升级走 fixture 先行 |
-| embedding fixture 与模型绑定，用户换模型 → 阈值失效 | novelty 又回到「拍脑袋」 | K-4：未标定模型强制词面 + capabilities 明示 `calibrated:false` |
-| scanpy 依赖链（numba/scikit-learn/leidenalg）在 CI 机器编译失败 | 契约测试整套 skip → 0 skip 基线红 | W5-3 β 第一步实测 wheel；失败即改用 `pydeseq2`/`cobrapy` 先行，scanpy 退到 W5-3 δ 或 v0.6 |
-| `approval/gate.ts` 搬家动了 `lab/cli.ts` | 湿实验审批回归 | 只换 import；`lab_cli.test` 与 e2e ⑧ 必过；β 阴性对照包含 lab 路径 |
-| 用户在 `compute approve --run` 一步做完 → 审批与派发同刻 | 与 wet 的「先 approve 再 simulate」两步不同 | 允许，但 `--run` 仍走同一 `dispatch()`（消费 + 重验），decision record 与 dispatch 时间戳分开记；MCP 侧两者都扣留 |
-| C2 第二批被「staged 里看起来有用」诱惑 | 铺量 | W5-3 γ **默认空置**，只有 F-1 / W5-2 末验收给出书面拉动才开 |
+| The Modal token doesn't arrive in time → W5-2 α can only deliver a fake gateway | Real e2e is delayed | The CI path doesn't depend on it (the local adapter walks the full approval chain); α's report honestly states "not actually recorded"; the release criteria list "a real Modal smoke test" as a separate item that cannot be satisfied with a replay |
+| Quirks in `modal` SDK 0.9.0, e.g. `close()` not actually closing the gRPC channel | A long-running server accumulates connections | Client pooling is copied as-is; upgrades go through fixtures first |
+| Embedding fixtures are tied to a specific model, so if the user switches models the threshold becomes invalid | novelty falls back to "pulled out of thin air" again | K-4: an uncalibrated model forces lexical + capabilities explicitly reports `calibrated:false` |
+| scanpy's dependency chain (numba/scikit-learn/leidenalg) fails to compile on the CI machine | The whole contract-test suite skips → the 0-skip baseline fails | W5-3 β's first step measures the wheel in real conditions; on failure, switch to `pydeseq2`/`cobrapy` first, with scanpy pushed to W5-3 δ or v0.6 |
+| Moving `approval/gate.ts` touches `lab/cli.ts` | Wet-experiment approval regresses | Only the import is swapped; `lab_cli.test` and e2e ⑧ must pass; β's negative controls include the lab path |
+| A user completes `compute approve --run` in one step → approval and dispatch happen at the same instant | This differs from wet's two-step "approve first, then simulate" | Allowed, but `--run` still goes through the same `dispatch()` (consumption + re-verification); the decision record and the dispatch timestamp are recorded separately; both are withheld on the MCP side |
+| The C2 second batch is tempting because "it looks useful in staged" | Scope creep | W5-3 γ **stays empty by default**, and only opens if F-1 or the W5-2-end acceptance review gives a written pull request |
 
 ---
 
-## 六、开工顺序与第一波任务书草稿
+## 6. Kickoff order and the first wave's task-brief drafts
 
-**顺序**：闸门 F（F-1 基线验收 → F-2 AMiner → F-3 删别名 → F-4 V27 定性）→ 主会话 `cd` 回主仓 → 建 `feat/w5-1-integration` → spawn 四条 lane。
+**Order**: Gate F (F-1 baseline acceptance → F-2 AMiner → F-3 remove aliases → F-4 rules on V27) → the main session `cd`s back to the main repo → creates `feat/w5-1-integration` → spawns the four lanes.
 
-以下四份任务书按 v0.4 lane brief 格式。共同段落只写一次：
+The following four task briefs follow the v0.4 lane-brief format. Shared paragraphs are written once:
 
-> **共同段落（每份任务书都包含）**
-> - 工作区：`git worktree add ~/Desktop/AI4S/spark-research-w5-1-<lane> -b feat/w5-1-<lane> feat/w5-1-integration` → `bun install --frozen-lockfile` → `uv sync`（或链接主仓 `.venv`；不做这步 17 个 OpenMM 用例静默 skip）→ `export SPARK_E2E_PORT=<4400+序号>` → **立即 `git push -u`**（纪律 9）
-> - 隔离：**不要动其他 lane 的 worktree 和主仓**；你自己 lane 的工作区就是你该待的地方，不管初始 cwd 在哪。如果环境与本任务书矛盾，停下来问，那是对的。
-> - 基线：`main feb3c8a`；`bun test tests/unit` = 1396 pass / 0 fail / 0 skip
-> - 只改所有权表里的文件；越界先回报。不碰 CHANGELOG / BACKLOG / README（δ 的 V25 段除外）/ DEVELOPMENT_PLAN*；devlog 只写 `docs/devlog/W5-1-<lane>.md`
-> - 提 PR 前跑全量：`bun run typecheck` + `bun test tests/unit/` + `tests/concurrency/` + `tests/timeout/` + `bun run test:e2e` + `bun run test:py` + `bun run test:lab`
-> - 阴性对照是强制项：回退自己的修复，确认新测试真的会红，终端输出贴进 devlog
-> - 报告必须写明哪些套件没能在本 lane 跑成（不许把 skip 当通过）
-> - 目标分支 `feat/w5-1-integration`；不 push main、不开 PR、不 merge
-> - 新建模块暂无生产调用方时，在 `ALLOWED_ORPHANS` 登记并写清「等谁接线」——只许加登记，不许改断言逻辑
-> - 凭据永不进代码/fixture/devlog；commit 前对新增文件 grep 一遍
+> **Shared section (included in every task brief)**
+> - Workspace: `git worktree add ~/Desktop/AI4S/spark-research-w5-1-<lane> -b feat/w5-1-<lane> feat/w5-1-integration` → `bun install --frozen-lockfile` → `uv sync` (or link to the main repo's `.venv`; skipping this step causes 17 OpenMM test cases to silently skip) → `export SPARK_E2E_PORT=<4400+lane index>` → **`git push -u` immediately** (discipline rule 9)
+> - Isolation: **do not touch other lanes' worktrees or the main repo**; your own lane's workspace is where you belong, regardless of your initial cwd. If the environment contradicts this task brief, stop and ask — that is the correct move.
+> - Baseline: `main feb3c8a`; `bun test tests/unit` = 1396 pass / 0 fail / 0 skip
+> - Only touch files in the ownership table; report before crossing that boundary. Do not touch CHANGELOG / BACKLOG / README (except δ's V25 section) / DEVELOPMENT_PLAN*; the devlog is written only to `docs/devlog/W5-1-<lane>.md`
+> - Before opening a PR, run the full suite: `bun run typecheck` + `bun test tests/unit/` + `tests/concurrency/` + `tests/timeout/` + `bun run test:e2e` + `bun run test:py` + `bun run test:lab`
+> - Negative controls are mandatory: revert your own fix, confirm the new test genuinely fails, and paste the terminal output into the devlog
+> - The report must state which suites could not be run successfully in this lane (do not count a skip as a pass)
+> - Target branch `feat/w5-1-integration`; do not push to main, do not open a PR, do not merge
+> - When a newly built module has no production caller yet, register it in `ALLOWED_ORPHANS` and state clearly "awaiting wiring by whom" — only registry additions are allowed, never changes to the assertion logic
+> - Credentials must never enter code/fixtures/the devlog; grep every newly added file before committing
 
-### 6.1 W5-1-a · C1 契约先行 + 审批语义 + local adapter + 上传面
+### 6.1 W5-1-a · C1 contract-first + approval semantics + the local adapter + the upload surface
 
-**你是 v0.5 关键路径的起点。** 读：`docs/DEVELOPMENT_PLAN_v0.5_MODULES.md` §1.1（全部）与 §2.1-2.5；`~/Desktop/AI4S/spark-research-v0.5-plan/workstreams/compute/COMPUTE_DESIGN.md`；`backend/src/lab/wet_loop.ts:371-560`（审批与消费的已验证写法）；`backend/src/simulation/{platform,run_store}.ts`（磁盘真源与 poll 顺序）；`tests/helpers/simulation_contract.ts`、`tests/concurrency/approve_once.test.ts`、`tests/unit/wet_crash_recovery.test.ts`。
+**You are the starting point of v0.5's critical path.** Read: `docs/DEVELOPMENT_PLAN_v0.5_MODULES.md` §1.1 (in full) and §2.1-2.5; `~/Desktop/AI4S/spark-research-v0.5-plan/workstreams/compute/COMPUTE_DESIGN.md`; `backend/src/lab/wet_loop.ts:371-560` (the already-verified approach to approval and consumption); `backend/src/simulation/{platform,run_store}.ts` (the disk source of truth and the poll order); `tests/helpers/simulation_contract.ts`, `tests/concurrency/approve_once.test.ts`, `tests/unit/wet_crash_recovery.test.ts`.
 
-**文件所有权**：`backend/src/compute/{lifecycle,plan,target,approval,job_store,uploads,broker}.ts` · `backend/src/compute/adapters/local.ts` · `backend/src/simulation/platform.ts`（只许 `export` `canonicalJson`）· `package.json`（只许加 `"modal": "0.9.0"` devDependency；本波不 import）· `tests/unit/compute_{lifecycle,plan,approval,job_store,uploads,broker,local}.test.ts` · `tests/concurrency/compute_dispatch_once.test.ts` · `tests/helpers/compute_contract.ts` · `tests/unit/narrative_parity.test.ts`（只许加 `ALLOWED_ORPHANS` 登记）· `docs/devlog/W5-1-a.md`
+**File ownership**: `backend/src/compute/{lifecycle,plan,target,approval,job_store,uploads,broker}.ts` · `backend/src/compute/adapters/local.ts` · `backend/src/simulation/platform.ts` (only allowed to `export` `canonicalJson`) · `package.json` (only allowed to add the `"modal": "0.9.0"` devDependency; no import this wave) · `tests/unit/compute_{lifecycle,plan,approval,job_store,uploads,broker,local}.test.ts` · `tests/concurrency/compute_dispatch_once.test.ts` · `tests/helpers/compute_contract.ts` · `tests/unit/narrative_parity.test.ts` (only allowed to add an `ALLOWED_ORPHANS` registration) · `docs/devlog/W5-1-a.md`
 
-**任务**：
-1. `lifecycle.ts`：§2.1 签名；转移表三张；`transition()` 纯函数；不变式 L-1…L-7；**穷举测试**（三轴 × 事件笛卡尔积 vs 显式合法表）。
-2. `plan.ts`：§2.2；digest 排除 `workspaceRoot`；`approvalRequired` 派生；`estimate` 查不到价格 = null；`validatePlan` 拒 shell 字符串 command、拒密钥样 env key。
-3. `target.ts`：§2.3；`validateSshHost()` 照上游 Host schema 校验规则（只校验，无实现）。
-4. `uploads.ts`：deny-list / gitignore / 双限额 / sha256 / symlink 拒 / `preflight()`；全部纯函数 + 只读 fs。
-5. `job_store.ts`：目录布局 §1.1.5；原子写 + `rev` CAS。
-6. `approval.ts`：§2.4；decision record 形状与 `wet_loop.ts:387-418` 同构（`evidence:"inferred"`、`origin.kind:"manual"`、`metadata.kind:"approval"`、`planDigest`）；`consume()` 在同一次 CAS 里 `approval → consumedApproval`。
-7. `broker.ts`：§2.5；`dispatch()` 五步；admission limit 超出显式失败；`recover()` 按 `adapterHandle` 分派。
-8. `adapters/local.ts`：子进程 + 落文件不 pipe；`recover()` 顺序「先 exit-code 文件再 pid」；`capabilities().billable=false`。
-9. `tests/helpers/compute_contract.ts`：参数化契约套件（照 `SimulationContractCase`），本波只跑 local。
-10. `ALLOWED_ORPHANS` 登记 `broker.ts` 与 `adapters/local.ts`：「等接线：W5-2 β 的 `compute/cli.ts` 接上后必须删本条」。
+**Tasks**:
+1. `lifecycle.ts`: the §2.1 signatures; the three transition tables; a pure `transition()` function; invariants L-1…L-7; an **exhaustive test** (the Cartesian product of the three axes × the event table, versus the explicit legal-state table).
+2. `plan.ts`: §2.2; the digest excludes `workspaceRoot`; `approvalRequired` is derived; `estimate` is null when the price can't be looked up; `validatePlan` rejects a shell-string command and secret-looking env keys.
+3. `target.ts`: §2.3; `validateSshHost()` follows the upstream Host schema's validation rules (validation only, no implementation).
+4. `uploads.ts`: deny-list / gitignore / dual limits / sha256 / symlink rejection / `preflight()`; all pure functions + read-only fs.
+5. `job_store.ts`: the directory layout from §1.1.5; atomic writes + `rev` CAS.
+6. `approval.ts`: §2.4; the decision-record shape is isomorphic to `wet_loop.ts:387-418` (`evidence:"inferred"`, `origin.kind:"manual"`, `metadata.kind:"approval"`, `planDigest`); `consume()` performs `approval → consumedApproval` within the same CAS operation.
+7. `broker.ts`: §2.5; `dispatch()`'s five steps; exceeding the admission limit fails explicitly; `recover()` dispatches based on `adapterHandle`.
+8. `adapters/local.ts`: a subprocess that writes to files rather than piping; `recover()`'s order is "check the exit-code file before the pid"; `capabilities().billable=false`.
+9. `tests/helpers/compute_contract.ts`: a parameterized contract suite (following `SimulationContractCase`); this wave only runs against local.
+10. Register `broker.ts` and `adapters/local.ts` in `ALLOWED_ORPHANS`: "awaiting wiring: this entry must be deleted once W5-2 β's `compute/cli.ts` is wired up."
 
-**阶段门**：六套件全量；新增测试全绿；`tests/unit` 计数 ≥ 1396 且 0 skip。
-**阴性对照**（至少）：L-2 入边放宽 → 红；`consume()` 不清空 approval → 「重启后不得凭旧 approval 重派」红；`preflight` 去掉 sha256 比对 → 红；`compute_dispatch_once` 去掉 CAS → 红。
-**报告要求**：接口与 §2 签名的任何偏离逐条列出并给理由；`canonicalJson` 导出对 `specHashOf` 的影响（应为零，附 `simulation_contract` 通过证据）；上传 deny-list 的最终清单。
+**Stage gates**: the full six test suites; all new tests green; the `tests/unit` count ≥ 1396 with 0 skips.
+**Negative controls** (at least): loosening the L-2 in-edge → must fail; `consume()` not clearing approval → "must not re-dispatch on a stale approval after a restart" must fail; removing the sha256 comparison from `preflight` → must fail; removing CAS from `compute_dispatch_once` → must fail.
+**Report requirements**: list every deviation from the §2 signatures, with a reason for each; the impact of exporting `canonicalJson` on `specHashOf` (should be zero, with evidence that `simulation_contract` passes); the final upload deny-list.
 
-### 6.2 W5-1-b · C4 embedding 抽象 + novelty 重标定
+### 6.2 W5-1-b · C4 embedding abstraction + novelty recalibration
 
-读：本文 §1.2 与 §2.8；`workstreams/provider/V05_PROVIDER_DESIGN.md` §(b)；`backend/src/llm/{types,router}.ts`、`llm/providers/{types,registry,openai_compat}.ts`；`backend/src/ideation/{affinity,novelty}.ts`；`backend/src/http/{client,fixture}.ts`；`docs/devlog/P4-ideation.md` 的标定表。
+Read: this document's §1.2 and §2.8; `workstreams/provider/V05_PROVIDER_DESIGN.md` §(b); `backend/src/llm/{types,router}.ts`, `llm/providers/{types,registry,openai_compat}.ts`; `backend/src/ideation/{affinity,novelty}.ts`; `backend/src/http/{client,fixture}.ts`; the calibration table in `docs/devlog/P4-ideation.md`.
 
-**文件所有权**：`backend/src/llm/embeddings/**` · `backend/src/ideation/{novelty,affinity}.ts` · `backend/src/config/index.ts`（只许加 `embeddingModel`）· `backend/src/capabilities/index.ts`（只许加 `embedding` 段与其接口）· `tests/unit/{embeddings,novelty,novelty_e2e,novelty_calibration}.test.ts` · `tests/fixtures/embeddings/**` · `tests/fixtures/novelty/calibration.json` · `docs/devlog/W5-1-b.md`
+**File ownership**: `backend/src/llm/embeddings/**` · `backend/src/ideation/{novelty,affinity}.ts` · `backend/src/config/index.ts` (only allowed to add `embeddingModel`) · `backend/src/capabilities/index.ts` (only allowed to add the `embedding` section and its interface) · `tests/unit/{embeddings,novelty,novelty_e2e,novelty_calibration}.test.ts` · `tests/fixtures/embeddings/**` · `tests/fixtures/novelty/calibration.json` · `docs/devlog/W5-1-b.md`
 
-**任务**：
-1. 开工第一件事：本机 Ollama（若有）核 `/v1/embeddings` 是否可用；结果写 devlog（AD-12）。
-2. `embeddings/types.ts` + `openai_compat.ts` + `router.ts` + `calibration.ts`（§2.8）；**必须走 `HttpClient`**。
-3. novelty 双留痕：`NoveltyCandidate` 增 `semanticAffinity`/`affinityBasis`；`NoveltyDeps.embedder`；`constrainRating` 按 basis 取阈值；**未标定模型强制词面**；报告口径说明写清 basis/模型/阈值/标定日期；embedding 失败必须写进报告，不静默。
-4. 标定集：按 §1.2.3 从既有磁带构造 ≥20 条（≥10 existing / ≥10 novel / P4 原 2 条），落 `calibration.json`；用你实际有 key 的模型 `FIXTURE_MODE=record` 录向量 fixture；`SEMANTIC_THRESHOLDS` 只登记该模型。
-5. `novelty_calibration.test.ts`：余量各 ≥0.05；`sampleSize` 对撞 calibration.json 条数。
-6. `CONFIG_SETTINGS.embeddingModel`；capabilities `embedding` 段。
+**Tasks**:
+1. The very first thing to do: check whether local Ollama (if present) supports `/v1/embeddings`; write the result into the devlog (AD-12).
+2. `embeddings/types.ts` + `openai_compat.ts` + `router.ts` + `calibration.ts` (§2.8); **must go through `HttpClient`**.
+3. Dual-trace novelty: `NoveltyCandidate` gains `semanticAffinity`/`affinityBasis`; `NoveltyDeps.embedder`; `constrainRating` picks its threshold based on basis; **an uncalibrated model forces lexical**; the report's methodology note states the basis/model/threshold/calibration date; an embedding failure must be written into the report, never silently swallowed.
+4. Calibration set: per §1.2.3, construct ≥20 entries from existing cassettes (≥10 existing / ≥10 novel / the 2 original from P4), written to `calibration.json`; record the vector fixture with `FIXTURE_MODE=record` using whichever model you actually have a key for; `SEMANTIC_THRESHOLDS` only registers that model.
+5. `novelty_calibration.test.ts`: margins of ≥0.05 on each side; `sampleSize` must match the count in calibration.json.
+6. `CONFIG_SETTINGS.embeddingModel`; the capabilities `embedding` section.
 
-**阶段门**：六套件；`novelty_e2e` 回放下 0 skip。
-**阴性对照**：阈值 ±0.1 → 红；`ok=false` 时 `vectors` 改 `[]` → 编译错；未标定模型当语义用 → 红；删 5 条样本 → `sampleSize` 红。
-**报告要求**：最终阈值、正/负分布的 min/max、余量；用的模型与 fixture 大小；标定集里每条 claim 的来源磁带；**embedding 与词面在 20 条上的判定差异表**（这是 C4「提升可信度」的直接证据）。
+**Stage gates**: the six test suites; `novelty_e2e` at 0 skips under replay.
+**Negative controls**: shifting the threshold by ±0.1 → must fail; changing `vectors` to `[]` when `ok=false` → compile error; treating an uncalibrated model as semantic → must fail; deleting 5 samples → `sampleSize` must fail.
+**Report requirements**: the final thresholds, the min/max of the positive/negative distributions, the margins; which model was used and the fixture size; the source cassette for every claim in the calibration set; **a table showing where embedding and lexical disagree across the 20 entries** (this is the direct evidence for C4's "improves credibility" claim).
 
-### 6.3 W5-1-c · C5-② SMILES → SVG
+### 6.3 W5-1-c · SMILES → SVG
 
-读：本文 §1.3 与 §2.9；`backend/src/artifacts/store.ts:65-82,172-232`；`backend/src/experiment/loop.ts:290-335`（`createFromArtifact` 用法）；`backend/src/proteins/{cli,analysis}.ts` + `server/routes/proteins.ts` + `mcp/tools.ts` 的 `protein_analyze`（R-d 补三入口的先例）；`frontend/workspace/src/components/center.tsx:355-400`；`tests/unit/ui_cli_parity.test.ts`；`tests/e2e/workbench.spec.ts`。
+Read: this document's §1.3 and §2.9; `backend/src/artifacts/store.ts:65-82,172-232`; `backend/src/experiment/loop.ts:290-335` (the `createFromArtifact` usage pattern); `backend/src/proteins/{cli,analysis}.ts` + `server/routes/proteins.ts` + `mcp/tools.ts`'s `protein_analyze` (the precedent for R-d's "three entry points" requirement); `frontend/workspace/src/components/center.tsx:355-400`; `tests/unit/ui_cli_parity.test.ts`; `tests/e2e/workbench.spec.ts`.
 
-**文件所有权**：`backend/src/chem/{depict.py,depict.ts,cli.ts}` · `backend/src/server/routes/chem.ts` · `backend/src/server/app.ts`（只许加 import + 一行 `app.route`）· `backend/src/index.ts`（只许加 `case "chem"`）· `backend/src/mcp/tools.ts`（只许追加 `chem_depict`）· `frontend/workspace/src/components/center.tsx`（只许 ArtifactsView 加 svg 分支）· `frontend/workspace/src/lib/{types,api}.ts`（只许补 contentType 透传）· `tests/unit/{chem_depict,chem_cli,chem_http,chem_mcp}.test.ts` · `tests/unit/ui_cli_parity.test.ts`（只许加一组）· `tests/e2e/workbench.spec.ts`（只许追加 ⑭）· `docs/devlog/W5-1-c.md`
+**File ownership**: `backend/src/chem/{depict.py,depict.ts,cli.ts}` · `backend/src/server/routes/chem.ts` · `backend/src/server/app.ts` (only allowed to add the import + one `app.route` line) · `backend/src/index.ts` (only allowed to add `case "chem"`) · `backend/src/mcp/tools.ts` (only allowed to append `chem_depict`) · `frontend/workspace/src/components/center.tsx` (only allowed to add the svg branch to ArtifactsView) · `frontend/workspace/src/lib/{types,api}.ts` (only allowed to add contentType pass-through) · `tests/unit/{chem_depict,chem_cli,chem_http,chem_mcp}.test.ts` · `tests/unit/ui_cli_parity.test.ts` (only allowed to add one group) · `tests/e2e/workbench.spec.ts` (only allowed to append ⑭) · `docs/devlog/W5-1-c.md`
 
-**任务**：
-1. `depict.py`：stdin JSON → stdout JSON；rdkit 缺失时输出 `{ok:false, error:{kind:"rdkit_unavailable", message:"安装：uv pip install rdkit"}}`（可操作原因口径）。
-2. `depict.ts`：子进程（`resolvePython()`）+ 超时 + `assertSafeSvg` + `ArtifactStore.save()` + `createFromArtifact({ evidence:"computed", metadata.kind:"chem_depiction" })`；非法输入**不落任何东西**。
-3. 三入口：CLI `chem depict`、HTTP `POST /api/chem/depict`、MCP `chem_depict`（描述按 `mcp/tools.ts` 头部「判断二」四段写）。
-4. 前端 svg 分支（`<img data:>`，不 innerHTML）。
-5. `ui_cli_parity` 新组；Playwright ⑭。
-6. **不建 SKILL.md**。
+**Tasks**:
+1. `depict.py`: stdin JSON → stdout JSON; when rdkit is missing, output `{ok:false, error:{kind:"rdkit_unavailable", message:"install: uv pip install rdkit"}}` (following the actionable-reason convention).
+2. `depict.ts`: a subprocess (`resolvePython()`) + a timeout + `assertSafeSvg` + `ArtifactStore.save()` + `createFromArtifact({ evidence:"computed", metadata.kind:"chem_depiction" })`; invalid input **writes nothing at all**.
+3. Three entry points: the CLI `chem depict`, HTTP `POST /api/chem/depict`, and MCP's `chem_depict` (the description written per the four-part "judgment two" format at the top of `mcp/tools.ts`).
+4. The frontend svg branch (`<img data:>`, not innerHTML).
+5. A new `ui_cli_parity` group; Playwright ⑭.
+6. **No SKILL.md is created.**
 
-**阶段门**：六套件（含 `bun run test:e2e`）。
-**阴性对照**：脚本对非法 SMILES 吐空 svg → 「不落 record」红；前端改回 `<pre>` → ⑭ 红；`assertSafeSvg` 放行 `<script>` → 红。
-**报告要求**：rdkit 版本与耗时；SVG 尺寸；三入口的 record 指纹一致证据；capabilities 里 `chem_depict` 出现的截图/JSON 片段。
+**Stage gates**: the six test suites (including `bun run test:e2e`).
+**Negative controls**: the script emitting an empty svg for an invalid SMILES → "no record written" must fail; reverting the frontend to `<pre>` → ⑭ must fail; `assertSafeSvg` letting `<script>` through → must fail.
+**Report requirements**: the rdkit version and its latency; SVG dimensions; evidence that the record fingerprints match across all three entry points; a screenshot/JSON snippet showing `chem_depict` appearing in capabilities.
 
-### 6.4 W5-1-d · V25 安全门字段兑现
+### 6.4 W5-1-d · Making the V25 safety-gate fields actually consumed
 
-读：本文 §1.5 第一行；`backend/src/lab/safety.ts:20-50,121-160`；`backend/src/lab/protocol.ts:3-8,255-310`；`docs/devlog/P10-d.md` 的 D-8 段；`README.md`「安全门当前的真实覆盖范围」；`backend/src/skills/wet-protocol/SKILL.md`。
+Read: this document's §1.5 row 1; `backend/src/lab/safety.ts:20-50,121-160`; `backend/src/lab/protocol.ts:3-8,255-310`; the D-8 section of `docs/devlog/P10-d.md`; README's "the safety gate's current real coverage"; `backend/src/skills/wet-protocol/SKILL.md`.
 
-**文件所有权**：`backend/src/lab/protocol.ts` · `backend/src/lab/safety.ts` · `backend/src/skills/wet-protocol/SKILL.md`（只许改覆盖范围一节）· `README.md`（**只许**改「安全门当前的真实覆盖范围」一段）· `tests/unit/{lab_safety,lab_compile}.test.ts` · `tests/lab/protocol_agent.test.py`（若动 python 侧）· `docs/devlog/W5-1-d.md`
+**File ownership**: `backend/src/lab/protocol.ts` · `backend/src/lab/safety.ts` · `backend/src/skills/wet-protocol/SKILL.md` (only allowed to change the coverage section) · `README.md` (**only** allowed to change the "the safety gate's current real coverage" paragraph) · `tests/unit/{lab_safety,lab_compile}.test.ts` · `tests/lab/protocol_agent.test.py` (if the Python side is touched) · `docs/devlog/W5-1-d.md`
 
-**任务**：
-1. 编译器解析浓度 → `ReagentSpec.concentration`（单位归一到 mol/L 或 %，写清口径）；解析 BSL → `ProtocolStep.params.biosafetyLevel`。
-2. `concentration_limit` / `biosafety` 从「恒空转」变真消费；`MAX_CONCENTRATION` 表补来源注释。
-3. `scanUnconsumedSignals` 的两条分支改成**只在解析失败时报**；解析成功即消费，不再告警。
-4. 更新 README 覆盖范围段与 SKILL.md；**不许**宣称超过实际解析能力的覆盖（AD-12）。
-5. 对抗用例：超限浓度必 fail；BSL-3 必 fail；模糊表达（「适量」「高浓度」）→ 仍告警未消费。
+**Tasks**:
+1. Have the compiler parse concentration into `ReagentSpec.concentration` (normalize units to mol/L or %, and document the convention clearly), and parse BSL into `ProtocolStep.params.biosafetyLevel`.
+2. Turn `concentration_limit` / `biosafety` from "permanently a no-op" into real consumption; add source citations to the `MAX_CONCENTRATION` table.
+3. Change the two branches of `scanUnconsumedSignals` to **report only on parse failure**; successful parsing counts as consumption and no longer warns.
+4. Update README's coverage section and SKILL.md; **do not** claim coverage beyond the actual parsing capability (AD-12).
+5. Adversarial cases: an over-limit concentration must fail; BSL-3 must fail; vague phrasing ("an appropriate amount," "high concentration") → still warns as unconsumed.
 
-**阶段门**：六套件（`test:lab` 必跑）。
-**阴性对照**：拆解析器 → 「超限必 fail」红；解析成功仍告警 → 「已消费不告警」红。
-**报告要求**：解析覆盖的表达形式清单（正则）与明确不覆盖的清单；README 段落 before/after。
-
----
-
-## 七、异议（明确写出，附理由）
-
-### X-1 · CB-5 的审批**语义**应在 CB-1 做，CB-5 只做接线
-
-方案 §3.1 把 CB-5 排在 W5-2，§3.2 说它是重心。本文同意重心判断，但认为切片边界画错了：`planned → awaiting_approval → approved → queued` 是 lifecycle 主干，「digest 一次性消费」「执行前重验」是 `dispatch` 转移的**前置条件**，不是外挂。CB-1 若不含它们，穷举转移测试必然给 `dispatch` 留一个「测试时不查审批」的口子——那个口子就是生产后门。前移后 W5-2 β 只剩接线（CLI/HTTP/withheld/TTY/ToolBus/capabilities），反而更容易在一波内闭环。**代价**：W5-1 α 变重（8 个文件），建议 Opus。
-
-### X-2 · 枢纽文件清单不应整版锁死
-
-§3.0 的矩阵证明 v0.5 三波里没有一个文件被同波两条 lane 争用。整版锁死会重演 v0.4 的「建好但没人喂」。按波次分配（K-5），主会话每波开工前重跑矩阵。
-
-### X-3 · daemon 里的 v0.1 `ComputeService` 必须二选一
-
-> **主会话核实后升级（2026-09-10）：这不是「v0.5 落地后会有两个 compute 造成混淆」，
-> 是 v0.4.0 里一条活着的静默假成功路径。**
->
-> 实测链路：`agents/orchestrator.ts:53` 的 `TASK_KINDS` 含 `"compute"` →
-> `orchestrator.ts:490-494` 的 `case "compute"` 调 `this.daemon.compute.submit()` →
-> `daemon/daemon.ts:72-91` 的 `DefaultCompute` 用**内存 Map** 造一个
-> `{ id, status: "queued" }` 假 job → **`ok: true` 返回**。
->
-> 也就是说：**LLM 计划出一个 compute 任务，会拿到一个永远不出结果的假 job，
-> 而整条链路报成功。** 这正是外部评审当年的原话——
-> 「delegate_task/compute 走内存 mock 永不出结果——LLM plan 出 compute 任务会静默产出假 job」。
-> P8 删掉了 `backend/src/compute/`（providers/manager/job_manager 三件），
-> **daemon 侧这一条活了下来**，v0.3.0 的 D-4「LLM 失败不再静默当成功」也没覆盖到它
-> （它不是 LLM 失败，是执行层假成功）。
->
-> **处置升格为闸门 F 的第五件（F-5）**，先于任何 v0.5 功能：
-> 要么删掉 `ComputeService` / `DefaultCompute` / `permissions.ts:8` 的 `compute_submit` /
-> `TASK_KINDS` 的 `"compute"` 与 orchestrator 的 case 分支，要么让它显式报「未实现」。
-> **静默假成功是最差的那个选择**，而它已经在仓库里活了四个版本。
-
-### X-4 · W5-3 δ「runtime contract + Python SDK」定义没跟着走（主会话已纠正措辞）
-
-> **主会话核实：原文「全文与规划目录里没有任何定义」是过头了。**
-> 规划目录 `TODO_v0.5.md:101` 与 `:132` **有定义**：
-> 「对外 API 升格为有版本契约 + 零依赖 Python 客户端（对标上游 `tooling/sdk/python`）。
-> 排 v0.5 后段，依赖 P14 的 SSE 流稳定」。
->
-> **但这条异议的实质成立**：主会话把它抄进方案 §5 的波次表时，
-> **定义没跟着走**——方案正文只剩一行标题，任何拿方案去派活的人都不知道它要做什么。
-> 这与 v0.4 反复出现的「叙事与实现分家」是同一形状，只是发生在文档之间。
->
-> **处置**：W5-3 δ 保留但**必须先把定义从规划目录搬进方案正文**，
-> 或降为机动位。派活前定义不在方案里，就不派。
-
-### X-5 · C5-② 的「kernel 侧」应解作「Python 侧」
-
-经 `PythonKernel`/daemon 走 depict 会把 permit set、`ControlRepl`、kernel 生命周期都拖进一个 100ms 的无状态调用；`simulation/platform.ts:23-26` 已为仿真层做过同样取舍。本文用子进程 + `resolvePython()`（同一 `.venv`），零新依赖。
-
-### X-6（提醒，非异议）· 方案 §5 把 CB-4 与 CB-5 排同波是对的，但要写明两者**互不依赖**
-
-方案的依赖图把 CB-5 画在 CB-4 之后（`F → CB-1/2/3 → CB-4 → CB-5`）。实际上 CB-5 接线只面对 CB-1 的接口，CI 用 local adapter 走完整审批链；CB-4 缺 token 时不应阻塞 CB-5。本文关键路径已按此画（§0.2）。
+**Stage gates**: the six test suites (`test:lab` must run).
+**Negative controls**: removing the parser → "over-limit must fail" must fail; successful parsing still warning → "consumed no longer warns" must fail.
+**Report requirements**: a list of the parseable expression forms (regexes) and an explicit list of what isn't covered; the README paragraph before/after.
 
 ---
 
-## 八、给主会话的收口备忘
+## 7. Objections (stated explicitly, with rationale)
 
-- W5-1 收口：`gen:llms`；核 α 的 `ALLOWED_ORPHANS` 登记两条；独立重跑 α 的 L-2 阴性对照与 γ 的 Playwright ⑭；把 §1.4.5 两条规范写进 `EXTENDING.md`；决定 X-3。
-- W5-2 收口：删 α 登记（β 已做，核对称）；`narrative_parity` 新增「target 数」「NCBI host 限速」两断言在位；**W5-2 末外部验收**（local target 审批链）；核 `MCP_WITHHELD` 三条进了 `MCP_INSTRUCTIONS`（`mcp/server.ts:204-214` 自动）。
-- W5-3 收口：`EXTENDING.md` 技能数；`skills/README.md`；真实 Modal 冒烟结果单列（回放不算）；BACKLOG 38 条逐条「吸收/不做」；CHANGELOG breaking 段（F-3、V21）。
-- 发布前：干净机器完整链路；若 F-4 定「修」，V28 二进制冒烟含 `chem depict` 与 `compute targets`。
+### X-1 · CB-5's approval **semantics** should be done in CB-1; CB-5 should only handle wiring
+
+Proposal §3.1 places CB-5 in W5-2, and §3.2 calls it the center of gravity. This document agrees with that assessment of importance, but believes the slice boundary is drawn in the wrong place: `planned → awaiting_approval → approved → queued` is the backbone of the lifecycle, and "one-time digest consumption" and "pre-execution re-verification" are **preconditions** of the `dispatch` transition, not bolt-ons. If CB-1 doesn't include them, the exhaustive transition test will inevitably leave `dispatch` with a "no approval check under test" loophole — and that loophole is a production backdoor. Once moved forward, W5-2 β is left with only wiring (CLI/HTTP/withheld/TTY/ToolBus/capabilities), which is actually easier to close out within a single wave. **Cost**: W5-1 α becomes heavier (8 files); Opus is recommended.
+
+### X-2 · The hub-file list should not be locked down for the whole version
+
+The matrix in §3.0 proves that across v0.5's three waves, no file is contested by two lanes in the same wave. Locking it down for the whole version would replay v0.4's "built but nobody wired it up." Files are assigned wave by wave (K-5), with the main session re-running the matrix before each wave starts.
+
+### X-3 · The v0.1 `ComputeService` in the daemon must be resolved one way or the other
+
+> **Upgraded after main-session verification (2026-09-10): this is not "once v0.5 lands, there will be two 'computes' causing confusion" —
+> it is a live, silent false-success path that already exists in v0.4.0.**
+>
+> The actual call chain: `agents/orchestrator.ts:53`'s `TASK_KINDS` includes `"compute"` →
+> `orchestrator.ts:490-494`'s `case "compute"` calls `this.daemon.compute.submit()` →
+> `daemon/daemon.ts:72-91`'s `DefaultCompute` fabricates a fake job, `{ id, status: "queued" }`,
+> using an **in-memory Map** → and **returns `ok: true`**.
+>
+> In other words: **when an LLM plans a compute task, it gets back a fake job that will never produce
+> a result, while the entire chain reports success.** This is exactly what the external review said
+> at the time — "delegate_task/compute goes through an in-memory mock that never produces a result —
+> an LLM planning a compute task will silently produce a fake job."
+> P8 deleted `backend/src/compute/` (the providers/manager/job_manager trio),
+> **but this one survived on the daemon side**, and v0.3.0's D-4 ("LLM failures are no longer
+> silently treated as success") never covered it either
+> (it isn't an LLM failure — it's a false success at the execution layer).
+>
+> **This disposition is elevated to Gate F's fifth item (F-5)**, ahead of any v0.5 feature work:
+> either delete `ComputeService` / `DefaultCompute` / the `compute_submit` entry in `permissions.ts:8` /
+> the `"compute"` entry in `TASK_KINDS` and the orchestrator's case branch, or make it explicitly
+> report "not implemented." **A silent false success is the worst possible choice**,
+> and it has already been alive in the repository for four versions.
+
+### X-4 · W5-3 δ's "runtime contract + Python SDK" definition didn't come along with it (wording already corrected by the main session)
+
+> **Main-session verification: the original claim that "there is no definition anywhere in the full
+> proposal text or the planning directory" was overstated.**
+> The planning directory's `TODO_v0.5.md:101` and `:132` **do have a definition**:
+> "the external API is upgraded to a versioned contract + a zero-dependency Python client
+> (benchmarked against upstream's `tooling/sdk/python`). Scheduled for the latter part of v0.5,
+> depending on P14's SSE streaming stabilizing."
+>
+> **But the substance of this objection still holds**: when the main session copied this into
+> proposal §5's wave table, **the definition didn't come along with it** — the proposal's body text
+> is left with only a one-line heading, so anyone dispatching work off the proposal has no idea what
+> it's supposed to do. This is the same shape as the "narrative and implementation diverging" problem
+> that recurred throughout v0.4, just occurring between documents this time.
+>
+> **Disposition**: W5-3 δ is kept, but **the definition must first be moved from the planning
+> directory into the proposal's body text**, or it is demoted to a floating slot. Before the
+> definition is in the proposal, it does not get dispatched.
+
+### X-5 · C5-②'s "kernel side" should be read as "the Python side"
+
+Routing depict through `PythonKernel`/the daemon would drag the permit set, `ControlRepl`, and the kernel lifecycle into a 100ms stateless call; `simulation/platform.ts:23-26` already made the same trade-off for the simulation layer. This document uses a subprocess + `resolvePython()` (the same `.venv`), with zero new dependencies.
+
+### X-6 (a reminder, not an objection) · Proposal §5 is right to schedule CB-4 and CB-5 in the same wave, but it must state that the two are **mutually independent**
+
+The proposal's dependency graph draws CB-5 after CB-4 (`F → CB-1/2/3 → CB-4 → CB-5`). In practice, CB-5's wiring only faces CB-1's interface, and CI walks the full approval chain using the local adapter; CB-4 lacking a token should not block CB-5. This document's critical path is already drawn this way (§0.2).
 
 ---
 
-## 三·补：W5-1 按闸门 F 的产出重排（主会话，2026-09-10）
+## 8. Close-out memo for the main session
 
-> 本节由主会话在闸门 F 收口后追加。§3.1 原表写于闸门 F **之前**，那时 F-1 的外部验收
-> 还没跑。方案 §1 明文「**F-1 的产出直接影响 §2 的选择**」，产出回来了，这里兑现它。
+- W5-1 close-out: `gen:llms`; check α's two `ALLOWED_ORPHANS` registrations; independently re-run α's L-2 negative control and γ's Playwright ⑭; write §1.4.5's two rules into `EXTENDING.md`; decide X-3.
+- W5-2 close-out: remove α's registration (β has done this — verify it's symmetric); confirm the two new `narrative_parity` assertions ("target count" and "NCBI host rate limiting") are in place; **the W5-2-end external acceptance review** (the local-target approval chain); verify the three `MCP_WITHHELD` entries made it into `MCP_INSTRUCTIONS` (automatic via `mcp/server.ts:204-214`).
+- W5-3 close-out: the skill count in `EXTENDING.md`; `skills/README.md`; the real Modal smoke-test result listed separately (a replay doesn't count); go through all 38 BACKLOG items one by one deciding "absorb/drop"; the CHANGELOG breaking-changes section (F-3, V21).
+- Pre-release: the full chain on a clean machine; if F-4 decides "fix," the V28 binary smoke test must include `chem depict` and `compute targets`.
 
-### 补.1 F-4 裁定：修，不永久降级
+---
 
-方案给 F-4 的两条路是「修」或「把不发单二进制写成永久承诺」，并规定**不许再挂一版**。
+## 3 (supplement): Rescheduling W5-1 based on Gate F's output (main session, 2026-09-10)
 
-选「修」的理由不是偏好，是**降级这条路走不通**：代码用 `bun:sqlite` 撑持久层，
-node 跑不起来，所以 **npm 包也要求预装 Bun**。砍掉单二进制不会让安装变简单，
-只会让三条安装路径**全都**要求预装 Bun——上手性反而更差。降级付出了能力却换不到简化。
+> This section was appended by the main session after Gate F closed out. The original §3.1 table
+> was written **before** Gate F, when F-1's external acceptance review had not yet run.
+> Proposal §1 states explicitly that "**F-1's output directly influences the choices in §2**";
+> the output is now in, and this section acts on it.
 
-F-c 已经把机制验证到底并给出最小可行集（`docs/devlog/F-c.md`）：
-`.sql`/`.txt` 走静态 `import ... with { type: "text" }`；`.py` 因为要被**外部子进程**
-按路径 spawn，必须「静态 import 文本 → 运行期解包到临时文件 → spawn 真实路径」，
-**单靠 `type: "file"` 不行**（它给的是 `/$bunfs/` 虚拟路径，外部 python 打不开）。
-`project/records.ts` 这一处 F-c 已实机打补丁 + 编译 + 跑通，是修法可行的实证。
+### Supplement.1 F-4 ruling: fix it, don't permanently downgrade
 
-### 补.2 新增三条 lane（ε / ζ / η），全部由 F-1 拉动
+The proposal gives F-4 two paths — "fix it" or "commit permanently to not shipping a single binary" — and stipulates that **no version may leave this hanging again**.
 
-| lane | 内容 | 为什么值得占一条 lane |
+Choosing "fix it" isn't a matter of preference — it's that **the downgrade path doesn't actually work**: the code relies on `bun:sqlite` for the persistence layer, which node cannot run, so **the npm package would also require Bun to be pre-installed**. Dropping the single binary wouldn't simplify installation; it would just make all three installation paths require Bun to be pre-installed — making onboarding worse, not better. Downgrading gives up capability without buying any simplification in return.
+
+F-c has already fully verified the mechanism and produced a minimal viable set (`docs/devlog/F-c.md`): `.sql`/`.txt` go through a static `import ... with { type: "text" }`; `.py` files, because they must be spawned by path from **an external subprocess**, require "static import as text → unpack to a temp file at runtime → spawn the real path" — **`type: "file"` alone doesn't work** (it yields a virtual `/$bunfs/` path that an external python process can't open). `project/records.ts` is the one spot where F-c has already applied the patch on a real machine, compiled it, and run it successfully — concrete proof that the fix approach is viable.
+
+### Supplement.2 Three new lanes (ε / ζ / η), all pulled by F-1
+
+| Lane | Contents | Why it's worth its own lane |
 |---|---|---|
-| **ε** V27/V33 资产内嵌 | F-4 的执行面：3 处 `schema.sql` · 4 处 `.py` · 3 处 prompt `.txt` · 3 处危险默认路径（含 V33 的 `/workspaces`） | 闸门 F 唯一没做完的一件。它决定「单二进制」这条安装路径是真的还是假的 |
-| **ζ** 文献域可用性 | V34 默认源 · V35 长任务 CLI 可见性 · V36 失败消息 · V38 BibTeX 作者名 · V39 `lit review --help` | 外部验收的头两号卡点都在这里。**按文件归属合并成一条**：五项全落在 `literature/` 下，拆开必抢 `literature/cli.ts` |
-| **η** 能力口径收口 | V37 `auth` 与 `config list`/`doctor` 对同一把 key 报不同状态 + `idea new` 失败消息 | 真因已定位到行，比报告说的更具体（见下） |
+| **ε** V27/V33 embedding assets | F-4's execution surface: 3 instances of `schema.sql` · 4 instances of `.py` · 3 instances of prompt `.txt` · 3 dangerous default paths (including V33's `/workspaces`) | The one thing Gate F left unfinished. It determines whether the "single binary" installation path is real or fake |
+| **ζ** Literature-domain usability | V34 default sources · V35 long-task CLI visibility · V36 failure messages · V38 BibTeX author names · V39 `lit review --help` | Both of the top two blockers from the external acceptance review live here. **Merged into one lane by file ownership**: all five items land under `literature/`, and splitting them apart would inevitably fight over `literature/cli.ts` |
+| **η** Closing out capability-reporting accuracy | V37: `auth` and `config list`/`doctor` report different statuses for the same key + `idea new`'s failure message | The root cause has already been pinned down to a specific line, more specifically than the report stated (see below) |
 
-**V37 的真因**（主会话核实）：`index.ts:103` 有一份**手写的 `KEY_NAMES` 副本，只列
-kimi + openrouter**，而 `doctor` / `capabilities` / `onboarding` 三处都从
-`providerApiKeyEnv()` 派生。更直接的是 `auth()` 显示配置时**只读 config 文件、不看环境变量**
-（`index.ts:126`），所以 key 在 env 里时它报「未设置」。**这与 P11 收口过的
-`PROVIDER_API_KEY_ENV` 手工副本是同一个 bug 的第二现场**——真源统一了，但漏了这个消费方。
+**V37's root cause** (verified by the main session): `index.ts:103` has a **hand-written copy of `KEY_NAMES` that only lists kimi + openrouter**, while `doctor` / `capabilities` / `onboarding` all derive theirs from `providerApiKeyEnv()`. More directly, `auth()`, when displaying configuration, **only reads the config file and never looks at environment variables** (`index.ts:126`), so it reports "not set" when the key is actually present in the environment. **This is the second occurrence of the exact same bug as the hand-written `PROVIDER_API_KEY_ENV` copy that was closed out in P11** — the source of truth was unified, but this consumer was missed.
 
-### 补.3 `backend/src/index.ts` 归属重排
+### Supplement.3 Rescheduling ownership of `backend/src/index.ts`
 
-原表把 `index.ts` 的「只许加 `case "chem"`」给了 γ。现在 η 要重写该文件的
-`KEY_NAMES` / `getApiKey()` / `auth()` 三处，**两条 lane 写同一个文件必冲突**。
+The original table gave γ "only allowed to add `case "chem"`" in `index.ts`. Now η needs to rewrite that file's `KEY_NAMES` / `getApiKey()` / `auth()` in three places — **two lanes writing to the same file will inevitably conflict**.
 
-处置沿用本文 §3.1 对 `app.ts` 已有的先例（「`app.ts` 一行由收口接」）：
+The disposition follows the precedent already established in this document's §3.1 for `app.ts` ("the one line in `app.ts` is wired up at close-out"):
 
-- **`backend/src/index.ts` 整个归 η**
-- **γ 的 `case "chem"` 一行与 import 由收口接**——γ 在报告里写明该写哪一行
+- **`backend/src/index.ts` as a whole belongs to η**
+- **γ's `case "chem"` line and its import are wired up at close-out** — γ states in its report exactly which line needs to be written
 
-### 补.4 W5-1 足迹增量核验（只列新增三条与原四条的交叉面）
+### Supplement.4 W5-1 footprint verification, incremental (listing only the intersection between the three new lanes and the original four)
 
-| 文件 | 争用 | 处置 |
+| File | Contention | Disposition |
 |---|---|---|
-| `backend/src/index.ts` | γ（原）· η（新） | **归 η**；γ 那一行下放收口（补.3） |
-| `backend/src/literature/library.ts` | ε（`schema.sql`） | ζ 只拿 `{models,cli,export}.ts`，不含 `library.ts` → 不冲突 |
-| `backend/src/lab/wet_backend.ts` | ε（`.py` spawn） | δ 只拿 `{protocol,safety}.ts` → 不冲突 |
-| `backend/src/simulation/{openmm,pyref}/index.ts` | ε（`runner.py`） | α 只拿 `platform.ts` 的 `canonicalJson` 导出；W5-3 β 拿的是 registry + 三个新平台 → 不冲突 |
-| `backend/src/agents/orchestrator.ts` | ε（V33 的 `/workspaces`，`:223`） | W5-2 δ 才动它，**跨波不同时** → 不冲突 |
-| `backend/src/ideation/cli.ts` | η（失败消息） | β 拿的是 `{novelty,affinity}.ts` → 不冲突 |
-| `tests/unit/narrative_parity.test.ts` | α（登记「等接线」） | ζ 的新门禁断言**另开** `tests/unit/literature_source_parity.test.ts`，不碰枢纽文件 |
+| `backend/src/index.ts` | γ (original) · η (new) | **Belongs to η**; γ's line is delegated to close-out (Supplement.3) |
+| `backend/src/literature/library.ts` | ε (`schema.sql`) | ζ only takes `{models,cli,export}.ts`, not `library.ts` → no conflict |
+| `backend/src/lab/wet_backend.ts` | ε (`.py` spawn) | δ only takes `{protocol,safety}.ts` → no conflict |
+| `backend/src/simulation/{openmm,pyref}/index.ts` | ε (`runner.py`) | α only takes the `canonicalJson` export from `platform.ts`; W5-3 β takes the registry + three new platforms → no conflict |
+| `backend/src/agents/orchestrator.ts` | ε (V33's `/workspaces`, `:223`) | Only W5-2 δ touches it, **different waves, never simultaneous** → no conflict |
+| `backend/src/ideation/cli.ts` | η (the failure message) | β takes `{novelty,affinity}.ts` → no conflict |
+| `tests/unit/narrative_parity.test.ts` | α (registers "awaiting wiring") | ζ's new gate-check assertion is put in a **separate new file**, `tests/unit/literature_source_parity.test.ts`, and does not touch the hub file |
 
-### 补.5 ζ 要顺带补的一条门禁（V34 的结构性教训）
+### Supplement.5 A gate check ζ needs to add along the way (a structural lesson from V34)
 
-V34 不是普通 bug：`lit search --sources arxiv` 能用、`capabilities --json` 报 arxiv 可用、
-`lit add <arxiv-id>` 却查不到。**能力做好了，默认值没跟着改**，而 **AD-12 门禁抓不到**——
-它核「arxiv 在不在注册表」，核不了「默认值有没有包含它」。
+V34 was not an ordinary bug: `lit search --sources arxiv` worked, `capabilities --json` reported arxiv as available, yet `lit add <arxiv-id>` couldn't find it. **The capability was built, but the default value wasn't updated to match it**, and **the AD-12 gate check couldn't catch this** — it checks "is arxiv in the registry," not "does the default value include it."
 
-所以 ζ 除了改那一行，必须加一条断言：**已实装的源必须在 `DEFAULT_SEARCH_SOURCES` 里，
-或在一张显式排除表里带理由**（CNKI/万方是占位实现，属于合法排除）。
-阴性对照：把 arxiv 从默认集里拿掉 → 该断言必须变红。
+So beyond fixing that one line, ζ must add an assertion: **any already-implemented source must appear in `DEFAULT_SEARCH_SOURCES`, or be listed with a reason in an explicit exclusion table** (CNKI/Wanfang are placeholder implementations and are a legitimate exclusion). Negative control: remove arxiv from the default set → this assertion must fail.
 
-### 补.6 剩余两次外部验收的落点不变
+### Supplement.6 The remaining two external-acceptance-review checkpoints are unchanged
 
-方案 §6.3 要求三次。闸门 F 已跑第一次（基线）。**W5-2 末**第二次（含审批链，用 local
-target 即可，不必等 Modal），**发布前**第三次（干净机器）。两次都必须由未参与开发的会话执行。
+Proposal §6.3 requires three reviews. Gate F has already run the first (baseline). The second is **at the end of W5-2** (including the approval chain; the local target is sufficient, no need to wait for Modal), and the third is **pre-release** (a clean machine). Both must be performed by a session that was not involved in development.
 
 ---
 
-## 三·补.7：W5-2 α 走「无 token 降级交付」，启用 Modal 必须是纯配置（用户 2026-09-10 决定）
+## 3 (supplement.7): W5-2 α ships a "degraded delivery without a token"; enabling Modal must be pure configuration (user decision, 2026-09-10)
 
-### 决定
+### The decision
 
-用户口径：**先按 A（降级交付），剩下的放到用户配置文件里。**
+The user's direction: **go with option A first (degraded delivery); the rest goes into the user's config file.**
 
-所以 W5-2 α 的交付边界是：**gateway 接口 + 录制层 + 用假 gateway 过契约测试**，
-不做真实 Modal 录制。真实冒烟留到用户拿到 token 之后手动补一次。
-**这不阻塞任何其它 lane**——α 已交付的 local adapter 承担全部契约测试，
-第二次外部验收（W5-2 末）用 local target 就能走完整审批链。
+So W5-2 α's delivery boundary is: **the gateway interface + the recording layer + passing the contract tests with a fake gateway**, with no real Modal recording. The real smoke test is deferred to a manual pass once the user obtains a token. **This blocks no other lane** — α's already-delivered local adapter carries the entire contract-test suite, and the second external acceptance review (end of W5-2) can walk the full approval chain using the local target.
 
-### 这个决定带来的三条硬约束（都要可核，不许靠自觉）
+### Three hard constraints that follow from this decision (all must be verifiable, not left to good faith)
 
-**约束一：启用 Modal 必须零代码改动、零重新编译。**
-用户后来做的全部动作只有两件——把 token 写进 `~/.spark-research/credentials.json`
-的 `connectors.modal`（§1.1.7 已定，复用 `CredentialStore`，0600），
-把 `computeTarget` / `modalEnvironment` 写进 `config.json`（W5-2 β 的所有权）。
+**Constraint one: enabling Modal must require zero code changes and zero recompilation.**
+The only two actions the user later needs to take are: writing the token into `connectors.modal` in `~/.spark-research/credentials.json` (already specified in §1.1.7, reusing `CredentialStore`, mode 0600), and writing `computeTarget` / `modalEnvironment` into `config.json` (owned by W5-2 β).
 
-> ⚠️ **W5-2 α 交付后的更正（主会话，2026-09-10）**：这条约束**只兑现了一半**，
-> 而且是 lane α 主动指出来的。判定路径确实纯配置（有阴性对照钉着，没有任何编译期常量
-> 参与「Modal 能不能用」），**但真实 `ModalGateway`（Modal SDK 客户端）压根还不存在**——
-> 本波交付的是接口 + 录制层 + 假 gateway。所以**「填了 token 就能跑」现在不成立**。
+> ⚠️ **Correction after W5-2 α's delivery (main session, 2026-09-10)**: this constraint was **only half fulfilled**, and it was lane α itself that flagged it. The decision path really is pure configuration (pinned down by a negative control, with no compile-time constant participating in "whether Modal can be used"), **but a real `ModalGateway` (a Modal SDK client) doesn't exist at all yet** — what this wave delivered is the interface + the recording layer + a fake gateway. So **"just fill in the token and it runs" does not currently hold**.
 >
-> α 没有把接口做得像是能用，而是让 `status()` 在这种情况下报得难看但准确：
-> 「真实 gateway 尚未实现——所以只填 token 还跑不起来」（`adapters/modal.ts:156`）。
-> **这是对的取向**：一个还没连过真实服务的适配器，任何"看起来能用"的措辞都会误导发布材料。
+> Rather than making the interface look usable, α made `status()` report this situation in a way that's unattractive but accurate: "the real gateway is not yet implemented — so filling in only the token still won't make it run" (`adapters/modal.ts:156`). **This is the right call**: for an adapter that has never connected to a real service, any wording that makes it "look usable" would mislead release materials.
 >
-> 约束一的准确表述应该是：**「将来实现真实 gateway 时，启用它不得需要任何编译期改动」**——
-> 这一条本波已经做到并有门禁。而"填 token 即可用"要等真实 gateway 落地后才成立，
-> 清单见 `docs/devlog/W5-2-a.md` §四。
-**adapter 里不许有任何 build-time 常量参与「Modal 能不能用」的判定**——
-判定只能来自运行期读配置。阴性对照：把判定改成读一个编译期常量 → 测试必须红。
+> The accurate statement of constraint one should be: **"once the real gateway is implemented in the future, enabling it must require no compile-time changes"** — this part has already been achieved this wave and is gate-checked. "Fill in the token and it just works" only becomes true once the real gateway lands; see `docs/devlog/W5-2-a.md` §4 for the checklist.
 
-**约束二：没配 token 时的口径必须是「未配置」，不是「不可用」也不是「可用」。**
-`doctor` 与 `capabilities --json` 都要如实报 `credentialConfigured: false`（§2.11 已有字段），
-并给出**配置指引**（V36 的质量要求）。
+**No build-time constant may participate in the "can Modal be used" decision inside the adapter** — the decision must come only from reading configuration at runtime. Negative control: change the decision to read a compile-time constant → the test must fail.
 
-- 报「不可用」是错的：能力在，只是没凭据，和 `openmm` 没装是两回事；
-- 报「可用」更错——那是 AD-12 明令禁止的形状，本波刚因为这个修了 V34 和二进制的「技能 0 个」。
+**Constraint two: when no token is configured, the reported status must be "not configured" — neither "unavailable" nor "available."**
+Both `doctor` and `capabilities --json` must honestly report `credentialConfigured: false` (the field already exists in §2.11), and must provide **configuration guidance** (a quality requirement from V36).
 
-**约束三：假 gateway 不许成为永久替身。**
-录制层用假 gateway 过契约测试是**为了让契约先立起来**，不是 Modal 的实现。
-所以 `modal.ts` 必须在 `ALLOWED_ORPHANS` 或等价位置留一条明确的
-「**等真实录制**：拿到 token 后必须补一次真实 gateway 录制并删本条」——
-与 W5-1 α 的「等接线」同一套纪律。**没有这条登记，假 gateway 会活到发布。**
+- Reporting "unavailable" is wrong: the capability is present, it's just missing credentials — a different situation from `openmm` not being installed;
+- Reporting "available" is even more wrong — that's exactly the shape AD-12 explicitly forbids, and this very wave just fixed V34 and the binary's "0 skills" for the same reason.
 
-### 对外材料的口径
+**Constraint three: the fake gateway must never become a permanent stand-in.**
+Using a fake gateway to pass contract tests in the recording layer is **meant to get the contract established first** — it is not an implementation of Modal. So `modal.ts` must carry an explicit entry, in `ALLOWED_ORPHANS` or an equivalent location, reading "**awaiting real recording**: once a token is obtained, a real gateway recording must be made and this entry deleted" — the same discipline as W5-1 α's "awaiting wiring." **Without this registration, the fake gateway will live on into the release.**
 
-v0.5.0 发布时**不许**宣称「支持 Modal 远端算力」。准确的说法是：
-**算力抽象层与审批链已落地并有 local 实现；Modal adapter 的契约已立、真实链路未验证。**
-（这与 v0.4.0 发布时如实说明三件未关闭事项是同一条纪律。）
+### The messaging for external materials
+
+The v0.5.0 release **must not** claim to "support Modal remote compute." The accurate statement is: **the compute abstraction layer and the approval chain have landed, with a local implementation; the Modal adapter's contract is established, but its real pathway is unverified.** (This follows the same discipline as v0.4.0's honest disclosure of three unclosed items at release time.)
 
 ---
 
-## 三·补.8：W5-3 lane 划分与足迹核验（主会话，2026-09-10）
+## 3 (supplement.8): W5-3 lane assignment and footprint verification (main session, 2026-09-10)
 
-> §3.3 的原表写于 W5-2 之前。这里按**两件已发生的事**重排：
-> ① W5-2 末的零上下文外部验收产出；② V45（外部 MCP 运行时接线）被识别为一条 lane。
+> §3.3's original table was written before W5-2. It is rescheduled here based on **two events
+> that have since occurred**: ① the output of the zero-context external acceptance review at the
+> end of W5-2; ② V45 (external MCP runtime wiring) being identified as its own lane.
 
-### 补.8.1 第二批 connector（原 γ）**取消**——这是方案自己的规则在生效
+### Supplement.8.1 The second batch of connectors (formerly γ) is **cancelled** — this is the proposal's own rule taking effect
 
-§3.3 给 W5-3 γ 的条件是「**只在 F-1 或 W5-2 末外部验收给出拉动时才开；否则本 lane 空置**」。
+§3.3's condition for W5-3 γ was "**only opens if F-1 or the W5-2-end external acceptance review calls for it; otherwise this lane stays empty**."
 
-W5-2 末的验收**没有要求更多文献源**。它要的是：算力进证据图（S2）、能看原始 record（S11）、
-报告的证据索引别空着（S10）。**所以第二批 connector 不开**——不是忘了，是判据说不该开。
-这条规则存在的理由就是防止重演 v0.4 的铺量（方案 §2）。
+The W5-2-end review **did not ask for more literature sources**. What it asked for was: getting compute output into the evidence graph (S2), being able to view raw records (S11), and not leaving the report's evidence index empty (S10). **So the second batch of connectors does not open** — not because it was forgotten, but because the criteria say it shouldn't. The whole reason this rule exists is to prevent a repeat of v0.4's scope creep (proposal §2).
 
-腾出来的位置给**更值钱的**两条：V45 与「证据图可见性」。
+The freed-up slot goes to two **more valuable** items instead: V45 and "evidence-graph visibility."
 
-### 补.8.2 四条 lane
+### Supplement.8.2 Four lanes
 
-| lane | 内容 | 模型 |
+| Lane | Contents | Model |
 |---|---|---|
-| **α** | CB-6 桥 + **S2（算力产出进证据图）** + 真实 SIGKILL e2e | Opus |
-| **β** | C3 平台三件套（scanpy / pydeseq2 / cobrapy） | Opus |
-| **γ** | **V45**：外部 MCP 的运行时接线（子进程生命周期） | Opus |
-| **δ** | **证据图可见性**：S10 / S11 / S12 | Sonnet |
+| **α** | The CB-6 bridge + **S2 (getting compute output into the evidence graph)** + the real SIGKILL e2e | Opus |
+| **β** | C3 three-platform bundle (scanpy / pydeseq2 / cobrapy) | Opus |
+| **γ** | **V45**: external MCP runtime wiring (subprocess lifecycle) | Opus |
+| **δ** | **Evidence-graph visibility**: S10 / S11 / S12 | Sonnet |
 
-**α 为什么把 S2 一并做**：设计 §1.1 本来就把「一条 `observation`（`kind:"compute_output"`,
-`evidence:"computed"`）+ harvest 文件各一条 artifact record」排给 W5-3 α。
-验收撞到它只是因为 W5-3 还没跑。**S2 不是新增范围，是它本来的范围。**
+**Why α also does S2**: the design in §1.1 already assigned "one `observation` record (`kind:"compute_output"`, `evidence:"computed"`) + one artifact record per harvested file" to W5-3 α. The acceptance review only ran into it because W5-3 hadn't run yet. **S2 is not new scope — it was already α's scope.**
 
-**γ 为什么是 lane 不是收口活**：W5-2 收口追查发现 `connectExternalMcp()` 整条生产路径
-零调用方——不是「忘了传参数」，是**没有那条流程可传**。要建的是完整生命周期：
-发现已装的 `mcp_client` 扩展 → agent 开跑时连接**子进程** → 注册进 `ExternalToolRegistry` →
-绑定项目的 `recordSink` → 结束时收掉 → **坏扩展不许拖垮整轮**。
-在收口里手搓子进程生命周期正是工程纪律第 13 条警告的那类跨层改动。
+**Why γ is a lane rather than close-out work**: the W5-2 close-out investigation found that `connectExternalMcp()`'s entire production path has zero callers — not because "a parameter was forgotten," but because **there is no such flow to pass it through**. What needs to be built is the complete lifecycle: discover an installed `mcp_client` extension → connect its **subprocess** when the agent starts running → register it into `ExternalToolRegistry` → bind the project's `recordSink` → tear it down at the end → **a broken extension must not be allowed to bring down the whole run**. Hand-building a subprocess lifecycle during close-out is exactly the kind of cross-layer change that engineering discipline rule 13 warns against.
 
-**δ 刻意扩 `report` 而不是新建 `records` 命名空间**：`report` CLI 已经有
-`export`/`stats` 且已在 `index.ts` 接线，`RecordStore` 也已有 `list`/`get`/`edgesOf`/`listEdges`
-（只读，够用）。扩它**一次消掉三处枢纽争用**（`index.ts` · `narrative_parity.test.ts` ·
-新命令的「等接线」登记），而且证据图检视本来就属于 `report` 的语义。
+**Why δ deliberately extends `report` rather than creating a new `records` namespace**: the `report` CLI already has `export`/`stats` and is already wired into `index.ts`, and `RecordStore` already has `list`/`get`/`edgesOf`/`listEdges` (read-only, which is sufficient). Extending it **eliminates three hub-file contention points in one move** (`index.ts` · `narrative_parity.test.ts` · a new command's "awaiting wiring" registration), and evidence-graph inspection already belongs semantically under `report` anyway.
 
-### 补.8.3 足迹核验（grep 实核，不凭记忆）
+### Supplement.8.3 Footprint verification (verified by actual grep, not from memory)
 
-| 文件 | α | β | γ | δ | 处置 |
+| File | α | β | γ | δ | Disposition |
 |---|---|---|---|---|---|
-| `backend/src/compute/sim_bridge.ts`（新建） | ✅ | | | | 独占 |
-| `backend/src/compute/{cli,broker}.ts` | ✅（S2 落 record） | | | | 独占 |
-| `backend/src/experiment/{loop,models,cli}.ts` | ✅ | | | | 独占 |
-| `backend/src/server/routes/experiments.ts` | ✅ | | | | 独占 |
-| `backend/src/mcp/tools.ts` | ✅（`exp_design` 加 `target`） | | | | 独占 |
-| `backend/src/simulation/registry.ts` + 三个新平台 | | ✅ | | | 独占（α 的桥只读它，§1.1.9） |
-| `backend/src/skills/**` · `docs/EXTENDING.md` · `pyproject.toml` | | ✅ | | | 独占 |
-| `tests/unit/narrative_parity.test.ts` | | ✅（SKILL_ENTRYPOINTS 三行） | | | **β 独占**；γ 不需要（`mcp_client.ts` 本就有生产调用方，非孤儿，已核）；δ 不需要（扩 `report`，无新入口） |
-| `backend/src/extensions/{loader,mcp_client}.ts` | | | ✅ | | 独占 |
-| `backend/src/daemon/daemon.ts` · `server/context.ts` · `index.ts` | | | ✅ | | **γ 独占**——δ 改扩 `report` 后不再需要 `index.ts` |
-| `backend/src/agents/orchestrator.ts` | | | ✅ | | 独占（α 不碰它） |
-| `backend/src/report/{cli,export}.ts` | | | | ✅ | 独占 |
-| `backend/src/project/records.ts` | 只读 | | | 只读 | **无人写**——α 用既有 `create()`，δ 用既有查询 API |
-| `backend/src/artifacts/store.ts` | 只读（调 `save()`） | | | | 无人写 |
+| `backend/src/compute/sim_bridge.ts` (new) | ✅ | | | | Exclusive |
+| `backend/src/compute/{cli,broker}.ts` | ✅ (S2 writes the record) | | | | Exclusive |
+| `backend/src/experiment/{loop,models,cli}.ts` | ✅ | | | | Exclusive |
+| `backend/src/server/routes/experiments.ts` | ✅ | | | | Exclusive |
+| `backend/src/mcp/tools.ts` | ✅ (adds `target` to `exp_design`) | | | | Exclusive |
+| `backend/src/simulation/registry.ts` + the three new platforms | | ✅ | | | Exclusive (α's bridge only reads it, §1.1.9) |
+| `backend/src/skills/**` · `docs/EXTENDING.md` · `pyproject.toml` | | ✅ | | | Exclusive |
+| `tests/unit/narrative_parity.test.ts` | | ✅ (three SKILL_ENTRYPOINTS lines) | | | **Exclusive to β**; γ doesn't need it (`mcp_client.ts` already has a production caller, so it isn't an orphan — verified); δ doesn't need it (extends `report`, no new entry point) |
+| `backend/src/extensions/{loader,mcp_client}.ts` | | | ✅ | | Exclusive |
+| `backend/src/daemon/daemon.ts` · `server/context.ts` · `index.ts` | | | ✅ | | **Exclusive to γ** — δ no longer needs `index.ts` now that it extends `report` instead |
+| `backend/src/agents/orchestrator.ts` | | | ✅ | | Exclusive (α doesn't touch it) |
+| `backend/src/report/{cli,export}.ts` | | | | ✅ | Exclusive |
+| `backend/src/project/records.ts` | Read-only | | | Read-only | **Nobody writes to it** — α uses the existing `create()`, δ uses the existing query API |
+| `backend/src/artifacts/store.ts` | Read-only (calls `save()`) | | | | Nobody writes to it |
 
-**结论：零争用。** 与 W5-1/W5-2 相比这轮足迹格外干净，主要靠 δ 改扩 `report` 那个决定。
+**Conclusion: zero contention.** Compared with W5-1/W5-2, this round's footprint is unusually clean, mainly thanks to δ's decision to extend `report`.
 
-### 补.8.4 这轮任务书要带的三条教训
+### Supplement.8.4 Three lessons this round's task briefs must carry
 
-1. **基线数字必须实测后写进任务书**（W5-1 教训：新 worktree 缺 `.venv`/`node_modules` 时
-   python 套件**不报错、静默变 skip**，lane 会量到假基线）。worktree 建好后预装依赖并抽验一次。
-2. **跨层改动的 lane 必须在任务书里点名要求跑 e2e**（W5-1 教训：δ 的足迹里没有 `tests/e2e/`，
-   V25 的连带回归漏到收口才发现）。本轮 α 与 γ 都属跨层。
-3. **并行 lane 之间的「同一件事两份手写副本」单条 lane 的门禁看不见**（V46 教训：
-   Modal 凭据字段名对不上）。本轮 α 与 δ 都会碰「算力产出在证据图里长什么样」——
-   **任务书里把 record 的 `kind` / `evidence` 字面量指定死，并要求双方都从同一处 import**。
+1. **Baseline numbers must be measured for real before being written into a task brief** (a W5-1 lesson: when a new worktree is missing `.venv`/`node_modules`, the Python suite **doesn't error — it silently turns into a skip**, and a lane will measure against a fake baseline). Pre-install dependencies once the worktree is built, and spot-check them.
+2. **A lane doing cross-layer changes must be explicitly required in its task brief to run e2e** (a W5-1 lesson: δ's footprint had no `tests/e2e/` in it, and V25's associated regression wasn't caught until close-out). Both α and γ are cross-layer this round.
+3. **A single lane's gate checks cannot see "the same thing hand-copied twice" across parallel lanes** (a V46 lesson: Modal credential field names didn't match up). This round, both α and δ will touch "what compute output looks like in the evidence graph" — **the task briefs must pin down the record's `kind` / `evidence` literals exactly, and require both lanes to import them from the same place**.

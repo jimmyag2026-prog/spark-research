@@ -1,291 +1,291 @@
-# Spark Research v0.6 开发与测试方案（定稿 v1）
+# Spark Research v0.6 Development & Testing Plan (Final v1)
 
-> 定稿时间：2026-09-11 PDT · 基线：main @ v0.5.0
-> **执行前提已满足（2026-09-11 验证）**：tag v0.5.0 = main HEAD（20a7232，PR #38）·
-> `--version` 报 0.5.0 · 工作区干净 · 本地无残留分支。
-> 附带发现：GitHub 上 v0.3.0 起只打 tag、未建 Release 对象（Releases 列表停在 v0.2.1）；
-> 是否补建由用户定，不阻塞 v0.6。
-> 位置纪律：本目录独立于仓库与 GitHub，不影响现有工作区；执行开始后第一个动作把本文
-> 拷入仓库 `docs/DEVELOPMENT_PLAN_v0.6.md` 并走 PR。
-> 执行方式：`/loop` 自适应节奏连续 10 小时自动推进（用户到时敲命令，见 §9）。
+> Finalized: 2026-09-11 PDT · Baseline: main @ v0.5.0
+> **Execution preconditions satisfied (verified 2026-09-11)**: tag v0.5.0 = main HEAD (20a7232, PR #38) ·
+> `--version` reports 0.5.0 · working tree clean · no leftover local branches.
+> Incidental finding: on GitHub, starting from v0.3.0 only tags were pushed, no Release objects were created (the Releases list stops at v0.2.1);
+> whether to backfill these is for the user to decide, and it does not block v0.6.
+> Location discipline: this directory is independent of the repo and GitHub and does not affect the existing working tree; the first action once execution begins is to copy this document
+> into the repo as `docs/DEVELOPMENT_PLAN_v0.6.md` and put it through a PR.
+> Execution mode: `/loop` at an adaptive pace, running automatically for 10 continuous hours (the user types the command when ready, see §9).
 
 ---
 
-## 〇、一句话与已锁定决策
+## 0. One-Liner and Locked-In Decisions
 
-**v0.5 把链路建全并诚实标出所有断点；v0.6 让一个真实用户从浏览器进来能走完
-「文献 → 写作」，并用多轮真实运行的记账数据把文献调研与写作质量磨到可信。**
+**v0.5 built out the full pipeline and honestly flagged every breakpoint; v0.6 lets a real user come in through the browser and walk all the way through
+"literature → writing," and uses accounting data from multiple real runs to polish literature research and writing quality until it is trustworthy.**
 
-| 决策项 | 内容 | 拍板时间 |
+| Decision item | Content | Decided |
 |---|---|---|
-| B2 课题 | T1 蛋白结构预测（EN）· T2 单细胞聚类（EN）· T3 脑机接口信号解码（中）· T4 钙钛矿稳定性（中） | 2026-09-11 用户确认 |
-| 每轮预算 | **$2**（LLM 实花，`maxCostUsd` 强制） | 同上 |
-| 全程总预算 | **$6 硬顶**（10 小时内 LLM 实花；超顶停花钱路径，继续不花钱的开发） | 同上 |
-| LLM 模型 | OpenRouter `z-ai/glm-5.3-flash`（实效价含 5.5% 平台费：输入 ~$0.0791/M · 输出 ~$0.2638/M） | 同上 |
-| 检索主源 | AMiner（中文课题主路径；key 2026-10-07 到期，**本版不续期**，中文轮次一律排在到期前） | 同上 |
-| PR 政策 | **授权自动 squash-merge**：测试全绿 + 自审通过即合；main 不直推不变；push 后必验远端 ref | 同上 |
-| 版本纪律 | 全部改动在 **v0.6.x 线**迭代：W6-1 收口 → `v0.6.0-alpha.1`；B2 轮次修复 → alpha.2/3…；A5 验收过 → `v0.6.0`。每个 tag 必有 CHANGELOG 段 + devlog 记录 | 同上 |
-| 进度汇报 | **不用 TG 推送**。① session 内每个唤醒点报一段进度；② GitHub 可审计：PR 按 `G-x:` / `W6-1 α:` / `B2-R1:` 前缀命名，用户随时二次核对 merged PR 列表与 CHANGELOG | 同上 |
-| A3（3D 视图） | 条件触发：B2 轮次真产出结构数据才做（3Dmol.js 锁版本、产物不入 git），否则明确不做 | 同上 |
+| B2 topics | T1 protein structure prediction (EN) · T2 single-cell clustering (EN) · T3 brain-computer interface signal decoding (ZH) · T4 perovskite stability (ZH) | Confirmed by user 2026-09-11 |
+| Per-round budget | **$2** (actual LLM spend, enforced by `maxCostUsd`) | Same as above |
+| Total budget for the whole run | **$6 hard cap** (actual LLM spend within the 10 hours; once the cap is hit, stop the spending path and continue with non-spending development) | Same as above |
+| LLM model | OpenRouter `z-ai/glm-5.3-flash` (effective price including 5.5% platform fee: input ~$0.0791/M · output ~$0.2638/M) | Same as above |
+| Primary retrieval source | AMiner (main path for Chinese-language topics; key expires 2026-10-07, **not renewed in this release**, all Chinese-language rounds must be scheduled before expiry) | Same as above |
+| PR policy | **Automatic squash-merge authorized**: merge once all tests are green and self-review passes; direct pushes to main remain disallowed; the remote ref must be verified after every push | Same as above |
+| Versioning discipline | All changes iterate on the **v0.6.x line**: W6-1 close-out → `v0.6.0-alpha.1`; B2-round fixes → alpha.2/3…; A5 review pass → `v0.6.0`. Every tag must have a CHANGELOG section + devlog entry | Same as above |
+| Progress reporting | **No Telegram push notifications**. ① within the session, report a progress update at every wake-up point; ② auditable on GitHub: PRs are named with the `G-x:` / `W6-1 α:` / `B2-R1:` prefixes, so the user can re-verify the merged-PR list and CHANGELOG at any time | Same as above |
+| A3 (3D view) | Conditionally triggered: only built if a B2 round actually produces structural data (3Dmol.js pinned to a version, artifacts not committed to git); otherwise explicitly not done | Same as above |
 
-预算量级参考：单课题全链路（10 篇精读 + 综述 + 2 idea + novelty）估算 ~$0.3。
-R1 两课题 ≈ $0.6，全量复跑 4 课题 ≈ $1.2，均在 $2 内。$2 闸的意义是**防失控循环**
-（P12 `agent_run` 事故形状），不是省钱。
-
----
-
-## 一、基线闸（第 0 步，不过不开工）
-
-自动跑首个动作，只验不改：
-
-1. `git fetch` 后确认 main 包含 tag `v0.5.0`，且 release/v0.5.0 的收尾提交已在 main 上
-2. 源码起 server，`/api/health` 报 0.5.0（v0.2.1 事故的直接教训：tag 与 main 分家靠这条抓）
-3. 工作区干净（无未提交改动残留）
-4. `OPENROUTER_API_KEY` 在位 · `~/.spark-research/credentials.json` 在位 · `bun test` 全绿
-
-**任一不满足 → 停止执行，在 session 里报告状态，等用户处置。不擅自收尾发布。**
-
-通过后：本文拷入 `docs/DEVELOPMENT_PLAN_v0.6.md`，连同 4 份课题任务书（§5）走第一个 PR。
+Budget-scale reference: a single topic's full pipeline (10 deep-read papers + review + 2 ideas + novelty check) is estimated at ~$0.3.
+R1's two topics ≈ $0.6, a full re-run of all 4 topics ≈ $1.2, both within $2. The point of the $2 gate is to **prevent runaway loops**
+(the shape of the P12 `agent_run` incident), not to save money.
 
 ---
 
-## 二、闸门 G（地基，串行完成后才开波次）
+## 1. Baseline Gate (Step 0 — work does not start without it)
 
-### G-1 · 模型配置化 + GLM 定价登记
+The first automated action only verifies, it does not change anything:
 
-开发：
-1. `PROVIDER_MODELS.openrouter` 加 `z-ai/glm-5.3-flash`；`providers/registry` 的
-   `priceFor` 登记**含 5.5% 平台费的实效价**，注释写明口径（否则账本永远低报）
-2. `config set default-model` 落盘 + `LLMRouter.call()` 未显式传 model 时读它。
-   **V40 现行犯教训**（`defaultProvider` 只写不读）：必须有真读者，并补门禁——
-   **可写入的配置项必须有读者**（对配置 schema 逐项对账）
-3. `lit read` / `lit review` / `idea` / `chat` 加 `--model` 覆盖项（V16 的用户可见一半；子代理分模型不做）
+1. After `git fetch`, confirm main contains tag `v0.5.0`, and that the release/v0.5.0 close-out commit is already on main
+2. Start the server from source; `/api/health` reports 0.5.0 (a direct lesson from the v0.2.1 incident: this is how a tag/main divergence gets caught)
+3. Working tree is clean (no leftover uncommitted changes)
+4. `OPENROUTER_API_KEY` present · `~/.spark-research/credentials.json` present · `bun test` all green
 
-测试：
-- 单测：set 后不传 model 走 openrouter 且 wire model 正确
-- 阴性对照：拆掉读者 → 「配置项必须有读者」门禁立红
-- 定价断言：`priceFor("z-ai/glm-5.3-flash")` 非 null（防将来改表静默丢价）
+**If any of these is not satisfied → stop execution, report status in the session, and wait for the user to decide. Do not close out or release on your own initiative.**
 
-### G-2 · 发行面
-
-开发：前端 dist 产物进二进制（V27 家族最后一块，V43①）；`package.json` 补
-`files`/`engines`/`prepublishOnly`（V29）；`new skill|connector` 二进制内维持显式拒绝并写进 INSTALL.md（V43②）。
-
-测试（V28 一并落）：CI 冒烟——构建二进制 → `--version` / `capabilities --json` / `doctor`
-→ **`server` 起来 curl 首页 200 且为真 HTML** → 版本号三处一致。干净目录手工验一次 npx 路径。
-
-### G-3 · 轮级预算闸（$2 强制执行）
-
-开发：
-1. **账本落盘**：`usage.jsonl`（`~/.spark-research/projects/<slug>/`），每次 LLM 调用追记
-   `{ts, command, skill, model, calls, tokens, knownCostUsd, unknownCostCalls}`——
-   一「轮」跨多条 CLI 命令，账必须跨进程累计
-2. 批量命令（`lit read --all` / `lit review` / agent 循环）启动时读累计账，传
-   `maxCostUsd` 进 `BudgetLedger`；超限**优雅停 + 可 resume，已完成的精读卡不丢**。
-   判定沿用账本铁律：用 `knownCostUsd` 下界判超，未知成本示警不装死、绝不当 0
-3. `usage` CLI：`spark-research usage [--json] [--since <ts>]`，分 skill 归因。
-   **CLI 接线注意**：`usage` 命名空间的 dispatcher 独立成 `backend/src/cli/usage.ts`，
-   `index.ts` 只加一个 case——给 W6-1 α 留挂载点，避免两条 lane 抢 `index.ts` 热点
-
-测试：
-- 跨进程持久性：两条命令先后跑，第二条读到累计
-- 阴性对照：注入无单价模型 → `unknownCostCalls`+1、`costUsd` 报 null 不报 0
-- 闸门实测：上限设 $0.001 跑 `lit read --all` → 优雅停 + resume 提示 + 已完成卡保留
-
-### G-4 · AMiner 预检
-
-真 key 跑一次 `getPaper` 详情接口（V9，search 已验通），结果码记入 devlog。
-不续期（用户指令）；确立排期约束：**中文课题所有轮次压在 10-07 前**（本次 10 小时内天然满足）。
+Once passed: copy this document into `docs/DEVELOPMENT_PLAN_v0.6.md`, and put it through the first PR together with the 4 topic taskbooks (§5).
 
 ---
 
-## 三、W6-1 · 三条并行 lane
+## 2. Gate G (Foundation — waves only open after this is completed serially)
 
-文件所有权（v0.4 §5.1 铁律；`index.ts` 热点已在 G-3 拆解）：
+### G-1 · Model configurability + GLM pricing registration
 
-| lane | 内容 | 独占文件/目录 | 不许碰 |
+Development:
+1. Add `z-ai/glm-5.3-flash` to `PROVIDER_MODELS.openrouter`; in `providers/registry`,
+   register `priceFor` with the **effective price including the 5.5% platform fee**, with a comment documenting the basis (otherwise the ledger will always under-report)
+2. `config set default-model` persists to disk + `LLMRouter.call()` reads it when no model is explicitly passed.
+   **Lesson from the V40 repeat offender** (`defaultProvider` was write-only, never read): there must be a real reader, plus an added gate check —
+   **any config item that can be written must have a reader** (reconcile every item in the config schema)
+3. Add a `--model` override to `lit read` / `lit review` / `idea` / `chat` (V16's "half visible to the user"; per-subagent model assignment is out of scope)
+
+Tests:
+- Unit test: after `set`, calling without passing model routes through openrouter with the correct wire model
+- Negative control: remove the reader → the "config item must have a reader" gate turns red
+- Pricing assertion: `priceFor("z-ai/glm-5.3-flash")` is non-null (guards against silently losing pricing on a future table edit)
+
+### G-2 · Release surface
+
+Development: bundle the frontend dist artifacts into the binary (the last piece of the V27 family, V43①); add
+`files`/`engines`/`prepublishOnly` to `package.json` (V29); `new skill|connector` continues to be explicitly rejected inside the binary, documented in INSTALL.md (V43②).
+
+Tests (V28 lands together with this): CI smoke test — build the binary → `--version` / `capabilities --json` / `doctor`
+→ **start `server`, curl the homepage, get 200 and real HTML** → version numbers consistent in all three places. Manually verify the npx path once from a clean directory.
+
+### G-3 · Round-level budget gate ($2 enforced)
+
+Development:
+1. **Ledger persisted to disk**: `usage.jsonl` (under `~/.spark-research/projects/<slug>/`), appending on every LLM call:
+   `{ts, command, skill, model, calls, tokens, knownCostUsd, unknownCostCalls}` —
+   a single "round" spans multiple CLI commands, so the ledger must accumulate across processes
+2. Batch commands (`lit read --all` / `lit review` / the agent loop) read the accumulated ledger at startup and pass
+   `maxCostUsd` into `BudgetLedger`; on overrun, **stop gracefully with resume support, without losing already-completed deep-read cards**.
+   The overrun decision follows the ledger's iron rule: use the `knownCostUsd` lower bound to judge overrun, flag unknown cost with a warning rather than hiding it, and never treat it as 0
+3. `usage` CLI: `spark-research usage [--json] [--since <ts>]`, attributed per skill.
+   **CLI wiring note**: the `usage` namespace's dispatcher is broken out into its own `backend/src/cli/usage.ts`,
+   with `index.ts` only adding a single case — this leaves a mount point for W6-1 α, avoiding two lanes contending for the `index.ts` hotspot
+
+Tests:
+- Cross-process persistence: run two commands in sequence, the second reads the accumulated total
+- Negative control: inject a model with no unit price → `unknownCostCalls` +1, `costUsd` reports null, not 0
+- Live gate test: set the cap to $0.001, run `lit read --all` → stops gracefully + resume prompt + completed cards retained
+
+### G-4 · AMiner preflight check
+
+Run the `getPaper` detail endpoint once with a real key (V9, search has already been verified working), and record the result code in the devlog.
+No renewal (per user instruction); establish the scheduling constraint: **all rounds of Chinese-language topics must be squeezed in before 10-07** (naturally satisfied within this run's 10 hours).
+
+---
+
+## 3. W6-1 · Three parallel lanes
+
+File ownership (the iron rule from v0.4 §5.1; the `index.ts` hotspot has already been broken apart in G-3):
+
+| lane | Content | Exclusive files/directories | Must not touch |
 |---|---|---|---|
-| α | connector 调用台账 | `connectors/base.ts` · `backend/src/usage/`（新）· `cli/usage.ts` 内追加 | `index.ts` · frontend |
-| β | 工作台四面板 | `frontend/workspace/src/**` | backend 一切 |
-| γ | CLI 上手性清扫 | `index.ts` · `literature/` 文案 · `report/export.ts` | `connectors/` · frontend |
+| α | connector call ledger | `connectors/base.ts` · `backend/src/usage/` (new) · appended within `cli/usage.ts` | `index.ts` · frontend |
+| β | four workbench panels | `frontend/workspace/src/**` | all of backend |
+| γ | CLI onboarding cleanup | `index.ts` · `literature/` copy · `report/export.ts` | `connectors/` · frontend |
 
-### lane α · connector 调用台账（B1）
+### lane α · connector call ledger (B1)
 
-G-3 管钱，α 管 API 调用**次数与健康度**（AMiner 免费，但 429/401/延迟是 B2 每轮核心观测量）：
-- `connectors/base.ts` 一处埋点、全体 connector 覆盖（不逐个改——V46「两份手写副本」教训）：
-  `{ts, connector, host, status, latencyMs, rateLimitWaitMs}` 落 `api_calls.jsonl`
-- `usage api` 子命令：分源/分 host 聚合，429/401 单列（V26 限速器实效由此可观测）
-- 落账 URL **去查询参数**（凭据纪律）
+G-3 handles money, α handles API call **counts and health** (AMiner is free, but 429/401/latency are B2's core observed metrics every round):
+- A single instrumentation point in `connectors/base.ts`, covering every connector (not modifying each one individually — the lesson of V46's "two hand-written copies"):
+  `{ts, connector, host, status, latencyMs, rateLimitWaitMs}` logged to `api_calls.jsonl`
+- `usage api` subcommand: aggregated by source/by host, with 429/401 broken out separately (this is how the V26 rate limiter's real-world effectiveness becomes observable)
+- Logged URLs have **query parameters stripped** (credential discipline)
 
-测试：成功/429/超时三分支都落账；阴性对照：绕过 base 层直发 → 门禁红；
-**台账文件内容过密钥正则门禁**。
+Tests: success/429/timeout — all three branches get logged; negative control: bypassing the base layer to send directly → gate turns red;
+**ledger file contents are checked against the credential-regex gate**.
 
-### lane β · 工作台四面板（A2）
+### lane β · four workbench panels (A2)
 
-每面板三件套：实现 + `ui_cli_parity.test.ts` 断言 + Playwright 一条。
+Each panel gets a three-piece set: implementation + a `ui_cli_parity.test.ts` assertion + one Playwright scenario.
 
-| 面板 | 对齐 CLI | Playwright 场景 |
+| Panel | CLI it aligns with | Playwright scenario |
 |---|---|---|
-| ① 长任务进度 | `lit tasks` | 起 read 任务 → UI 出进度 → 刷新后仍在 |
-| ② record/证据图 | `report records` / `report show` | 点 record → 见入边出边 |
-| ③ 算力只读 | `compute list/status` | job 可见；**断言派发按钮不存在**（V47 裁定） |
-| ④ 用量 | `usage` / `usage api` | 跑命令后数字变化 |
+| ① Long-task progress | `lit tasks` | start a read task → UI shows progress → still there after refresh |
+| ② record / evidence graph | `report records` / `report show` | click a record → see incoming and outgoing edges |
+| ③ Compute (read-only) | `compute list/status` | job is visible; **assert that the dispatch button does not exist** (V47 ruling) |
+| ④ Usage | `usage` / `usage api` | numbers change after running a command |
 
-纪律：④ 只消费 G-3/α 的 `--json` 出口，不自算（两处算同一数字 = V37 形状）。
+Discipline: ④ only consumes the `--json` output of G-3/α, it does not compute its own numbers (two places computing the same number = the shape of V37).
 
-### lane γ · CLI 上手性清扫（A4）
+### lane γ · CLI onboarding cleanup (A4)
 
-- V54：bioRxiv「不是真检索」caveat 进 `lit sources` / `lit search` + `&amp;` 解码
-- V56 三条：未知命令回显打错的词 · 报告携带 unconsumedWarnings · observation 表格排版
-- V50：rev 采「用户可见 rev 与内部写计数分离」方向，行为变更进 CHANGELOG
-- V53：真实故障注入验证 `packagingLimitation` 机制真的能亮
+- V54: the bioRxiv "not real search" caveat goes into `lit sources` / `lit search` + `&amp;` decoding
+- V56, three items: unknown-command echo of the mistyped word · reports carrying unconsumedWarnings · observation table formatting
+- V50: for `rev`, adopt the direction of "separating the user-visible rev from the internal write count"; the behavior change goes into the CHANGELOG
+- V53: verify with real fault injection that the `packagingLimitation` mechanism actually lights up
 
-每条带回归测试。
+Each item comes with a regression test.
 
-### W6-1 收口
+### W6-1 close-out
 
-三 lane 合入 → 全量测试绿 → 二进制冒烟 → **改动路径窄验收**（V58 教训制度化）
-→ tag `v0.6.0-alpha.1` + CHANGELOG + devlog。
+All three lanes merged in → full test suite green → binary smoke test → **narrow acceptance review of the changed paths** (institutionalizing the V58 lesson)
+→ tag `v0.6.0-alpha.1` + CHANGELOG + devlog.
 
 ---
 
-## 四、B2 · 多轮实证回环（版本核心）
+## 4. B2 · Multi-round empirical feedback loop (the core of this release)
 
-### 每轮协议（固定脚本，逐轮可比）
+### Per-round protocol (fixed script, comparable round over round)
 
 ```
-0. 预检:  usage 归零快照 · doctor · AMiner 探活
-1. 检索:  按任务书检索式 lit search（中文课题 --sources aminer 为主）
-2. 入库:  lit add 前 10 篇 → paper-download 拉 PDF
-3. 精读:  lit read --all（$2 闸在身，模型 z-ai/glm-5.3-flash）
-4. 综述:  lit review（引用真伪核验开启）
-5. 思路:  idea new ×2 → novelty check
-6. 报告:  report export
-7. 观察:  usage / usage api 快照 · report stats · 指标表（§6）填写
-8. 登记:  发现清单 → BACKLOG（每条有去向：修 / 推迟 / 明确不做）
-9. 修复:  本轮修复 + 回归 + 改动路径窄验收 → 才许开下一轮；修复合入后 tag alpha.N
+0. Preflight: usage snapshot reset to zero · doctor · AMiner liveness probe
+1. Retrieval: lit search per the taskbook's search query (for Chinese-language topics, --sources aminer is primary)
+2. Ingestion: lit add the top 10 papers → paper-download pulls the PDFs
+3. Deep read: lit read --all (the $2 gate is in effect, model z-ai/glm-5.3-flash)
+4. Review: lit review (citation authenticity verification enabled)
+5. Ideation: idea new ×2 → novelty check
+6. Report: report export
+7. Observation: usage / usage api snapshot · report stats · fill in the metrics table (§6)
+8. Logging: findings list → BACKLOG (every item has a disposition: fix / defer / explicitly won't do)
+9. Fix: this round's fixes + regression + narrow acceptance review of changed paths → only then is the next round allowed to open; tag alpha.N after fixes are merged
 ```
 
-### 轮次安排
+### Round schedule
 
-| 轮 | 课题 | 执行者 | 定位 |
+| Round | Topics | Executor | Purpose |
 |---|---|---|---|
-| R1（本次 10h 内） | T1 + T3 | **零上下文子代理**（主会话开发、验收者陌生——v0.5 三次验收验证过的最能挖问题的姿势） | 预期发现最多，修复窗口最长 |
-| R2（后续 session） | T2 + T4 | 零上下文子代理 | 带 R1 修复跑；据 T1 是否产出结构数据裁定 A3 |
-| R3（后续 session） | T1–T4 全量 | 主会话驱动 | 回归 + 定稿数据；原则上不混新修复，混了就加 R4 |
+| R1 (within this 10h run) | T1 + T3 | **Zero-context subagent** (unfamiliar with the main session's development — the posture v0.5's three review passes proved best at surfacing problems) | Expected to surface the most findings, with the longest fix window |
+| R2 (subsequent session) | T2 + T4 | Zero-context subagent | Runs with R1's fixes applied; whether T1 produced structural data decides A3 |
+| R3 (subsequent session) | T1–T4, full set | Driven by the main session | Regression + final data; in principle no new fixes are mixed in — if they are, add R4 |
 
-### 课题任务书（执行期第一个 PR 里各自成文；召回基准在开跑前独立预列并冻结）
+### Topic taskbooks (each written up in its own document within the first PR of the execution phase; recall baselines are independently pre-listed and frozen before the run starts)
 
-| # | 课题 | 检索式要点 | 覆盖面 |
+| # | Topic | Search query key points | Coverage |
 |---|---|---|---|
-| T1 | 蛋白结构预测/设计近三年进展（AlphaFold 系） | EN：protein structure prediction / design, 2023-2026 | protein-analysis；产出结构 → 触发 A3 |
-| T2 | 单细胞转录组聚类方法比较 | EN：single-cell RNA-seq clustering benchmark | scanpy 平台、干实验闭环 |
-| T3 | 脑机接口信号解码 | 中：脑机接口 / 神经信号解码（AMiner 中文检索式） | V8 中文召回、AMiner 主路径 |
-| T4 | 钙钛矿太阳能电池稳定性 | 中：钙钛矿 / 稳定性 / 封装 | AMiner + 中英混合去重 |
+| T1 | Recent 3-year progress in protein structure prediction/design (AlphaFold family) | EN: protein structure prediction / design, 2023-2026 | protein-analysis; producing structural output → triggers A3 |
+| T2 | Comparison of single-cell transcriptome clustering methods | EN: single-cell RNA-seq clustering benchmark | scanpy platform, dry-experiment closed loop |
+| T3 | Brain-computer interface signal decoding | ZH: brain-computer interface / neural signal decoding (AMiner Chinese-language search query) | V8 Chinese-language recall, AMiner main path |
+| T4 | Perovskite solar cell stability | ZH: perovskite / stability / encapsulation | AMiner + mixed Chinese/English deduplication |
 
-任务书固定格式：研究问题一句话 · 检索式 · **预列核心文献 5–8 篇（召回率判据基准，
-用免费源独立编制、开跑前冻结，与轮次执行隔离）** · 预算 $2 · 成功判据。
+Fixed taskbook format: research question in one sentence · search query · **5–8 pre-listed core papers (the baseline for the recall-rate acceptance criterion,
+independently compiled using free sources and frozen before the run starts, isolated from round execution)** · budget $2 · success criteria.
 
 ---
 
-## 五、指标表（每轮必填，趋势可比）
+## 5. Metrics table (must be filled in every round, trend-comparable)
 
-| 指标 | 测法 | 目标 |
+| Metric | Measurement method | Target |
 |---|---|---|
-| 每轮成本 | `usage` knownCostUsd + unknownCostCalls | ≤$2 且 unknown=0（>0 = 定价表有洞，当轮修） |
-| 检索召回 | 命中任务书预列核心文献比例 | EN ≥80%；中文先拿基线数字（V8）再定修法 |
-| API 健康 | `usage api` 429/401 率、限速等待 | 429 趋零（V26 实效验证） |
-| 引用核验 | lit review hard/soft 数 + 人工抽验 5 条 | precision 维持 100%（P8-G5 基线） |
-| 判定器 JSON 失败率 | `citation_judge_unavailable` 计数（V12） | GLM 上重测基线；>2% 则接 `response_format`（GLM 支持与否 R1 实测，不预设） |
-| 精读卡质量 | 每轮抽 5 张，错误分型（漏读/幻觉/归因错） | 类型收敛；V13 口径用真实样本裁定 |
-| novelty 判准 | 每轮新 claim 进标定集 | 三轮后 ≥20 claim（v0.5 规划欠账） |
-| 报告可用性 | report export 人读一遍 | 无 S10/S12 类「读者以为坏了」断点 |
+| Per-round cost | `usage` knownCostUsd + unknownCostCalls | ≤$2 and unknown=0 (>0 = there's a hole in the pricing table, fix within the same round) |
+| Retrieval recall | Proportion of hits against the taskbook's pre-listed core papers | EN ≥80%; for Chinese, first get a baseline number (V8), then decide on a fix |
+| API health | `usage api` 429/401 rate, rate-limit wait time | 429 trending to zero (verifying V26's real-world effectiveness) |
+| Citation verification | lit review hard/soft counts + manual spot-check of 5 entries | precision holds at 100% (P8-G5 baseline) |
+| Judge JSON failure rate | `citation_judge_unavailable` count (V12) | Re-establish baseline on GLM; if >2%, wire up `response_format` (whether GLM supports it is tested empirically in R1, not assumed in advance) |
+| Deep-read card quality | Sample 5 cards per round, classify errors (missed reading/hallucination/misattribution) | Error types converge; the V13 standard is decided using real samples |
+| Novelty criteria | Each round's new claims go into the calibration set | ≥20 claims after three rounds (a debt left over from v0.5 planning) |
+| Report usability | A human reads through the report export once | No S10/S12-type "reader thinks it's broken" breakpoints |
 
 ---
 
-## 六、后续波次（本次 10h 之外，列出为完整版图）
+## 6. Subsequent waves (beyond this 10h run, listed here for the complete roadmap)
 
-- **W6-2**：R2 + A3 裁定与落地（若触发）
-- **W6-3**：R3 全量复跑 + 指标汇总；附线债务：V41（MCP 描述能力声称门禁）·
-  V48（local handle 落盘，SIGKILL→resume 成真）· V24/V21/V14/V3 逐条裁定吸收或明确不做
-- **收口 A5**：零上下文外部验收，两点与前三次不同（V57 处置）——
-  ① 入口以浏览器工作台为主（从 `npx spark-research server` 开始）；
-  ② 花钱路径预授权 $2 按脚本执行不逐条请示。blocker 修完补窄验收才发 `v0.6.0`
+- **W6-2**: R2 + the A3 decision and implementation (if triggered)
+- **W6-3**: R3 full re-run + metrics roll-up; attached side debt: V41 (MCP description-capability claim gate) ·
+  V48 (local handle persisted to disk, so SIGKILL→resume actually works) · V24/V21/V14/V3 decided item by item — absorbed or explicitly won't-do
+- **Close-out A5**: zero-context external review pass, two points differ from the previous three (per the V57 disposition) —
+  ① the entry point is primarily the browser workbench (starting from `npx spark-research server`);
+  ② the spending path is pre-authorized for $2 and executed per script without asking for approval on each item. `v0.6.0` ships only after blockers are fixed and a narrow acceptance review is completed.
 
-### v0.6.0 DONE 定义（四条全满足）
+### v0.6.0 DONE definition (all four conditions satisfied)
 
-- [ ] 干净机器 npx 起 server 即有可用工作台，四面板齐
-- [ ] 三轮回环完成，指标表三轮可比、趋势向好或每条恶化有解释
-- [ ] $2 闸被真实触发测试过，成本账 unknown=0
-- [ ] 零上下文验收者经浏览器 + 花钱路径走通全链路（V57 清零）
+- [ ] On a clean machine, `npx` starting the server yields a usable workbench with all four panels
+- [ ] Three rounds of the feedback loop completed, the metrics table is comparable across the three rounds, with trends improving or every regression explained
+- [ ] The $2 gate has been tested with a real trigger, cost ledger unknown=0
+- [ ] A zero-context reviewer walked the full pipeline through the browser + spending path (V57 zeroed out)
 
-### 明确不做（v0.6）
+### Explicitly out of scope (v0.6)
 
-物理 Opentrons · 多用户身份 · SSH/Modal 真 gateway · skill/connector 铺量
-（只集成 B2 点名的，每轮 ≤2–3 个）· compute Web 派发 · AMiner 续期（用户指令）·
-子代理分模型配置 · 基因组浏览器。
+Physical Opentrons · multi-user identity · a real SSH/Modal gateway · broad skill/connector rollout
+(only integrating what B2 names, ≤2–3 per round) · compute dispatch from the web UI · AMiner renewal (per user instruction) ·
+per-subagent model configuration · genome browser.
 
 ---
 
-## 七、10 小时自动运行操作规程
+## 7. 10-hour automated run operating procedure
 
-### 时间盒（预估，滚动调整；做不完按序砍尾，不全面减薄）
+### Time-boxing (estimated, adjusted on a rolling basis; if something doesn't finish, cut from the tail in order rather than thinning everything evenly)
 
-| 时段 | 内容 | 产出判据 |
+| Time window | Content | Output acceptance criterion |
 |---|---|---|
-| 0–0.5h | 基线闸（§1）+ 方案/任务书入库 PR | main 含 v0.5.0 且 health 对账 |
-| 0.5–2.5h | 闸门 G-1/G-3/G-4/G-2 | 闸门测试全绿 + $0.001 触发实测 |
-| 2.5–6h | W6-1 三 lane（各自 worktree：`~/Desktop/spark-research-<lane>`） | 各 lane 门禁 + 阴性对照绿 |
-| 6–6.5h | W6-1 收口 → `v0.6.0-alpha.1` | 全量绿 + 冒烟 + 窄验收 |
-| 6.5–9.5h | B2 R1（T1+T3，零上下文子代理，$2 闸）；余时修头部发现 | 两份轮次报告 + usage 快照 + BACKLOG 登记 |
-| 9.5–10h | 收尾：wip 物化成分支推走（stash 不过夜）· 交接纪要 · session 内总结 | 干净可续跑状态 |
+| 0–0.5h | Baseline gate (§1) + PR bringing the plan/taskbooks into the repo | main contains v0.5.0 and health check reconciles |
+| 0.5–2.5h | Gate G-1/G-3/G-4/G-2 | All gate tests green + $0.001 live trigger test |
+| 2.5–6h | W6-1 three lanes (each in its own worktree: `~/Desktop/spark-research-<lane>`) | Each lane's gate checks + negative controls green |
+| 6–6.5h | W6-1 close-out → `v0.6.0-alpha.1` | Full suite green + smoke test + narrow acceptance review |
+| 6.5–9.5h | B2 R1 (T1+T3, zero-context subagent, $2 gate); remaining time fixes top-priority findings | Two round reports + usage snapshot + BACKLOG entries logged |
+| 9.5–10h | Wrap-up: materialize wip into a branch and push it (no stash left overnight) · handoff notes · in-session summary | Clean, resumable state |
 
-### 护栏（全程硬约束）
+### Guardrails (hard constraints for the whole run)
 
-1. main 不直推；PR 全绿 + 自审后 squash-merge（用户 2026-09-11 授权）；**合并后立即删本地分支**
-2. 每次 push 后验远端 ref（禁 `push -q; echo ok`）
-3. LLM 实花**硬顶 $6**；超顶停花钱路径、继续不花钱的开发并在 session 里说明
-4. 凭据不进日志/提交/prompt；α lane 密钥门禁兜底；commit 前新增文件过密钥 grep
-5. 湿实验/compute 审批路径不碰（AD-9 TTY 要求自动跑天然守住）
-6. 版本记录：每个 alpha tag 有 CHANGELOG 段；每波次 devlog；发现全部进 BACKLOG 有去向
-7. 进度汇报：每个唤醒点 session 内报一段（做了什么 / 下一步 / 花费累计）；
-   GitHub 侧 PR 前缀 `G-x:` / `W6-1 α:` / `B2-R1:` 供用户二次核对
-8. 验收之后改动被验收的东西 → 必须补跑窄验收（V58）
+1. No direct pushes to main; squash-merge after all tests are green and self-review passes (authorized by the user on 2026-09-11); **delete the local branch immediately after merging**
+2. Verify the remote ref after every push (`push -q; echo ok` is forbidden)
+3. Actual LLM spend is **hard-capped at $6**; once the cap is hit, stop the spending path and continue with non-spending development, noting this in the session
+4. Credentials must never enter logs/commits/prompts; the α lane's credential gate serves as the backstop; new files are grepped for secrets before commit
+5. Do not touch the wet-experiment/compute approval path (naturally held in place by the AD-9 TTY requirement during automated runs)
+6. Version records: every alpha tag has a CHANGELOG section; every wave gets a devlog entry; all findings go into BACKLOG with a disposition
+7. Progress reporting: report a segment within the session at every wake-up point (what was done / next steps / cumulative spend);
+   on the GitHub side, PR prefixes `G-x:` / `W6-1 α:` / `B2-R1:` let the user re-verify independently
+8. If something already reviewed gets changed after its review pass → a narrow acceptance review must be re-run (V58)
 
-### 子代理与模型分配（哪一步谁来干、用什么模型）
+### Subagent and model allocation (who does which step, using which model)
 
-> 两层模型互不相干，别混：**产品侧 LLM**（spark-research 自己调的）全程
-> `z-ai/glm-5.3-flash`，受 $2/$6 预算管；**agent 侧模型**（Claude 干活的）按下表分配，
-> 消耗的是 Claude 额度。
+> The two model layers are independent of each other — don't conflate them: the **product-side LLM** (the one spark-research itself calls) uses
+> `z-ai/glm-5.3-flash` throughout, governed by the $2/$6 budget; the **agent-side model** (the one Claude uses to do the work) is allocated per the table below,
+> and consumes Claude quota.
 
-| 步骤 | 执行者 | agent 模型 | 理由 |
+| Step | Executor | Agent model | Rationale |
 |---|---|---|---|
-| 基线闸 · 闸门 G | **主会话直接干**，不开子代理 | Fable（当前） | 串行地基活、碰热点文件（router/index.ts），拆给子代理反而要重建上下文 |
-| W6-1 lane α/β/γ | 3 个并行子代理，各自 worktree | **sonnet** | v0.5 同类 lane 开发就是 sonnet 子代理，量级合适 |
-| W6-1 合入评审 | **主会话**（单一合并权，纪律 14） | Fable | **别信 lane 自报数字**：合并前主会话独立复跑测试与阴性对照，不采信 lane 的「全绿」声明 |
-| W6-1 收口（冒烟/窄验收/tag） | 主会话 | Fable | 跨 lane 判断 + 发版动作 |
-| B2 R1 执行（T1+T3） | **零上下文子代理**（禁读源码，只给 MCP/CLI + llms.txt） | **sonnet** | 验收者必须陌生；产品侧照样走 glm，agent 模型不影响 $2 预算 |
-| R1 指标汇总 / 发现分析 / BACKLOG 登记 | 主会话 | Fable | 判断密集，是这 10 小时真正的价值点 |
-| 机械批量活（fixture 录制、日志扫描、任务书召回基准编制） | 单个子代理 | **haiku** | 纯执行，省额度 |
+| Baseline gate · Gate G | **Done directly by the main session**, no subagent | Fable (current) | Serial foundational work that touches hotspot files (router/index.ts); delegating to a subagent would require rebuilding context anyway |
+| W6-1 lane α/β/γ | 3 parallel subagents, each in its own worktree | **sonnet** | The same kind of lane development in v0.5 also used sonnet subagents — the right scale for this |
+| W6-1 merge review | **Main session** (sole merge authority, discipline #14) | Fable | **Don't trust a lane's self-reported numbers**: before merging, the main session independently re-runs the tests and negative controls, and does not take a lane's "all green" claim at face value |
+| W6-1 close-out (smoke test/narrow acceptance review/tag) | Main session | Fable | Cross-lane judgment + release actions |
+| B2 R1 execution (T1+T3) | **Zero-context subagent** (forbidden from reading source code, given only MCP/CLI + llms.txt) | **sonnet** | The reviewer must be unfamiliar with the system; the product side still goes through glm — the agent model does not affect the $2 budget |
+| R1 metrics roll-up / findings analysis / BACKLOG logging | Main session | Fable | Judgment-intensive — this is where the real value of these 10 hours lies |
+| Mechanical batch work (fixture recording, log scanning, compiling taskbook recall baselines) | A single subagent | **haiku** | Pure execution, saves quota |
 
-补充纪律：子代理产出一律**主会话验证后才算数**（复跑测试 / 抽查文件 / 核对远端 ref）；
-子代理不授予 merge 权限，PR 合并只在主会话发生。
+Additional discipline: subagent output only counts once **verified by the main session** (re-running tests / spot-checking files / checking the remote ref);
+subagents are never granted merge rights — PR merges happen only in the main session.
 
-### Claude 额度不足的恢复协议
+### Recovery protocol for insufficient Claude quota
 
-额度耗尽的表现通常是子代理 spawn 失败或调用报配额错误。处置固定为：
+Quota exhaustion typically manifests as subagent spawn failures or calls reporting quota errors. The fixed response is:
 
-1. **先落地再等待**：把当前状态物化（未合并改动 → wip 分支推走、进度写进
-   `~/Desktop/AI4S/spark-research-v0.6-plan/RUN_LOG.md`），确保任何中断点都可续跑
-2. **降档重试**（按序）：并行 3 lane → 串行单 lane；sonnet 子代理 → 主会话自己干
-   → 机械部分换 haiku。**产品侧 glm 调用不受 Claude 额度影响**，B2 轮次若已在跑就让它跑完
-3. **定期重试**：额度全堵时不空转刷 token——用唤醒机制隔 **20–30 分钟**探一次
-   （spawn 一个最小 haiku 任务作探针），恢复即从 RUN_LOG 断点继续；每次尝试在 session 里记一行
-4. **时间口径**：额度阻塞时间计入 10 小时墙钟。若到点仍堵，在第一个恢复的唤醒点
-   只做收尾（wip 物化 + 交接纪要）即停止，不续新活
+1. **Materialize before waiting**: turn the current state into something durable (unmerged changes → push into a wip branch, progress written into
+   `~/Desktop/AI4S/spark-research-v0.6-plan/RUN_LOG.md`), ensuring any interruption point is resumable
+2. **Step down and retry** (in order): 3 parallel lanes → a single serial lane; sonnet subagent → the main session does it itself
+   → mechanical parts switch to haiku. **Product-side glm calls are unaffected by Claude quota** — if a B2 round is already running, let it finish
+3. **Periodic retry**: when quota is fully blocked, don't idle-spin burning tokens — use a wake-up mechanism to probe every **20–30 minutes**
+   (spawn a minimal haiku task as a probe); once recovered, resume from the RUN_LOG breakpoint; log one line per attempt in the session
+4. **Time accounting**: time blocked on quota still counts against the 10-hour wall clock. If still blocked when time runs out, at the first wake-up point after recovery,
+   do only wrap-up (materializing wip + handoff notes) and stop — do not start new work
 
-### 启动命令（用户确认 v0.5 发布后，在 session 里敲）
+### Launch command (the user types this in the session after confirming the v0.5 release)
 
 ```
-/loop 按 ~/Desktop/AI4S/spark-research-v0.6-plan/PLAN_v0.6.md 自动推进 v0.6：先过基线闸（main=v0.5.0、health 对账、工作区干净，不满足即停并报告），然后闸门G → W6-1三lane → 收口打v0.6.0-alpha.1 → B2第1轮（T1+T3，零上下文子代理，每轮$2闸）。护栏照方案§7：PR全绿自审后squash-merge、LLM总花费硬顶$6、凭据不入日志、每个唤醒点session内报进度。子代理与模型按§7分配表（lane开发sonnet、机械活haiku、评审合并主会话），Claude额度不足按§7恢复协议：先物化状态到RUN_LOG.md，降档重试，20–30分钟探针唤醒，恢复即续跑。连续干10小时，到点或目标完成即物化wip分支、写交接纪要并停止。
+/loop Follow ~/Desktop/AI4S/spark-research-v0.6-plan/PLAN_v0.6.md to automatically advance v0.6: first pass the baseline gate (main=v0.5.0, health reconciled, working tree clean; stop and report if not satisfied), then Gate G → W6-1 three lanes → close-out and tag v0.6.0-alpha.1 → B2 Round 1 (T1+T3, zero-context subagent, $2 gate per round). Guardrails per plan §7: squash-merge after PR is all-green and self-reviewed, LLM total spend hard-capped at $6, credentials never enter logs, report progress within the session at every wake-up point. Subagent and model allocation per the §7 table (lane development uses sonnet, mechanical work uses haiku, review and merging in the main session); on insufficient Claude quota, follow the §7 recovery protocol: first materialize state to RUN_LOG.md, step down and retry, wake up every 20–30 minutes to probe, resume immediately once recovered. Run continuously for 10 hours; once time is up or the goal is complete, materialize the wip branch, write handoff notes, and stop.
 ```
