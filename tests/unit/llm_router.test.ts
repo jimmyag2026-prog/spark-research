@@ -76,6 +76,99 @@ describe("LLMRouter 超时（D-2）", () => {
 });
 
 // ============================================================================
+// V137：`LlmError.retryable` 与 `CallOptions.maxRetries` 此前全仓无消费方——
+// 任何瞬时失败（超时/限流/5xx）都直接向上抛，router.ts 里没有任何重试循环。
+// `sleepImpl` 注入一个 no-op，测试不真等退避延迟。
+// ============================================================================
+
+/** 依次返回给定的一串 status；用尽后固定返回最后一个（不会越界）。 */
+function sequenceFetch(statuses: number[], body = "boom"): { fetchImpl: typeof fetch; calls: number[] } {
+  const calls: number[] = [];
+  let idx = 0;
+  const fetchImpl = (async () => {
+    const status = statuses[Math.min(idx, statuses.length - 1)]!;
+    calls.push(status);
+    idx++;
+    return new Response(status === 200 ? JSON.stringify({ choices: [{ message: { content: "ok" } }] }) : body, {
+      status,
+    });
+  }) as unknown as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+describe("V137：retryable 失败接指数退避重试", () => {
+  test("第一次 500（retryable）失败，重试一次后成功 → 调用方看到成功", async () => {
+    const { fetchImpl, calls } = sequenceFetch([500, 200]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], "gpt-4o-mini");
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([500, 200]);
+  });
+
+  test("401（auth，retryable:false）→ 不重试，只发一次请求", async () => {
+    const { fetchImpl, calls } = sequenceFetch([401, 200]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], "gpt-4o-mini");
+    expect(res.ok).toBe(false);
+    if (res.ok) throw new Error("unreachable");
+    expect(res.error.kind).toBe("auth");
+    expect(calls).toEqual([401]); // 没有第二次请求。
+  });
+
+  test("默认重试上限是 1 次：持续 500 → 总共两次请求后如实失败，不是无限重试", async () => {
+    const { fetchImpl, calls } = sequenceFetch([500, 500, 500]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], "gpt-4o-mini");
+    expect(res.ok).toBe(false);
+    expect(calls).toEqual([500, 500]); // 1 次初始 + 1 次默认重试，不多不少。
+  });
+
+  test("options.maxRetries 可以覆盖路由默认值（调大到 2）", async () => {
+    const { fetchImpl, calls } = sequenceFetch([500, 500, 200]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], { model: "gpt-4o-mini", maxRetries: 2 });
+    expect(res.ok).toBe(true);
+    expect(calls).toEqual([500, 500, 200]);
+  });
+
+  test("options.maxRetries: 0 可以显式关掉重试，即使是 retryable 失败", async () => {
+    const { fetchImpl, calls } = sequenceFetch([500, 200]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], { model: "gpt-4o-mini", maxRetries: 0 });
+    expect(res.ok).toBe(false);
+    expect(calls).toEqual([500]);
+  });
+
+  test("流式调用（options.onDelta）从不重试，即使失败是 retryable——避免 onDelta 重复投递半截内容", async () => {
+    const { fetchImpl, calls } = sequenceFetch([500, 200]);
+    const router = new LLMRouter({ OPENAI_API_KEY: "k" }, { fetchImpl, sleepImpl: async () => {} });
+    const res = await router.call([{ role: "user", content: "hi" }], {
+      model: "gpt-4o-mini",
+      onDelta: () => {},
+    });
+    expect(res.ok).toBe(false);
+    expect(calls).toEqual([500]); // 只发了一次，没有因为 retryable 而重试。
+  });
+
+  test("退避确实调用了 sleepImpl，且延迟随尝试次数指数增长", async () => {
+    const { fetchImpl } = sequenceFetch([500, 500, 200]);
+    const delays: number[] = [];
+    const router = new LLMRouter(
+      { OPENAI_API_KEY: "k" },
+      { fetchImpl, sleepImpl: async (ms) => { delays.push(ms); }, maxRetries: 2, retryBaseDelayMs: 100 },
+    );
+    const res = await router.call([{ role: "user", content: "hi" }], "gpt-4o-mini");
+    expect(res.ok).toBe(true);
+    expect(delays).toHaveLength(2);
+    // 第二次退避（attempt=1）的基准是第一次（attempt=0）的两倍；抖动只加不减。
+    expect(delays[0]!).toBeGreaterThanOrEqual(100);
+    expect(delays[0]!).toBeLessThan(200);
+    expect(delays[1]!).toBeGreaterThanOrEqual(200);
+    expect(delays[1]!).toBeLessThan(300);
+  });
+});
+
+// ============================================================================
 // P11-a：OpenAI 兼容基座补齐 tool calling / 流式 / response_format / 本地端点。
 // 全部走注入的 fetchImpl——不打真实网络（测试纪律）。
 // ============================================================================

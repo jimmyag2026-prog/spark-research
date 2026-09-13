@@ -140,6 +140,30 @@ function defaultLlmTimeoutMs(): number {
   return configuredLlmTimeoutMs(120_000);
 }
 
+// V137：`LlmError.retryable` (and `CallOptions.maxRetries`, "仅对 retryable 的失败
+// 生效") were both declared but had zero readers anywhere in this file — every
+// transient failure (timeout, rate limit, 5xx) propagated straight to the caller
+// with no retry path at all, despite the type surface promising one existed.
+//
+// Bounded exponential backoff + jitter, gated strictly on `error.retryable`.
+// **Streaming calls (`options.onDelta` set) are excluded**: a retryable failure
+// can happen mid-stream, after some chunks were already delivered to the caller
+// via `onDelta` — retrying would re-run the whole request and re-deliver those
+// chunks a second time, corrupting whatever the caller is assembling from them.
+// Nothing in the non-streaming path is non-idempotent, so retrying it is safe.
+// One retry by default, not more: this is a default applied to *every* caller
+// that doesn't opt into a different `CallOptions.maxRetries`, including ones with
+// their own tight timeout budgets (see tests/timeout/llm.test.ts) — tripling
+// worst-case latency by default would be a worse regression than the one being
+// fixed. Callers that want more resilience can pass a higher `maxRetries` per call.
+const DEFAULT_MAX_RETRIES = 1;
+const RETRY_BASE_DELAY_MS = 200;
+const RETRY_MAX_DELAY_MS = 4_000;
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class LLMRouter {
   static readonly SUPPORTED_PROVIDERS = SUPPORTED_PROVIDERS;
   static readonly PROVIDER_MODELS = PROVIDER_MODELS;
@@ -148,14 +172,28 @@ export class LLMRouter {
   private env: Record<string, string | undefined>;
   private fetchImpl: typeof fetch;
   private timeoutMs: number;
+  private defaultMaxRetries: number;
+  private retryBaseDelayMs: number;
+  private sleepImpl: (ms: number) => Promise<void>;
 
   constructor(
     env: Record<string, string | undefined> = process.env,
-    opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
+    opts: {
+      fetchImpl?: typeof fetch;
+      timeoutMs?: number;
+      /** V137：default for calls that don't set `CallOptions.maxRetries` themselves. */
+      maxRetries?: number;
+      retryBaseDelayMs?: number;
+      /** Test hook — real callers never need this; tests inject a no-op to avoid real waits. */
+      sleepImpl?: (ms: number) => Promise<void>;
+    } = {},
   ) {
     this.env = env;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.timeoutMs = opts.timeoutMs ?? defaultLlmTimeoutMs();
+    this.defaultMaxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.retryBaseDelayMs = opts.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
+    this.sleepImpl = opts.sleepImpl ?? defaultSleep;
   }
 
   /**
@@ -184,17 +222,29 @@ export class LLMRouter {
       });
     }
 
-    return entry.adapter.call({
-      model: entry.wireModel(model),
-      messages,
-      options,
-      // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
-      // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
-      apiKey: this.env[entry.envKey] ?? "",
-      baseUrl: "",
-      timeoutMs: options.timeoutMs ?? this.timeoutMs,
-      fetchImpl: this.fetchImpl,
-    });
+    // V137：streaming calls never retry (see the DEFAULT_MAX_RETRIES comment above
+    // for why) — bounded exponential backoff + jitter otherwise, gated strictly on
+    // `error.retryable`, capped by `options.maxRetries` (declared in CallOptions
+    // since P11, never consumed until now) or the router's own default.
+    const maxRetries = options.onDelta ? 0 : options.maxRetries ?? this.defaultMaxRetries;
+    let attempt = 0;
+    for (;;) {
+      const response = await entry.adapter.call({
+        model: entry.wireModel(model),
+        messages,
+        options,
+        // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
+        // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
+        apiKey: this.env[entry.envKey] ?? "",
+        baseUrl: "",
+        timeoutMs: options.timeoutMs ?? this.timeoutMs,
+        fetchImpl: this.fetchImpl,
+      });
+      if (response.ok || !response.error.retryable || attempt >= maxRetries) return response;
+      const delay = Math.min(this.retryBaseDelayMs * 2 ** attempt, RETRY_MAX_DELAY_MS) + Math.random() * this.retryBaseDelayMs;
+      await this.sleepImpl(delay);
+      attempt++;
+    }
   }
 
   /**
