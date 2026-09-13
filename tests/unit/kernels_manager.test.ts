@@ -72,6 +72,34 @@ describe("PythonKernel 超时隔离（D-2）", () => {
   }, 15_000);
 });
 
+describe("PythonKernel 行协议保护（V140）", () => {
+  test("直写 OS 级 stdout（绕过 python_kernel.py 的 StringIO 重定向）会打乱行协议——execute() 显式报错，不是抛未处理的 JSON.parse 异常或悄悄错位", async () => {
+    const kernel = new PythonKernel();
+    kernels.push(kernel);
+
+    // `sys.stdout` 在 execute() 内部被重定向进 StringIO（见 python_kernel.py），
+    // 普通 print() 走不到这里；`os.write(1, ...)` 绕过那层重定向，直接写 OS 级
+    // fd 1——这正是「原生扩展/继承 fd 的子进程往 stdout 打旁路数据」的可复现版本，
+    // 与上面 D-3 用 `os.write(2, ...)` 测 stderr 排空是同一族手法。
+    const garbledCode = ["import os", "os.write(1, b'not-json-garbage\\n')"].join("\n");
+
+    let caught: unknown;
+    try {
+      await kernel.execute(garbledCode, { timeoutMs: 5_000 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("not valid JSON");
+
+    // 关键验收点：kernel 已经被杀掉重置（同超时路径的恢复机制），下一次 execute()
+    // 透明拉起一个干净进程，正常工作——不是继续吃上一次留下的错位响应。
+    const follow = await kernel.execute("21 * 2", { timeoutMs: 5_000 });
+    expect(follow.status).toBe("ok");
+    expect(follow.result).toBe(42);
+  }, 15_000);
+});
+
 describe("KernelManager.dispose(kernelId)（D-5）", () => {
   test("按 id 销毁只影响那一个内核，其它内核继续存活", async () => {
     const km = new KernelManager();

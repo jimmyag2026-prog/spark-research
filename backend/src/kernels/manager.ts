@@ -110,6 +110,14 @@ export class PythonKernel {
       if (typeof stdout === "number" || !stdout) return;
       try {
         for await (const chunk of stdout) {
+          // V140 补充：`killAndReset()` 调用 `proc.kill()` 后不会立刻让这个读循环停下——
+          // kill() 是异步生效的，旧进程在被杀前已经写进 OS 管道、但这个循环还没来得及读
+          // 的字节仍会作为后续 chunk 到达。`this.buffer`/`this.waiters` 是整个 kernel
+          // 实例共享的（不是按 proc 隔离的），一旦 `ensureProc()` 已经换上了新进程，这个
+          // 属于旧进程的读循环必须停止再碰共享状态——否则旧响应会窜进新一轮 execute()
+          // 的协议里（V140 修复本身就实测复现过这条race：旧进程留下的一行迟到数据
+          // 覆盖了新进程刚返回的正确响应）。
+          if (this.proc !== proc) return;
           this.buffer += Buffer.from(chunk).toString();
           let idx: number;
           while ((idx = this.buffer.indexOf("\n")) >= 0) {
@@ -192,9 +200,28 @@ export class PythonKernel {
         `PythonKernel: process exited without response${tail ? ` (stderr tail: ${tail.slice(-500)})` : ""}`,
       );
     }
-    const parsed = JSON.parse(line);
+    let parsed: { status?: string; stdout?: string; stderr?: string; result?: unknown; error?: string };
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      // V140：this line protocol is strictly single-in-flight (see the D-2
+      // comment above `execute()`'s timeout branch). An out-of-protocol stdout
+      // write — a native extension, a subprocess that inherited fd 1, a stray
+      // `print()` somewhere in user or third-party code — hands this waiter a
+      // line that was never meant to be a JSON response. Once one line is
+      // garbled we can't tell whether the real response is still coming or a
+      // later line is now off-by-one, so trying to resync by skipping ahead
+      // isn't safe. Kill and reset the kernel (same recovery the timeout path
+      // above already uses) and fail loudly instead of letting the desync
+      // silently corrupt whichever *next* execute() call happens to catch it.
+      this.killAndReset();
+      throw new Error(
+        `PythonKernel: response line was not valid JSON (kernel line protocol desynced, process restarted): ` +
+          `${error instanceof Error ? error.message : String(error)}; line: ${line.slice(0, 200)}`,
+      );
+    }
     return {
-      status: parsed.status,
+      status: parsed.status as KernelResult["status"],
       stdout: parsed.stdout ?? "",
       stderr: parsed.stderr ?? "",
       result: parsed.result,
