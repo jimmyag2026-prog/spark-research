@@ -19,7 +19,8 @@
 - 文本级：登记表 `SWITCH_FIELDS = [{ type: "LlmError", field: "retryable" }, { type: "CallOptions", field: "maxRetries" }, ...]`——**先把 `backend/src/llm/types.ts` 里所有 boolean / number 可选字段全部列进去**，再逐个核。
 - 读取点判据：`backend/src` 里出现 `\.<field>\b` 且**后面不是** `:` 或 `=`（排除对象字面量写入和赋值），且不在 `types.ts` 本文件。零命中 → 红。
 - 能力边界写进注释：只认 `.field` 读法，解构读法会漏（如 `const { retryable } = err`）——所以**再补一条**：`{\s*[^}]*\bfield\b[^}]*}\s*=` 也算读。两条都零命中才红。
-- **闸门 H 合入后 `retryable` / `maxRetries` 应当已有读者**（V137 在 `router.ts` 加了重试循环）。**这条门禁在 alpha.1 上必须绿，在 v0.8.0 tag 上必须红**——这就是它的阴性对照，不用人造。把在 `v0.8.0` 检出上跑红的终端输出贴进 devlog。
+- **判据细节（2026-09-14 首次实跑后定稿）**：剥注释；`.field` 不接 `:`/`=`/`?`；解构算读；**同名转发**（`retryable: x.retryable`，把同一字段抄进同形对象）不算读，**异名映射**（`max_tokens: o.maxTokens`，送进请求体）算读——第一版把所有转发都排除，误杀了 `maxTokens`，已收紧。
+- **历史阴性对照已跑（main@644cccd）**：红名单 = `maxRetries`（V137 本尊）+ `toolCalling` / `streaming` / `usageReported`（`ProviderCapabilities` 三字段，`router.ts:123` 构造、无人消费——**首次运行即抓到的三个新同族**，进 I-3）。**`retryable` 不进红名单**：`anthropic.ts` 的 `const { kind, retryable } = classifyHttpError(...)` 是解构 classify 的返回值，文本级判据把它算成读者。这是写明的能力边界，如实记在测试注释与 devlog；V137 的历史对照由 `maxRetries` 承担。**闸门 H 合入后 `maxRetries` 必须转绿**，其余三个待 I-3 定去向。
 
 ## I-2 · 阴性对照（三条，真跑，终端输出进 `docs/devlog/GATE_I.md`）
 
