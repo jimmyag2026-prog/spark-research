@@ -22,7 +22,7 @@
 |---|---|---|
 | 1 | **不加新功能域** | 同 v0.3 / v0.8 口径 |
 | 2 | **不把四段管线改成 message loop** | OpenScience 是 session + message loop，我们是 plan → executeTask\* → summarize → review。改架构是大手术，收益在灵活性不在速度；当前的慢有更近的原因。**v0.9 明确不做。** |
-| 3 | **凭据不走 HTTP 写入**（U6·B） | 与 AD-2「凭据只在 daemon 进程」正面冲突。本版只做非密配置面（U6·A）+ UI 里补「去终端 `spark-research auth`」的下一步。**裁定推 v0.10**，输入是 USAGE_LOG U6 列的三个前置问题。 |
+| 3 | **凭据不走 HTTP 写入**（U6·B）——**待用户拍板是否翻转** | 与 AD-2「凭据只在 daemon 进程」正面冲突。**参考对象已查实**（2026-09-14）：OpenScience 的凭据**是**经 HTTP `PUT` 写入的（`server/routes/settings/credentials.ts`，805 行），其模型是「值写入后永不返回、永不进 `process.env`、登记进输出脱敏、UI 只见字段名」，外加 loopback 绑定 + Host/Origin 白名单 + 部署 bearer token。这是 AD-2 的另一种答案，不是漏洞。**两条路**：甲 = 维持 AD-2，本版只做非密配置面 + 把 connector 凭据指引改对（新增 `auth --connector <id>` CLI）；乙 = 照 OpenScience 模型在 γ 加 `PUT /api/credentials/:id`（write-only + 脱敏 + loopback 硬限）。**默认执行甲；乙需要用户明确说做**，因为它改的是架构决策。 |
 | 4 | **闸门 I 先跑门禁再修 bug** | 已知至少三处「声明了、赋值了、没有读者」（V40 / V137 / U10）。先修单个实例等于承认还会有第四第五个；让门禁把这一类的全体人口找出来，名单决定 lane 分配。 |
 | 5 | **δ-2 用「探端口」不用 pid 文件** | 零新状态；我们撞到的失败模式（默认端口上的孤儿）探端口就抓得到。pid 文件引入陈旧状态维护，收益不抵。 |
 | 6 | **β-3 改抛错之前必须先盘点在用模型名** | 否则可能当场打断正在用的模型。盘点脚本在 `LANE_beta.md`，先跑盘点、补登记、再落抛错。 |
@@ -66,7 +66,7 @@
 |---|---|---|---|
 | **α** | 交互链路的速度与稳定性 | U1 U4 · V77 | 输出看门狗（超时只计模型等待、真实输出续期）· 跨 provider 错误规范化与分类 · 三段结构化进度 · 失败落 `errorKind` |
 | **β** | 模型控制面 | U5 U9 U10 · V16 | `chat()` 真的读 `model`（含「无 key provider 必失败」整类门禁）· `chat` 子命令补旗标且 `--help` 零调用 · 路由兜底改显式拒绝 + 两份模型清单合一 |
-| **γ** | 非密配置面 + 工作台收尾 | U6·A U3 · V130 | `GET/PUT /api/config` + 设置面板 · 已归档项目在下拉框折叠 · 顶栏显示 server 版本 · 凭据「去终端」指引 |
+| **γ** | 非密配置面 + 数据源面板 + 工作台收尾 | U6·A U3 · V130 | `GET/PUT /api/config` + 注册表驱动的设置面板（模式抄 OpenScience `registry.ts`，组件不抄）· **γ-5 数据源面板：`searchSources` 配置键替代代码常量 + 每源勾选 + 凭据状态** · connector 凭据指引改对（新增 `auth --connector <id>` CLI，原「去 `spark-research auth`」对 connector 是错的）· 已归档项目折叠 · 顶栏 server 版本 |
 | **δ** | 门禁与小项 | U2 U7 U8 · V120 V62 | 集成套件跳过不再像通过 · `doctor` 探运行实例 · 删重复启动日志 · `database is locked` · 补 `DEVELOPMENT_PLAN_v0.8.1.md` |
 
 每条 lane 的交付 / 测试 / 阴性对照 / 真实核验 / 足迹 见各自任务书。
@@ -112,7 +112,11 @@
 | `scripts/inventory-model-names.ts`（新） | β | β-3 前置盘点：扫 `~/.spark-research` 全部 `config.json` / `usage.jsonl` 里出现过的模型名 |
 | `backend/src/server/routes/config.ts`（新） | γ | γ-1 |
 | `backend/src/config/index.ts` | γ | γ-3 写入校验（模型名已登记 / 超时为正整数），**只加不改** |
-| `frontend/workspace/src/**` | γ | 设置视图（新 `components/settings.tsx`）· `left.tsx` 归档折叠 + 「设置」导航 · `app.tsx` 顶栏版本 · 凭据指引文案 |
+| `frontend/workspace/src/**` | γ | 设置面板注册表（新 `components/settings/registry.ts`，模式抄上游）· `general` / `sources` / `credentials` 三面板 · `left.tsx` 归档折叠 + 「设置」导航 · `app.tsx` 顶栏版本 · 凭据指引文案 |
+| `backend/src/cli/auth_connector.ts`（新） | γ | γ-5 `spark-research auth --connector <id>`：TTY 不回显读 key → `CredentialStore.set`；接线进 `index.ts:474 case "auth"` 走收口 diff |
+| `backend/src/literature/search.ts` | γ | **只改一处**：`DEFAULT_SEARCH_SOURCES` 使用点改读 `configuredSearchSources()`；常量保留作默认值 |
+| `backend/src/daemon/credentials.ts` | **收口** | γ 只调用其 `set/list/has`；若需改动交 diff。**若用户拍板方案乙（凭据 HTTP 写入），此文件与新 `routes/credentials.ts` 归收口主会话做，不放 lane** |
+| `NOTICE`（新） | **收口** | 首次从上游复制结构即建；Apache-2.0 归属段照上游 NOTICE 格式 |
 | `tests/e2e/workbench.spec.ts` | γ | 新增用例只追加，不改既有编号 |
 | `backend/src/contract/**` | γ | 只跑生成器，不手改 |
 | `sdk/python/**` | γ | 只跑 `bun run gen:sdk`，不手改 |
@@ -166,6 +170,7 @@
 - [ ] 传一个已登记但当前 provider 无 key 的模型 → 调用必失败（β-1 门禁实跑）；台账 `model` / `provider` 字段与实际调用一致
 - [ ] 每个会调 LLM 的子命令 `--help` 零模型调用（β-2 门禁实跑，含 `chat`）
 - [ ] 网页端改非密配置即时生效（A8 实测：换模型后台账 model 字段跟着变）；凭据「未配置」旁有可执行下一步
+- [ ] 数据源面板可勾选默认检索源，勾掉一个源后 `lit search`（无 `--sources`）真的不再查它（A8 实测）；需 key 的源显示的是 `auth --connector <id>`，且该命令在终端能把 key 写进 `credentials.json`（0600，不回显）
 - [ ] T5「配置与运维」跑通，其发现全部登记（含不成立的复核记录）
 - [ ] 集成套件在 CI 里**要么真跑要么显式报「本轮未验证」**，不再出现 `0 pass / 8 skip / 0 fail` 静默形态
 
