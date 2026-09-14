@@ -1,7 +1,8 @@
 # W9-1 lane 共同纪律（每条 lane 任务书都引用本文，逐条硬约束）
 
 - **仓库**：`github.com/jimmyag2026-prog/spark-research`。你的 worktree 与分支在任务书首行；**每条命令都显式 `cd` 进你的 worktree**，不要依赖当前目录。方案真源：`docs/DEVELOPMENT_PLAN_v0.9.md`（§三你那条 lane 的行、§六足迹表、§七砍尾顺序）；工程纪律 `docs/DEVELOPMENT_PLAN.md`；BACKLOG 条目原文 `docs/BACKLOG.md`；**使用现场原文 `docs/USAGE_LOG.md`**（U 编号的证据段是你的需求来源，先读它再读任务书）。
-- **基线**：`v0.9.0-alpha.1`（闸门 I 已合入）。从它切分支：`git worktree add ~/Desktop/AI4S/spark-research-<lane> -b feat/W9-<lane> v0.9.0-alpha.1`。
+- **基线**：本轮（2026-09-14）网络不可用、真 PR 无法合入 main，**基线改为本地集成分支 `integration/v0.9-base`**（= main ⊕ V142 ⊕ 闸门 H ⊕ 闸门 I ⊕ 方案与任务书，闸门 I 八条全绿）。从它切分支：`git worktree add ~/Desktop/AI4S/spark-research-<lane> -b feat/W9-<lane> integration/v0.9-base`（**在主仓 `~/Desktop/AI4S/spark-research` 目录下执行这条命令**，分支在本地已存在）。网络恢复后主会话会把真 PR 合进 main 并给 `alpha.1` 打 tag；收口时你的 lane 会被 rebase 到真 main 上——**所以 commit 粒度要小、每个 commit 自洽**。
+- **离线纪律**：`git push` 大概率失败。**本地 commit 即可，报告里写明「未推送，本地 HEAD = <sha>」**；不要为推送反复重试占用时间。主会话统一推。
 - **足迹（一文件一主）**：只改任务书「允许」列出的文件；「禁止」列出的文件**一行都不碰**。需要它们改动时，把 ≤10 行的 diff 原文写进报告的「收口 diff」段，收口合入。**枢纽文件一律归收口**：`backend/src/index.ts` · `backend/src/llm/router.ts` · `backend/src/agents/orchestrator.ts` · `backend/src/server/app.ts` · `backend/src/server/routes/session.ts`，以及 `CHANGELOG.md` · `docs/BACKLOG.md` · `README.md` · `llms*.txt` · `docs/DESIGN.md` · `docs/DEVELOPMENT_PLAN*.md`。
 - **五条 lane 的所有权边界**：`frontend/**` **只有 ε 碰**；`backend/src/server/routes/settings/**` 只有 γ 碰。γ 与 ε 之间是唯一的 lane 间依赖：**γ 在第 2 个 commit 前推出路由骨架 + 响应 schema（返回 fixture），ε 从该 commit 起做面板；之后契约只增字段不改名**。ε 需要后端改动时写进报告「给 γ 的契约请求」，不自己改后端；γ 需要前端配合时同理。
 - **「等接线」登记**：你新建但无权接线的模块，往 `tests/unit/narrative_parity.test.ts` 的 `ALLOWED_ORPHANS` 登记并写清「等收口接 X」；收口接上后按对称检查删除。接了不删会红，忘接也会红。
@@ -11,7 +12,7 @@
 - **AD-12**：`tests/unit/narrative_parity.test.ts` 必须绿；不许在描述/帮助文案里声称没做到的能力。
 - **并行噪音**：多 lane 并行时 spawn python 子进程的 probe 单测可能超时。**报数前把超时用例单独重跑一次**，单独跑绿就写「并行超时、单独重跑 N/N 绿」，别当自己的回归也别藏。
 - **凭据永不入 repo/日志/报告**；commit 前对新增文件跑 `grep -nE "sk-[A-Za-z0-9]{20,}|api[_-]?key *[:=] *['\"][A-Za-z0-9]{16,}|Bearer [A-Za-z0-9._-]{15,}"`。α-4 落错误摘要时**先脱敏**——上游错误体可能带 key 片段。
-- **Git**：只在你的 lane 分支 commit；**不合 main、不开 PR、不打 tag**；做完 `git push -u origin <你的分支>` 并 `git ls-remote origin refs/heads/<你的分支>` 核对远端 ref，**不核对不许报完成**。网络/额度中断先落 wip commit 并在信息里标「未经任何验证」。commit message 末尾固定两行：
+- **Git**：只在你的 lane 分支 commit；**不合 main、不开 PR、不打 tag**；网络可用时 `git push -u origin <你的分支>` 并 `git ls-remote` 核对远端 ref；**网络不可用时按上面的离线纪律报本地 sha**。网络/额度中断先落 wip commit 并在信息里标「未经任何验证」。commit message 末尾固定两行：
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`
   `Claude-Session: https://claude.ai/code/session_01B5LKEur3EUffn3q7XTPNGW`
 - **报告**（最终回复）按这个顺序：① 改了哪些文件（相对路径）② 新增/修改的测试与门禁 ③ 六套件数字（每套一行）④ 阴性对照表（改法→结果）⑤ **收口 diff**（禁止文件的 ≤10 行改动原文）⑥ **如实交代**：没做到的、拿不准的、与任务书的偏差 ⑦ 远端 ref 的 sha。**不要美化数字；收口会独立复跑，对不上比红更糟。**
