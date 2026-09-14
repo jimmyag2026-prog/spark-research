@@ -1,251 +1,251 @@
-# Spark Research v0.2 开发与验证计划
+# Spark Research v0.2 Development and Verification Plan
 
-> 状态：随 [DESIGN.md](DESIGN.md) 定稿 · 2026-09-09
-> 原则：每阶段一个分支一个 PR，squash merge；测试只增不减；每阶段留 devlog；先验证后进入下一阶段。
-
----
-
-## 〇、工程纪律（全阶段生效）
-
-1. **分支流**：`main` 不直推。每阶段开 `feat/p<N>-<slug>` 分支 → PR → squash merge → 删分支。
-2. **测试门槛**：进入 PR 前 `bun run typecheck` + `bun test tests/unit/` 必须全绿；新模块必须带单测；e2e 用 fixture 回放进 CI（真实网络请求只在本地验证跑，录制后回放）。
-3. **devlog**：每阶段完成时写 `docs/devlog/P<N>-<slug>.md`：做了什么、关键决策、测试结果（含失败与修复）、与设计的偏差。
-4. **凭据纪律**：任何凭据不进 repo/prompt/日志；新增文件 commit 前跑密钥 grep。
-5. **模型分工**：设计与验收评审用 Fable 5（主会话）；实现类任务可委派 Opus 5 子代理，子代理产出必须经主会话审查 + 测试验证后才 merge。
-6. **文档同步**：实现与设计出现偏差时，同 PR 内更新 DESIGN.md，不留漂移。
-7. **工作树隔离**（P6 事故后新增）：子代理开发期间，主会话**不得**在主工作树做任何 git 操作（checkout/branch/commit）；主会话需要并行改动时用独立 worktree，或等子代理收尾。事故记录见 devlog P6。
-8. **worktree 一律建在 `~/Desktop/AI4S/<repo>-<topic>`**（P7 事故后修正）：`~/Desktop/` 下的其他路径可能因沙箱策略在会话中途变为不可访问，导致未提交成果彻底丢失。
-9. **阶段性成果及时保存**（P7 后新增，用户要求；P9 后加强）：**新分支创建后立即 `git push -u` 建立远端跟踪，再开始写代码**；此后每完成一个逻辑块就 commit 并 push。P9 曾在零 commit 状态遭遇额度中断，差点全丢。推送 feature 分支不违反「main 不直推」——合并仍走 PR + 主会话审查。遇到额度中断、环境故障时成果不丢。
-10. **发布后立刻验证 tag 真在 main 的历史里**（v0.2.1 事故后新增）：打完 tag 执行
-    `git merge-base --is-ancestor <tag> origin/main`，不成立就说明被绕过了。
-    **事故经过**：`v0.2.1` 打在 `c5c7b11`，但 P10 的分支从更早的 `19a3586` 拉出并先行合并，
-    main 于是走上另一条路径——tag 与 Release 声称的三个修复在 main 上根本不存在、
-    版本号回退、回归测试文件消失，而且 v0.3 会基于缺修复的代码继续开发。
-    **最危险的地方是它不报错**：不冲突、不告警，只是静默消失。这次是截图时偶然瞥见
-    `/api/health` 报 0.2.0 才发现的，纯属运气。
-11. **跨阶段语义一致性要显式断言**（v0.2.1 × P10 后新增）：文件不冲突 ≠ 语义不冲突。
-    **样本**：v0.2.1 的工具描述建议「把 MCP 等待调到 900000」，P10 新增的任务生命周期兜底
-    默认却只有 600000——两处改动各自都对，合起来给出了错误的建议，**而且两边测试全绿**。
-    功能测试发现不了这类矛盾。凡是「两个旋钮必须一起拧」的关系（超时上限、能力位与其消费端、
-    工具描述与实际行为），都要有一条专门断言一致性的测试钉住。
-
-12. **push 后必验远端 ref**（v0.3.0 空 PR 事故后新增）：`git push -q …; echo ok` 会用
-    无条件 echo **掩盖推送失败**。开 PR 前 `git ls-remote --heads origin <branch>` 确认
-    远端 ref 就是本地 HEAD；合并后 `git diff --stat <本地分支> origin/main` 应为空。
-    **事故经过**：PR #22 的分支根本没推上去，远端停在旧 commit，于是 PR 相对 main 的
-    diff 为空，GitHub 照常 squash「合并」——32 文件 / 2027 行整个阶段成果没进 main，不报错。
-
-13. **跨层改动必须跑 e2e + 消费方清扫**（v0.3.0 UI 回归后新增）：后端改动只要触及
-    **对外词汇表或响应形状**（状态名、枚举、端点字段、错误码），就必须 ① 跑
-    `bun run test:e2e`；② 清扫消费方：`frontend/workspace/src`、`mcp/tools.ts` 的工具描述、
-    `llms.txt`、`skills/*/SKILL.md`、capabilities 输出、docs。
-    **事故经过**：v0.3.0 拆掉 `wet_run` 后，工作台执行按钮仍按旧状态名判可用 →
-    批准后按钮永远是灰的，湿实验闭环在 Web 上断掉。**e2e 用例本来就存在，只是没跑**；
-    typecheck 抓不到，因为那是字符串比较不是枚举。
-
-14. **单一合并权**（跨会话事故后新增）：同一时刻只有一个会话拥有向 `main` 合并的权力，
-    其他会话产出一律停在分支上。integration 分支开 PR 前必须 `git fetch` 并确认
-    `origin/main` 是自己的祖先，且复验**全部既有 tag 仍在 `origin/main` 历史里**。
-    **事故经过**：另一个会话把 P10 的 lane 分支直接合进 main，而那些 lane 是从 v0.2.1
-    之前拉出来的 → v0.2.1 的三个修复被静默绕过。
+> Status: Finalized alongside [DESIGN.md](DESIGN.md) · 2026-09-09
+> Principle: one branch and one PR per phase, squash merge; tests only ever increase, never decrease; leave a devlog for each phase; verify before moving to the next phase.
 
 ---
 
-## 一、阶段总览
+## 0. Engineering Discipline (applies across all phases)
+
+1. **Branch flow**: no direct pushes to `main`. Each phase opens a `feat/p<N>-<slug>` branch → PR → squash merge → delete the branch.
+2. **Test threshold**: before opening a PR, `bun run typecheck` + `bun test tests/unit/` must pass fully; new modules must ship with unit tests; e2e tests run via fixture replay in CI (real network requests only run during local verification, then get recorded and replayed).
+3. **devlog**: when each phase completes, write `docs/devlog/P<N>-<slug>.md`: what was done, key decisions, test results (including failures and fixes), and deviations from the design.
+4. **Credential discipline**: no credentials ever go into the repo/prompts/logs; run a secret grep on new files before committing.
+5. **Model division of labor**: use Fable 5 (main session) for design and acceptance review; implementation tasks may be delegated to Opus 5 subagents, and subagent output must go through main-session review + test verification before it can be merged.
+6. **Documentation sync**: when implementation deviates from the design, update DESIGN.md within the same PR — no drift left behind.
+7. **Worktree isolation** (added after the P6 incident): while a subagent is developing, the main session **must not** perform any git operations (checkout/branch/commit) in the main worktree; when the main session needs to make parallel changes, use a separate worktree, or wait for the subagent to close out. See devlog P6 for the incident record.
+8. **worktrees must always be created under `~/Desktop/AI4S/<repo>-<topic>`** (corrected after the P7 incident): other paths under `~/Desktop/` can become inaccessible mid-session due to sandbox policy, causing uncommitted work to be lost entirely.
+9. **Save incremental progress promptly** (added after P7, at the user's request; reinforced after P9): **immediately after creating a new branch, run `git push -u` to establish remote tracking before writing any code**; after that, commit and push after completing each logical chunk. P9 once hit a quota interruption while at zero commits and nearly lost everything. Pushing a feature branch does not violate "no direct pushes to main" — merging still goes through PR + main-session review. This way work isn't lost when a quota interruption or environment failure occurs.
+10. **Immediately verify after release that the tag is actually in main's history** (added after the v0.2.1 incident): after cutting a tag, run
+    `git merge-base --is-ancestor <tag> origin/main`; if it doesn't hold, the tag has been bypassed.
+    **Incident**: `v0.2.1` was tagged at `c5c7b11`, but P10's branch was pulled from the earlier `19a3586` and merged first,
+    so main ended up on a different path — the three fixes the tag and Release claimed simply did not exist on main,
+    the version number regressed, the regression test file disappeared, and v0.3 would have continued development on top of code missing the fixes.
+    **The most dangerous part is that it produces no error**: no conflict, no warning, it just silently vanishes. This was only caught by chance,
+    when `/api/health` was glimpsed reporting 0.2.0 during a screenshot — pure luck.
+11. **Cross-phase semantic consistency must be asserted explicitly** (added after v0.2.1 × P10): no file conflict ≠ no semantic conflict.
+    **Example**: v0.2.1's tool description recommended "set the MCP wait to 900000," while P10's newly added task-lifecycle fallback
+    default was only 600000 — each change was correct on its own, but together they gave the wrong recommendation, **and tests were all green on both sides**.
+    Functional tests can't catch this kind of contradiction. Any relationship where "two knobs must be turned together" (timeout ceilings, capability flags and their consumers,
+    tool descriptions and actual behavior) must be pinned down with a dedicated consistency-assertion test.
+
+12. **Always verify the remote ref after pushing** (added after the v0.3.0 empty-PR incident): `git push -q …; echo ok` uses an
+    unconditional echo that **masks push failures**. Before opening a PR, confirm with `git ls-remote --heads origin <branch>` that
+    the remote ref matches local HEAD; after merging, `git diff --stat <local-branch> origin/main` should be empty.
+    **Incident**: PR #22's branch was never actually pushed — the remote stayed at an old commit, so the PR's
+    diff against main was empty, and GitHub went ahead and squash-"merged" it anyway — 32 files / 2027 lines, an entire phase's worth of work, never made it into main, with no error.
+
+13. **Any cross-layer change must run e2e + a consumer sweep** (added after the v0.3.0 UI regression): whenever a backend change touches
+    the **public vocabulary or response shape** (state names, enums, endpoint fields, error codes), it must ① run
+    `bun run test:e2e`; ② sweep consumers: `frontend/workspace/src`, the tool descriptions in `mcp/tools.ts`,
+    `llms.txt`, `skills/*/SKILL.md`, the capabilities output, and docs.
+    **Incident**: after v0.3.0 removed `wet_run`, the workspace's execute button still judged availability by the old state name →
+    after approval the button stayed permanently greyed out, breaking the wet-experiment loop on the Web UI. **The e2e test case already existed, it simply wasn't run**;
+    typecheck couldn't catch it, because that was a string comparison, not an enum.
+
+14. **Single merge authority** (added after a cross-session incident): at any given moment only one session holds the authority to merge into `main`;
+    all other sessions' output stays parked on branches. Before opening a PR for an integration branch, you must `git fetch` and confirm
+    that `origin/main` is its own ancestor, and re-verify that **all existing tags are still in `origin/main`'s history**.
+    **Incident**: another session merged P10's lane branches directly into main, and those lanes had been pulled from before v0.2.1 —
+    so v0.2.1's three fixes were silently bypassed.
+
+---
+
+## 1. Phase Overview
 
 ```
-P0 设计入库（本 PR）
-P1 Project 基座 ──────────► 一切持久化的根
-P2 文献域·检索与文献库 ────► 域 A 前半（A1/A2）
-P3 文献域·综述与引用核验 ──► 域 A 后半（A3）+ 域 E 引用检查器
-P4 Co-explore 与 Novelty ──► 域 A4 + 域 D
-P5 干实验闭环 ─────────────► 域 B1/B3 + 域 C 实验记录
-P6 湿实验模拟器 ───────────► 域 B2
-P7 前端工作台 ─────────────► 时间线 + 项目导航 + 实验面板升级
-P8 功能收口 ───────────────► 报告导出 + README + P8-gate 清偿 + 判据核验
-P9 扩展面与 LLM 友好化 ────► EXTENDING + 脚手架 + capabilities + MCP + 发布 v0.2.0
+P0 Design merged into repo (this PR)
+P1 Project foundation ──────────► root of all persistence
+P2 Literature domain · retrieval and library ────► first half of Domain A (A1/A2)
+P3 Literature domain · review and citation verification ──► second half of Domain A (A3) + Domain E citation checker
+P4 Co-explore and Novelty ──► Domain A4 + Domain D
+P5 Dry-experiment loop ─────────────► Domain B1/B3 + Domain C experiment records
+P6 Wet-experiment simulator ───────────► Domain B2
+P7 Frontend workbench ─────────────► timeline + project navigation + experiment panel upgrade
+P8 Feature close-out ───────────────► report export + README + P8-gate settlement + acceptance criteria review
+P9 Extensibility surface and LLM-friendliness ────► EXTENDING + scaffolding + capabilities + MCP + release v0.2.0
 ```
 
-依赖关系：P1 是所有阶段前置；P2→P3→P4 串行（同域递进）；P5、P6 可在 P1 后与文献域并行；P7 需要 P1-P5 的 API 稳定；P8 收口。
+Dependencies: P1 is a prerequisite for all phases; P2→P3→P4 run serially (progressing within the same domain); P5 and P6 can run in parallel with the literature domain after P1; P7 requires the P1-P5 APIs to be stable; P8 is the close-out.
 
 ---
 
-## 二、各阶段明细
+## 2. Phase Details
 
-### P1 Project 基座
+### P1 Project Foundation
 
-**范围**
-- `backend/src/project/`：Project 管理器（create/open/list/archive），目录布局 `~/.spark-research/projects/<slug>/`
-- `records.db` schema：record 表（7 类型）+ 边表（5 边类型）+ 与 artifacts 互链（AD-3）
-- 凭据服务：daemon 内 `CredentialStore`（`credentials.json` 0600 读写，按 connector id 取用；AD-2）
-- CLI：`spark-research project new|list|open`；session 归属 project
-- 现有 artifact store 迁移：`project` 字段从自由字符串变为真实 project 引用
+**Scope**
+- `backend/src/project/`: Project manager (create/open/list/archive), directory layout `~/.spark-research/projects/<slug>/`
+- `records.db` schema: record table (7 types) + edge table (5 edge types) + cross-linking with artifacts (AD-3)
+- Credential service: `CredentialStore` inside the daemon (`credentials.json` read/write at 0600, looked up by connector id; AD-2)
+- CLI: `spark-research project new|list|open`; sessions belong to a project
+- Migration of the existing artifact store: the `project` field changes from a free-form string to a real project reference
 
-**验证**
-- 单测：project 生命周期、record CRUD、边一致性、凭据文件权限（0600 断言）、permit set 拦截 kernel 直读凭据
-- e2e：CLI 建项目 → 会话产生 artifact + record → 重启进程 → 数据完整可查
+**Verification**
+- Unit tests: project lifecycle, record CRUD, edge consistency, credential file permissions (0600 assertion), permit set blocking the kernel from reading credentials directly
+- e2e: create a project via CLI → session produces artifact + record → restart the process → data is intact and queryable
 
-**退出标准**：全部测试绿；devlog P1 落库。
+**Exit criteria**: all tests green; devlog P1 committed.
 
-### P2 文献域 · 检索与文献库
+### P2 Literature Domain · Retrieval and Library
 
-**范围**
-- Connector 扩展：OpenAlex、CrossRef、EuropePMC、Semantic Scholar（免 key）；AMiner（走凭据服务，29 API 中先接 search/paper-detail 两个核心）
-- 跨源统一检索：并发查询 → DOI/标题去重 → 归一化 Paper 模型
-- Project Library：`library.db`（论文/作者/标签/笔记/阅读状态）+ PDF 下载管线（arXiv/EuropePMC OA 直下，403 降级策略）+ checksum
-- 引文关系抓取（OpenAlex citations API）
-- BibTeX / CSL-JSON 导出
-- 技能：literature-search、paper-download、library-curation
+**Scope**
+- Connector expansion: OpenAlex, CrossRef, EuropePMC, Semantic Scholar (no key required); AMiner (via the credential service, wiring up the two core endpoints — search/paper-detail — out of its 29 APIs first)
+- Cross-source unified retrieval: concurrent queries → DOI/title deduplication → normalized Paper model
+- Project Library: `library.db` (papers/authors/tags/notes/reading status) + PDF download pipeline (direct download from arXiv/EuropePMC OA, with a 403 fallback strategy) + checksum
+- Citation relationship scraping (OpenAlex citations API)
+- BibTeX / CSL-JSON export
+- Skills: literature-search, paper-download, library-curation
 
-**验证**
-- 单测：去重逻辑（DOI 相同/标题模糊）、归一化、BibTeX 输出格式
-- 本地真实 e2e：一次跨 5 源检索 + 2 篇 OA PDF 真实下载入库；请求响应录制为 fixture
-- CI e2e：fixture 回放跑同一链路
+**Verification**
+- Unit tests: deduplication logic (matching DOI / fuzzy title), normalization, BibTeX output format
+- Local real-world e2e: one search across 5 sources + real download of 2 OA PDFs into the library; request/response recorded as a fixture
+- CI e2e: replay the same pipeline via fixture
 
-**退出标准**：真实检索+下载 e2e 通过并录制；AMiner connector 在有 key 环境验证、无 key 环境优雅降级（明确报「未配置」而非报错）。
+**Exit criteria**: real search + download e2e passes and is recorded; the AMiner connector is verified in an environment with a key, and degrades gracefully in an environment without one (explicitly reporting "not configured" rather than erroring).
 
-### P3 文献域 · 综述与引用核验
+### P3 Literature Domain · Review and Citation Verification
 
-**范围**
-- 精读卡 pipeline：库内论文 → 结构化卡片（record: paper 锚点）
-- 综述草稿生成：基于精读卡组织，引用只允许指向库内论文
-- Reviewer 新检查器：`citation-integrity`（草稿引用 ↔ 库内论文匹配；不匹配 = hard finding → veto）
-- 技能：literature-review
+**Scope**
+- Close-reading card pipeline: papers in the library → structured cards (anchored to a record: paper)
+- Review draft generation: organized from close-reading cards, citations may only point to papers in the library
+- New Reviewer checker: `citation-integrity` (matches draft citations against papers in the library; a mismatch = a hard finding → veto)
+- Skill: literature-review
 
-**验证**
-- 单测：citation-integrity 规则（真引用过 / 伪造引用 veto / 库外引用 veto）
-- e2e：10 篇真实文献 → 综述 → 故意注入一条伪造引用 → Reviewer 必须抓到（对抗测试）
+**Verification**
+- Unit tests: citation-integrity rules (genuine citation passes / fabricated citation vetoed / out-of-library citation vetoed)
+- e2e: 10 real papers → review → deliberately inject one fabricated citation → the Reviewer must catch it (adversarial test)
 
-**退出标准**：对抗测试稳定通过（伪造引用检出率 100%，注入 3 种伪造模式：不存在 DOI、真标题假结论、库外真文献）。
+**Exit criteria**: the adversarial test passes consistently (100% detection rate for fabricated citations, injecting 3 fabrication modes: nonexistent DOI, real title with a false conclusion, a genuine paper outside the library).
 
-### P4 Co-explore 与 Novelty
+### P4 Co-explore and Novelty
 
-**范围**
-- Co-explore 会话模式：批判性探讨 workflow prompt + 文献 grounding（观点必须带来源或标注 inferred）
-- Idea 卡：产出、入库（record: idea）、支持/反对文献边
-- Novelty pipeline：claim 提取 → 密集检索（复用 P2 统一检索）→ 对比报告（novel/incremental/existing 评级）→ 引用核验（复用 P3 检查器）
-- 技能：idea-coexplore、novelty-check
+**Scope**
+- Co-explore session mode: critical-discussion workflow prompt + literature grounding (claims must carry a source or be tagged inferred)
+- Idea cards: produced, stored (record: idea), with supporting/opposing literature edges
+- Novelty pipeline: claim extraction → dense retrieval (reusing P2's unified retrieval) → comparison report (novel/incremental/existing rating) → citation verification (reusing the P3 checker)
+- Skills: idea-coexplore, novelty-check
 
-**验证**
-- 单测：claim 提取结构、报告 schema、评级逻辑
-- e2e 双向对照：(a) 拿一个**已发表工作的核心 idea** 跑 novelty check → 必须评为 existing 且找到原文；(b) 拿一个**刻意杜撰的组合 idea** → 应评 novel/incremental 且给出最近邻
+**Verification**
+- Unit tests: claim extraction structure, report schema, rating logic
+- e2e bidirectional comparison: (a) take the **core idea of an already-published work** and run novelty check → it must be rated existing and find the original paper; (b) take a **deliberately fabricated combination idea** → it should be rated novel/incremental and given its nearest neighbors
 
-**退出标准**：双向对照 e2e 通过；Idea 卡在证据图中与文献正确连边。
+**Exit criteria**: the bidirectional comparison e2e passes; idea cards are correctly linked to literature in the evidence graph.
 
-### P5 干实验闭环
+### P5 Dry-Experiment Loop
 
-**范围**
-- `SimulationPlatform` 接口（prepare/submit/poll/collect；AD-4）
-- 参考实现 ×2：OpenMM（进程内）+ 第二实现（GROMACS 或纯 Python 仿真脚本，视本机环境定，devlog 记录选择理由）
-- 闭环状态机：`design → dry_run → collect → analyze → iterate|conclude`，状态持久化（record: experiment）、断点续跑
-- Kernel 集成：仿真产出自动进 artifact + observation record
-- 技能：dry-experiment、protein-analysis（把现有蛋白 connector 链路补上技能与 e2e）
+**Scope**
+- `SimulationPlatform` interface (prepare/submit/poll/collect; AD-4)
+- 2 reference implementations: OpenMM (in-process) + a second implementation (GROMACS or a pure-Python simulation script, decided based on the local environment, with the rationale recorded in the devlog)
+- Closed-loop state machine: `design → dry_run → collect → analyze → iterate|conclude`, with state persistence (record: experiment) and resume-from-checkpoint
+- Kernel integration: simulation output automatically becomes an artifact + observation record
+- Skills: dry-experiment, protein-analysis (add a skill and e2e coverage on top of the existing protein connector pipeline)
 
-**验证**
-- 单测：状态机转移全覆盖、断点恢复、adapter 契约 mock 测试
-- e2e：OpenMM 最小 MD 任务（如水盒子平衡）端到端：设计 → 运行 → 数据回收 → observation 入图 → 中途 kill 进程 → 恢复续跑
+**Verification**
+- Unit tests: full coverage of state-machine transitions, checkpoint recovery, adapter contract mock tests
+- e2e: a minimal OpenMM MD task (e.g. water-box equilibration) end to end: design → run → data collection → observation into the graph → kill the process midway → resume and continue
 
-**退出标准**：e2e 含断点恢复通过；两个 adapter 实现共用同一契约测试套件全绿。
+**Exit criteria**: the e2e test including checkpoint recovery passes; both adapter implementations pass fully green on the same shared contract test suite.
 
-### P6 湿实验模拟器
+### P6 Wet-Experiment Simulator
 
-**范围**
-- Opentrons 集成：`opentrons_simulate` 替换 `mock_devices.py` 作为默认湿实验后端（mock 保留用于单测）
-- 协议编译目标：现有 protocol compiler 输出 → Opentrons Python protocol API v2 脚本
-- approve gate 落地：湿实验执行前 CLI/API 强制确认（AD-6）
-- 干湿闭环状态机接通：`dry_run → approve → wet_run → collect`
-- 技能：wet-protocol
+**Scope**
+- Opentrons integration: `opentrons_simulate` replaces `mock_devices.py` as the default wet-experiment backend (the mock is kept for unit tests)
+- Protocol compilation target: existing protocol compiler output → an Opentrons Python protocol API v2 script
+- approve gate implementation: mandatory CLI/API confirmation before wet-experiment execution (AD-6)
+- Wiring the dry/wet closed-loop state machine together: `dry_run → approve → wet_run → collect`
+- Skill: wet-protocol
 
-**验证**
-- 单测：编译输出合法性（opentrons_simulate 解析通过即合法）、safety gate 拦截清单（超浓度/不兼容试剂/缺 approve 各一例）
-- e2e：自然语言协议（「取样品 50µL 加入 96 孔板，37°C 孵育…」）→ 编译 → 安全门 → approve → 模拟器执行 → 执行日志入 record
+**Verification**
+- Unit tests: validity of compiled output (valid if it parses successfully under opentrons_simulate), the safety gate's block list (one example each for over-concentration / incompatible reagents / missing approve)
+- e2e: a natural-language protocol ("take a 50µL sample and add it to a 96-well plate, incubate at 37°C…") → compile → safety gate → approve → simulator execution → execution log recorded
 
-**退出标准**：至少 2 个不同类型协议在真实 `opentrons_simulate` 下执行成功；safety gate 对抗样例全部拦截。
+**Exit criteria**: at least 2 different types of protocols execute successfully under real `opentrons_simulate`; the safety gate blocks every adversarial sample.
 
-### P7 前端工作台
+### P7 Frontend Workbench
 
-**范围**（2026-09-09 用户修订：UI 详细程度参考 OpenScience 工作台，非冒烟版）
-- **第一步 API 层**（仍是重点）：P1-P6 全部能力补齐 HTTP API（project/lit/idea/exp/lab 端点 + SSE 会话流），server/app.ts 从 v0.1 形态升级；无 API 能力不许只存在于 UI
-- **第二步 UI 升级为 SolidJS 工作台**（AD-7 的「到 P7 再迁」触发）：对标 OpenScience `frontend/workspace` 的体验水准与交互模式（本地 clone 可研究其组件组织/主题/会话流渲染，Apache 2.0 可参考但代码自研）：
-  - 左：项目切换 + 文献库/思路库/实验导航树
-  - 中：会话流（含 coexplore 模式）+ 精读卡/综述/novelty 报告的富渲染
-  - 右：record 时间线（按类型/时间过滤）+ artifact/证据图浏览
-  - 底：实验面板——干湿状态机可视化 + approve/reject 按钮（decision record 联动）
-  - 明暗主题、键盘可用性、加载与错误态完整
-- 科学渲染以轻量为限（表格/曲线/run log），分子/结构 3D 渲染排 v0.3
+**Scope** (revised by the user on 2026-09-09: the UI's level of detail should reference the OpenScience workbench, not a smoke-test version)
+- **Step one, the API layer** (still the priority): fill out HTTP APIs for all P1-P6 capabilities (project/lit/idea/exp/lab endpoints + SSE session streams), upgrading server/app.ts from its v0.1 form; no capability is allowed to exist only in the UI without an API
+- **Step two, upgrade the UI to a SolidJS workbench** (triggered by AD-7's "migrate at P7"): match the experience level and interaction patterns of OpenScience's `frontend/workspace` (a local clone can be studied for its component organization/theming/session-stream rendering — Apache 2.0 allows reference, but the code itself is written from scratch):
+  - Left: project switcher + navigation tree for the literature library/idea library/experiments
+  - Middle: session stream (including coexplore mode) + rich rendering of close-reading cards/reviews/novelty reports
+  - Right: record timeline (filterable by type/time) + artifact/evidence graph browsing
+  - Bottom: experiment panel — dry/wet state machine visualization + approve/reject buttons (linked to the decision record)
+  - complete light/dark themes, keyboard accessibility, and loading/error states
+- Scientific rendering is limited to lightweight forms (tables/curves/run logs); molecular/structural 3D rendering is scheduled for v0.3
 
-**验证**
-- API 层：每个新端点单测（现有 server.test.ts 模式）
-- e2e：浏览器全流程（建项目 → 检索入库 → 精读/综述 → idea/novelty → 干实验 approve→湿实验模拟 → 时间线完整呈现），Playwright 或等价
-- UI 与 CLI 行为对照：同一操作两侧产生相同 record/artifact
+**Verification**
+- API layer: unit tests for every new endpoint (following the existing server.test.ts pattern)
+- e2e: a full browser workflow (create project → retrieve into library → close-reading/review → idea/novelty → dry-experiment approve → wet-experiment simulation → complete timeline rendering), using Playwright or an equivalent
+- UI vs. CLI behavior comparison: the same operation produces identical records/artifacts on both sides
 
-**退出标准**：全流程浏览器 e2e 通过；UI 全部是 API 投影；体验对照 OpenScience workspace 无明显断档（会话流/导航/时间线三项主观验收由用户过目）。
+**Exit criteria**: the full-workflow browser e2e passes; the UI is entirely a projection of the API; the experience shows no obvious gap compared with the OpenScience workspace (the three subjective items — session stream/navigation/timeline — are reviewed and signed off by the user).
 
-### P8 收口发布 v0.2
+### P8 Close-Out and Release v0.2
 
-**范围**
-- 研究报告导出：证据图 → Markdown（问题/思路/实验/结论分区，结论卡 review 门槛生效）
-- 技能：research-report
-- README 重写（对齐新定位与五域）、DESIGN.md 终稿核对、CHANGELOG
-- 发布判据核验：DESIGN.md §7 的 4 条逐条打勾，记入 devlog P8
+**Scope**
+- Research report export: evidence graph → Markdown (sectioned into questions/ideas/experiments/conclusions, with the conclusion-card review threshold in effect)
+- Skill: research-report
+- README rewrite (aligned with the new positioning and the five domains), final check of DESIGN.md, CHANGELOG
+- Release acceptance-criteria review: check off each of the 4 items in DESIGN.md §7 one by one, recorded in devlog P8
 
-**验证**：§7 成功标准即验收清单——特别是那条完整研究线索的全流程演练（文献 → idea → novelty → 干实验 → 结论 → 报告），作为最终 e2e 保存为可重放脚本。
+**Verification**: §7's success criteria serve as the acceptance checklist — in particular, the full walkthrough of a complete research thread (literature → idea → novelty → dry experiment → conclusion → report) is saved as a replayable script for the final e2e.
 
-**退出标准**：4 条判据全过。（2026-09-09 修订：tag 与 Release 移至 P9 末尾——发布必须带完整的扩展性故事。）
+**Exit criteria**: all 4 acceptance criteria pass. (Revised 2026-09-09: tagging and the Release are moved to the end of P9 — the release must come with a complete extensibility story.)
 
-### P9 扩展面梳理与 LLM 友好化（2026-09-09 用户新增，发布前最后一阶段）
+### P9 Extensibility Surface Review and LLM-Friendliness (added by the user on 2026-09-09, the final phase before release)
 
-> 用户原话口径：梳理 skill / tool / connector 这些方便科研人员自己配置和修改的地方，并进行 LLM 友好的封装和适配。
+> User's original framing: review the places — skill / tool / connector — that let researchers configure and modify things themselves, and wrap and adapt them in an LLM-friendly way.
 
-**范围**
+**Scope**
 
-一、扩展面梳理（面向科研人员的自助配置）
-- `docs/EXTENDING.md`：六个扩展点各一节，每节 = 契约说明 + 最小可运行示例 + 测试方法 + 文件放置位置：
-  1. **Skill**（`backend/src/skills/<name>/SKILL.md`，规范化 frontmatter：name/description/triggers/所需 connector）
-  2. **Connector**（Connector 契约 + 凭据经 CredentialStore，AD-2；免 key 与带 key 两个示例）
-  3. **SimulationPlatform**（干实验平台，P5 契约测试套件直接复用作新平台的验收）
-  4. **WetLabBackend**（湿实验执行端；含 V6 施工说明：非 Opentrons 设备族需把设备语言编译下沉进 backend）
-  5. **安全门规则**（纯函数规则，加一条 = 一个函数 + 单测）
-  6. **Prompt 与模型路由**（agents/prompt/*.txt 双层结构 + 每子代理独立模型配置）
-- 脚手架：`spark-research new skill|connector|platform <name>` 生成带测试桩的模板
-- 用户配置面收口：`~/.spark-research/config.json` 统一登记（默认模型、politeness header 的 mailto、backend 选择），文档写清哪些能改、改了影响什么
+I. Extensibility surface review (self-service configuration for researchers)
+- `docs/EXTENDING.md`: one section per extension point (six total), each section = contract description + minimal runnable example + testing method + file placement location:
+  1. **Skill** (`backend/src/skills/<name>/SKILL.md`, standardized frontmatter: name/description/triggers/required connector)
+  2. **Connector** (the Connector contract + credentials via CredentialStore, AD-2; two examples, one keyless and one requiring a key)
+  3. **SimulationPlatform** (dry-experiment platforms; the P5 contract test suite is reused directly as acceptance for new platforms)
+  4. **WetLabBackend** (the wet-experiment execution side; includes V6 implementation notes: non-Opentrons device families need device-language compilation pushed down into the backend)
+  5. **Safety gate rules** (pure-function rules; adding one rule = one function + one unit test)
+  6. **Prompt and model routing** (the two-layer `agents/prompt/*.txt` structure + an independent model configuration per subagent)
+- Scaffolding: `spark-research new skill|connector|platform <name>` generates a template with test stubs
+- Consolidating the user configuration surface: `~/.spark-research/config.json` registers everything in one place (default model, the mailto for the politeness header, backend selection), with documentation spelling out clearly what can be changed and what changing it affects
 
-二、LLM 友好封装与适配
-- **能力自描述**：`spark-research capabilities --json` 输出机器可读清单（全部 connectors/platforms/backends/skills/安全规则 + 各自的输入 schema 与可用性状态）——agent 一次调用即可 introspect 整个工作台
-- **llms.txt + llms-full.txt**（对标 OpenScience docs 的做法）：纯文本全量文档，外部 LLM 可直接消化
-- **SKILL.md 规范化**：统一 frontmatter schema，校验进 CI；agent 按需加载（技能目录 = LLM 的操作手册，不预填 context）
-- **MCP server 模式**：`spark-research mcp` 把核心能力（lit search/library/idea/novelty/exp/lab/records）暴露为 MCP tools——任何外部 LLM agent（Claude Code、其他 MCP 客户端）可直接把 Spark Research 当科研工具箱接入。approve 类危险动作在 MCP 层保持人工确认语义
-- 工具描述打磨：每个 MCP tool / API 端点的 description 按「LLM 第一次见就会用」标准写（参数示例 + 常见错误 + 何时不该用）
+II. LLM-friendly wrapping and adaptation
+- **Capability self-description**: `spark-research capabilities --json` outputs a machine-readable manifest (all connectors/platforms/backends/skills/safety rules + each one's input schema and availability status) — an agent can introspect the entire workbench in a single call
+- **llms.txt + llms-full.txt** (matching the approach used by OpenScience docs): plain-text, complete documentation that an external LLM can consume directly
+- **SKILL.md standardization**: a unified frontmatter schema, validated in CI; agents load it on demand (the skills directory = the LLM's operating manual, not pre-filled into context)
+- **MCP server mode**: `spark-research mcp` exposes the core capabilities (lit search/library/idea/novelty/exp/lab/records) as MCP tools — any external LLM agent (Claude Code, other MCP clients) can plug Spark Research in directly as a research toolbox. Dangerous actions of the approve kind retain human-confirmation semantics at the MCP layer
+- Tool-description polishing: every MCP tool / API endpoint's description is written to the standard of "an LLM can use it correctly the first time it sees it" (parameter examples + common mistakes + when not to use it)
 
-**验证**
-- EXTENDING.md 六节各带的最小示例真实可跑（CI 里跑通示例 skill/connector/规则各一个）
-- `capabilities --json` schema 校验 + 与实际注册表一致性测试（清单里的每一项真实存在）
-- MCP server：用 MCP 客户端真实连接跑通 lit search → idea → novelty 链路的 e2e；approve 动作在 MCP 层被要求确认的对抗测试
-- llms.txt 生成脚本幂等（文档变更后重新生成 diff 干净）
+**Verification**
+- The minimal example attached to each of EXTENDING.md's six sections actually runs (CI runs one example skill/connector/rule each successfully)
+- `capabilities --json` schema validation + a consistency test against the actual registry (every item in the manifest genuinely exists)
+- MCP server: a real MCP client connects and runs the lit search → idea → novelty pipeline end to end; an adversarial test confirming that approve actions require confirmation at the MCP layer
+- The llms.txt generation script is idempotent (regenerating after a documentation change produces a clean diff)
 
-**退出标准**：外部验收——用一个全新的 Claude Code 会话（无本仓库上下文）仅凭 MCP 接入 + llms.txt，完成一次「检索文献入库 → 建 idea → novelty check」操作；EXTENDING.md 三类示例 CI 全绿；tag `v0.2.0` + GitHub Release（从 P8 移入）。
+**Exit criteria**: external acceptance — using a brand-new Claude Code session (with no context on this repo), relying solely on the MCP connection + llms.txt, complete a "retrieve literature into the library → create an idea → novelty check" operation; all three categories of EXTENDING.md examples pass CI; tag `v0.2.0` + GitHub Release (moved in from P8).
 
-**P9 完成状态（2026-09-09）**：范围全部落地，见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)。
-机器版退出标准已由 `tests/unit/mcp_e2e.test.ts` 覆盖（真实 MCP 客户端跑通
-capabilities → 检索入库 → idea → novelty → 时间线 → 报告，零网络零真实模型）；
-**人版外部验收（全新 Claude Code 会话接 MCP）留给主会话执行**，tag 与 Release 同。
+**P9 completion status (2026-09-09)**: the entire scope has been delivered, see [devlog/P9-extensibility.md](devlog/P9-extensibility.md).
+The machine-side exit criteria are already covered by `tests/unit/mcp_e2e.test.ts` (a real MCP client runs
+capabilities → retrieve into library → idea → novelty → timeline → report end to end, with zero network access and zero real models);
+**the human-side external acceptance review (a brand-new Claude Code session connecting via MCP) is left for the main session to carry out**, together with the tag and Release.
 
-| 层 | 工具 | 网络 | 运行时机 |
+| Layer | Tool | Network | When it runs |
 |----|------|------|---------|
-| 单元 | bun test | 无 | 每次 commit |
-| 契约（adapter/connector） | bun test + mock | 无 | 每次 commit |
-| e2e 回放 | bun test + fixture | 无（回放） | CI |
-| e2e 真实 | bun test（tagged） | 有 | 本地验证 + 录制 fixture 时 |
-| 对抗 | 专用测试（伪造引用/安全门样例） | 无 | CI |
-| Python（kernel/lab） | pytest | 无 | 每次 commit |
+| Unit | bun test | none | every commit |
+| Contract (adapter/connector) | bun test + mock | none | every commit |
+| e2e replay | bun test + fixture | none (replay) | CI |
+| e2e real | bun test (tagged) | yes | local verification + when recording fixtures |
+| Adversarial | dedicated tests (fabricated citations/safety gate samples) | none | CI |
+| Python (kernel/lab) | pytest | none | every commit |
 
-**模拟测试原则**（用户要求「分步骤有逻辑的自己做模拟测试和验证」的落点）：
-1. 每阶段先写「验证」小节列出的测试，再实现（测试即验收口径）
-2. 真实外部依赖（网络 API、模拟器）本地跑通一次 → 录制 → CI 永远回放，杜绝 flaky
-3. 对抗测试优先于 happy path：伪造引用、安全门违规、断点 kill 都是一等测试用例
+**Simulated-testing principles** (the concrete realization of the user's request to "do simulated testing and verification yourself, step by step and logically"):
+1. For each phase, write the tests listed in the "Verification" section first, then implement (tests define the acceptance bar)
+2. Real external dependencies (network APIs, simulators) are run successfully once locally → recorded → CI always replays them, eliminating flakiness
+3. Adversarial tests take priority over the happy path: fabricated citations, safety-gate violations, and checkpoint kills are all first-class test cases
 
-## 四、执行方式
+## 4. Execution Approach
 
-- 每阶段启动时：主会话（Fable 5）确认范围 → 委派 Opus 5 子代理实现 → 主会话跑测试 + 审代码 + 对照设计验收 → PR → squash merge → devlog
-- 阶段间与用户同步一次进度与下阶段范围（「后面商议的需求」的插入点：新需求进 backlog，评估后排进阶段或 v0.3）
-- 本地目录 `~/Desktop/AI4S/spark-research` 与 GitHub `jimmyag2026-prog/spark-research` 实时同步（每个 PR merge 即推送）
+- At the start of each phase: the main session (Fable 5) confirms scope → delegates implementation to an Opus 5 subagent → the main session runs tests + reviews code + checks acceptance against the design → PR → squash merge → devlog
+- Between phases, sync progress and the next phase's scope with the user once ("requirements to be discussed later" get inserted here: new requirements go into the backlog, and after evaluation are scheduled into a phase or into v0.3)
+- The local directory `~/Desktop/AI4S/spark-research` stays synced in real time with GitHub `jimmyag2026-prog/spark-research` (pushed as soon as each PR is merged)

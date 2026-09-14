@@ -1,157 +1,157 @@
-# Spark Research v0.3.0 开发方案
+# Spark Research v0.3.0 Development Plan
 
-> 制订时间：2026-09-09（PDT）
-> 输入：`spark-research_review报告.md`（外部评审，对象 main `b4aab02` + P8）、
-> `ClaudeScience_vs_OpenScience_架构与功能对比.md`（参照系调研）、v0.2 全量代码复核
-> 基线：main `4b0ebd5`（P8 已合）+ `feat/p9-extensibility`（config / capabilities / MCP server /
-> SKILL frontmatter 已提交，scaffold 在途）——**本方案假定 P9 合入并打出 `v0.2.0` 之后开工**
-> 目标口径（用户原话）：*做到和 OpenScience 一样的功能和易用性，并在此基础上有自己的特色，
-> 扩展性尽量对比 OpenScience 并有更优的设计*
-
----
-
-> ## ⚠️ 已被 `DEVELOPMENT_PLAN_v0.4.md` 承接（2026-09-10）
->
-> **P10（闸门 D）已完成并发布 v0.3.0 / v0.3.1。** 本文的 P11–P16 章节
-> （架构设计仍然有效）已由 **`docs/DEVELOPMENT_PLAN_v0.4.md`** 承接并修订——
-> 那份文档折入了 P10 的三次事故教训、并行实测数据与 v0.3 遗留的新发现（V20–V25）。
-> **施工以 v0.4 文档为准**；本文保留作为架构设计的出处与 P10 的历史记录。
-
-> ## ⚠️ 版本线已重新切分（2026-09-10）
->
-> 本方案初稿假定「v0.3.0 在 P16 末尾一次打出」。实际执行时改为：
-> **`v0.3.0` = 闸门 D（P10）单独发布**——它含真正的破坏性变更
-> （`wet_run` 状态被拆、`/api/lab/machine` 形状变化、写请求强制 `application/json`、
-> 跨站写请求被拒），按 SemVer 不该塞进 patch，也不该攒到三条主线做完才发。
->
-> **三条主线（P11–P16）顺延为 `v0.4.0` 的内容。** 阶段编号、依赖顺序、
-> 文件所有权与验证方案全部不变，只是版本标签换了。
-> 下文凡出现「v0.3.0 发布」「v0.3 目标态」字样，一律理解为 **v0.4.0**。
+> Drafted: 2026-09-09 (PDT)
+> Inputs: `spark-research_review报告.md` (external review, target main `b4aab02` + P8),
+> `ClaudeScience_vs_OpenScience_架构与功能对比.md` (reference-frame research), full v0.2 code re-verification
+> Baseline: main `4b0ebd5` (P8 merged) + `feat/p9-extensibility` (config / capabilities / MCP server /
+> SKILL frontmatter already committed, scaffold in progress) — **this plan assumes work starts after P9 is merged and `v0.2.0` is cut**
+> Target scope (user's own words): *achieve the same functionality and ease of use as OpenScience, and on that basis develop our own distinctive character,
+> with extensibility that measures up to OpenScience and has a better design*
 
 ---
 
-## 〇、一句话方案
+> ## ⚠️ Superseded by `DEVELOPMENT_PLAN_v0.4.md` (2026-09-10)
+>
+> **P10 (Gate D) is complete and v0.3.0 / v0.3.1 have been released.** The P11–P16 sections of this document
+> (the architecture design remains valid) have been carried forward and revised by **`docs/DEVELOPMENT_PLAN_v0.4.md`** —
+> that document folds in the lessons from P10's three incidents, parallel real-world measurement data, and new findings left over from v0.3 (V20–V25).
+> **Follow the v0.4 document for execution**; this document is retained as the source of the architecture design and as the historical record of P10.
 
-**v0.2 把「数据与纪律」做扎实了，v0.3 补「运行时与生态」这条最短的板——
-用 OpenScience 的形态（npx 秒装、默认 Web、模型中立、真委派、插件扩展）追平易用性，
-再用 spark 自己的确定性纪律（图上判完成、契约化验收扩展、能力声称机器可核）在同样的形态上超车。**
-
-评审给出的战略结论是「优势全在随年限增值的数据层，劣势全在随行业速度贬值的运行时层」。
-v0.3 就是唯一一次把运行时债一次性还清的窗口——**再往后每加一个功能域，都要在坏地基上加一遍**。
+> ## ⚠️ The version line has been re-split (2026-09-10)
+>
+> The original draft of this plan assumed that "v0.3.0 would be cut all at once at the end of P16." In actual execution this changed to:
+> **`v0.3.0` = Gate D (P10) released on its own** — it contains genuinely breaking changes
+> (the `wet_run` state was split, the shape of `/api/lab/machine` changed, write requests now require `application/json`,
+> cross-site write requests are rejected); per SemVer these should not be crammed into a patch release, nor held back until all three main lines are done.
+>
+> **The three main lines (P11–P16) are deferred to become the content of `v0.4.0`.** The phase numbering, dependency order,
+> file ownership, and verification plan are all unchanged — only the version label has changed.
+> Wherever the text below says "v0.3.0 release" or "v0.3 target state," read it as **v0.4.0**.
 
 ---
 
-## 一、从评审到版本主题
+## 0. One-sentence summary
 
-### 1.1 评审的三个核心判断，与 v0.3 的对应
+**v0.2 made "data and discipline" solid; v0.3 fills in "runtime and ecosystem," the shortest plank —
+matching OpenScience's ease of use with its form factor (npx install in seconds, Web by default, model-neutral, real delegation, plugin extensibility),
+then overtaking it on the same form factor with spark's own deterministic discipline (completion judged against the graph, contract-based acceptance for extensions, machine-verifiable capability claims).**
 
-| 评审判断 | v0.3 回应 |
+The review's strategic conclusion is that "the advantage is entirely in the data layer, which appreciates with years of accumulation; the disadvantage is entirely in the runtime layer, which depreciates at the speed of the industry."
+v0.3 is the only window in which we pay off the runtime debt in one shot — **every feature domain added after this point would otherwise be built on a bad foundation, over and over again.**
+
+---
+
+## I. From the review to the version theme
+
+### 1.1 The review's three core judgments, and v0.3's response to each
+
+| Review judgment | v0.3 response |
 |---|---|
-| **裂缝一：叙事超前于实现**——Agent 层三大卖点（swarm / 子代理 / permit set）停留在数据结构 | 主线 A：把子代理做成真委派（ToolBus + tool loop），permit set 变成真消费方；swarm 删除；并新增 **CI 级的「叙事一致性门禁」**，让这类落差以后不可能再攒到评审才发现 |
-| **裂缝二：并发与超时的工程基本功缺口**——单线程测试永远测不出 | 闸门 D：P0 竞态 / 全链路超时 / CAS / stderr 排空一次清完，并新增 `tests/concurrency/` 与「假上游挂起」测试层，把这个维度永久纳入 CI |
-| **差异化方向判断正确，值得坚持** | 主线 C：把「确定性纪律」从域管线推广到**编排层**（图上判完成）与**扩展层**（契约化验收）——这两处两个参照系都没有 |
+| **Crack one: narrative ahead of implementation** — the Agent layer's three big selling points (swarm / subagents / permit set) remain data structures | Main line A: turn subagents into real delegation (ToolBus + tool loop); make the permit set a real consumer; delete swarm; and add a new **CI-level "narrative-consistency gate"** so this kind of gap can never again go unnoticed until review time |
+| **Crack two: gaps in basic concurrency and timeout engineering** — single-threaded tests can never catch these | Gate D: P0 races / end-to-end timeouts / CAS / stderr draining all cleared in one pass, plus a new `tests/concurrency/` and a "fake upstream hang" test layer, permanently folding this dimension into CI |
+| **The direction of differentiation is judged correct and worth sticking with** | Main line C: extend "deterministic discipline" from the domain pipelines to the **orchestration layer** (completion judged against the graph) and the **extension layer** (contract-based acceptance) — neither reference system has an equivalent for either of these |
 
-### 1.2 v0.3 明确不做（防止范围蔓延）
+### 1.2 What v0.3 explicitly does NOT do (to prevent scope creep)
 
-| 不做 | 理由 |
+| Not doing | Reason |
 |---|---|
-| 追 OpenScience 的 313 skills / 46 connector 数量 | AD-5「少而深」不变。v0.3 解决的是**让用户自己 30 分钟加一个**，不是我们加 46 个 |
-| 多用户真实身份认证（BACKLOG V10） | 单用户本地场景下 `actorSource` 已诚实；上多用户前先把 agent 层做实，否则是给空架子加锁 |
-| 物理 Opentrons 对接（V6） | **硬前置**：安全门声明必须先兑现（闸门 D-8）。评审原话「过度声明的安全门比没有安全门更危险」 |
-| 插件市场 / 远端扩展仓库 | 先有装载与验收机制，再谈分发。v0.3 只做本地目录装载 |
-| 远端算力真实实现（V4） | 按真实需求拉动，无课题拉动就不做 |
+| Chasing OpenScience's count of 313 skills / 46 connectors | AD-5 "few but deep" is unchanged. What v0.3 solves is **letting the user add one in 30 minutes themselves**, not us adding 46 |
+| Real multi-user identity authentication (BACKLOG V10) | In the single-user local scenario `actorSource` is already honest; before adding multi-user support the agent layer needs to be made real, otherwise we're adding a lock to an empty shell |
+| Physical Opentrons integration (V6) | **Hard precondition**: the safety-gate claim must be made good on first (Gate D-8). In the review's own words: "an over-claimed safety gate is more dangerous than no safety gate" |
+| Plugin marketplace / remote extension repository | Loading and acceptance mechanisms must exist first before distribution is worth discussing. v0.3 only does local directory loading |
+| Real implementation of remote compute (V4) | Build it when real demand pulls for it; without a driving use case, don't build it |
 
 ---
 
-## 二、总体结构：一道闸门 + 三条主线 + 一条附线
+## II. Overall structure: one gate + three main lines + one side line
 
 ```
-                    ┌──────────────── 闸门 D：债务清算（不清完不开工）─────────────────┐
-                    │ 并发竞态 · 全链路超时 · 静默失败 · 权限口径 · 安全门声明收敛        │
+                    ┌──────────────── Gate D: debt settlement (work does not start until cleared) ─────────────────┐
+                    │ concurrency races · end-to-end timeouts · silent failures · permission scope · safety-gate claim convergence │
                     └────────────────────────────┬──────────────────────────────────┘
                                                  │
                               ┌──────────────────┴──────────────────┐
-                              │  P11 LLM Runtime v2（A/B/C 共同地基）  │
-                              │  provider 适配层 · tool calling ·      │
-                              │  usage 记账 · 超时重试 · 流式 · JSON 模式│
+                              │  P11 LLM Runtime v2 (shared foundation for A/B/C)  │
+                              │  provider adapter layer · tool calling ·      │
+                              │  usage accounting · timeout/retry · streaming · JSON mode │
                               └──────────────────┬──────────────────┘
                      ┌───────────────────────────┼───────────────────────────┐
                      │                           │                           │
         ┌────────────▼───────────┐  ┌────────────▼───────────┐  ┌────────────▼───────────┐
-        │ 主线 A：Agent Runtime   │  │ 主线 B：上手性追平       │  │ 主线 C：扩展性超车       │
-        │ P12 ToolBus + 真子代理  │  │ P14 npx/单二进制        │  │ P15 扩展装载 + 声明式    │
-        │ P13 contract/replan/   │  │     零参数起 UI · 向导   │  │     connector · MCP     │
-        │     记账 · findings     │  │     依赖分层 · demo     │  │     client · 契约化验收  │
-        │     状态机              │  │     本地模型 · SSE 流    │  │                         │
+        │ Main line A: Agent Runtime │  │ Main line B: closing the onboarding gap │  │ Main line C: overtaking on extensibility │
+        │ P12 ToolBus + real subagents │  │ P14 npx/single binary        │  │ P15 extension loading + declarative │
+        │ P13 contract/replan/     │  │     zero-arg UI startup · wizard    │  │     connector · MCP     │
+        │     accounting · findings │  │     tiered dependencies · demo    │  │     client · contract-based acceptance │
+        │     state machine        │  │     local model · SSE streaming    │  │                         │
         └────────────┬───────────┘  └────────────┬───────────┘  └────────────┬───────────┘
                      └───────────────────────────┼───────────────────────────┘
                                     ┌────────────▼───────────┐
-                                    │ 附线 E：P16 文献域补强   │
-                                    │ （同时是主线 C 的首个    │
-                                    │   真实用户：arXiv/PubMed │
-                                    │   用声明式 connector 加）│
+                                    │ Side line E: P16 literature domain hardening │
+                                    │ (also serves as main line C's │
+                                    │   first real user: arXiv/PubMed │
+                                    │   added via declarative connector) │
                                     └────────────┬───────────┘
-                                            v0.3.0 发布
+                                            v0.3.0 release
 ```
 
-**为什么这个顺序**：
-1. 闸门 D 在最前，因为**编排就是并发**——不修 C-1 竞态，主线 A 每一次并发委派都在静默出错，而且测不出来。
-2. P11 在三条主线之前，因为 tool calling（A）、流式输出（B）、外部工具注册（C）、结构化输出（BACKLOG V12）**共用同一个 LLM 抽象**。先分头做三遍适配层是本方案最容易犯的错。
-3. 附线 E 放最后不是因为不重要，而是它要**当主线 C 的验收用例**：如果 arXiv/PubMed 不能用声明式 manifest 加进来，说明扩展机制设计失败——这是比任何单测都硬的验收。
+**Why this order**:
+1. Gate D comes first, because **orchestration is concurrency** — if we don't fix the C-1 race, every concurrent delegation in main line A silently fails, and it's untestable.
+2. P11 comes before the three main lines, because tool calling (A), streaming output (B), external tool registration (C), and structured output (BACKLOG V12) **all share the same LLM abstraction**. Building three separate adapter layers first would be the easiest mistake in this plan.
+3. Side line E is placed last not because it's unimportant, but because it serves as **the acceptance test case for main line C**: if arXiv/PubMed cannot be added via a declarative manifest, that means the extension mechanism's design has failed — this is a harder acceptance bar than any unit test.
 
 ---
 
-## 三、闸门 D：债务清算（P10）
+## III. Gate D: debt settlement (P10)
 
-> **门禁语义**：D 全绿之前，P11 及之后的任何功能代码不合入 main。
-> 全部是评审第一/第二优先项。量级：2–3 个会话，4 条 lane 并行（见 §6.3.2）。
+> **Gate semantics**: until D is entirely green, no feature code for P11 or beyond may be merged into main.
+> All items are the review's first/second priority items. Scale: 2–3 sessions, 4 lanes in parallel (see §6.3.2).
 
-| # | 项 | 位置 | 做法 | 验收 |
+| # | Item | Location | Approach | Acceptance |
 |---|---|---|---|---|
-| D-1 | **P0 并发竞态**：`__handlingTool` 实例级状态在并发下静默绕过参数映射 | `connectors/base.ts:56,78-86` | 去掉「同名方法即 handler」魔法分发，改**显式 handler 注册表**（子类构造时 `this.handle("search", this.searchImpl)`）；`call()` 不再依赖任何实例可变状态 | `tests/concurrency/connector_race.test.ts`：单实例 100 并发混合工具调用，断言每个请求的最终 URL/参数与串行结果逐位一致 |
-| D-2 | **全链路超时**：`http/client.ts` 裸 fetch、LLM 调用、`PythonKernel.execute`、TaskRegistry 全部无超时 | `http/client.ts` · `llm/` · `kernels/` · `server/tasks.ts` | 每层一个显式 `timeoutMs`（默认进 `config.json`，HTTP 30s / LLM 120s / kernel 由调用方给）；用 `AbortController`；超时是**可见错误**不是静默返回 | 「假上游挂起」测试层：注入永不响应的 HttpClient / LLM / kernel，断言四个入口都在 N 秒内返回 `timeout` 错误而非挂死 |
-| D-3 | **kernel stderr 从不排空** → 长会话写满 64KB 管道缓冲后永久死锁 | `kernels/manager.ts:37-49` | 照抄 `lab/wet_backend.ts:206` 已有的正确写法 | 单测：向 kernel 打 1MB stderr 后仍能正常 execute |
-| D-4 | **LLM 失败被静默当成功** | `agents/orchestrator.ts:290,318,412` | **类型层根治**（不止加 `if`）：`LlmResponse.ok=false` 时 `content` 恒为空串，错误只在 `error` 字段——让「把错误文本当产出」在编译期就不可能。见 §4.1 | 单测：FakeLLM 返回失败 → orchestrator 该任务 `ok:false`，summary 不含错误文本，review 不放行 |
-| D-5 | `kernelManager.dispose()` 全局摧毁内核，并发会话互杀 | `agents/orchestrator.ts:325-335` | `dispose(kernelId)` 单内核 | `tests/concurrency/kernel_isolation.test.ts`：两 session 交错执行，各自 kernel 存活 |
-| D-6 | **config.json 0644 存 LLM API key**（比 connector 凭据的 0600 还弱） | `index.ts:55-58,71` · `config/index.ts:177` | 照抄 `daemon/credentials.ts` 的 `mode: 0o600 + chmodSync`；启动时检测过宽权限并告警 | 单测断言写入后 `stat` 为 0600；已存在的宽权限文件被收紧 |
-| D-7 | **无 Origin/Host 校验 + `jsonBody` 不查 Content-Type** → 恶意网页可 `text/plain` 跨站 POST `/approve` | `server/app.ts` · `http/` | 本地默认只信 `localhost`/`127.0.0.1` Origin 白名单（可配）；写端点强制 `application/json` | 对抗测试：伪造 Origin、缺 Content-Type、`text/plain` 三种跨站写请求全部 403 |
-| D-8 | **安全门声明收敛**（接真机前的硬门槛） | `lab/` | 二选一并写死在文档与 CLI 输出：**(a)** 补 NL→浓度/BSL 解析 + 试剂词表扩到英文/分子式 + 续句试剂合并 + **未消费参数告警**；**(b)** 把口径降为「当前安全门仅对中文关键词命中试剂与体积生效」。**推荐 (a) 的最小版 + 强制 (b) 的告警**：解析器新增「本句有未被任何规则消费的量纲/试剂」→ 编译产物带 `unconsumed` 警告，审批界面必须显示 | 对抗矩阵扩到英文/分子式协议；「用户写了但安全门没看见」的用例必须产出可见告警而非静默绿灯 |
-| D-9 | **状态机无乐观并发控制** → 一次批准并发执行两次 | `project/records.ts:181-192` | `UPDATE ... WHERE id=? AND rev=?` + rev 自增；experiment record 的 `state`/`approval` 写入加来源校验 | `tests/concurrency/approve_once.test.ts`：并发 N 次 `POST /simulate` 同一获批协议，断言恰好 1 次执行、其余 409 |
-| D-10 | wet 状态机 `wet_run` 合并「已批待执行」与「执行中」；approval 跨崩溃存活 → 重启后免审批重跑 | `lab/` | 拆 `approved` / `executing` 两态；approval **一次性消费**（重跑需再批） | 崩溃恢复用例：批准 → SIGKILL → 重启 → 断言需要重新审批 |
-| D-11 | 文档漂移一次清 | `docs/` `README` `SKILL.md` | connector 数 17（非 18）；SKILL.md 里已被代码证伪的 EuropePMC 死端点；版本号三处两值统一到 `version.ts` | §7 的叙事一致性测试（见 D-12）自动拦截 |
-| D-12 | **新增：叙事一致性门禁** | `tests/unit/narrative_parity.test.ts` | README/DESIGN 中每条能力声称，必须在 `capabilities --json` 里有对应条目且 `status` 与实际注册表一致；孤儿模块（无生产调用方，仅自测试引用）在 CI 报错 | 用当前的 `swarm.ts` 当阴性对照：删除前该测试必须能把它抓出来 |
+| D-1 | **P0 concurrency race**: instance-level `__handlingTool` state silently bypasses argument mapping under concurrency | `connectors/base.ts:56,78-86` | Remove the "same-named method is the handler" magic dispatch, switch to an **explicit handler registry** (subclass constructor calls `this.handle("search", this.searchImpl)`); `call()` no longer depends on any mutable instance state | `tests/concurrency/connector_race.test.ts`: 100 concurrent mixed tool calls against a single instance, assert that the final URL/args for every request match the serial result bit-for-bit |
+| D-2 | **End-to-end timeouts**: `http/client.ts` bare fetch, LLM calls, `PythonKernel.execute`, and TaskRegistry all have no timeouts | `http/client.ts` · `llm/` · `kernels/` · `server/tasks.ts` | An explicit `timeoutMs` at every layer (default lives in `config.json`; HTTP 30s / LLM 120s / kernel supplied by the caller); use `AbortController`; a timeout is a **visible error**, not a silent return | "Fake upstream hang" test layer: inject an HttpClient / LLM / kernel that never responds, assert all four entry points return a `timeout` error within N seconds instead of hanging forever |
+| D-3 | **Kernel stderr is never drained** → after a long session fills the 64KB pipe buffer, it deadlocks permanently | `kernels/manager.ts:37-49` | Copy the correct pattern already present in `lab/wet_backend.ts:206` | Unit test: still able to `execute` normally after pushing 1MB of stderr to the kernel |
+| D-4 | **LLM failures are silently treated as success** | `agents/orchestrator.ts:290,318,412` | **Fix at the type level** (not just adding `if`s): when `LlmResponse.ok=false`, `content` is always the empty string — errors live only in the `error` field, so "treating error text as output" becomes impossible at compile time. See §4.1 | Unit test: FakeLLM returns failure → the orchestrator task is `ok:false`, the summary contains no error text, review does not pass it |
+| D-5 | `kernelManager.dispose()` globally destroys kernels, so concurrent sessions kill each other | `agents/orchestrator.ts:325-335` | `dispose(kernelId)` for a single kernel | `tests/concurrency/kernel_isolation.test.ts`: two sessions executing interleaved, each session's kernel survives |
+| D-6 | **`config.json` stores the LLM API key at 0644** (even weaker than the 0600 used for connector credentials) | `index.ts:55-58,71` · `config/index.ts:177` | Copy the `mode: 0o600 + chmodSync` pattern already used in `daemon/credentials.ts`; detect and warn about overly permissive file modes at startup | Unit test asserts `stat` shows 0600 after write; existing overly permissive files are tightened |
+| D-7 | **No Origin/Host validation + `jsonBody` doesn't check Content-Type** → a malicious webpage can POST cross-site to `/approve` via `text/plain` | `server/app.ts` · `http/` | By default, locally, only trust an Origin whitelist of `localhost`/`127.0.0.1` (configurable); write endpoints require `application/json` | Adversarial test: three kinds of cross-site write requests — forged Origin, missing Content-Type, `text/plain` — all get 403 |
+| D-8 | **Safety-gate claim convergence** (hard threshold before connecting to real hardware) | `lab/` | Choose one, and commit to it in both docs and CLI output: **(a)** add NL→concentration/BSL parsing + expand the reagent vocabulary to English/molecular formulas + merge continuation-sentence reagents + **warn on unconsumed parameters**; **(b)** downgrade the claim to "the safety gate currently only works on reagents and volumes matched by Chinese-language keywords." **Recommended: minimal version of (a) plus mandatory (b) warning**: the parser adds "this sentence contains a quantity/reagent not consumed by any rule" → compiled output carries an `unconsumed` warning, which the approval UI must display | The adversarial matrix is extended to English/molecular-formula protocols; the case of "the user wrote it but the safety gate never saw it" must produce a visible warning, not a silent green light |
+| D-9 | **The state machine has no optimistic concurrency control** → a single approval can be executed twice concurrently | `project/records.ts:181-192` | `UPDATE ... WHERE id=? AND rev=?` with `rev` auto-incrementing; writes to the experiment record's `state`/`approval` gain source validation | `tests/concurrency/approve_once.test.ts`: N concurrent `POST /simulate` calls against the same approved protocol, assert exactly 1 execution and the rest 409 |
+| D-10 | The wet-lab state machine's `wet_run` conflates "approved, pending execution" with "executing"; approval survives crashes → a restart re-runs without re-approval | `lab/` | Split into two states, `approved` / `executing`; approval is **consumed once** (a rerun requires re-approval) | Crash-recovery test case: approve → SIGKILL → restart → assert re-approval is required |
+| D-11 | Clean up documentation drift in one pass | `docs/` `README` `SKILL.md` | Connector count 17 (not 18); the EuropePMC dead endpoint in SKILL.md that has already been falsified by the code; unify the version number (which currently has two different values across three places) into `version.ts` | Automatically caught by the narrative-consistency test in §7 (see D-12) |
+| D-12 | **New: narrative-consistency gate** | `tests/unit/narrative_parity.test.ts` | Every capability claim in README/DESIGN must have a corresponding entry in `capabilities --json` whose `status` matches the actual registry; orphan modules (no production caller, referenced only by their own tests) cause a CI error | Use the current `swarm.ts` as a negative control: before it is deleted, this test must be able to catch it |
 
-**闸门退出标准**：D-1…D-12 全绿 + `tests/concurrency/` 新增套件全绿 + 现有 655 用例不回归。
+**Gate exit criteria**: D-1…D-12 all green + the new `tests/concurrency/` suite all green + the existing 655 test cases show no regressions.
 
 ---
 
-## 四、主线代码架构设计
+## IV. Main-line code architecture design
 
-### 4.1 P11 · LLM Runtime v2（A/B/C 共同地基）
+### 4.1 P11 · LLM Runtime v2 (shared foundation for A/B/C)
 
-**为什么它必须先做**：评审没点出、但复核实测发现的一条**新的名实落差**——
-`SUPPORTED_PROVIDERS` 声明 6 个 provider（kimi/openai/anthropic/deepseek/qwen/openrouter），
-`call()` 里**只有 `callOpenRouter` 与 `callKimi` 两个实现**，其余四个静默落到 OpenRouter 或失败。
-DESIGN §5.4「保持模型无关」与 OpenScience 的「模型中立」在这里差距最大，而**模型中立恰是 OpenScience 最被引用的卖点**。
+**Why this must be done first**: a new gap between narrative and implementation that the review didn't point out but that our re-verification found —
+`SUPPORTED_PROVIDERS` declares 6 providers (kimi/openai/anthropic/deepseek/qwen/openrouter), but `call()`
+**only actually implements `callOpenRouter` and `callKimi`**; the other four silently fall through to OpenRouter or fail.
+This is the widest gap between DESIGN §5.4 "stay model-agnostic" and OpenScience's "model neutrality" — and **model neutrality happens to be OpenScience's most-cited selling point**.
 
-同时，tool calling（主线 A 的前提）、streaming（主线 B 的 SSE token 流）、
-外部工具注册（主线 C）、`response_format` JSON 模式（BACKLOG V12）、
-usage 记账（主线 A 的帧级账本）——**五件事共用同一个抽象**。
+At the same time, tool calling (a prerequisite for main line A), streaming (main line B's SSE token stream),
+external tool registration (main line C), `response_format` JSON mode (BACKLOG V12),
+and usage accounting (main line A's frame-level ledger) — **all five things share the same abstraction**.
 
 ```
 backend/src/llm/
   types.ts            # ChatMessage(+tool role) / ToolSpec / ToolCall / Usage / LlmResponse
-  router.ts           # 门面：模型名 → provider adapter；保留现有 call() 签名向后兼容
+  router.ts           # Facade: model name → provider adapter; keeps the existing call() signature backward compatible
   providers/
-    registry.ts       # provider 声明表：baseUrl / envKey / 能力位（capabilities 自描述的数据源）
-    openai_compat.ts  # 一套代码覆盖 openai / deepseek / qwen / kimi / openrouter /
-                      # ollama / vLLM / 任意自建 baseUrl —— 「模型中立」的真正落点
-    anthropic.ts      # 原生 messages API（tool_use / tool_result 形状与 OpenAI 不同，必须独立）
-  budget.ts           # 预算句柄：token / 成本 / 调用数上限，跨子代理传递
+    registry.ts       # provider declaration table: baseUrl / envKey / capability bits (the data source behind capabilities self-description)
+    openai_compat.ts  # one codebase covering openai / deepseek / qwen / kimi / openrouter /
+                      # ollama / vLLM / any self-hosted baseUrl — the real anchor point of "model neutrality"
+    anthropic.ts      # native messages API (tool_use / tool_result shape differs from OpenAI, must be separate)
+  budget.ts           # budget handle: token / cost / call-count caps, passed across subagents
 ```
 
 ```ts
-// types.ts —— 关键设计在于「失败时没有内容可用」
+// types.ts —— the key design point is "no content available on failure"
 export type ChatMessage =
   | { role: "system" | "user"; content: string }
   | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
@@ -164,18 +164,18 @@ export interface CallOptions {
   model?: string;
   tools?: ToolSpec[];
   toolChoice?: "auto" | "none" | { name: string };
-  responseFormat?: "text" | "json_object" | { jsonSchema: JsonSchema };  // BACKLOG V12 根治
-  timeoutMs?: number;          // 无默认值不许调用（D-2 的强制点）
-  maxRetries?: number;         // 仅对 retryable 错误
+  responseFormat?: "text" | "json_object" | { jsonSchema: JsonSchema };  // fixes BACKLOG V12 at the root
+  timeoutMs?: number;          // calling without a default is not allowed (D-2's enforcement point)
+  maxRetries?: number;         // only for retryable errors
   signal?: AbortSignal;
   budget?: BudgetHandle;
-  onDelta?: (chunk: string) => void;   // 流式；不传即非流式（主线 B 的 SSE 接这里）
+  onDelta?: (chunk: string) => void;   // streaming; if not passed, non-streaming (main line B's SSE hooks in here)
 }
 
 export interface LlmResponse {
   ok: boolean;
   provider: string; model: string;
-  /** ok=false 时**恒为空串**。错误只在 error 字段——F-2 的类型层根治 */
+  /** always the empty string when ok=false. Errors live only in the error field — the type-level fix for F-2 */
   content: string;
   toolCalls: ToolCall[];
   usage: { inputTokens: number; outputTokens: number; costUsd: number | null };
@@ -184,26 +184,26 @@ export interface LlmResponse {
 }
 ```
 
-**provider 能力位**随 `capabilities --json` 透出：
-`{ toolCalling, jsonMode, streaming, usageReported }`——外部 agent 在选模型**之前**就知道
-这个模型能不能跑 tool loop，而不是跑到一半发现不支持。这条与 P9 的 `caveat` 字段同哲学。
+**Provider capability bits** are surfaced via `capabilities --json`:
+`{ toolCalling, jsonMode, streaming, usageReported }` — an external agent knows **before** choosing a model
+whether it can run a tool loop, instead of finding out halfway through that it can't. This follows the same philosophy as P9's `caveat` field.
 
-**本地模型兜底**（主线 B 的免 key 路径，学 OpenScience「本地端点永远 BYOK 不挡」）：
-`config.json` 支持 `providers.local = { baseUrl, model, apiKey?: null }`；
-`spark-research doctor` 主动探测 `localhost:11434`（Ollama）并在向导里提示。
+**Local-model fallback** (main line B's key-free path, following OpenScience's "local endpoints are never blocked from BYOK"):
+`config.json` supports `providers.local = { baseUrl, model, apiKey?: null }`;
+`spark-research doctor` actively probes `localhost:11434` (Ollama) and surfaces this in the wizard.
 
-**成本表**：`registry.ts` 内置各模型单价（可被 config 覆盖），拿不到 usage 时
-`costUsd: null` 并标 `usageUnavailable` ——**不填 0 冒充免费**（诚实记录文化的延伸）。
+**Cost table**: `registry.ts` has built-in per-model prices (overridable via config); when usage can't be obtained,
+`costUsd: null` is set along with `usageUnavailable` — **never fill in 0 to pretend it's free** (an extension of the culture of honest disclosure).
 
 ---
 
-### 4.2 P12 · AgentToolBus + 真子代理（主线 A 第一步）
+### 4.2 P12 · AgentToolBus + real subagents (main line A, step one)
 
-#### 4.2.1 ToolBus：把 P9 已建好的管道接通
+#### 4.2.1 ToolBus: wiring up the pipe that P9 already built
 
-P9 的 `McpToolRunner`（`backend/src/mcp/server.ts`）已经是一条**进程内的统一工具总线**——
-每个工具就是对 P7 HTTP app 的一次 `app.fetch()`，CLI/HTTP/UI/MCP 四入口共享同一套 service 层。
-**主线 A 不造新轮子，只在它外面套三层：授权、预算、审计。**
+P9's `McpToolRunner` (`backend/src/mcp/server.ts`) is already a **unified in-process tool bus** —
+every tool is just one `app.fetch()` call against the P7 HTTP app, with CLI/HTTP/UI/MCP all sharing the same service layer through four entry points.
+**Main line A doesn't reinvent the wheel — it just wraps three layers around it: authorization, budget, audit.**
 
 ```
 backend/src/agents/toolbus.ts
@@ -211,154 +211,154 @@ backend/src/agents/toolbus.ts
 
 ```ts
 export interface ToolBusOptions {
-  runner: McpToolRunner;        // P9 已有
-  grants: string[];             // 白名单工具名 —— permit set 的第一个真正消费方（AD-2 兑现）
-  budget: BudgetLedger;         // 调用数 / 墙钟 / token 上限
-  audit: (e: ToolAuditEntry) => void;   // 每次调用落一条执行记录
+  runner: McpToolRunner;        // already exists from P9
+  grants: string[];             // whitelisted tool names — the first real consumer of the permit set (making good on AD-2)
+  budget: BudgetLedger;         // caps on call count / wall-clock / tokens
+  audit: (e: ToolAuditEntry) => void;   // one execution record logged per call
   timeoutMs: number;
-  extraTools?: ExternalToolSpec[];      // 主线 C：外部 MCP server 注册进来的工具
+  extraTools?: ExternalToolSpec[];      // main line C: tools registered by an external MCP server
 }
 
 export class AgentToolBus {
-  /** 给 LLM 的 tools 定义。与 capabilities --json / MCP server **同源**（MCP_TOOLS），不另写一份 */
+  /** tools definition handed to the LLM. **Same source** as capabilities --json / the MCP server (MCP_TOOLS) — not a separate copy */
   specs(): ToolSpec[];
   async call(name: string, args: Record<string, unknown>): Promise<ToolOutcome>;
 }
 ```
 
-**三条硬规则**（都是可对抗测试的）：
+**Three hard rules** (all adversarially testable):
 
-1. **未授权工具 → 结构化拒绝，不抛异常**：
-   返回 `{ ok:false, denied:"not_granted", granted:[...] }`——模型读得懂并能改道，
-   而不是把一个异常堆栈塞回 context。
-2. **`MCP_WITHHELD` 的危险动作（`lab_approve` / `conclusion_review` / `project_archive`）
-   在 ToolBus 层同样拒绝**——**子代理永远不能自批准**。
-   这是 AD-6「人工审批门」从 HTTP 层扩展到 agent 层，也是 v0.3 唯一不可协商的红线。
-3. **每次调用落一条执行记录**（谁调的 / 参数摘要 / 耗时 / 结果规模 / 是否被拒）。
-   Claude Science 的帧级记账在 spark 里天然是**图上的节点**——见 §4.4。
+1. **An unauthorized tool → a structured rejection, not a thrown exception**:
+   returns `{ ok:false, denied:"not_granted", granted:[...] }` — something the model can read and route around,
+   rather than stuffing an exception stack trace back into context.
+2. **`MCP_WITHHELD` dangerous actions (`lab_approve` / `conclusion_review` / `project_archive`)
+   are likewise rejected at the ToolBus layer** — **a subagent can never approve its own work**.
+   This extends AD-6's "human approval gate" from the HTTP layer to the agent layer, and is v0.3's one non-negotiable red line.
+3. **One execution record is logged per call** (who called it / argument summary / duration / result size / whether it was rejected).
+   Claude Science's frame-level accounting is, in spark, naturally **a node on the graph** — see §4.4.
 
-#### 4.2.2 子代理：从裸 `llm.call` 到真 tool loop
+#### 4.2.2 Subagents: from bare `llm.call` to a real tool loop
 
 ```ts
-// backend/src/agents/subagent.ts（重写 sub_agent.ts）
+// backend/src/agents/subagent.ts (rewrite of sub_agent.ts)
 export interface SubAgentSpec {
   name: string;
   type: "explore" | "execute" | "review" | "lab" | "literature";
-  model: string;                 // 每类独立模型 —— DESIGN §5.4 的死字段终于有消费方
-  promptFile: string;            // agents/prompt/<type>.txt，不再内联在 TS 里
-  grants: string[];              // ToolBus 白名单
+  model: string;                 // an independent model per type — DESIGN §5.4's dead field finally has a consumer
+  promptFile: string;            // agents/prompt/<type>.txt, no longer inlined in TS
+  grants: string[];              // ToolBus whitelist
   budget: { maxToolCalls: number; maxTokens: number; maxWallMs: number };
-  readOnly: boolean;             // review = true，硬约束（只读工具集 + 拒绝写工具）
+  readOnly: boolean;             // review = true, a hard constraint (read-only tool set + rejects write tools)
 }
 
 export interface SubAgentResult {
   finalText: string;
   toolCalls: ToolAuditEntry[];
   usage: Usage;
-  /** done | budget | timeout | denied | error —— **预算耗尽 ≠ 完成**，必须回流 */
+  /** done | budget | timeout | denied | error —— **budget exhaustion ≠ completion**, it must flow back */
   stopReason: StopReason;
 }
 ```
 
-循环：`llm.call(messages, {tools: bus.specs()})` → 有 `toolCalls` 则（受限并发）执行
-→ 结果以 `role:"tool"` 消息回灌 → 再调 → 直到无 tool call 或触预算。
+Loop: `llm.call(messages, {tools: bus.specs()})` → if there are `toolCalls`, execute them (with bounded concurrency)
+→ feed results back as `role:"tool"` messages → call again → repeat until there are no tool calls or the budget is hit.
 
-**默认 grants（安全默认值）**：
+**Default grants (secure-by-default)**:
 
-| 子代理 | grants | 刻意不给 |
+| Subagent | grants | deliberately not granted |
 |---|---|---|
-| explore | `lit_search` `lit_list` `lit_read_cards` `records_timeline` `record_get` | 一切写入 |
-| literature | explore 全套 + `lit_add` `lit_export` `lit_review_draft` | 实验与湿域 |
-| execute | `exp_design` `exp_run` `exp_list` `task_status` `kernel_exec`(新增) | 湿域、审批 |
-| lab | `lab_compile` `lab_status` | **`lab_approve` / `lab_simulate`——执行必须人批** |
-| review | 只读：`record_get` `records_timeline` `conclusion_list` `conclusion_get` `report_export` | 一切写入与执行 |
+| explore | `lit_search` `lit_list` `lit_read_cards` `records_timeline` `record_get` | all writes |
+| literature | full explore set + `lit_add` `lit_export` `lit_review_draft` | experiments and the wet-lab domain |
+| execute | `exp_design` `exp_run` `exp_list` `task_status` `kernel_exec` (new) | wet-lab domain, approvals |
+| lab | `lab_compile` `lab_status` | **`lab_approve` / `lab_simulate` — execution must be human-approved** |
+| review | read-only: `record_get` `records_timeline` `conclusion_list` `conclusion_get` `report_export` | all writes and execution |
 
-#### 4.2.3 swarm 的处置：删除
+#### 4.2.3 Disposition of swarm: delete it
 
-`grep` 复核：`agents/swarm.ts` 在生产代码中**零调用方**，仅 `tests/unit/swarm.test.ts` 引用；
-`dependsOn` 未实现；`decompose` 是三条正则。
+`grep` re-verification: `agents/swarm.ts` has **zero callers** in production code, referenced only by `tests/unit/swarm.test.ts`;
+`dependsOn` is unimplemented; `decompose` is three regexes.
 
-**决定：删除 `swarm.ts` / `swarm_types.ts` 及其测试**，并发能力由 ToolBus 的受限并发池提供。
-理由与 P8 删 `compute/providers.ts` 完全同构——「留着两套『提交任务』抽象只会让下一个人选错」。
-README 中的「100 并发 swarm」宣传语在 D-12 的叙事门禁下也必须同步撤下。
+**Decision: delete `swarm.ts` / `swarm_types.ts` and their tests**; concurrency capability is provided by ToolBus's bounded concurrency pool.
+The reasoning is structurally identical to P8's deletion of `compute/providers.ts` — "keeping two 'submit a task' abstractions around only makes the next person pick the wrong one."
+The "100 concurrent swarm" marketing line in the README must likewise come down, under the D-12 narrative gate.
 
 ---
 
-### 4.3 P13 · Research Contract + Replan（主线 A 第二步，**超越点**）
+### 4.3 P13 · Research Contract + Replan (main line A, step two, **an overtaking point**)
 
-#### 4.3.1 完成判定：学 OpenScience 的形，用 spark 的魂
+#### 4.3.1 Completion judgment: borrow OpenScience's form, keep spark's soul
 
-OpenScience 的完成边界是 `contract.stages.every(status === 'completed')`——形态对，
-但 stage 的 `completed` **由 agent 自报**。spark 有证据图，可以做得更硬：
+OpenScience's completion boundary is `contract.stages.every(status === 'completed')` — the form is right,
+but the stage's `completed` **is self-reported by the agent**. spark has an evidence graph and can make this harder:
 
 ```ts
 // backend/src/agents/contract.ts
 export interface ContractStage {
   id: string;
   description: string;
-  /** 完成判据不问模型，问图：零 IO 之外只读证据图的纯查询 */
+  /** the completion criterion doesn't ask the model, it asks the graph: a zero-IO, read-only query against the evidence graph */
   check(q: EvidenceQuery): StageStatus;
 }
 export interface StageStatus { done: boolean; evidence: string[]; reason: string }
 ```
 
-以 `literature-review` 契约为例：
+Taking the `literature-review` contract as an example:
 
-| stage | 确定性判据（对证据图的查询） |
+| stage | deterministic criterion (query against the evidence graph) |
 |---|---|
-| `searched` | 本 session 新增 `paper` record ≥ 1 |
-| `read_cards` | 进入综述的每篇 paper 都有对应 `reading` record（集合包含关系） |
-| `citations_verified` | 存在 `citation-integrity` 的 review 记录，且零 hard finding |
+| `searched` | at least 1 new `paper` record was added in this session |
+| `read_cards` | every paper included in the review has a corresponding `reading` record (a set-inclusion relationship) |
+| `citations_verified` | a `citation-integrity` review record exists, with zero hard findings |
 
-> **写进 DESIGN 作 AD-10**：*任务完成判定必须由确定性代码对证据图查询得出，
-> 不得由模型自报。* 这是 AD-8（模型给结论处必有确定性约束层）在**编排层**的直接推论——
-> 两个参照系都没有等价物：Claude Science 是状态机驱动但判据在模型侧，
-> OpenScience 是 stage 自报。
+> **To be written into DESIGN as AD-10**: *task completion must be determined by deterministic code querying the evidence graph,
+> and must not be self-reported by the model.* This is the direct corollary, at the **orchestration layer**, of AD-8 (wherever the model draws a conclusion, there must be a deterministic constraint layer) —
+> neither reference system has an equivalent: Claude Science is state-machine-driven but the criterion sits on the model side,
+> OpenScience relies on stage self-reporting.
 
-#### 4.3.2 观察反馈循环：从单发管线到真 agent
+#### 4.3.2 Observe-feedback loop: from a one-shot pipeline to a real agent
 
 ```
 round = 0
 while round < maxRounds:
     plan         = planner(goal, contract.progress(), lastObservations)
-    outcomes     = execute(plan)              # 子代理 / ToolBus
-    observations = distill(outcomes)          # 结构化对象，不是 200 字符截断
+    outcomes     = execute(plan)              # subagent / ToolBus
+    observations = distill(outcomes)          # a structured object, not a truncated 200-character string
     if contract.allDone(): break
     if noProgress(2 rounds): break("no_progress")
     round += 1
 ```
 
-两处关键设计：
+Two key design points:
 
-- **`distill` 产出结构化 observation**（命中数 / 新增 record id / 错误类型 / stopReason），
-  不再是 `output.slice(0,200)` 塞进 summary。**任务产出必须能回流决策**，
-  这是评论「措辞过强的 research agent」的正面回应。
-- **`noProgress` 是确定性判据**：连续两轮证据图无新增节点 → 停止并如实报告
-  「N 轮无进展，契约未完成的 stage 是 X」。**宁可报未完成，不烧钱空转、不假装完成**。
-  这条护栏两个参照系都没有明说。
+- **`distill` produces a structured observation** (hit count / newly added record ids / error type / stopReason),
+  no longer `output.slice(0,200)` stuffed into the summary. **Task output must be able to flow back into decisions**;
+  this is a direct response to the review's comment about the "overstated research agent."
+- **`noProgress` is a deterministic criterion**: two consecutive rounds with no new nodes in the evidence graph → stop and honestly report
+  "N rounds with no progress; the stage of the contract that remains unfinished is X." **It is better to report incompleteness than to burn money spinning idle, or pretend to be done**.
+  Neither reference system spells out this guardrail.
 
-#### 4.3.3 帧级记账：落进图，而不是另起一张表
+#### 4.3.3 Frame-level accounting: land it in the graph, not a separate table
 
-Claude Science 的 `frames` 表带 `model`/`effort`/token/`total_cost`；
-OpenScience 有 harness `fingerprint`。spark 已有证据图——**记账直接落图**：
+Claude Science's `frames` table carries `model`/`effort`/token/`total_cost`;
+OpenScience has a harness `fingerprint`. spark already has an evidence graph — **the accounting lands directly in the graph**:
 
-新增第 9 类 record `agent_run`：
+A new, 9th record kind, `agent_run`:
 
 ```
 { kind: "agent_run",
   agent, model, provider,
-  systemHash, promptHash,              // ← 同时补上 OpenScience 的「harness 指纹」缺口
+  systemHash, promptHash,              // ← also fills OpenScience's "harness fingerprint" gap
   usage: { inputTokens, outputTokens, costUsd | null, usageUnavailable? },
   toolCalls: n, stopReason, parentRunId }
 ```
-边：`derives_from`（父 run → 子 run）；产物 record 挂 `agent_run` 的 id。
+Edge: `derives_from` (parent run → child run); artifact records attach to the `agent_run`'s id.
 
-**一石三鸟**：
-1. Claude Science 的帧级成本账 → 有了，且**可被 `report` / lineage / UI 时间线免费查询**（它们本就读图）；
-2. OpenScience 的模型指纹可复现性 → 有了，novelty 报告与精读卡终于能回答「哪个模型、哪版 prompt 产的」；
-3. 证据图第 15 个 record 类型的边际成本远低于第 5 个——架构复利在这里第一次兑现给 agent 层。
+**Three birds, one stone**:
+1. Claude Science's frame-level cost accounting → now exists, and **is queryable for free by `report` / lineage / the UI timeline** (they already read the graph);
+2. OpenScience's model-fingerprint reproducibility → now exists; the novelty report and reading cards can finally answer "which model, which prompt version produced this";
+3. The marginal cost of the evidence graph's 15th record kind is far lower than the 5th — the architecture's compounding return finally pays off for the agent layer here.
 
-#### 4.3.4 findings 状态机：吸收 Claude Science 唯一明显领先的地方
+#### 4.3.4 The findings state machine: absorbing Claude Science's one clear lead
 
 ```
 backend/src/reviewer/findings_store.ts
@@ -367,388 +367,387 @@ findings(id, project, session, target, checker, severity, fingerprint,
          evidence, note, reflagCount, firstSeenAt, lastSeenAt, resolvedBy)
 ```
 
-- reviewer 每轮按 `(checker, target, fingerprint)` upsert 去重
-- CLI：`spark-research review findings [--open]` / `mark-addressed <id> --note "..."`
-- **复核闭环**：下一轮仍命中 → `reflagged` + `reflagCount++`；不再命中 → `resolved`
-- soft finding 依旧不打断会话，但 `findings --open` 就是 Claude 的 `host.findings()` 等价物
-  ——补上评审指出的「soft finding 缺主动查入口」
+- the reviewer upserts and deduplicates on `(checker, target, fingerprint)` every round
+- CLI: `spark-research review findings [--open]` / `mark-addressed <id> --note "..."`
+- **re-verification closed loop**: if the next round still hits → `reflagged` + `reflagCount++`; if it no longer hits → `resolved`
+- a soft finding still does not interrupt the session, but `findings --open` is now the equivalent of Claude's `host.findings()`
+  — filling the review's noted gap of "soft findings have no active query entry point"
 
 ---
 
-### 4.4 P14 · 上手性追平（主线 B）
+### 4.4 P14 · Closing the onboarding gap (main line B)
 
-| 项 | 现状 | v0.3 目标 | 对标 |
+| Item | current state | v0.3 target | benchmark |
 |---|---|---|---|
-| 安装 | clone + `bun install` + uv + 手装 openmm/opentrons | `npx spark-research` / 单二进制（`bun build --compile` 脚本**已存在** package.json:12）/ Homebrew tap / curl 一键 | OpenScience `npx synsci` |
-| 默认入口 | `bun run dev`（面向开发者） | `spark-research` 零参数 → 起 server + 开浏览器；CLI 降为高级入口 | OpenScience 默认行为 |
-| Python 依赖 | 重且必装 | **三档分层**：`core`（零 Python）/ `science`（openmm）/ `lab`（opentrons）；首次用到才提示装哪条命令；`spark-research doctor` 报告缺哪层 | pyref 已是零依赖样板 |
-| 首跑 | 没 key 时整条链路「成功」返回错误文本 | 闸门 D-4 已根治；`spark-research init` 向导：建项目 → 探测 provider（含本地 Ollama）→ 跑一次真实检索 → 展示证据图 → 打印下一步三条命令 | — |
-| 零 key 体验 | 无 | `spark-research demo`：fixture 驱动的离线示例项目，**零网络零 key**，30 秒看到证据图 + 报告全貌 | — |
-| 免 key 模型 | 无 | P11 的 `providers.local`（Ollama / OpenAI-compatible 端点），BYOK 永不挡 | OpenScience PR #135 口径 |
-| Web 一等公民 | UI 是投影，novelty / dry-exp 要回 CLI | UI 内直接发起 novelty check / 干实验；长任务句柄落盘（V11）；**SSE token 流**（接 P11 的 `onDelta`） | OpenScience workspace |
+| Installation | clone + `bun install` + uv + manually installing openmm/opentrons | `npx spark-research` / single binary (the `bun build --compile` script **already exists**, package.json:12) / Homebrew tap / curl one-liner | OpenScience `npx synsci` |
+| Default entry point | `bun run dev` (developer-facing) | `spark-research` zero-arg → starts the server + opens the browser; the CLI becomes an advanced entry point | OpenScience's default behavior |
+| Python dependencies | heavy and mandatory | **three tiers**: `core` (zero Python) / `science` (openmm) / `lab` (opentrons); prompt for which command to install only when first needed; `spark-research doctor` reports which tier is missing | pyref is already a zero-dependency template |
+| First run | when no key is present, the whole chain "succeeds" while returning error text | already fixed at the root by Gate D-4; `spark-research init` wizard: create a project → probe providers (including local Ollama) → run one real search → display the evidence graph → print the next three commands | — |
+| Key-free experience | none | `spark-research demo`: a fixture-driven offline sample project, **zero network, zero key**, see the full evidence graph + report in 30 seconds | — |
+| Key-free model | none | P11's `providers.local` (Ollama / OpenAI-compatible endpoint); BYOK is never blocked | OpenScience PR #135 |
+| Web as a first-class citizen | the UI is a projection; novelty / dry experiments require going back to the CLI | initiate novelty checks / dry experiments directly within the UI; long-running task handles persisted to disk (V11); **SSE token streaming** (hooks into P11's `onDelta`) | OpenScience workspace |
 
 ---
 
-### 4.5 P15 · 扩展面（主线 C，**换赛道的一步**）
+### 4.5 P15 · The extension surface (main line C, **a change of track**)
 
-OpenScience 的扩展优势是「46 connector + 插件运行时 + OpenAPI SDK + LSP + MCP client + 技能包目录」。
-**正面拼数量必败**（评审 §10.3 已断言）。v0.3 换赛道：
-**不比谁内置得多，比谁让用户自助加得快、且加完可信。**
+OpenScience's extensibility advantage is "46 connectors + a plugin runtime + an OpenAPI SDK + LSP + an MCP client + a skill-pack catalog."
+**Competing head-on on quantity is a losing game** (already asserted in the review's §10.3). v0.3 changes track:
+**Not who ships more built in, but who lets users add their own faster, and trust what they added once it's added.**
 
-#### 4.5.1 三种装载强度
+#### 4.5.1 Three loading strengths
 
 ```
 ~/.spark-research/extensions/<name>/
-  extension.json     # manifest：kind / name / version / entry / requires / grants
-  connector.json     # kind=connector 时的**声明式定义**（零 TS 代码）
-  index.ts           # kind=skill|platform|backend|rule 时的实现
-  SKILL.md           # P9 的 frontmatter 规范直接复用
-  tests/             # 扩展自带验收用例（ext verify 会跑）
+  extension.json     # manifest: kind / name / version / entry / requires / grants
+  connector.json     # the **declarative definition** when kind=connector (zero TS code)
+  index.ts           # the implementation when kind=skill|platform|backend|rule
+  SKILL.md           # reuses P9's frontmatter spec directly
+  tests/             # verification cases shipped with the extension (run by ext verify)
 ```
 
-| 强度 | 形态 | 覆盖 | 安全性 |
+| Strength | Form | Coverage | Security |
 |---|---|---|---|
-| ① **声明式 connector（推荐默认）** | `connector.json`：baseUrl / tools / 参数映射 / 响应归一化映射（受限 JSONPath 子集） | 绝大多数 REST 文献与数据库源 | **不执行任意代码**，只跑受限映射；URL 走出站白名单校验（禁 `file://`、禁内网段，防 SSRF） |
-| ② **TS 扩展** | skill / `SimulationPlatform` / `WetLabBackend` / 安全门规则 | 需要真逻辑的场景 | 同 UID 代码执行 → 装载需显式 `--trust`，首次打印 sha256 指纹并要求确认，manifest 记录指纹 |
-| ③ **外部 MCP server 接入（反向 MCP client）** | `spark-research ext add-mcp <name> --cmd "..."` | 一次性接入整个 MCP 生态 | 外部工具注册进 ToolBus 与 `capabilities`，**每次调用同样落执行记录** |
+| ① **Declarative connector (recommended default)** | `connector.json`: baseUrl / tools / argument mapping / response-normalization mapping (a restricted JSONPath subset) | the vast majority of REST literature and database sources | **executes no arbitrary code**, only runs restricted mappings; outbound URLs pass a whitelist check (`file://` forbidden, private IP ranges forbidden, guarding against SSRF) |
+| ② **TS extension** | skill / `SimulationPlatform` / `WetLabBackend` / safety-gate rules | scenarios that need real logic | same-UID code execution → loading requires explicit `--trust`, the sha256 fingerprint is printed and confirmation required the first time, the fingerprint is recorded in the manifest |
+| ③ **External MCP server integration (reverse MCP client)** | `spark-research ext add-mcp <name> --cmd "..."` | one-time integration with the entire MCP ecosystem | external tools are registered into ToolBus and `capabilities`; **every call likewise produces an execution record** |
 
-> ③ 是相对 OpenScience 的**净增益**：它有 MCP client，但外部工具调用不进 provenance；
-> spark 因为 ToolBus 统一审计，外部工具的每次调用天然落进证据图。
+> ③ is a **net gain** relative to OpenScience: it has an MCP client, but external tool calls don't enter its provenance record;
+> because spark's ToolBus provides unified auditing, every call to an external tool naturally lands in the evidence graph.
 
-#### 4.5.2 契约化验收：spark 独有的设计
+#### 4.5.2 Contract-based acceptance: spark's unique design
 
 ```
 spark-research ext verify <path>
 ```
 
-| 扩展类型 | 跑什么 |
+| Extension type | What runs |
 |---|---|
-| connector | Connector 契约测试：参数映射正确性、**并发不变式**（D-1 的回归套件直接复用）、凭据不落盘、错误消息不回显响应体 |
-| platform | **直接复用 P5 已有的 `SimulationPlatform` 契约测试套件**（prepare/submit/poll/collect）——AD-4 当初「两个实现验证接口」的投资在这里第二次回本 |
-| rule | 纯函数性检查：零 IO、确定性（同输入两次同输出）、无外部状态 |
-| skill | P9 的 frontmatter schema 校验 + 声明的 e2e 存在且能跑（AD-5 的机器化） |
+| connector | Connector contract tests: correctness of argument mapping, **concurrency invariants** (directly reuses D-1's regression suite), credentials never persisted to disk, error messages don't echo the response body |
+| platform | **directly reuses the existing P5 `SimulationPlatform` contract test suite** (prepare/submit/poll/collect) — AD-4's original investment in "two implementations validate an interface" pays off a second time here |
+| rule | pure-function checks: zero IO, deterministic (same input twice, same output), no external state |
+| skill | P9's frontmatter schema validation + verifying the declared e2e exists and runs (a mechanization of AD-5) |
 
-> **写进 DESIGN 作 AD-11**：*扩展「能装上」不算装好，「过得了对应契约测试」才算装好。*
-> 这把 AD-5（技能必须有 e2e 才算完成）从**开发侧纪律**变成了**运行时门禁**，
-> 也是对 OpenScience「313 技能质量参差」的结构性回答——
-> 我们不限制数量，我们限制**未经验证的数量**。
+> **To be written into DESIGN as AD-11**: *for an extension, "it loads" doesn't count as "it works" — only "it passes its contract tests" counts as working.*
+> This turns AD-5 (a skill must have an e2e to count as done) from a **development-side discipline** into a **runtime gate**,
+> and is also a structural answer to OpenScience's "313 skills of uneven quality" —
+> we're not limiting the count, we're limiting the count of **unverified** ones.
 
-#### 4.5.3 扩展的凭据与权限边界（AD-2 的延伸）
+#### 4.5.3 Extension credential and permission boundaries (an extension of AD-2)
 
-- 扩展**默认拿不到任何凭据**；需在 manifest 声明 `requires.credentials: ["<id>"]`，
-  用户执行 `ext grant <name>` 后才由 CredentialStore 代访问——**值本体仍不出 daemon**。
-- 扩展的 ToolBus grants 同样 manifest 声明 + 用户批准，与子代理走同一套授权代码。
-- 扩展抛异常/崩溃**不得拖垮主进程**：装载与调用都在错误边界内，失败降级为
-  「该扩展不可用 + 原因」，并在 `capabilities` 里如实标 `status: "failed"`。
+- Extensions **have no access to any credentials by default**; they must declare `requires.credentials: ["<id>"]` in the manifest,
+  and only after the user runs `ext grant <name>` does the CredentialStore proxy access on their behalf — **the value itself still never leaves the daemon**.
+- Extensions' ToolBus grants likewise require manifest declaration + user approval, running through the same authorization code path as subagents.
+- An extension throwing an exception / crashing **must not take down the main process**: both loading and invocation are inside an error boundary; on failure it degrades to
+  "this extension is unavailable + reason," and honestly marks `status: "failed"` in `capabilities`.
 
 ---
 
-### 4.6 P16 · 文献域补强（附线 E，兼作主线 C 的验收）
+### 4.6 P16 · Literature-domain hardening (side line E, doubles as main line C's acceptance test)
 
-评审判定：**综述环节三者第一，检索广度第三**。两件工程即可补齐。
+Review verdict: **first among the three in the literature-review step, third in search breadth**. Two pieces of engineering close the gap.
 
-| # | 项 | 做法 | 备注 |
+| # | Item | Approach | Notes |
 |---|---|---|---|
-| E-1 | **arXiv / PubMed 接入**（BACKLOG V1） | **用 §4.5 的声明式 connector manifest 实现**，不写 TS | 这是主线 C 最硬的验收：*如果两个最基础的源不能用 manifest 加进来，扩展机制就是失败的* |
-| E-2 | citation judge 降本 | 按 `(key, sentence hash)` 去重 + 并发限流 + 失败重试一次 | 30 引用综述从 30 次串行往返砍一个量级；配合 P11 的 `response_format` 根治 V12 |
-| E-3 | `mergeAuthors` 按下标配对 affiliation（张冠李戴，已复现） | 改按归一化姓名配对；完全同名补年份闸 | 元数据可信是文献库立身之本 |
-| E-4 | S2「无 key 自动降级」承诺未实现 | 补凭据路径（`apiKeyRequired` 改真值）；无 key 时不再每次白撞 429 | BACKLOG D2 |
-| E-5 | CJK 元数据 | bibtex key 保 Unicode（`\p{Script=Han}`）；中文标题 bigram 去重 | AMiner 中文优势才兑现 |
-| E-6 | 删除论文留孤儿 record | 级联清理或标 `retracted` | 证据图不撒谎（配合 lineage 幻 id 返 404） |
+| E-1 | **arXiv / PubMed integration** (BACKLOG V1) | **implemented using the declarative connector manifest from §4.5**, no TS written | this is main line C's hardest acceptance test: *if the two most basic sources can't be added via a manifest, the extension mechanism has failed* |
+| E-2 | reduce citation-judge cost | dedup by `(key, sentence hash)` + concurrency throttling + one retry on failure | cuts a 30-citation review from 30 serial round trips by an order of magnitude; combined with P11's `response_format` this fixes V12 at the root |
+| E-3 | `mergeAuthors` pairs affiliations by index (mismatched attribution has already been reproduced) | switch to pairing by normalized name; add a year gate for exact-name matches | metadata trustworthiness is the foundation of a literature library |
+| E-4 | S2's "automatic downgrade without a key" promise is unimplemented | add the credential path (make `apiKeyRequired` a true value); no longer repeatedly hits 429 when there's no key | BACKLOG D2 |
+| E-5 | CJK metadata | keep Unicode in bibtex keys (`\p{Script=Han}`); bigram dedup for Chinese titles | this is where AMiner's Chinese-language advantage finally pays off |
+| E-6 | deleting a paper leaves orphan records | cascade cleanup or mark as `retracted` | the evidence graph must not lie (paired with lineage returning 404 for phantom ids) |
 
 ---
 
-## 五、验证方案
+## V. Verification plan
 
-> 项目已有的「对抗测试优先于 happy path」「真实跑一次→录制→CI 永远回放」两条原则不变。
-> v0.3 **新增四个测试层**，都是「单线程 happy path 永远测不出」的维度。
+> The project's existing principles — "adversarial tests before happy path," "record one real run → CI replays it forever" — remain unchanged.
+> v0.3 **adds four new test layers**, all covering dimensions that "single-threaded happy-path tests can never catch."
 
-### 5.1 新增测试层
+### 5.1 New test layers
 
-| 层 | 目录 | 内容 | 钉死什么 |
+| Layer | Directory | Content | What it locks down |
 |---|---|---|---|
-| **并发对抗** | `tests/concurrency/` | ① 单 connector 实例 100 并发混合工具 → 参数映射与串行逐位一致（D-1）② 并发 N 次 `/simulate` 同一获批协议 → 恰好 1 次执行、其余 409（D-9）③ 两 session 交错执行 → kernel 互不摧毁（D-5） | 评审 P0 与「一次批准多次执行」 |
-| **挂起/超时** | `tests/timeout/` | 注入永不响应的 HttpClient / LLM / kernel，断言 CLI / HTTP / MCP / 子代理四个入口都在 N 秒内返回可见 `timeout` 错误 | E-2「任一上游挂起 = 永久卡死」 |
-| **Agent loop 对抗** | `tests/unit/agent_loop/` | FakeLLM 脚本化 tool call 序列：① 越权工具被结构化拒绝 ② 预算耗尽 → `stopReason:"budget"` 而非 `done` ③ tool 结果真回灌（断言第二轮 prompt 含第一轮结果）④ **子代理调 `lab_approve` 必被拒**（红线） ⑤ LLM 返回失败 → 任务 `ok:false` 且 summary 不含错误文本（D-4） | 主线 A 的全部承诺 |
-| **扩展恶意矩阵** | `tests/unit/extensions/` | ① manifest 声明 A 却调 B 工具 → 拒 ② 未 grant 却取凭据 → 拒 ③ 声明式 connector 里塞 `file://` / 内网地址 → 拒（SSRF） ④ 扩展抛异常 → 主进程存活、`capabilities` 标 `failed` ⑤ 未过 `ext verify` 的扩展装载时显式警告 | 主线 C 的安全边界 |
+| **Concurrency adversarial** | `tests/concurrency/` | ① 100 concurrent mixed tool calls against a single connector instance → argument mapping matches the serial result bit-for-bit (D-1) ② N concurrent `/simulate` calls against the same approved protocol → exactly 1 execution, the rest 409 (D-9) ③ two sessions executing interleaved → kernels don't destroy each other (D-5) | the review's P0 and "one approval, multiple executions" |
+| **Hang/timeout** | `tests/timeout/` | inject an HttpClient / LLM / kernel that never responds, assert all four entry points — CLI / HTTP / MCP / subagent — return a visible `timeout` error within N seconds | E-2 "any upstream hang = permanent stuck state" |
+| **Agent-loop adversarial** | `tests/unit/agent_loop/` | FakeLLM scripts a sequence of tool calls: ① an unauthorized tool is structurally rejected ② budget exhaustion → `stopReason:"budget"` rather than `done` ③ tool results are genuinely fed back in (assert the second-round prompt contains the first round's result) ④ **a subagent calling `lab_approve` must be rejected** (red line) ⑤ LLM returns failure → the task is `ok:false` and the summary contains no error text (D-4) | all of main line A's promises |
+| **Extension malice matrix** | `tests/unit/extensions/` | ① manifest declares A but calls tool B → rejected ② takes a credential without a grant → rejected ③ a declarative connector embeds `file://` / a private-network address → rejected (SSRF) ④ an extension throws an exception → main process survives, `capabilities` marked `failed` ⑤ loading an extension that hasn't passed `ext verify` produces an explicit warning | main line C's security boundary |
 
-### 5.2 确定性判据的对抗测试（AD-10 的自证）
+### 5.2 Adversarial tests for the deterministic criterion (self-proof of AD-10)
 
-- **伪造完成**：FakeLLM 自称「综述已完成」，但图上无 `reading` record → `contract.allDone()` 必须为 false。
-- **无进展停机**：连续两轮工具调用不产生新 record → 循环在第 2 轮停止，报告写明未完成的 stage。
-- **记账诚实**：provider 不回 usage 时，`costUsd` 为 `null` 且标 `usageUnavailable`，**不得填 0**。
+- **Fake completion**: FakeLLM claims "the review is complete," but there is no `reading` record in the graph → `contract.allDone()` must be false.
+- **No-progress stop**: two consecutive rounds of tool calls produce no new record → the loop stops at round 2, and the report states the stage that remains incomplete.
+- **Honest accounting**: when the provider doesn't return usage, `costUsd` is `null` and marked `usageUnavailable`, **must not be filled in as 0**.
 
-### 5.3 名实一致门禁（D-12，本次评审最大发现的根治）
+### 5.3 Narrative-implementation consistency gate (D-12, the root fix for this review's biggest finding)
 
-`tests/unit/narrative_parity.test.ts`：
-1. README / DESIGN 中每条能力声称 → `capabilities --json` 有对应条目，且 `status` 与实际注册表一致；
-2. **孤儿模块检测**：生产代码零调用方、仅被自身测试引用的模块 → CI 报错
-   （用删除前的 `swarm.ts` 当阴性对照，证明该测试真的能抓到）；
-3. 数字类声称（connector 数 / 技能数 / 端点数）由脚本生成，**不允许手写**。
+`tests/unit/narrative_parity.test.ts`:
+1. every capability claim in README / DESIGN → has a corresponding entry in `capabilities --json`, whose `status` matches the actual registry;
+2. **orphan-module detection**: a module with zero callers in production code, referenced only by its own tests → CI error
+   (uses `swarm.ts`, before its deletion, as a negative control, proving this test can really catch it);
+3. numeric claims (connector count / skill count / endpoint count) are generated by a script — **hand-writing them is not allowed**.
 
-> **写进 DESIGN 作 AD-12**：*对外声称的每一项能力必须机器可核。*
-> 评审说「越靠近可信度核心的代码质量越高，越靠近宣传语的代码越虚」——
-> 这条 AD 就是不让这句话在 v0.4 再成立一次。
+> **To be written into DESIGN as AD-12**: *every capability claimed externally must be machine-verifiable.*
+> The review's biggest finding was that "narrative runs ahead of implementation." Relying on people's self-discipline is not sustainable — it must be a gate.
 
-### 5.4 外部验收（版本级退出标准）
+### 5.4 External acceptance (version-level exit criteria)
 
-沿用 P9 已确立的「外部验收」形式，v0.3 加码：
+Continuing the "external acceptance" format already established in P9, v0.3 raises the bar further:
 
-1. **全新 Claude Code 会话（无本仓库上下文）**，仅凭 `npx spark-research mcp` + `llms.txt`，
-   完成：检索文献入库 → 建 idea → novelty check → **发起一次干实验并读回结论**。
-2. **干净机器（无 bun / 无 Python / 无 API key）**：`npx spark-research` →
-   `demo` 项目 30 秒内看到证据图与报告。
-3. **第三方视角加一个 connector**：按 `docs/EXTENDING.md` 用声明式 manifest 加一个
-   全新数据源并通过 `ext verify`，全程不改仓库源码——**由未参与开发的人执行**。
-4. `tests/concurrency/` 与 `tests/timeout/` 全绿；现有用例零回归。
+1. **A brand-new Claude Code session (no context on this repo)**, using only `npx spark-research mcp` + `llms.txt`,
+   completes: search literature into the library → create an idea → run a novelty check → **launch one dry experiment and read back the conclusion**.
+2. **A clean machine (no bun / no Python / no API key)**: `npx spark-research` →
+   the `demo` project shows the evidence graph and report within 30 seconds.
+3. **A third-party perspective adds a connector**: following `docs/EXTENDING.md`, add a
+   brand-new data source using a declarative manifest and pass `ext verify`, without touching the repo's source code at all — **performed by someone who was not part of the development**.
+4. `tests/concurrency/` and `tests/timeout/` are all green; zero regressions in existing test cases.
 
 ---
 
-## 六、路线、排期与执行方式
+## VI. Roadmap, schedule, and execution approach
 
-### 6.0 排期单位说明（重要）
+### 6.0 A note on schedule units (important)
 
-**本方案不用「周」作单位。** v0.2 的实测节奏是：P0 设计定稿到 P9 收尾
-（18.6k 行后端 TS + 3.1k 前端 + 13.5k 行测试 + 655 用例）**在 2026-09-09 一天之内完成**，
-含一夜睡眠，实际工作时间约 15 小时。逐阶段墙钟：
+**This plan does not use "week" as a unit.** v0.2's measured pace was: from the final design of P0 to the wrap-up of P9
+(18.6k lines of backend TS + 3.1k frontend + 13.5k lines of tests + 655 test cases) **completed within a single day, 2026-09-09**,
+including one night's sleep, with roughly 15 hours of actual work time. Phase-by-phase wall clock:
 
 ```
-00:52 P0 设计  →  01:08 P1(16m)  →  01:40 P2(32m)  →  02:07 P3(27m)  →  02:43 P4(36m)
-      ⋯ 过夜 ⋯
-09:12 P5  →  10:01 P6(49m)  →  13:24 P7(3h23，56 端点 + SolidJS + Playwright)
-20:22 P8  →  21:33–22:09 P9 五个 commit(36m)
+00:52 P0 design  →  01:08 P1(16m)  →  01:40 P2(32m)  →  02:07 P3(27m)  →  02:43 P4(36m)
+      ⋯ overnight ⋯
+09:12 P5  →  10:01 P6(49m)  →  13:24 P7(3h23, 56 endpoints + SolidJS + Playwright)
+20:22 P8  →  21:33–22:09 P9 five commits(36m)
 ```
 
-在这个 tempo 下「周」是没有意义的刻度。**阶段量级一律用「会话」计**
-（一个会话 ≈ 一次完整的「范围确认 → 委派实现 → 跑测试 → 审代码 → 对照设计验收 → PR」循环，
-对应 P1–P9 的 30 分钟至 3 小时不等）。
+At this tempo, "week" is not a meaningful unit. **Phase scale is uniformly measured in "sessions"**
+(one session ≈ one complete cycle of "confirm scope → delegate implementation → run tests → review code → check against the design → PR,"
+corresponding to the 30 minutes to 3 hours seen across P1–P9).
 
-v0.3 比 v0.2 单位工作量更重（并发、新抽象层、更多对抗测试），
-但阶段数相当——**整体量级：2–4 个工作日**。
+v0.3 carries more work per unit than v0.2 (concurrency, new abstraction layers, more adversarial tests),
+but a comparable number of phases — **overall scale: 2–4 working days**.
 
-### 6.1 阶段表
+### 6.1 Phase table
 
-| 阶段 | 内容 | 量级 | 并行 lane | 主用模型 | 依赖 | 阶段门 |
+| Phase | Content | Scale | Parallel lanes | Primary model | Dependency | Phase gate |
 |---|---|---|---|---|---|---|
-| **P10** | 闸门 D：D-1…D-12 | 2–3 会话 | **4** | **Sonnet 5** | P9 合入 + `v0.2.0` tag | 并发/超时新套件全绿；655 用例零回归 |
-| **P11** | LLM Runtime v2 | 2 会话 | 3（接口先行后） | **Opus 5** | P10 | provider 矩阵契约测试；tool calling / JSON 模式 / 流式 / usage 各一条真实录制回放 |
-| **P12** | ToolBus + 真子代理；删 swarm | 2 会话 | 2 | **Opus 5** | P11 | Agent loop 对抗五条全过；README 宣传语与实现对齐（D-12 门禁） |
-| **P13** | contract + replan + 帧级记账 + findings 状态机 | 2 会话 | 2 | **Opus 5** | P12 | AD-10 对抗测试（伪造完成 / 无进展停机 / 记账诚实）全过 |
-| **P14** | 上手性：npx/单二进制/零参数 UI/向导/依赖分层/demo/本地模型/SSE 流 | 2 会话 | 2 | **Sonnet 5** | P11（流式） | 干净机器外部验收 ②通过 |
-| **P15** | 扩展装载 + 声明式 connector + MCP client + `ext verify` | 2 会话 | 2 | **Opus 5** | P12（ToolBus） | 恶意扩展矩阵全过；`EXTENDING.md` 三类示例 CI 全绿 |
-| **P16** | 文献域补强（arXiv/PubMed 走 manifest）+ 收口 + `v0.3.0` | 1–2 会话 | 3 | **Sonnet 5** | P15 | 外部验收 ①③④ 全过 |
+| **P10** | Gate D: D-1…D-12 | 2–3 sessions | **4** | **Sonnet 5** | P9 merged + `v0.2.0` tag | new concurrency/timeout suite all green; 655 test cases show zero regressions |
+| **P11** | LLM Runtime v2 | 2 sessions | 3 (interface-first) | **Opus 5** | P10 | provider matrix contract tests; one real recorded/replayed test each for tool calling / JSON mode / streaming / usage |
+| **P12** | ToolBus + real subagents; delete swarm | 2 sessions | 2 | **Opus 5** | P11 | all five agent-loop adversarial tests pass; README marketing copy matches implementation (D-12 gate) |
+| **P13** | contract + replan + frame-level accounting + findings state machine | 2 sessions | 2 | **Opus 5** | P12 | AD-10 adversarial tests (fake completion / no-progress stop / honest accounting) all pass |
+| **P14** | Onboarding: npx/single binary/zero-arg UI/wizard/tiered dependencies/demo/local model/SSE streaming | 2 sessions | 2 | **Sonnet 5** | P11 (streaming) | clean-machine external acceptance ② passes |
+| **P15** | Extension loading + declarative connector + MCP client + `ext verify` | 2 sessions | 2 | **Opus 5** | P12 (ToolBus) | malicious-extension matrix all pass; all three `EXTENDING.md` examples green in CI |
+| **P16** | Literature-domain hardening (arXiv/PubMed via manifest) + close-out + `v0.3.0` | 1–2 sessions | 3 | **Sonnet 5** | P15 | external acceptance ①③④ all pass |
 
-**关键路径**：P10 → P11 → P12 → P13 → P16。
-**P14 与 P12/P13 并行**（只依赖 P11 的流式），**P15 与 P13 并行**（只依赖 P12 的 ToolBus）——
-两者都不占关键路径。
+**Critical path**: P10 → P11 → P12 → P13 → P16.
+**P14 runs in parallel with P12/P13** (depends only on P11's streaming); **P15 runs in parallel with P13** (depends only on P12's ToolBus) —
+neither is on the critical path.
 
-**可裁剪顺序**（若要提前发布）：P15 的 ③ MCP client → P14 的 Homebrew/curl → P13 的 findings 状态机。
-**不可裁剪**：P10 全部、P11、P12、AD-10 的确定性完成判据——这四项是 v0.3 主题本身。
+**Trimmable order** (if an earlier release is needed): P15's ③ MCP client → P14's Homebrew/curl → P13's findings state machine.
+**Not trimmable**: all of P10, P11, P12, and AD-10's deterministic completion criterion — these four are v0.3's theme itself.
 
-### 6.2 模型分配依据
+### 6.2 Basis for model allocation
 
-不做全局切换，按**任务形状**分。依据来自评审自己的发现：
+No global switch — split by **task shape**. This is based on the review's own findings:
 
-> 「越靠近可信度核心的代码质量越高，越靠近『AI Agent 平台』宣传语的代码越虚」
+> "The closer the code is to the core of trustworthiness, the higher its quality; the closer it is to the 'AI Agent platform' marketing copy, the more hollow it becomes"
 
-翻译成模型选型：v0.2 里质量高的地方是**规格明确的机械活**（状态机、fixture 纪律、对抗测试），
-出问题的地方全在**设计判断的边界**上——connector 的魔法分发被判定为「坏抽象」（P0 根因）、
-全链路零超时、LLM 失败静默当成功、Agent 层抽象建好但没接线。
-**这些不是「写不出代码」，是品味与盲区。**
+Translated into model selection: in v0.2, the places with high quality were **mechanical work with a clear spec** (state machines, fixture discipline, adversarial tests),
+while the problems all sat at **the boundary of design judgment** — the connector's magic dispatch was judged a "bad abstraction" (the root cause of P0),
+zero end-to-end timeouts, LLM failures silently treated as success, the Agent-layer abstraction built but never wired up.
+**These aren't cases of "can't write the code" — they're matters of taste and blind spots.**
 
-| 形状 | 阶段 | 模型 | 理由 |
+| Shape | Phase | Model | Reason |
 |---|---|---|---|
-| 照方抓药（评审已写明改哪个文件第几行） | P10 · P16 | Sonnet 5 | 12 项里 10 项规格完备，Opus 在这里是浪费；且这两阶段并行 lane 最多 |
-| 规格清楚的工程活（打包 / 向导 / 依赖分层） | P14 | Sonnet 5 | — |
-| 抽象设计（错了要返工三条主线） | P11 | Opus 5 | 一个抽象同时承载 tool calling / 流式 / 记账 / JSON 模式 |
-| 抽象设计（v0.2 唯一被判「坏抽象」的那一层的继任者） | P12 | Opus 5 | 同一个位置栽过一次 |
-| 原创设计（AD-10「完成判定问图不问模型」） | P13 | Opus 5 | v0.3 最有原创性的一条 |
-| 安全边界设计 | P15 | Opus 5 | 错了就是 S-3「沙箱一行逃逸」那种过度声明 |
+| Follow the recipe (the review already spells out which file and line to change) | P10 · P16 | Sonnet 5 | 10 of 12 items have a complete spec; Opus would be wasted here; and these two phases have the most parallel lanes |
+| Clearly specified engineering work (packaging / wizard / dependency tiering) | P14 | Sonnet 5 | — |
+| Abstraction design (getting it wrong means reworking all three main lines) | P11 | Opus 5 | one abstraction simultaneously carries tool calling / streaming / accounting / JSON mode |
+| Abstraction design (the successor to the one layer in v0.2 that was judged a "bad abstraction") | P12 | Opus 5 | the same spot has already tripped once before |
+| Original design (AD-10, "completion judged by asking the graph, not the model") | P13 | Opus 5 | the most original idea in v0.3 |
+| Security boundary design | P15 | Opus 5 | getting it wrong is the kind of over-claim that produced S-3, "the sandbox has a one-line escape" |
 
-**关于单轮等待**：v0.2 的总吞吐不慢，若痛点是「一次回复等太久」，
-先试 Opus 的 `/fast`（同一个 Opus、输出更快，**不降级到小模型**），而不是换模型。
+**On single-turn wait times**: v0.2's overall throughput isn't slow; if the pain point is "waiting too long for one reply,"
+try Opus's `/fast` first (the same Opus, faster output, **not a downgrade to a smaller model**), rather than switching models.
 
-### 6.3 并行开发方案
+### 6.3 Parallel development plan
 
-#### 6.3.1 地基已经具备（实测）
+#### 6.3.1 The foundation is already in place (measured)
 
-| 检查项 | 结论 |
+| Check item | Conclusion |
 |---|---|
-| 测试状态隔离 | 全部 `mkdtempSync` 建临时工作区，`SPARK_RESEARCH_DATA_DIR` 可注入，**没有一个测试碰 `~/.spark-research`** |
-| 端口占用 | 单元 / MCP / server 测试走 `app.fetch()` **进程内调用，不监听端口** |
-| 唯一共享资源 | Playwright 固定端口 4399，但已有 `SPARK_E2E_PORT` 环境变量兜底 |
+| Test-state isolation | all tests build a temp workspace via `mkdtempSync`, `SPARK_RESEARCH_DATA_DIR` can be injected, **not a single test touches `~/.spark-research`** |
+| Port usage | unit / MCP / server tests go through `app.fetch()`, an **in-process call, no listening port** |
+| Sole shared resource | Playwright is pinned to port 4399, but the `SPARK_E2E_PORT` environment variable already provides a fallback |
 
-**结论：N 个 agent 同时跑 `bun test` 是安全的**，只需给每条 lane 分配不同的 `SPARK_E2E_PORT`。
+**Conclusion: it is safe for N agents to run `bun test` at the same time**, as long as each lane is assigned a different `SPARK_E2E_PORT`.
 
-#### 6.3.2 lane 划分与文件所有权
+#### 6.3.2 Lane division and file ownership
 
-> **铁律：一个文件同一时刻只属于一条 lane。** 下表就是所有权登记，越界即冲突。
+> **Iron rule: a file belongs to exactly one lane at any given moment.** The table below is the ownership registry — crossing it is a conflict.
 
-**P10（4 lane，Sonnet 5）**
+**P10 (4 lanes, Sonnet 5)**
 
-| lane | 负责 | 独占文件 |
+| Lane | Responsible for | Exclusive files |
 |---|---|---|
-| `D-a` 连接器 | D-1 | `connectors/base.ts` `connectors/registry.ts` `connectors/*.ts` `tests/concurrency/connector_race.test.ts` |
-| `D-b` 运行时管道 | D-2 D-3 D-5 D-4(战术版) V3 | `http/client.ts` `kernels/manager.ts` `server/tasks.ts` `agents/orchestrator.ts` `tests/timeout/**` |
-| `D-c` 安全面 | D-6 D-7 | `index.ts`(auth 写入段) `config/index.ts` `server/app.ts` `http/body.ts` |
-| `D-d` 湿域与状态机 | D-8 D-9 D-10 | `lab/**` `project/records.ts` `tests/concurrency/approve_once.test.ts` |
+| `D-a` connectors | D-1 | `connectors/base.ts` `connectors/registry.ts` `connectors/*.ts` `tests/concurrency/connector_race.test.ts` |
+| `D-b` runtime pipeline | D-2 D-3 D-5 D-4(tactical version) V3 | `http/client.ts` `kernels/manager.ts` `server/tasks.ts` `agents/orchestrator.ts` `tests/timeout/**` |
+| `D-c` security surface | D-6 D-7 | `index.ts`(auth-write section) `config/index.ts` `server/app.ts` `http/body.ts` |
+| `D-d` wet-lab domain and state machine | D-8 D-9 D-10 | `lab/**` `project/records.ts` `tests/concurrency/approve_once.test.ts` |
 
-> D-4 在 P10 只做战术版（orchestrator 三处检查 `res.ok`）；
-> **AD-13 的类型层根治在 P11 完成**（`ok=false ⇒ content=""`）——分两步是因为类型改动属 P11 的抽象。
+> D-4 only gets a tactical version in P10 (three `res.ok` checks in the orchestrator);
+> **the type-level root fix in AD-13 is completed in P11** (`ok=false ⇒ content=""`) — split into two steps because the type change belongs to P11's abstraction.
 
-**P11（接口先行 → 3 lane，Opus 5）**
+**P11 (interface-first → 3 lanes, Opus 5)**
 
-| lane | 独占文件 |
+| Lane | Exclusive files |
 |---|---|
-| **接口先行**（必须先单独合入） | `llm/types.ts` + `llm/router.ts` 门面 |
-| `R-a` OpenAI 兼容基座（含 ollama / vLLM / 本地端点） | `llm/providers/openai_compat.ts` |
-| `R-b` Anthropic 原生 | `llm/providers/anthropic.ts` |
-| `R-c` 记账与能力位 | `llm/budget.ts` `llm/providers/registry.ts` |
+| **Interface-first** (must be merged on its own first) | `llm/types.ts` + `llm/router.ts` facade |
+| `R-a` OpenAI-compatible base (including ollama / vLLM / local endpoints) | `llm/providers/openai_compat.ts` |
+| `R-b` Anthropic native | `llm/providers/anthropic.ts` |
+| `R-c` accounting and capability bits | `llm/budget.ts` `llm/providers/registry.ts` |
 
-**P12（2 lane，Opus 5）**：`agents/toolbus.ts` ‖ `agents/subagent.ts` + `agents/prompt/*.txt` + 删 swarm
-**P13（2 lane，Opus 5）**：`agents/contract.ts` + replan + `agents/ledger.ts` ‖ `reviewer/findings_store.ts` + CLI（**完全独立**）
-**P14（2 lane，Sonnet 5）**：分发与打包 ‖ 向导 + demo + SSE 流
-**P15（2 lane，Opus 5）**：扩展装载 + `ext verify` ‖ 声明式 connector + MCP client
-**P16（3 lane，Sonnet 5）**：E-1 manifest 源 ‖ E-2 judge 降本 ‖ E-3…E-6 元数据修复
+**P12 (2 lanes, Opus 5)**: `agents/toolbus.ts` ‖ `agents/subagent.ts` + `agents/prompt/*.txt` + delete swarm
+**P13 (2 lanes, Opus 5)**: `agents/contract.ts` + replan + `agents/ledger.ts` ‖ `reviewer/findings_store.ts` + CLI (**fully independent**)
+**P14 (2 lanes, Sonnet 5)**: distribution and packaging ‖ wizard + demo + SSE streaming
+**P15 (2 lanes, Opus 5)**: extension loading + `ext verify` ‖ declarative connector + MCP client
+**P16 (3 lanes, Sonnet 5)**: E-1 manifest source ‖ E-2 judge cost reduction ‖ E-3…E-6 metadata fixes
 
-#### 6.3.3 四条纪律（前三条是 P6 事故的直接延伸）
+#### 6.3.3 Four disciplines (the first three are a direct extension of the P6 incident)
 
-1. **一 lane 一 worktree**：`~/Desktop/AI4S/spark-research-<lane>`，与现有 `-p9` / `-v03` 同惯例。
-   **绝不共享工作树**——P6 那次就是主会话在共享工作树切分支，把子代理半成品卷进了 docs PR 推上 main
-   （已入 repo 工程纪律第 7 条）。
-2. **接口先行**：两条 lane 触及同一类型时，先落一个**只改接口**的小 PR 到 main，再 fan out。
-   本方案已知的两处：P10 的 `HttpClient.RequestOptions.timeoutMs`（D-a 依赖 D-b）、
-   P11 的 `llm/types.ts`（三条 lane 全依赖）。
-3. **高冲突文件禁止 lane 触碰**：`CHANGELOG.md` / `BACKLOG.md` / `README.md` 一律由**收口 commit 统一写**；
-   devlog 每 lane 写自己的 `docs/devlog/P10-<lane>.md`（分文件 = 零冲突）。
-4. **多 lane 阶段走 integration 分支**：`lane → feat/P10-integration`（在这里跑全量测试）→ **一个 PR 进 main**。
-   否则会出现「每个 PR 单独绿、合进 main 红」——这正是评审说的那类**单线程测不出的语义冲突**。
+1. **One lane, one worktree**: `~/Desktop/AI4S/spark-research-<lane>`, following the same convention already used for `-p9` / `-v03`.
+   **Never share a working tree** — that's exactly what happened in the P6 incident, where the main session switched branches in a shared working tree and dragged a subagent's half-finished work into a docs PR that got pushed to main
+   (already added to the repo's engineering discipline as item 7).
+2. **Interface-first**: when two lanes touch the same type, land a small, **interface-only** PR to main first, then fan out.
+   Two places already known in this plan: P10's `HttpClient.RequestOptions.timeoutMs` (D-a depends on D-b), and
+   P11's `llm/types.ts` (all three lanes depend on it).
+3. **High-conflict files off limits to lanes**: `CHANGELOG.md` / `BACKLOG.md` / `README.md` are always written by the **close-out commit only**;
+   devlogs are written per-lane to their own `docs/devlog/P10-<lane>.md` (separate files = zero conflicts).
+4. **Multi-lane phases go through an integration branch**: `lane → feat/P10-integration` (full test suite runs here) → **a single PR into main**.
+   Otherwise you get "every PR is individually green, but main goes red after merging" — exactly the kind of **semantic conflict that single-threaded testing can't catch** that the review called out.
 
-#### 6.3.4 两个必须记住的例外
+#### 6.3.4 Two exceptions to keep in mind
 
-- **D-12 叙事一致性门禁必须放在串行尾巴**。它是全局测试，
-  在任何 lane 分支上都会因为看不见其他 lane 的改动而误报红。D-11 文档漂移同理。
-- **真正的瓶颈是审查带宽，不是 agent 数量**。现有工作流是「主会话审代码 + 对照设计验收 → PR」，
-  4 条 lane 同时产出就是 4 份 PR 等审。**这是并行度的上限**——所以本方案最多开到 4 条，不开 6–8 条。
+- **The D-12 narrative-consistency gate must run in the serial tail.** It is a global test that
+  will false-positive-fail on any lane branch, since it can't see the changes made in other lanes. The same applies to D-11's documentation-drift fix.
+- **The real bottleneck is review bandwidth, not the number of agents.** The current workflow is "the main session reviews code + checks against the design → PR";
+  4 lanes producing simultaneously means 4 PRs waiting for review. **This is the ceiling on parallelism** — which is why this plan caps out at 4 lanes, not 6–8.
 
-#### 6.3.5 lane 启动清单（写进每份子代理任务书）
+#### 6.3.5 Lane startup checklist (to be written into every subagent task brief)
 
 ```
 ① git worktree add ~/Desktop/AI4S/spark-research-<lane> -b feat/<phase>-<lane> origin/main
-② export SPARK_E2E_PORT=<4400 + lane 序号>
-③ 只改所有权表里属于本 lane 的文件；越界先回报，不自行扩权
-④ 不碰 CHANGELOG / BACKLOG / README；devlog 只写 docs/devlog/<phase>-<lane>.md
-⑤ 提 PR 前跑**全量** bun test（不只是本 lane 的测试）+ bun run typecheck
-⑥ 目标分支是 feat/<phase>-integration，不是 main
+② export SPARK_E2E_PORT=<4400 + lane index>
+③ only modify files belonging to this lane per the ownership table; report back before overstepping, don't self-expand scope
+④ don't touch CHANGELOG / BACKLOG / README; write devlog only to docs/devlog/<phase>-<lane>.md
+⑤ before opening a PR, run the **full** bun test suite (not just this lane's tests) + bun run typecheck
+⑥ the target branch is feat/<phase>-integration, not main
 ```
 
-### 6.4 里程碑与外部可见价值
+### 6.4 Milestones and externally visible value
 
-| 里程碑 | 完成即可对外说的话 |
+| Milestone | What we can honestly say externally once it's done |
 |---|---|
-| P10 末 | 「并发与超时下不会静默出错」——安全声明与实现一致 |
-| P12 末 | 「子代理是真的会用工具的 agent」——撤下所有虚标宣传 |
-| P13 末 | 「完成与否由证据图判定，不由模型自报」——**最值得写文章的一条** |
-| P14 末 | 「一条 `npx` 命令，零 key 30 秒看到全貌」——易用性追平 |
-| P15 末 | 「你自己加的数据源，装完就跑契约测试」——扩展性超车 |
-| P16 / v0.3.0 | 五大功能域 + 真 agent runtime + 自助扩展，三者中唯一有干湿闭环 |
+| End of P10 | "Under concurrency and timeouts, nothing fails silently" — the safety claim now matches the implementation |
+| End of P12 | "Subagents are real agents that actually use tools" — every overstated marketing claim comes down |
+| End of P13 | "Completion is judged by the evidence graph, not self-reported by the model" — **the single most publishable claim** |
+| End of P14 | "One `npx` command, see the full picture in 30 seconds with zero key" — ease of use has caught up |
+| End of P15 | "The data source you add yourself runs the contract tests the moment it's installed" — overtaking on extensibility |
+| P16 / v0.3.0 | five feature domains + a real agent runtime + self-service extensibility — the only one of the three with both a dry-lab and wet-lab closed loop |
 
 ---
 
-## 七、与两参照系的收敛表（v0.3 目标态）
+## VII. Convergence table against the two reference systems (v0.3 target state)
 
-| 维度 | OpenScience | Claude Science | v0.2 现状 | **v0.3 目标** |
+| Dimension | OpenScience | Claude Science | v0.2 current state | **v0.3 target** |
 |---|---|---|---|---|
-| 安装分发 | `npx synsci` 秒装 | macOS App | clone + bun install | npx / 单二进制 / brew　**✅ 追平** |
-| 默认入口 | 起 Web 工作区 | App | `bun run dev` | 零参数起 UI　**✅ 追平** |
-| 模型中立 | 全 provider | 锁 Anthropic | 声明 6 实测 2 | OpenAI-compat 基座 + Anthropic + 本地　**✅ 追平** |
-| 子代理委派 | `task` 工具真委派 | `host.delegate()` 帧树 | 裸 `llm.call` 无工具 | ToolBus 真委派 + 预算 + 审计　**✅ 追平** |
-| 完成判定 | `contract.stages`（agent 自报） | 状态机（模型侧判据） | 无 | **图上确定性判据（AD-10）　🚀 超越两者** |
-| 帧级记账 | 会话级 | 每帧 model/token/cost | 无 | **落进证据图，报告/lineage/UI 免费可查　🚀 超越** |
-| 模型指纹 | harness fingerprint | — | 无 | `agent_run` record 带 systemHash/promptHash　**✅ 追平** |
-| 审查持久化 | provenance claim | `verification_checks` 状态机 | 一次性 pass | findings 状态机 + 复核闭环　**✅ 追平 Claude** |
-| 连接器 | 46 免 key | 无 registry | 17 | **不比数量：声明式 manifest + 外部扩展 + MCP client　🚀 换赛道** |
-| 扩展机制 | 插件运行时 / SDK / LSP | agents 表 + MCP | 无 | 装载 + **契约化验收（AD-11）　🚀 超越** |
-| 能力自描述 | docs / llms.txt | — | P9 `capabilities --json` | + **叙事一致性 CI 门禁（AD-12）　🚀 超越两者** |
-| 干湿闭环 | 无 | 无 | 有（安全门打折） | 安全门兑现声明　**🚀 独占赛道** |
+| Install/distribution | `npx synsci`, install in seconds | macOS App | clone + bun install | npx / single binary / brew　**✅ at parity** |
+| Default entry point | starts a Web workspace | App | `bun run dev` | zero-arg starts the UI　**✅ at parity** |
+| Model neutrality | all providers | locked to Anthropic | 6 declared, 2 actually implemented | OpenAI-compat base + Anthropic + local　**✅ at parity** |
+| Subagent delegation | `task` tool, real delegation | `host.delegate()` frame tree | bare `llm.call`, no tools | ToolBus real delegation + budget + audit　**✅ at parity** |
+| Completion judgment | `contract.stages` (agent self-reported) | state machine (criterion on the model side) | none | **deterministic criterion against the graph (AD-10)　🚀 surpasses both** |
+| Frame-level accounting | session-level | per-frame model/token/cost | none | **lands in the evidence graph, free to query via report/lineage/UI　🚀 surpasses** |
+| Model fingerprint | harness fingerprint | — | none | `agent_run` record carries systemHash/promptHash　**✅ at parity** |
+| Review persistence | provenance claim | `verification_checks` state machine | one-shot pass | findings state machine + re-verification closed loop　**✅ at parity with Claude** |
+| Connectors | 46, key-free | no registry | 17 | **not competing on count: declarative manifest + external extensions + MCP client　🚀 changes track** |
+| Extension mechanism | plugin runtime / SDK / LSP | agents table + MCP | none | loading + **contract-based acceptance (AD-11)　🚀 surpasses** |
+| Capability self-description | docs / llms.txt | — | P9 `capabilities --json` | + **narrative-consistency CI gate (AD-12)　🚀 surpasses both** |
+| Dry/wet-lab closed loop | none | none | present (safety gate under-delivers) | safety gate delivers on its claim　**🚀 sole occupant of this track** |
 
 ---
 
-## 八、新增架构决策（待写入 DESIGN §5.2）
+## VIII. New architecture decisions (to be written into DESIGN §5.2)
 
-> **编号起点 AD-10**：P9 已经占用了 AD-9（「MCP 暴露面按『谁承担后果』切」），
-> 本方案初稿写成 AD-9…AD-13 是撞号，已整体后移一位。
+> **Numbering starts at AD-10**: P9 already used up AD-9 ("the MCP exposure surface is cut by 'who bears the consequences'"),
+> so this plan's original draft, which used AD-9…AD-13, had a numbering collision and has been shifted back by one.
 
-| # | 决策 | 理由 |
+| # | Decision | Reason |
 |---|---|---|
-| **AD-10** | 任务完成判定必须由确定性代码对证据图查询得出，不得由模型自报 | AD-8 在编排层的直接推论；OpenScience 的 stage 自报与 Claude 的模型侧判据都有同一个洞：*agent 可以宣布自己完成了* |
-| **AD-11** | 扩展「能装上」不算装好，「过得了对应契约测试」才算装好 | AD-5 从开发侧纪律升级为运行时门禁；对 OpenScience「铺量导致质量参差」的结构性回答——不限数量，限**未经验证**的数量 |
-| **AD-12** | 对外声称的每一项能力必须机器可核（`capabilities --json` 为准，CI 门禁） | 本次评审最大发现是「叙事超前于实现」。靠人自觉不可持续，必须是门禁 |
-| **AD-13** | LLM 调用失败时**没有内容可用**（`ok=false ⇒ content=""`，错误只在 `error` 字段） | F-2 的类型层根治：把「错误文本被当成产出」变成编译期不可能，而不是靠三处 `if` 记得写 |
-| **AD-14** | 子代理**永远不能执行需要人工审批的动作**（`lab_approve` / `conclusion_review` / `project_archive` 在 ToolBus 层硬拒） | AD-6 从 HTTP 层扩展到 agent 层。agent 能力越强，这条红线越重要 |
+| **AD-10** | Task completion must be determined by deterministic code querying the evidence graph, and must not be self-reported by the model | a direct corollary of AD-8 at the orchestration layer; both OpenScience's stage self-reporting and Claude's model-side criterion share the same flaw: *an agent can declare itself done* |
+| **AD-11** | For an extension, "it loads" doesn't count as working — only "it passes its contract tests" counts as working | upgrades AD-5 from a development-side discipline to a runtime gate; a structural answer to OpenScience's "quality unevenness from scaling up quantity" — we don't limit the count, we limit the count of **unverified** ones |
+| **AD-12** | Every capability claimed externally must be machine-verifiable (`capabilities --json` is authoritative, enforced by a CI gate) | this review's biggest finding was "narrative running ahead of implementation." Relying on self-discipline isn't sustainable — it must be a gate |
+| **AD-13** | On LLM call failure, **there is no content available** (`ok=false ⇒ content=""`, errors live only in the `error` field) | the type-level fix for F-2: makes "error text being treated as output" impossible at compile time, instead of relying on three scattered `if`s being remembered |
+| **AD-14** | A subagent can **never execute an action that requires human approval** (`lab_approve` / `conclusion_review` / `project_archive` are hard-rejected at the ToolBus layer) | extends AD-6 from the HTTP layer to the agent layer. The stronger an agent's capabilities, the more this red line matters |
 
 ---
 
-## 八·补 · 现有 BACKLOG 条目的归属
+## VIII·Addendum · Disposition of existing BACKLOG items
 
-> 让 `docs/BACKLOG.md` 里的 v0.3 候选有明确去处，不再是一张只进不出的表。
+> Give the v0.3 candidates in `docs/BACKLOG.md` a clear disposition, so it's no longer a table that only ever grows.
 
-| BACKLOG | 归属 | 说明 |
+| BACKLOG | Disposition | Notes |
 |---|---|---|
-| V1 arXiv/PubMed 接入 | **P16 (E-1)** | 改为用 P15 的声明式 connector 实现，兼作扩展机制验收 |
-| V2 novelty 相似度语义化（embedding） | v0.4 | 需要 embedding provider 决策；P11 的 provider 抽象为它铺路，但本版不做 |
-| V3 poll 的进程 start-time 交叉核验 | **P10 (随 D-2 超时一起)** | 现状「只会多报 running」方向安全，加超时时顺手做 |
-| V4 远端算力真实实现 | 不做 | §1.2：按真实课题拉动 |
-| V5 R kernel | 不做 | permit set 有位置但无需求；P12 后加一个 kernel 的成本更低，等需求 |
-| V6 物理 Opentrons | 不做（硬前置未满足） | §1.2：D-8 安全门声明兑现是硬门槛 |
-| V7 Agent Swarm 接入 | **P12：删除** | §4.2.3 —— 与 P8 删 `compute/providers.ts` 同构 |
-| V8 中文检索式召回优化 | **P16 (随 E-5)** | 与 CJK 元数据修复一起做 |
-| V9 AMiner `getPaper` 真实 key 验证 | **P16** | 录一次 fixture 即可 |
-| V10 HTTP 层真实身份 | 不做 | §1.2：先做实 agent 层 |
-| V11 长任务句柄落盘 | **P14** | UI 跨重启看到运行中任务，属上手性 |
-| V12 LLM 结构化输出 | **P11 根治** | `CallOptions.responseFormat`，不再靠「解析失败重试一次」治标 |
-| V13 判定 prompt 对「凭空归因」的口径 | **P16 (随 E-2)** | 与 judge 降本一起改，改完重跑 G5 测量 |
-| V14 位置加权豁免改白名单制 | **P13** | findings 状态机重构 reviewer 时一并做（阈值已到） |
-| V15 移除 `MCPConnector` 等 deprecated 别名 | **P10 (lane D-a)** | D-1 重构 connector 分发时顺带确认无外部引用后删除；做不掉就留 v0.4 |
-| V16 子代理独立模型暴露成用户配置项 | **P12** | 子代理做实时 `SubAgentSpec.model` 本就要有真消费方，顺势暴露成配置 |
-| V17 MCP 长任务进度回传 | **P14** | 与 SSE 流式一起做（同属「看得见 agent 在干活」） |
-| V18 `capabilities --probe` 结果缓存 | **P14** | 属上手性；缓存必须带失效条件（venv 变更），否则它会撒谎 |
-| V19 审批动作要求可交互终端 | **P12（与 AD-14 同批）** | AD-14「子代理永不自批准」是默认路径防线，V19 是技术防线，两者配套才完整 |
-| D1 第三个仿真平台 | 待定 | 契约已被两实现验证；P15 的 `ext verify` 让第三方自己加更划算 |
-| D2 Semantic Scholar key | **P16 (E-4)** | 凭据路径落地 |
-| D3 CNKI / 万方真实 API | 待定 | 无渠道；AMiner 仍是中文主路径 |
+| V1 arXiv/PubMed integration | **P16 (E-1)** | switched to implementation via P15's declarative connector, doubling as the extension-mechanism acceptance test |
+| V2 novelty similarity semantics (embedding) | v0.4 | requires an embedding-provider decision; P11's provider abstraction paves the way for it, but it's not done in this release |
+| V3 cross-checking poll process start-time | **P10 (bundled with the D-2 timeout work)** | current state ("only over-reports running") is safe in direction; do it opportunistically while adding timeouts |
+| V4 real implementation of remote compute | not doing | §1.2: build it when a real use case drives it |
+| V5 R kernel | not doing | the permit set has a slot but there's no demand; the marginal cost of adding one kernel is lower after P12 anyway, wait for demand |
+| V6 physical Opentrons | not doing (hard precondition unmet) | §1.2: making good on the D-8 safety-gate claim is the hard threshold |
+| V7 Agent Swarm integration | **P12: deleted** | §4.2.3 — structurally identical to P8's deletion of `compute/providers.ts` |
+| V8 optimization of Chinese-language retrieval recall | **P16 (bundled with E-5)** | done together with the CJK metadata fix |
+| V9 real-key verification of AMiner `getPaper` | **P16** | just needs a fixture recorded once |
+| V10 real identity at the HTTP layer | not doing | §1.2: make the agent layer real first |
+| V11 persisting long-running task handles to disk | **P14** | lets the UI see running tasks across restarts, part of the onboarding work |
+| V12 LLM structured output | **fixed at the root in P11** | via `CallOptions.responseFormat`, no longer papered over by "retry once on parse failure" |
+| V13 the judge prompt's stance on "attribution out of thin air" | **P16 (bundled with E-2)** | changed together with the judge cost reduction, then re-measured on G5 |
+| V14 change positional weighting exemption to a whitelist scheme | **P13** | done together with the findings-state-machine refactor of the reviewer (the threshold has already been reached) |
+| V15 remove deprecated aliases like `MCPConnector` | **P10 (lane D-a)** | confirm there are no external references while refactoring connector dispatch in D-1, then delete; if it can't be done, leave it for v0.4 |
+| V16 expose the subagent's independent model as a user config option | **P12** | making the subagent real requires `SubAgentSpec.model` to have a real consumer anyway, so expose it as config while we're at it |
+| V17 MCP long-task progress reporting | **P14** | done together with SSE streaming (both belong to "seeing the agent actually working") |
+| V18 caching `capabilities --probe` results | **P14** | part of onboarding; the cache must carry an invalidation condition (venv changes), otherwise it will lie |
+| V19 requiring an interactive terminal for approval actions | **P12 (same batch as AD-14)** | AD-14 ("a subagent can never self-approve") is the default-path defense; V19 is the technical defense — the two together form a complete pair |
+| D1 a third simulation platform | pending | the contract has already been validated by two implementations; P15's `ext verify` makes it more worthwhile to let a third party add it themselves |
+| D2 Semantic Scholar key | **P16 (E-4)** | land the credential path |
+| D3 real CNKI / Wanfang API | pending | no access channel; AMiner remains the primary path for Chinese-language sources |
 
 ---
 
-## 九、风险与缓解
+## IX. Risks and mitigations
 
-| 风险 | 影响 | 缓解 |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| 范围过大，跨度失控 | 拖到 v0.4 也发不出 | 三条主线**互相解耦**（除共用 P11）；§6.1 已给可裁剪顺序与关键路径；P14 单独可发 v0.2.1 |
-| tool calling 在国产 provider 上兼容性差 | 主线 A 落空 | P11 的能力位 `toolCalling` 是**运行时可查**的：不支持就降级为「JSON 计划 + 代码执行」模式并如实告知，不假装 |
-| 声明式 connector 的映射 DSL 越做越像编程语言 | 复杂度失控 | 硬约束：只支持受限 JSONPath 子集 + 固定归一化字段；**表达不了就写 TS 扩展**，这是特性不是缺陷 |
-| 外部扩展 = 同 UID 代码执行 | 安全面扩大 | 默认推声明式（不执行代码）；TS 扩展需 `--trust` + 指纹确认；凭据与工具授权都要显式 grant；**文档必须直说这不是沙箱**（不重蹈 S-3「沙箱一行逃逸」的过度声明） |
-| 记账落图导致 record 表膨胀 | 图查询变慢 | `agent_run` 默认只记 run 级不记每次 tool call（tool call 进执行记录表）；保留期与压缩策略进 config |
-| P10 修 D-8 安全门时发现工作量远超预估 | 阻塞整条线 | D-8 允许走 (b) 降级口径 + 强制 `unconsumed` 告警先行；补全解析器可推到 P16 或 v0.4，**但接真机的门槛不松** |
+| Scope too large, timeline gets out of control | still not shipped by v0.4 | the three main lines are **decoupled from each other** (aside from sharing P11); §6.1 already gives a trimmable order and critical path; P14 can ship on its own as v0.2.1 |
+| Tool calling has poor compatibility on domestic providers | main line A falls through | P11's `toolCalling` capability bit is **queryable at runtime**: if unsupported, degrade to a "JSON plan + code execution" mode and disclose this honestly, don't pretend |
+| The declarative connector's mapping DSL keeps growing more like a programming language | complexity gets out of control | hard constraint: only a restricted JSONPath subset + fixed normalization fields are supported; **if it can't be expressed, write a TS extension** — this is a feature, not a bug |
+| External extensions = same-UID code execution | expands the security surface | default to declarative (executes no code); TS extensions require `--trust` + fingerprint confirmation; both credentials and tool authorization require explicit grants; **the docs must state plainly that this is not a sandbox** (so as not to repeat the over-claim of S-3, "the sandbox has a one-line escape") |
+| Accounting landing in the graph causes the record table to bloat | graph queries slow down | `agent_run` by default only logs at the run level, not per tool call (tool calls go into the execution-record table); retention and compaction policy go into config |
+| Fixing D-8's safety gate in P10 turns out to take far more work than estimated | blocks the whole line | D-8 allows falling back to option (b), the downgraded claim + mandatory `unconsumed` warning, first; completing the parser can be pushed to P16 or v0.4, **but the bar for connecting to real hardware does not get relaxed** |
 
 ---
 
-## 十、给维护者的一段话
+## X. A word to maintainers
 
-评审那句「越靠近可信度核心的代码质量越高，越靠近『AI Agent 平台』宣传语的代码越虚」，
-是这个版本存在的全部理由。
+The review's line — "the closer the code is to the core of trustworthiness, the higher its quality; the closer it is to the 'AI Agent platform' marketing copy, the more hollow it becomes" —
+is the entire reason this release exists.
 
-v0.3 不加新功能域——**一个都不加**。它做三件事：
-把 agent 层从数据结构变成会用工具的东西；把上手门槛降到一条 `npx`；
-把扩展从「改仓库源码」变成「写一个 manifest 并过契约测试」。
+v0.3 adds no new feature domains — **not a single one**. It does three things:
+turns the agent layer from a data structure into something that actually uses tools; brings the onboarding bar down to a single `npx`;
+and turns extension from "edit the repo's source code" into "write a manifest and pass the contract tests."
 
-同时它把项目已经证明有效的那套确定性纪律，往上推了两层：
-**编排层**（完成与否问图不问模型）和**扩展层**（能装不算数，过契约才算数），
-再加一条把这次评审发现变成永久门禁的 AD-12。
+At the same time, it pushes the deterministic discipline the project has already proven effective up two more layers:
+the **orchestration layer** (completion judged by asking the graph, not the model) and the **extension layer** (loading doesn't count, passing the contract does),
+plus one more AD, AD-12, that turns this review's finding into a permanent gate.
 
-做完这三件，README 第一句话才是真的。
+Once these three things are done, the first sentence of the README will finally be true.
 
 ---
 
-*本方案基于 2026-09-09 外部评审报告 + Claude Science / OpenScience 对比调研 + v0.2 全量代码复核制订。*
-*复核中新发现且评审未列的一项：`LLMRouter` 声明 6 个 provider 但只实现 2 个（§4.1）——已纳入 P11。*
+*This plan is drafted based on the 2026-09-09 external review report + the Claude Science / OpenScience comparison research + a full re-verification of the v0.2 code.*
+*A new finding from re-verification, not listed in the review: `LLMRouter` declares 6 providers but only implements 2 (§4.1) — already folded into P11.*

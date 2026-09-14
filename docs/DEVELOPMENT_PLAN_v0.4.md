@@ -1,565 +1,567 @@
-# Spark Research v0.4.0 开发方案
+# Spark Research v0.4.0 Development Plan
 
-> 制订时间：2026-09-10（PDT）· 起点：`main` v0.3.1（`3599b75`）
-> 上游文档：`DEVELOPMENT_PLAN_v0.3.md`（主线 A/B/C 的架构设计仍然有效，本文承接并修订）
-> **本文是 v0.4 的唯一施工真源**；v0.3 文档的 P11–P16 章节以本文为准
-
----
-
-## 〇、一句话
-
-**v0.3 还清了并发与超时的债，v0.4 把「Agent 平台」这句话变成真的：
-子代理真的会用工具、任务完成由证据图判定、装一个扩展像装一个 npm 包、
-而这一切都要能被一个对本仓库一无所知的外部 agent 独立走通。**
+> Drafted: 2026-09-10 (PDT) · Starting point: `main` v0.3.1 (`3599b75`)
+> Upstream document: `DEVELOPMENT_PLAN_v0.3.md` (the architecture design of main lines A/B/C is still valid; this document carries it forward and revises it)
+> **This document is the sole source of truth for v0.4 construction**; where it conflicts with the P11–P16 sections of the v0.3 document, this document governs
 
 ---
 
-## 一、起点：v0.3 教了什么，哪些计划因此要改
+## 0. In one sentence
 
-### 1.1 v0.3 的三次事故，全部要变成 v0.4 的施工约束
-
-| 事故 | 表现 | v0.4 的应对 |
-|---|---|---|
-| **v0.2.1 被 P10 静默绕过** | P10 分支从 v0.2.1 之前拉出，合并后 tag 声称的修复在 main 上不存在；不冲突不告警，靠偶然瞥见 `/api/health` 才发现 | 纪律 §5.3 新增「单一合并权」与「integration 必须先对齐 origin/main 并复验旧 tag」 |
-| **PR #22 合并了空变更** | `git push -q …; echo pushed` 里的 echo 掩盖了推送失败，远端分支停在旧 commit，GitHub 照常「合并」 | 纪律新增「push 后必验远端 ref」；每个阶段门加一条 `git diff <分支> origin/main` 应为空 |
-| **v0.3.0 带着 UI 回归发布** | 后端拆掉 `wet_run`，前端执行按钮仍按旧状态名判可用 → 批准后按钮永远是灰的。**e2e 用例本来就存在，只是没跑** | **`bun run test:e2e` 进入每一个阶段门**；跨层改动强制走「消费方清扫清单」 |
-
-> 三次事故是同一个形状：**不报错、不冲突、只是静默什么都没发生**。
-> v0.4 的验证设计围绕这一句展开——凡是「失败会长得像成功」的地方，都要有一条显式断言。
-
-### 1.2 P10 并行实测：哪些成立，哪些要补
-
-**成立的**（继续照做）：一 lane 一 worktree、文件所有权互斥表、高冲突文件禁碰、
-lane → integration → 一个 PR。四条 lane 的纪律零违反。
-
-**要补的**：
-
-| 问题 | 实测 | v0.4 修正 |
-|---|---|---|
-| lane worktree 无 `.venv` | 17 个 OpenMM 契约用例**静默 skip**，lane 报绿但没跑 | lane 建好后必须 `uv sync`（或链接主仓 `.venv`）；lane 报告必须写明**哪些套件没跑成** |
-| 跨 lane 语义冲突 | D-d 拆状态 → `routes/lab.ts` 硬编码旧状态名，四条 lane 各自绿、合起来红 | 已由纪律 11 覆盖；v0.4 再加**消费方清扫清单**（见 §5.4） |
-| 真正的瓶颈是审查带宽 | 4 条 lane = 4 份 PR 等审，串行尾巴占了相当比例的时间 | lane 上限仍是 4；**串行尾巴的工作量要在排期里显式计入**，不再当成「收个尾」 |
-| 破口在跨会话 | 另一个会话直接把 lane 分支合进 main | §5.3 单一合并权 |
-
-**一个意外的正收益**：三条 lane 在没被强制要求的情况下都做了**阴性对照**
-（回退自己的修复、确认测试真的会红）。这条已被证明极其有效，v0.4 **升级为强制要求**。
-
-### 1.3 v0.3 遗留的、必须进 v0.4 的新发现
-
-| # | 发现 | 来源 |
-|---|---|---|
-| V22 | **`capabilities` 对外广播了一个无法调用的技能**——`protein-analysis` 在 `capabilities --json` 里带完整描述、`triggers`、connector 清单与 `validation` 列表，而 CLI / HTTP / MCP **三个入口全无**。外部 agent 读了 triggers 会确信自己能调用它。**不是完整性缺口，是自描述面撒谎**（AD-12 的直接违反） | D-12 门禁首次运行 + v0.4 制订时的可达性矩阵实测 |
-| V23 | 湿实验 `unconsumedWarnings` 只在 CLI 强制显示，**HTTP / Web 审批面没接** | lane D-d 交付说明 |
-| V25 | `concentration_limit` / `biosafety` 在自然语言主管线上**仍然空转** | lane D-d，D-8 的授权范围 |
-| V24 | `RecordIntegrityError` 没有「人工确认后修复」的恢复路径 | lane D-d |
-| V20/V21 | `CONFIG_DIR` 不认 `SPARK_RESEARCH_DATA_DIR`；超时类环境变量前缀不统一 | lane D-c / 串行收口 |
-| — | **`tests/integration/` 8 个用例是 `skipIf(!RECORDING)`**，connector 对真实上游的行为从未在本轮验过 | v0.3.1 验证复盘 |
-| — | **`records.db` 迁移没拿真实的 v0.2.x 老库跑过**，只有单测覆盖迁移逻辑 | v0.3.1 验证复盘 |
+**v0.3 paid off the concurrency and timeout debt; v0.4 makes the phrase "Agent platform" real:
+subagents actually use tools, task completion is judged by the evidence graph, installing an extension
+is like installing an npm package — and all of this must be independently walkable end-to-end
+by an external agent that knows nothing about this repo.**
 
 ---
 
-## 二、范围
+## I. Starting point: what v0.3 taught us, and which plans must change as a result
 
-### 2.1 做什么（六件事）
+### 1.1 v0.3's three incidents, all of which must become v0.4 construction constraints
 
-1. **可达性收口**——每一个对外声称的能力必须有可达的生产入口（AD-5 收紧）
-2. **LLM Runtime v2**——tool calling / usage 记账 / 流式 / JSON 模式 / 真正的模型中立
-3. **ToolBus + 真子代理**——子代理会用工具、有预算、有审计、永不自批准
-4. **研究循环**——contract 完成判据（问图不问模型）、replan、帧级记账、findings 状态机
-5. **上手性**——npx / 单二进制 / 零参数起 UI / 向导 / 离线 demo / 本地模型 / SSE 流
-6. **扩展面**——声明式 connector / TS 扩展 / 外部 MCP client / `ext verify` 契约化验收
+| Incident | Symptom | v0.4 response |
+|---|---|---|
+| **v0.2.1 was silently bypassed by P10** | The P10 branch was cut before v0.2.1; after merging, the fix the tag claimed did not actually exist on main. No conflict, no warning — it was only discovered by accidentally glancing at `/api/health` | Discipline §5.3 adds "sole merge authority" and "integration must first align with origin/main and re-verify old tags" |
+| **PR #22 merged an empty diff** | The `echo` in `git push -q …; echo pushed` masked the push failure; the remote branch stayed at the old commit while GitHub "merged" as usual | New discipline: "must verify the remote ref after push"; each phase gate adds a `git diff <branch> origin/main` check that should be empty |
+| **v0.3.0 shipped with a UI regression** | The backend removed `wet_run`, but the frontend's execute button still judged availability by the old state name → after approval, the button was permanently greyed out. **The e2e test case already existed — it just wasn't run** | **`bun run test:e2e` enters every phase gate**; cross-layer changes force a "consumer cleanup checklist" |
 
-外加**附线**：文献域补强（arXiv/PubMed 走声明式 manifest，兼作扩展机制验收）。
+> All three incidents share the same shape: **no error, no conflict — just silent nothing happening.**
+> v0.4's verification design revolves around this: wherever "failure looks like success" is possible, there must be an explicit assertion.
 
-### 2.2 明确不做
+### 1.2 P10 parallel field test: what held up, what needs backfilling
 
-| 不做 | 理由 |
+**What held up** (keep doing): one lane per worktree, the file-ownership mutual-exclusion table, no touching high-conflict files,
+lane → integration → one PR. Zero violations of the four-lane discipline.
+
+**What needs backfilling**:
+
+| Issue | Field result | v0.4 fix |
+|---|---|---|
+| lane worktree had no `.venv` | 17 OpenMM contract test cases were **silently skipped**, lane reported green but hadn't run | After a lane is set up, `uv sync` is mandatory (or link the main repo's `.venv`); the lane report must state **which suites failed to run** |
+| Cross-lane semantic conflict | D-d split a state → `routes/lab.ts` hardcoded the old state name, each of the four lanes green individually, red when combined | Already covered by Discipline 11; v0.4 adds the **consumer cleanup checklist** (see §5.4) |
+| The real bottleneck is review bandwidth | 4 lanes = 4 PRs waiting for review; the serial tail took up a considerable share of the time | The lane cap stays at 4; **the serial tail's workload must be explicitly counted in scheduling**, no longer treated as "just wrapping up" |
+| The breach was cross-session | Another session directly merged a lane branch into main | §5.3 sole merge authority |
+
+**An unexpected win**: three lanes performed **negative controls** (reverting their own fix and confirming the test really does go red)
+without being required to. This has proven extremely effective, and v0.4 **elevates it to a mandatory requirement**.
+
+### 1.3 New findings left over from v0.3 that must go into v0.4
+
+| # | Finding | Source |
+|---|---|---|
+| V22 | **`capabilities` externally broadcasts a skill that cannot actually be invoked** — `protein-analysis` carries a full description, `triggers`, a connector list, and a `validation` list in `capabilities --json`, while **all three entry points — CLI / HTTP / MCP — are absent**. An external agent reading the triggers would be confident it can invoke it. **This is not a completeness gap, it is the self-description surface lying** (a direct violation of AD-12) | First run of the D-12 gate check + the reachability matrix measured while drafting v0.4 |
+| V23 | The wet-experiment `unconsumedWarnings` is only force-displayed in the CLI; **HTTP / Web approval surfaces are not wired up** | lane D-d delivery notes |
+| V25 | `concentration_limit` / `biosafety` are **still no-ops** on the natural-language main pipeline | lane D-d, scope of D-8's authorization |
+| V24 | `RecordIntegrityError` has no "fix after manual confirmation" recovery path | lane D-d |
+| V20/V21 | `CONFIG_DIR` does not recognize `SPARK_RESEARCH_DATA_DIR`; timeout-related environment variable prefixes are inconsistent | lane D-c / serial close-out |
+| — | **8 test cases in `tests/integration/` are `skipIf(!RECORDING)`**, connector behavior against the real upstream has never been verified in this round | v0.3.1 verification retrospective |
+| — | **The `records.db` migration was never run against a real v0.2.x legacy database**, only unit-test coverage of the migration logic exists | v0.3.1 verification retrospective |
+
+---
+
+## II. Scope
+
+### 2.1 What to do (six items)
+
+1. **Reachability close-out** — every externally claimed capability must have a reachable production entry point (AD-5 tightened)
+2. **LLM Runtime v2** — tool calling / usage accounting / streaming / JSON mode / true model neutrality
+3. **ToolBus + real subagents** — subagents actually use tools, have a budget, are audited, and never self-approve
+4. **Research loop** — contract completion criterion (query the graph, not the model), replan, frame-level accounting, findings state machine
+5. **Onboarding experience** — npx / single binary / zero-argument UI startup / wizard / offline demo / local models / SSE streaming
+6. **Extension surface** — declarative connectors / TS extensions / external MCP client / `ext verify` contract-based acceptance
+
+Plus a **side track**: literature domain reinforcement (arXiv/PubMed go through declarative manifests, doubling as acceptance verification for the extension mechanism).
+
+### 2.2 Explicitly not doing
+
+| Not doing | Reason |
 |---|---|
-| 对接物理 Opentrons（V6） | **硬前置未满足**：V25 的 `concentration_limit` / `biosafety` 仍空转。v0.4 会补 V23（UI 强制显示告警），但补完仍不够 |
-| 多用户真实身份（V10） | 先把 agent 层做实；`actor` 仍是「谁自称就是谁」 |
-| 删 deprecated 别名（V15） | v0.2.0/v0.3.x 已公开发布带着它们，删是 breaking change，走废弃周期到 v0.5 |
-| 追 connector / skill 数量 | AD-5 不变。v0.4 解决的是**让用户 30 分钟自己加一个**，不是我们加 46 个 |
-| 插件市场 / 远端扩展仓库 | 先有装载与验收机制，v0.4 只做本地目录装载 |
+| Integrating physical Opentrons (V6) | **A hard prerequisite is unmet**: V25's `concentration_limit` / `biosafety` are still no-ops. v0.4 will backfill V23 (force-display the warning in the UI), but even after that it's still not enough |
+| Real multi-user identity (V10) | Get the agent layer solid first; `actor` is still "whoever claims to be who they say they are" |
+| Removing deprecated aliases (V15) | v0.2.0/v0.3.x have already been publicly released with them; removing them is a breaking change, and should go through a deprecation cycle to v0.5 |
+| Chasing connector / skill count | AD-5 is unchanged. What v0.4 solves is **letting the user add one themselves in 30 minutes**, not us adding 46 |
+| Plugin marketplace / remote extension repository | Get the loading and acceptance mechanism working first; v0.4 only does local directory loading |
 
 ---
 
-## 三、阶段总览
+## III. Phase overview
 
 ```
-P11 ─┬─ 接口先行：llm/types.ts ──┬─ R-a OpenAI 兼容基座
-     │                          ├─ R-b Anthropic 原生
-     │                          └─ R-c 预算与能力位
-     └─ R-d 可达性闸门（独立，不依赖接口）
+P11 ─┬─ Interface-first: llm/types.ts ──┬─ R-a OpenAI-compatible base
+     │                          ├─ R-b Anthropic native
+     │                          └─ R-c Budget and capability bits
+     └─ R-d Reachability gate (independent, no dependency on the interface)
                     │
                     ▼
-P12 ─┬─ T-a ToolBus（授权/预算/审计）
-     └─ T-b 真子代理 tool loop + 删 swarm          ──┐
+P12 ─┬─ T-a ToolBus (authorization/budget/audit)
+     └─ T-b Real subagent tool loop + remove swarm          ──┐
                     │                                │
-                    ▼                                │  P14 上手性
-P13 ─┬─ C-a contract + replan + 帧级记账             │  （只依赖 P11 流式，
-     └─ C-b findings 状态机（完全独立）              │    与 P12/P13 全程并行）
+                    ▼                                │  P14 Onboarding
+P13 ─┬─ C-a contract + replan + frame-level accounting             │  (only depends on P11 streaming,
+     └─ C-b findings state machine (fully independent)              │    runs fully in parallel with P12/P13)
                     │                                │
                     ▼                                │
-P15 ─┬─ X-a 扩展装载 + ext verify  ◀─ 依赖 P12 ToolBus
-     └─ X-b 声明式 connector + MCP client
+P15 ─┬─ X-a Extension loading + ext verify  ◀─ depends on P12 ToolBus
+     └─ X-b Declarative connector + MCP client
                     │
                     ▼
-P16  文献域补强（arXiv/PubMed 走 manifest = 扩展机制的真实验收）+ 发布 v0.4.0
+P16  Literature domain reinforcement (arXiv/PubMed via manifest = real acceptance test of the extension mechanism) + release v0.4.0
 ```
 
-**关键路径**：P11 → P12 → P13 → P15 → P16。**P14 不占关键路径。**
+**Critical path**: P11 → P12 → P13 → P15 → P16. **P14 is not on the critical path.**
 
 ---
 
-## 四、各阶段设计
+## IV. Phase designs
 
-### 4.1 P11 · LLM Runtime v2 + 可达性闸门
+### 4.1 P11 · LLM Runtime v2 + Reachability Gate
 
-#### R-a/b/c：LLM Runtime v2
+#### R-a/b/c: LLM Runtime v2
 
-现状复核（v0.3.1）：`llm/router.ts` 254 行，D-b 加了超时与 `fetchImpl` 注入，
-但**仍然没有 tool calling、没有 usage、没有流式、没有 `response_format`**，
-且 `SUPPORTED_PROVIDERS` 声明 6 个 provider 只实现 kimi / openrouter 两个。
+Current-state review (v0.3.1): `llm/router.ts` is 254 lines; D-b added timeouts and `fetchImpl` injection,
+but it **still has no tool calling, no usage, no streaming, no `response_format`**,
+and `SUPPORTED_PROVIDERS` declares 6 providers while only implementing two: kimi and openrouter.
 
-架构与类型设计**沿用 v0.3 文档 §4.1**（`llm/types.ts` + `providers/` 三件套），
-本文只记 P10 之后新增的两条约束：
+The architecture and type design **carries forward v0.3 document §4.1** (`llm/types.ts` + the `providers/` trio);
+this document records only two new constraints added after P10:
 
-1. **`ok=false ⇒ content=""`（AD-13）在本阶段落地**。P10 的 D-4 只做了战术版
-   （orchestrator 四处检查 `res.ok`）；类型层根治在这里做完，并**删掉那四处 if**——
-   否则会留下「两套防线，改一处不改另一处」的漂移面。
-2. **provider 能力位必须进 `capabilities --json`**：`{ toolCalling, jsonMode, streaming, usageReported }`。
-   外部 agent 在选模型**之前**就要知道能不能跑 tool loop，而不是跑到一半才发现。
-   这条同时是 P12 的前提——ToolBus 遇到不支持 tool calling 的模型要能**显式降级**
-   （降级为「JSON 计划 + 逐步执行」模式并如实告知），而不是静默失败。
+1. **`ok=false ⇒ content=""` (AD-13) lands in this phase**. P10's D-4 only did a tactical version
+   (the orchestrator checked `res.ok` in four places); the type-layer fix is completed here for good, **and those four `if`s are deleted** —
+   otherwise there would be "two lines of defense, fix one and not the other" drift.
+2. **Provider capability bits must go into `capabilities --json`**: `{ toolCalling, jsonMode, streaming, usageReported }`.
+   An external agent needs to know **before** picking a model whether it can run a tool loop, rather than finding out halfway through.
+   This is also a prerequisite for P12 — when ToolBus encounters a model that doesn't support tool calling, it must be able to **explicitly degrade**
+   (degrade to a "JSON plan + step-by-step execution" mode with honest disclosure), rather than failing silently.
 
-**风险与对策**：国产 provider 的 tool calling 兼容性差异大。
-对策是**能力位在运行时可探测**，且降级路径有独立 e2e——不能只在「模型配合」时才工作。
+**Risk and countermeasure**: tool-calling compatibility varies widely among domestic providers.
+The countermeasure is that **capability bits are detectable at runtime**, and the degradation path has an independent e2e test — it cannot only work "when the model cooperates."
 
-> **上游情报可用（2026-09-10 补）**：对 OpenScience v2.0.86 的 provider 层做过源码级调研，
-> per-provider 怪癖表在本地规划目录 `spark-research-v0.5-plan/workstreams/provider/PROVIDER_QUIRKS.md`
-> （刻意未入库，v0.5 评审时再定去留）。对 R-a/R-b 直接有用的三条：
-> ① DeepSeek 是唯一需要**结构性改写工具 schema** 的 provider，且 thinking 模式下要剔除 `tool_choice`；
-> ② OpenRouter 不显式请求会**静默丢弃推理轨迹**；
-> ③ Qwen 在上游几乎零专属适配，兼容性未经验证——正好是我们「能力位运行时可探测」要兜住的那类。
-> 实施 R-a/R-b 前先查这张表，别重新踩一遍坑。
+> **Upstream intel available (added 2026-09-10)**: a source-level investigation of OpenScience v2.0.86's provider layer was done,
+> and the per-provider quirks table lives in the local planning directory `spark-research-v0.5-plan/workstreams/provider/PROVIDER_QUIRKS.md`
+> (deliberately not checked into the repo; disposition to be decided at the v0.5 review). Three items directly useful for R-a/R-b:
+> ① DeepSeek is the only provider that requires **structurally rewriting the tool schema**, and `tool_choice` must be stripped in thinking mode;
+> ② OpenRouter will **silently discard the reasoning trace** unless explicitly requested;
+> ③ Qwen has almost no dedicated upstream adaptation and its compatibility is unverified — exactly the kind of case our "capability bits detectable at runtime" is meant to catch.
+> Check this table before implementing R-a/R-b — don't step in the same hole twice.
 
-#### R-d：可达性闸门（新增，独立 lane）
+#### R-d: Reachability Gate (new, independent lane)
 
-**问题**（v0.4 制订时实测了全部 10 个技能的可达性矩阵，结论比初判严重）：
-`protein-analysis` 是 10 个里**唯一 CLI / HTTP / MCP 三个入口全无**的，也是唯一 SKILL.md 里没有 CLI 示例的。
-而 `capabilities --json` **照常把它当可用能力广播**——带描述、`triggers`（「这个蛋白长什么样」
-「有没有可用的结构」）、connector 清单、`validation` 文件列表。外部 agent 读了 triggers 会确信能调用它。
+**The problem** (while drafting v0.4, the reachability matrix was measured for all 10 skills; the conclusion is worse than initially assumed):
+`protein-analysis` is the **only one of the 10 with all three entry points — CLI / HTTP / MCP — completely absent**, and the only one whose SKILL.md has no CLI example.
+Yet `capabilities --json` **broadcasts it as an available capability as usual** — with a description, `triggers` ("what does this protein look like",
+"is there an available structure"), a connector list, and a `validation` file list. An external agent reading the triggers would be confident it can invoke it.
 
-所以这不是「少个入口」，是**自描述面在对外撒谎**——AD-12 的直接违反，而现有门禁只查孤儿模块、
-没查技能可达性。AD-5「每个技能必须有配套 e2e 验证才算完成」在这里也被**纸面满足**了：有 e2e，但没人能用。
-（附带：它列的 `validation` 第二项属于 8 个 `skipIf(!RECORDING)` 用例之一，本轮从未跑过。）
+So this isn't "missing an entry point" — it's **the self-description surface lying to the outside world** — a direct violation of AD-12, and the existing gate check
+only looks for orphan modules, not skill reachability. AD-5's "every skill must have a matching e2e verification to count as done" is also **satisfied on paper only** here: there's an e2e test, but nobody can actually use it.
+(Aside: the second item in its `validation` list is one of the 8 `skipIf(!RECORDING)` test cases that has never run this round.)
 
-**AD-5 收紧为**（写入 DESIGN）：
+**AD-5 tightened to** (write into DESIGN):
 
-> 技能「完成」的判据是 **e2e 验证 + 至少一条可达的生产入口**（CLI / HTTP / MCP 三者之一），
-> 且该入口出现在 `capabilities --json` 里。只有测试能调到的能力等于不存在。
+> The criterion for a skill being "complete" is **e2e verification + at least one reachable production entry point** (one of CLI / HTTP / MCP),
+> and that entry point must appear in `capabilities --json`. A capability that only tests can reach is equivalent to not existing.
 
-**交付**：
-1. `narrative_parity.test.ts` 新增断言：`skills/` 下每个 SKILL.md 对应的能力，
-   必须在 CLI 命令表 / HTTP 路由表 / `MCP_TOOLS` 至少一处可达，且在 capabilities 输出里
-2. 补 `protein-analysis` 的生产入口（CLI + MCP 工具各一条），或从技能目录撤下——**二选一，不许悬着**
-3. **V23**：`unconsumedWarnings` 接进 HTTP 审批响应与 Web 审批弹窗，**并加 e2e 断言**
-   （批准界面必须显示「你写了但安全门没看见」的内容）
-4. **V20**：`index.ts` 的 `CONFIG_DIR` 改为走 `dataDir()`，与 `config/index.ts` 同一套解析
+**Deliverables**:
+1. Add an assertion to `narrative_parity.test.ts`: the capability corresponding to every SKILL.md under `skills/`
+   must be reachable in at least one of the CLI command table / HTTP route table / `MCP_TOOLS`, and must appear in the capabilities output
+2. Add production entry points for `protein-analysis` (one CLI + one MCP tool each), or pull it from the skill directory — **pick one, don't leave it hanging**
+3. **V23**: wire `unconsumedWarnings` into the HTTP approval response and the Web approval dialog, **with an added e2e assertion**
+   (the approval UI must display content saying "you wrote this but the safety gate never saw it")
+4. **V20**: change `index.ts`'s `CONFIG_DIR` to go through `dataDir()`, using the same resolution as `config/index.ts`
 
-> R-d 与 R-a/b/c 零文件重叠，可全程并行；它也是 P11 里唯一**不依赖接口先行**的 lane。
+> R-d has zero file overlap with R-a/b/c and can run fully in parallel; it is also the only lane in P11 that does **not depend on interface-first**.
 
-### 4.2 P12 · ToolBus + 真子代理
+### 4.2 P12 · ToolBus + real subagents
 
-架构沿用 v0.3 文档 §4.2（`AgentToolBus` 套在 P9 的 `McpToolRunner` 外面，加授权/预算/审计）。
-P10 之后的修订：
+Architecture carries forward v0.3 document §4.2 (`AgentToolBus` wraps around P9's `McpToolRunner`, adding authorization/budget/audit).
+Revisions after P10:
 
-1. **MCP 工具已增至 29 个**（v0.2.1 又加了几个），ToolBus 的 `specs()` 必须与
-   `MCP_TOOLS` **同源**，不另写一份。
-2. **`MCP_WITHHELD` 直接复用**（AD-9 已有的五个扣留工具），不重新实现一张危险动作表。
-   AD-14「子代理永不自批准」= ToolBus 对 `MCP_WITHHELD` 同样拒绝 + 对抗测试。
-3. **V19（审批要求可交互终端）与 AD-14 同批做**：AD-14 挡的是默认路径，
-   V19 才是技术防线（CLI 审批要求 TTY 或非交互环境拿不到的确认令牌）。两者缺一不可。
-4. **删 swarm**：`swarm.ts` / `swarm_types.ts` 及其测试。
-   注意 D-12 门禁的 `ALLOWED_ORPHANS` 里有它的登记条目，**删代码后必须同步删登记**——
-   门禁的「stale 条目」断言会强制这件事（这正是那条断言的用途）。
-5. **V16**：子代理独立模型暴露成用户配置项（`SubAgentSpec.model` 终于有真消费方）。
-6. **接口预留，不写实现（2026-09-10 补）**：v0.5 已拍板做远端算力（BACKLOG V4 启动条件触发），
-   它将是 ToolBus 的下一类消费者——**计费型后果动作**（提交一个 Modal GPU 任务 = 花真钱）。
-   P12 只需保证两点被测试锁死，不为 v0.5 写任何代码：
-   ① `MCP_WITHHELD` 的拒绝对子代理无例外（AD-14 对抗测试天然覆盖，将来 `compute approve` 加入扣留清单即可）；
-   ② 预算记账的接口不把计量单位硬编码为 token——留一个可扩展的计价维度，否则 v0.5 接算力成本时要拆了重做。
+1. **MCP tools have grown to 29** (v0.2.1 added a few more), and ToolBus's `specs()` must be **sourced from the same place** as
+   `MCP_TOOLS`, not maintained as a separate copy.
+2. **`MCP_WITHHELD` is directly reused** (the five withheld tools already defined by AD-9), not reimplemented as a separate dangerous-action table.
+   AD-14 "subagents never self-approve" = ToolBus also rejects `MCP_WITHHELD` + adversarial tests.
+3. **V19 (approval requires an interactive terminal) is done in the same batch as AD-14**: AD-14 blocks the default path,
+   while V19 is the technical line of defense (CLI approval requires a TTY or a confirmation token unobtainable in a non-interactive environment). Neither can be skipped.
+4. **Remove swarm**: `swarm.ts` / `swarm_types.ts` and their tests.
+   Note that the D-12 gate's `ALLOWED_ORPHANS` has a registration entry for it — **after deleting the code, the registration must be deleted too** —
+   the gate's "stale entry" assertion will force this (that's exactly what that assertion is for).
+5. **V16**: expose the subagent's independent model as a user config item (`SubAgentSpec.model` finally has a real consumer).
+6. **Reserve the interface, don't write the implementation (added 2026-09-10)**: v0.5 has already been greenlit to do remote compute
+   (BACKLOG V4's launch condition triggered), and it will be ToolBus's next class of consumer — **billable-consequence actions**
+   (submitting a Modal GPU job = spending real money). P12 only needs to lock two things down with tests, and doesn't need to write any code for v0.5:
+   ① `MCP_WITHHELD`'s rejection has no exception for subagents (the AD-14 adversarial test naturally covers this; later, `compute approve` just needs to be added to the withheld list);
+   ② the budget-accounting interface must not hardcode the unit of measure as tokens — leave an extensible pricing dimension, otherwise v0.5 will have to tear it apart and redo it when integrating compute cost.
 
-### 4.3 P13 · 研究循环
+### 4.3 P13 · Research loop
 
-架构沿用 v0.3 文档 §4.3（contract stages / replan / `agent_run` record / findings 状态机）。
-P10 之后的修订：
+Architecture carries forward v0.3 document §4.3 (contract stages / replan / `agent_run` record / findings state machine).
+Revisions after P10:
 
-1. **`agent_run` 是第 9 类 record**，而 records 表在 D-9 之后有了 `rev`（CAS）与
-   `integrityHash`。新 record 类型必须走同一套写入路径，**不得绕过完整性校验**。
-2. **AD-10 的最大设计风险**：`check(q)` 写得太严会让 agent 永远判定「未完成」而空转。
-   对策是**三条并行的停机条件**，缺一不可：
-   - `contract.allDone()` — 正常完成
-   - `noProgress(2 轮)` — 连续两轮证据图无新增节点 → 停并报告未完成的 stage
-   - `budget` 耗尽 → `stopReason: "budget"`，**明确区别于 `done`**
-3. **findings 状态机（C-b）与 contract/replan（C-a）零文件重叠**，全程并行。
+1. **`agent_run` is the 9th record type**, and the records table has had `rev` (CAS) and
+   `integrityHash` since D-9. New record types must go through the same write path, **and must not bypass integrity checking**.
+2. **AD-10's biggest design risk**: if `check(q)` is written too strictly, the agent will judge "not done" forever and spin.
+   The countermeasure is **three parallel halt conditions**, all required:
+   - `contract.allDone()` — normal completion
+   - `noProgress(2 rounds)` — two consecutive rounds with no new node in the evidence graph → halt and report the unfinished stage
+   - `budget` exhausted → `stopReason: "budget"`, **explicitly distinct from `done`**
+3. **The findings state machine (C-b) has zero file overlap with contract/replan (C-a)**, and runs fully in parallel.
 
-### 4.4 P14 · 上手性
+### 4.4 P14 · Onboarding experience
 
-沿用 v0.3 文档 §4.4。P10 之后新增两条：
+Carries forward v0.3 document §4.4. Two new items after P10:
 
-- **V11 长任务句柄落盘**升级为必做：v0.2.1 的零上下文外部验收已经撞上这个
-  （任务句柄在 server 进程内存里，连接一断即失效）。这是外部 agent 体验的头号摩擦点。
-- **V17 MCP 长任务进度回传** + **V18 `capabilities --probe` 缓存**一并做（同属「看得见在干活」）。
-- **本地模型接入有现成情报（2026-09-10 补）**：OpenScience `local.ts` 的实现清单已整理在本地规划目录
-  `spark-research-v0.5-plan/workstreams/provider/V05_PROVIDER_DESIGN.md` §c（未入库）。
-  三个上游实测坑：本地端点**不能设超时**（大模型冷加载分钟级）；Ollama 的上下文窗口要走
-  `/api/create` 别名机制而不是请求参数；Ollama/LM Studio 各有端口预设与响应形状差异。做 P14 本地模型时先读它。
+- **V11, persisting long-task handles to disk, is upgraded to mandatory**: v0.2.1's zero-context external acceptance review already ran into this
+  (the task handle lived in the server process's memory, and became invalid the moment the connection dropped). This is the #1 friction point for the external-agent experience.
+- **V17 MCP long-task progress reporting** + **V18 `capabilities --probe` caching** are done together (both belong to "visibly working").
+- **Local model integration has existing intel available (added 2026-09-10)**: the implementation checklist for OpenScience's `local.ts`
+  has been organized in the local planning directory `spark-research-v0.5-plan/workstreams/provider/V05_PROVIDER_DESIGN.md` §c (not checked in).
+  Three upstream field pitfalls: local endpoints **must not set a timeout** (cold-loading a large model can take minutes); Ollama's context window must go through
+  the `/api/create` alias mechanism rather than a request parameter; Ollama/LM Studio each have their own port presets and differing response shapes. Read it first when doing local models in P14.
 
-### 4.5 P15 · 扩展面
+### 4.5 P15 · Extension surface
 
-沿用 v0.3 文档 §4.5（三种装载强度 + `ext verify` 契约化验收 + AD-11）。P10 之后的修订：
+Carries forward v0.3 document §4.5 (three loading strengths + `ext verify` contract-based acceptance + AD-11). Revisions after P10:
 
-**声明式 connector 的 manifest 必须映射到 D-a 之后的新契约**：
-「同名方法即 handler」已在 v0.3.0 废除，现在是构造期显式 `this.handle(toolName, fn)` 注册。
-manifest 的每个 tool 声明编译成一条 handler 注册，**天然继承 D-1 的并发安全性质**——
-这是 v0.3 的债务清算给 v0.4 带来的直接红利，manifest 设计要显式利用它。
+**The declarative connector's manifest must map onto the new contract established after D-a**:
+"same-named method equals handler" was abolished in v0.3.0; it is now explicit constructor-time `this.handle(toolName, fn)` registration.
+Each tool declaration in the manifest compiles into one handler registration, **naturally inheriting D-1's concurrency-safety property** —
+this is a direct dividend from v0.3's debt payoff for v0.4, and the manifest design should explicitly exploit it.
 
-`ext verify` 的 connector 契约测试**直接复用 `tests/concurrency/connector_race.test.ts` 的不变式**：
-第三方 connector 也必须通过 100 并发参数映射一致性检查。
+`ext verify`'s connector contract tests **directly reuse the invariants of `tests/concurrency/connector_race.test.ts`**:
+third-party connectors must also pass the 100-concurrency parameter-mapping-consistency check.
 
-**manifest 表达力的三条实测约束（2026-09-10 补）**：v0.5 规划期间对 30 个候选数据源
-做过 staged 实现调研（本地规划目录 `spark-research-v0.5-plan/workstreams/connectors/`，未入库），
-manifest schema 设计时要把这三条当验收用例，而不是做完才发现表达不了：
+**Three field-tested constraints on manifest expressiveness (added 2026-09-10)**: during v0.5 planning, a staged implementation
+investigation was done on 30 candidate data sources (local planning directory `spark-research-v0.5-plan/workstreams/connectors/`, not checked in);
+these three should be used as acceptance cases when designing the manifest schema, rather than discovered too late to be expressible:
 
-1. **参数要支持 enum 校验**——bioRxiv 的 `server` 参数只认 `biorxiv|medrxiv`，声明不了枚举的 manifest 挡不住脏输入；
-2. **声明式映射覆盖不了响应体分支**——BindingDB 无匹配时返回 HTTP 200 + 空 body（不是 404），
-   这类源就该留在 TS 装载强度，manifest 不必追求全覆盖（三种装载强度并存正是为此）；
-3. **「一次 fetch 查多实体」的形态要拆**——OpenTargets 一个接口横跨 target/disease/drug 三类实体，
-   进 manifest 应拆成多个 tool 声明，而不是造一个万能参数。
+1. **Parameters must support enum validation** — bioRxiv's `server` parameter only accepts `biorxiv|medrxiv`; a manifest that can't declare an enum can't block dirty input;
+2. **Declarative mapping cannot cover response-body branching** — BindingDB returns HTTP 200 with an empty body on no match (not a 404);
+   sources like this should stay at the TS loading strength, and the manifest doesn't need to strive for full coverage (that's exactly why the three loading strengths coexist);
+3. **The shape of "one fetch, multiple entity types" needs to be split** — OpenTargets has a single endpoint spanning target/disease/drug, three entity types;
+   going into the manifest, it should be split into multiple tool declarations rather than made into one do-everything parameter.
 
-### 4.6 P16 · 文献域 + 发布
+### 4.6 P16 · Literature domain + release
 
-沿用 v0.3 文档 §4.6（E-1…E-6）。新增两条**验证性任务**（都来自 v0.3.1 的验证复盘）：
+Carries forward v0.3 document §4.6 (E-1…E-6). Two new **verification tasks** added (both from the v0.3.1 verification retrospective):
 
-- **跑一次真实网络的 `tests/integration/`**（`RECORDING=1`），重新录制 fixture 并核对
-  上游 API 是否已漂移——这套用例从写下来之后**在本轮从未跑过**
-- **拿一个真实的 v0.2.x 老 `records.db` 跑迁移演练**，确认 D-9 的 `rev` 列迁移在真实老库上成立
+- **Run `tests/integration/` once against the real network** (`RECORDING=1`), re-record the fixtures, and check
+  whether the upstream API has drifted — this suite of tests **has never run since it was written**
+- **Run a real v0.2.x legacy `records.db` through the migration drill**, confirming D-9's `rev` column migration holds up on a real legacy database
 
-**限速预算注意（2026-09-10 补，登记为 BACKLOG V26，P16 不实现）**：connector 层目前只有
-礼貌头（`politeness.ts`），**没有任何限速器**。P16 的 pubmed manifest 与 v0.5 计划新增的
-ClinVar / GEO 都打 NCBI eutils 的**同一主机预算**——将来限速器若做，必须按 host 键控合池，
-不能按 connector 各自为政，否则四个 connector 会集体被 429。
+**Rate-limiting budget note (added 2026-09-10, registered as BACKLOG V26, not implemented in P16)**: the connector layer currently only has
+a politeness header (`politeness.ts`), **no rate limiter of any kind**. P16's pubmed manifest and the ClinVar / GEO connectors planned for v0.5
+both hit the **same host budget** on NCBI eutils — if a rate limiter is ever built, it must be keyed and pooled by host,
+not managed per-connector independently, otherwise the four connectors would collectively get hit with 429s.
 
 ---
 
-## 五、并行方案
+## V. Parallelization plan
 
-### 5.1 lane 划分与文件所有权
+### 5.1 Lane division and file ownership
 
-> **铁律不变：一个文件同一时刻只属于一条 lane。** 越界先回报，不自行扩权。
+> **The iron rule is unchanged: a file belongs to exactly one lane at any given time.** Report first if crossing a boundary; never self-expand scope.
 
-**P11（4 lane）**
+**P11 (4 lanes)**
 
-| lane | 模型 | 独占文件 |
+| lane | model | exclusive files |
 |---|---|---|
-| **接口先行**（必须先单独合入） | Opus 5 | `llm/types.ts` + `llm/router.ts` 门面 |
-| `R-a` OpenAI 兼容基座（含 ollama / vLLM / 本地端点） | Opus 5 | `llm/providers/openai_compat.ts` |
-| `R-b` Anthropic 原生 | Sonnet 5 | `llm/providers/anthropic.ts` |
-| `R-c` 预算与能力位 | Sonnet 5 | `llm/budget.ts` `llm/providers/registry.ts` `capabilities/` 的 provider 段 |
-| `R-d` **可达性闸门**（不依赖接口先行） | Sonnet 5 | `tests/unit/narrative_parity.test.ts` · `proteins/**` · `skills/protein-analysis/**` · `lab/` 的 unconsumedWarnings 出口 · `server/routes/lab.ts` · 前端审批弹窗 · `index.ts` 的 CONFIG_DIR 段 |
+| **Interface-first** (must merge in alone first) | Opus 5 | `llm/types.ts` + `llm/router.ts` façade |
+| `R-a` OpenAI-compatible base (incl. ollama / vLLM / local endpoints) | Opus 5 | `llm/providers/openai_compat.ts` |
+| `R-b` Anthropic native | Sonnet 5 | `llm/providers/anthropic.ts` |
+| `R-c` Budget and capability bits | Sonnet 5 | `llm/budget.ts` `llm/providers/registry.ts` the provider section of `capabilities/` |
+| `R-d` **Reachability gate** (does not depend on interface-first) | Sonnet 5 | `tests/unit/narrative_parity.test.ts` · `proteins/**` · `skills/protein-analysis/**` · the unconsumedWarnings egress point in `lab/` · `server/routes/lab.ts` · the frontend approval dialog · the CONFIG_DIR section of `index.ts` |
 
-**P12（2 lane，Opus 5）**：`agents/toolbus.ts` ‖ `agents/subagent.ts` + `agents/prompt/*.txt` + 删 swarm（含删门禁登记）
-**P13（2 lane，Opus 5）**：`agents/contract.ts` + replan + `agents/ledger.ts` ‖ `reviewer/findings_store.ts` + CLI（**完全独立**）
-**P14（2 lane，Sonnet 5）**：分发打包（npx/单二进制/brew） ‖ 向导 + demo + SSE 流 + 任务句柄落盘
-**P15（2 lane，Opus 5）**：扩展装载 + `ext verify` ‖ 声明式 connector + MCP client
-**P16（3 lane，Sonnet 5）**：manifest 源（arXiv/PubMed） ‖ judge 降本 ‖ 元数据修复 + 真实网络录制 + 老库迁移演练
+**P12 (2 lanes, Opus 5)**: `agents/toolbus.ts` ‖ `agents/subagent.ts` + `agents/prompt/*.txt` + remove swarm (including removing the gate registration)
+**P13 (2 lanes, Opus 5)**: `agents/contract.ts` + replan + `agents/ledger.ts` ‖ `reviewer/findings_store.ts` + CLI (**fully independent**)
+**P14 (2 lanes, Sonnet 5)**: distribution packaging (npx/single binary/brew) ‖ wizard + demo + SSE streaming + long-task handle persistence
+**P15 (2 lanes, Opus 5)**: extension loading + `ext verify` ‖ declarative connector + MCP client
+**P16 (3 lanes, Sonnet 5)**: manifest sources (arXiv/PubMed) ‖ judge cost reduction ‖ metadata fixes + real-network recording + legacy-database migration drill
 
-### 5.2 lane 启动清单（写进每份任务书）
+### 5.2 Lane startup checklist (write into every task brief)
 
 ```
 ① git worktree add ~/Desktop/AI4S/spark-research-<lane> -b feat/<phase>-<lane> feat/<phase>-integration
 ② bun install --frozen-lockfile
-③ uv sync（或链接主仓 .venv）—— 不做这步，17 个 OpenMM 用例会静默 skip
-④ export SPARK_E2E_PORT=<4400 + lane 序号>
-⑤ 只改所有权表里属于本 lane 的文件；越界先回报
-⑥ 不碰 CHANGELOG / BACKLOG / README / DEVELOPMENT_PLAN*；devlog 只写 docs/devlog/<phase>-<lane>.md
-⑦ 提 PR 前跑**全量**：typecheck + bun test tests/unit/ + tests/concurrency/ + tests/timeout/
+③ uv sync (or link the main repo's .venv) — skip this step and 17 OpenMM cases will silently skip
+④ export SPARK_E2E_PORT=<4400 + lane number>
+⑤ Only touch files owned by this lane per the ownership table; report first if crossing a boundary
+⑥ Do not touch CHANGELOG / BACKLOG / README / DEVELOPMENT_PLAN*; devlog goes only in docs/devlog/<phase>-<lane>.md
+⑦ Before opening a PR, run the **full suite**: typecheck + bun test tests/unit/ + tests/concurrency/ + tests/timeout/
    + **bun run test:e2e** + test:py + test:lab
-⑧ **阴性对照是强制项**：回退自己的修复，确认新测试真的会红，把结果写进 devlog
-⑨ 报告里必须写明**哪些套件没能在本 lane 跑成**（不许把 skip 当通过）
-⑩ 目标分支是 feat/<phase>-integration，不是 main；不 push main、不开 PR、不 merge
+⑧ **Negative controls are mandatory**: revert your own fix, confirm the new test really goes red, write the result into the devlog
+⑨ The report must state **which suites failed to run** in this lane (do not count a skip as a pass)
+⑩ The target branch is feat/<phase>-integration, not main; do not push to main, do not open a PR against it, do not merge into it
 ```
 
-### 5.3 纪律（在仓库现有 11 条之上新增 3 条）
+### 5.3 Discipline (3 new items on top of the repo's existing 11)
 
-> 建议一并写进 `docs/DEVELOPMENT_PLAN.md` 的工程纪律小节。
+> Recommended to also add to the engineering-discipline section of `docs/DEVELOPMENT_PLAN.md`.
 
-**12. push 后必验远端 ref**（本次事故新增）
-`git push -q …; echo ok` 会用无条件 echo 掩盖推送失败。开 PR 前执行
-`git ls-remote --heads origin <branch>` 确认远端 ref 就是本地 HEAD；
-合并后执行 `git diff --stat <本地分支> origin/main` 应为空。
-**失败会长得像成功**——PR #22 就是这么合了一个空变更。
+**12. The remote ref must be verified after a push** (new, from this incident)
+`git push -q …; echo ok` uses an unconditional echo that masks a push failure. Before opening a PR, run
+`git ls-remote --heads origin <branch>` to confirm the remote ref really is the local HEAD;
+after merging, run `git diff --stat <local branch> origin/main`, which should be empty.
+**Failure that looks like success** — that's exactly how PR #22 merged an empty diff.
 
-**13. 跨层改动必须跑 e2e + 消费方清扫**（v0.3.0 回归后新增）
-后端改动只要触及**对外词汇表或响应形状**（状态名、枚举、端点字段、错误码），
-就必须：① 跑 `bun run test:e2e`；② 走一遍消费方清扫清单——
-`frontend/workspace/src`、`mcp/tools.ts` 的工具描述、`llms.txt`、`skills/*/SKILL.md`、
-`capabilities` 输出、`docs/`。**typecheck 抓不到字符串比较。**
+**13. Cross-layer changes must run e2e + a consumer cleanup pass** (new, after the v0.3.0 regression)
+Any backend change that touches the **externally-facing vocabulary or response shape** (state names, enums, endpoint fields, error codes)
+must: ① run `bun run test:e2e`; ② go through the consumer cleanup checklist —
+`frontend/workspace/src`, the tool descriptions in `mcp/tools.ts`, `llms.txt`, `skills/*/SKILL.md`,
+the `capabilities` output, `docs/`. **Typecheck cannot catch string comparisons.**
 
-**14. 单一合并权**（跨会话事故后新增）
-同一时刻只有一个会话拥有向 `main` 合并的权力。其他会话产出一律停在分支上。
-integration 分支在开 PR 前必须 `git fetch` 并确认 `origin/main` 是自己的祖先，
-且复验全部既有 tag 仍在 `origin/main` 历史里。
+**14. Sole merge authority** (new, after the cross-session incident)
+At any given moment, only one session holds the authority to merge into `main`. Any other session's output stays parked on its branch.
+Before opening a PR, the integration branch must `git fetch` and confirm `origin/main` is its own ancestor,
+and re-verify that every existing tag is still in `origin/main`'s history.
 
-### 5.3·补 · 新建模块但无权接线时怎么办（P11 实战补充）
+### 5.3·Addendum · What to do when a new module is created but you don't have wiring authority (P11 field addendum)
 
-**P11 撞上的真实冲突**：lane R-b 交付 `llm/providers/anthropic.ts`，但 `router.ts` 的
-`ADAPTERS` 注册被主会话**刻意扣下**（R-b 与 R-c 都可能要动 router，扣下是为了避免
-P10 那种「四条 lane 各自绿、合起来红」）。结果是 R-b 的新模块**在自己分支上没有任何
-生产调用方**——直接踩中 D-12 的孤儿模块门禁（那条断言当初就是用来抓 `swarm.ts` 的）。
+**A real conflict hit in P11**: lane R-b delivered `llm/providers/anthropic.ts`, but the `router.ts`'s
+`ADAPTERS` registration was **deliberately withheld** by the main session (both R-b and R-c might touch router,
+and withholding it was meant to avoid the P10-style "four lanes each green individually, red combined"). The result was that R-b's new module had
+**no production caller at all on its own branch** — running straight into the D-12 orphan-module gate check (that assertion was originally
+built to catch `swarm.ts`).
 
-**门禁是对的，扣接线也是对的，冲突在于两者没协调。** 这不是个例：任何
-「lane 新建模块 + 接线权在别处」的组合都会踩到，而 v0.4 剩下的阶段里这种组合很多
-（P12 的 ToolBus、P13 的 ledger、P15 的扩展装载器都是新模块）。
+**The gate was right, and withholding the wiring was right too — the conflict is that the two weren't coordinated.** This isn't an isolated case: any
+combination of "lane creates a new module + wiring authority sits elsewhere" will hit this, and there are many such combinations in the remaining phases of v0.4
+(P12's ToolBus, P13's ledger, and P15's extension loader are all new modules).
 
-**处置（此后照做）**：
+**Handling (follow from here on)**:
 
-1. 创建模块的 lane **自己**往 `ALLOWED_ORPHANS` 加一条登记，理由写成
-   「**等接线**：<谁> 在 <哪个阶段> 接线，接完必须删本条」
-2. 主会话接线时**删掉那条登记**
-3. 门禁的「多余登记必须删除」对称检查会强制这件事：
-   - 接了线 → 条目变多余 → 不删就红
-   - 忘了接线 → 模块还是孤儿 → 也红
+1. The lane creating the module **itself** adds a registration entry to `ALLOWED_ORPHANS`, with the reason written as
+   "**awaiting wiring**: <who> will wire it in <which phase>; this entry must be deleted once wired"
+2. When the main session does the wiring, it **deletes that registration entry**
+3. The gate's symmetric "stale entries must be deleted" check will force this:
+   - Wired in → the entry becomes stale → fails to delete it → red
+   - Forgot to wire in → the module is still an orphan → also red
 
-   **两个方向都被钉住，忘不掉。**
+   **Both directions are pinned down — it can't be forgotten.**
 
-> 顺带一提，这让门禁从「防止叙事漂移」多长出一个用途：**它同时是一张接线清单**。
-> 这是 AD-12 没预料到的正收益——把「声称与实现必须对账」推到极致，
-> 连「模块建好了但没接上」这种半成品状态也被自动追踪了。
+> Incidentally, this gives the gate check a use beyond "preventing narrative drift": **it doubles as a wiring checklist**.
+> This is an upside AD-12 didn't anticipate — pushing "claims must reconcile with implementation" to its limit,
+> such that even a half-finished state like "the module is built but not wired in" gets tracked automatically.
 
-**给 lane 任务书的模板句**：
-> 你新建的模块如果暂时没有生产调用方（接线权不在你这里），
-> 在 `ALLOWED_ORPHANS` 里登记一条并写清「等谁接线」——**只许加登记，不许改断言逻辑**。
-
----
-
-### 5.3·补二 · spawn 前必须回到中立目录（W1/W2 各踩一次）
-
-**现象**：子代理 spawn 时继承主会话当时的 cwd。W1 与 W2 两波我都停在某条 lane 的 worktree 里发任务，于是四个子代理的 pwd 全是那条 lane 的目录——**三条与自己的 brief 错配**。
-
-**后果比想象的重**：任务书里「不要动其他 worktree」这条隔离规则，和错配的 cwd 组合起来会产生一个**看似合理的错误推论**——子代理会把沙盒绑定读成指派信号，进而认为「我被指派的是 pwd 这条 lane，brief 发错了」或「另一个 session 正在我 brief 指向的目录里跑，我进去会撞车」。
-W1-c 与 W2-c 两次都是这么停下来的，而且**它们的推理在可观测信息范围内完全正确**。
-
-**在 brief 第一行写 `cd <绝对路径>` 不足以解决**（W2 就是这么写的，照样触发）——因为矛盾不在「不知道去哪」，而在「环境和指令互相矛盾时该信哪个」。
-
-**做法**：
-1. **spawn 前 `cd` 回主仓**（`~/Desktop/AI4S/spark-research`），让所有子代理继承一个中立目录；
-2. brief 里把隔离规则写准：「**不要动其他 lane 的 worktree 和主仓**；你自己 lane 的工作区就是你该待的地方，   不管初始 cwd 在哪」；
-3. 如果子代理还是停下来问——**那是对的行为，别嫌它烦**。这个项目踩过三次「不冲突、不告警、   只是静默出错」的坑（v0.2.1 被绕过 / PR 合空变更 / UI 回归），子代理主动拦截同类风险是净收益。
+**Template sentence for lane task briefs**:
+> If the module you created has no production caller for now (wiring authority isn't yours),
+> register an entry in `ALLOWED_ORPHANS` and write clearly "awaiting wiring by whom" — **only add registrations, never change the assertion logic**.
 
 ---
 
-### 5.4 消费方清扫清单（纪律 13 的可执行形式）
+### 5.3·Addendum 2 · Must return to a neutral directory before spawning (hit once each by W1/W2)
 
-改了后端的对外词汇表 / 响应形状后，逐项确认：
+**Symptom**: when a subagent spawns, it inherits the main session's cwd at that moment. Across both wave W1 and wave W2 I was sitting in a lane's worktree when I dispatched tasks, so all four subagents' pwd was that one lane's directory — **three of them mismatched with their own brief**.
 
-| 消费方 | 怎么查 |
+**The consequence is worse than it sounds**: the isolation rule in the task brief ("don't touch other worktrees"), combined with the mismatched cwd, produces a **seemingly reasonable but wrong inference** — the subagent reads the sandbox binding as an assignment signal, and concludes either "the lane I've been assigned is the one at pwd, the brief must be wrong" or "another session is currently working in the directory my brief points to, and going there would cause a collision."
+Both W1-c and W2-c stopped for exactly this reason, and **their reasoning was entirely correct given the information they could observe**.
+
+**Putting `cd <absolute path>` on the first line of the brief is not enough to fix this** (that's exactly what W2 did, and it still triggered) — because the contradiction isn't "not knowing where to go," it's "which one to believe when the environment and the instructions contradict each other."
+
+**Approach**:
+1. **`cd` back to the main repo before spawning** (`~/Desktop/AI4S/spark-research`), so every subagent inherits a neutral directory;
+2. Write the isolation rule precisely in the brief: "**Do not touch other lanes' worktrees or the main repo**; your own lane's workspace is where you belong, regardless of the initial cwd";
+3. If a subagent still stops to ask — **that's the correct behavior, don't find it annoying**. This project has hit three "no conflict, no warning, just a silent failure" pitfalls (v0.2.1 bypassed / a PR merging an empty diff / the UI regression), so a subagent proactively flagging a similar risk is a net win.
+
+---
+
+### 5.4 Consumer cleanup checklist (the executable form of Discipline 13)
+
+After changing the backend's externally-facing vocabulary / response shape, confirm each item:
+
+| Consumer | How to check |
 |---|---|
-| Web 工作台 | `grep -rn "<旧词>" frontend/workspace/src`（**注意是字符串比较，tsc 不管**） |
-| MCP 工具描述 | `grep -n "<旧词>" backend/src/mcp/tools.ts` — 这些字符串是给外部 agent 看的 |
-| 自描述端点 | `capabilities --json`、`/api/lab/machine` 等**必须能从真源推导**，不许手写 |
-| llms.txt | `bun run gen:llms` 后 `git diff` 应为空（否则就是忘了重新生成） |
-| SKILL.md | `grep -rn "<旧词>" backend/src/skills/` |
-| 文档 | README / DESIGN / EXTENDING |
+| Web workspace | `grep -rn "<old term>" frontend/workspace/src` (**note this is a string comparison — tsc doesn't care**) |
+| MCP tool descriptions | `grep -n "<old term>" backend/src/mcp/tools.ts` — these strings are what external agents see |
+| Self-describing endpoints | `capabilities --json`, `/api/lab/machine`, etc. **must be derivable from the source of truth**, never hand-written |
+| llms.txt | `git diff` after `bun run gen:llms` should be empty (otherwise it means regeneration was forgotten) |
+| SKILL.md | `grep -rn "<old term>" backend/src/skills/` |
+| Documentation | README / DESIGN / EXTENDING |
 
-**能自动化的都进 `narrative_parity.test.ts`**——清单是给人看的兜底，门禁才是防线。
+**Whatever can be automated goes into `narrative_parity.test.ts`** — the checklist is a manual fallback for humans; the gate check is the real line of defense.
 
 ---
 
-## 五·补 · P12–P16 的波次调度（P11 后重排）
+## V·Addendum · Wave scheduling for P12–P16 (rearranged after P11)
 
-> **为什么要重排**：§三的依赖图是**阶段级**的（P12→P13→P15→P16 串行），
-> 但真实依赖是**任务级**的，比阶段级松得多。按阶段排会让大量互不依赖的任务白等。
-> 本节把 P12–P16 的任务拆开重新打包，阶段编号保留为**交付分组标签**（CHANGELOG /
-> 里程碑仍按 P12–P16 讲），**执行按波次**。
+> **Why rearrange**: §III's dependency graph is at the **phase level** (P12→P13→P15→P16 serial),
+> but the real dependencies are at the **task level**, which is much looser. Scheduling by phase leaves a large number of mutually independent tasks waiting for no reason.
+> This section repackages the P12–P16 tasks; the phase numbering is kept as a **delivery grouping label** (CHANGELOG /
+> milestones are still described by P12–P16), but **execution proceeds by wave**.
 
-### 5·补.1 任务级依赖图（重画）
+### 5·Addendum.1 Task-level dependency graph (redrawn)
 
 ```
-R-c(budget.ts) ──► T-a ToolBus ──┬─► T-b 子代理 tool loop ──┐
-                                 │                          ├─► C-b replan 循环
-                                 └─► X-c 外部 MCP client    │
+R-c(budget.ts) ──► T-a ToolBus ──┬─► T-b subagent tool loop ──┐
+                                 │                          ├─► C-b replan loop
+                                 └─► X-c external MCP client    │
                                                             │
-C-a contract stages（只依赖证据图，**不依赖 ToolBus**）──────┘
+C-a contract stages (depends only on the evidence graph, **not on ToolBus**) ─────┘
 
-X-b 声明式 connector manifest（只依赖 v0.3.0 的 connector 契约）──► E-1 arXiv/PubMed
-X-a 扩展装载 + ext verify（只依赖已有的契约测试套件）
+X-b declarative connector manifest (depends only on v0.3.0's connector contract) ──► E-1 arXiv/PubMed
+X-a extension loading + ext verify (depends only on the existing contract test suite)
 
-以下**零跨依赖**，随时可开：
-  C-c agent_run 帧级记账 · C-d findings 状态机 · B-a 打包分发 ·
-  B-b 向导+demo · B-c SSE 流（依赖 P11 流式，已就绪）· B-d 长任务句柄落盘 ·
-  E-2…E-6 文献域修复 · 真实网络录制 · 老库迁移演练 · 删 swarm · V17/V18/V19
+The following have **zero cross-dependencies** and can start anytime:
+  C-c agent_run frame-level accounting · C-d findings state machine · B-a packaging & distribution ·
+  B-b wizard+demo · B-c SSE streaming (depends on P11 streaming, already ready) · B-d long-task handle persistence ·
+  E-2…E-6 literature-domain fixes · real-network recording · legacy-database migration drill · remove swarm · V17/V18/V19
 ```
 
-**真正的关键路径只有一条**：`R-c → T-a → T-b → C-b`。其余全部可以绕开它并行。
+**There is really only one critical path**: `R-c → T-a → T-b → C-b`. Everything else can be routed around it and parallelized.
 
-### 5·补.2 四个波次（每波 4 条 lane，上限仍是审查带宽）
+### 5·Addendum.2 Four waves (4 lanes per wave, still capped by review bandwidth)
 
-| 波次 | lane | 任务 | 依赖 | 模型 |
+| Wave | lane | Task | Dependency | Model |
 |---|---|---|---|---|
-| **W1** | `W1-a` | **T-a ToolBus**（授权 / 预算 / 审计三层，套在 P9 的 `McpToolRunner` 外） | R-c 的 `BudgetLedger` | Opus |
-| | `W1-b` | **C-d findings 状态机**（open→addressed→resolved→reflagged + CLI） | 无 | Sonnet |
-| | `W1-c` | **X-b 声明式 connector manifest**（受限映射 DSL + SSRF 白名单） | 无 | Opus |
-| | `W1-d` | **B-a 打包分发**（`bun build --compile` 单二进制 / npm meta 包 / brew） | 无 | Sonnet |
-| **W2** | `W2-a` | **T-b 子代理 tool loop**（`SubAgentSpec` + 预算 + stopReason 回流） | W1-a | Opus |
-| | `W2-b` | **C-a contract stages**（AD-10：完成判定问图不问模型） | 无 | Opus |
-| | `W2-c` | **X-a 扩展装载 + `ext verify`**（三种强度 + 契约化验收） | 无（与 W1-c 配对） | Opus |
-| | `W2-d` | **B-b/B-c 向导 + demo + SSE 流** | P11 流式 ✓ | Sonnet |
-| **W3** | `W3-a` | **C-b replan 循环**（观察回流 + 三条停机条件） | W2-a + W2-b | Opus |
-| | `W3-b` | **C-c agent_run 帧级记账**（第 9 类 record，走 rev + integrityHash） | R-c | Opus |
-| | `W3-c` | **X-c 外部 MCP client**（外部工具进 ToolBus 与 capabilities，调用落执行记录） | W1-a | Opus |
-| | `W3-d` | **E-1 arXiv/PubMed 走 manifest**（**兼作扩展机制的真实验收**） | W1-c | Sonnet |
-| **W4** | `W4-a` | **删 swarm** + README 宣传语撤下 + V16 子代理模型配置 + V19 审批要 TTY | W2-a | Sonnet |
-| | `W4-b` | **E-2…E-6 文献域修复** + 真实网络录制 + **真实 v0.2.x 老库迁移演练** | 无 | Sonnet |
-| | `W4-c` | **B-d 长任务句柄落盘（V11）** + V17 MCP 进度回传 + V18 probe 缓存 | 无 | Sonnet |
-| | `W4-d` | 机动位：吸收前三波溢出的未完成项 | — | — |
+| **W1** | `W1-a` | **T-a ToolBus** (the three layers of authorization / budget / audit, wrapped around P9's `McpToolRunner`) | R-c's `BudgetLedger` | Opus |
+| | `W1-b` | **C-d findings state machine** (open→addressed→resolved→reflagged + CLI) | none | Sonnet |
+| | `W1-c` | **X-b declarative connector manifest** (restricted mapping DSL + SSRF allowlist) | none | Opus |
+| | `W1-d` | **B-a packaging & distribution** (`bun build --compile` single binary / npm meta package / brew) | none | Sonnet |
+| **W2** | `W2-a` | **T-b subagent tool loop** (`SubAgentSpec` + budget + stopReason flow-back) | W1-a | Opus |
+| | `W2-b` | **C-a contract stages** (AD-10: completion is judged by querying the graph, not the model) | none | Opus |
+| | `W2-c` | **X-a extension loading + `ext verify`** (three loading strengths + contract-based acceptance) | none (paired with W1-c) | Opus |
+| | `W2-d` | **B-b/B-c wizard + demo + SSE streaming** | P11 streaming ✓ | Sonnet |
+| **W3** | `W3-a` | **C-b replan loop** (observation flow-back + three halt conditions) | W2-a + W2-b | Opus |
+| | `W3-b` | **C-c agent_run frame-level accounting** (the 9th record type, goes through rev + integrityHash) | R-c | Opus |
+| | `W3-c` | **X-c external MCP client** (external tools enter ToolBus and capabilities, calls land in the execution record) | W1-a | Opus |
+| | `W3-d` | **E-1 arXiv/PubMed via manifest** (**doubles as a real acceptance test of the extension mechanism**) | W1-c | Sonnet |
+| **W4** | `W4-a` | **Remove swarm** + pull the README marketing copy + V16 subagent model configuration + V19 approval requiring a TTY | W2-a | Sonnet |
+| | `W4-b` | **E-2…E-6 literature-domain fixes** + real-network recording + **real v0.2.x legacy-database migration drill** | none | Sonnet |
+| | `W4-c` | **B-d long-task handle persistence (V11)** + V17 MCP progress flow-back + V18 probe caching | none | Sonnet |
+| | `W4-d` | Floating slot: absorb overflow items from the first three waves | — | — |
 
-**波次间的串行尾巴**（主会话，不可省，P10/P11 实测占相当比例）：
-合 integration → 跨 lane 语义冲突收口 → 接线（含删 `ALLOWED_ORPHANS` 的「等接线」登记）
-→ 六套件全量 → devlog/CHANGELOG。
+**The serial tail between waves** (main session, cannot be skipped, took up a considerable share of the time in the P10/P11 field tests):
+merge integration → close out cross-lane semantic conflicts → wiring (including deleting "awaiting wiring" entries in `ALLOWED_ORPHANS`)
+→ the full six-suite run → devlog/CHANGELOG.
 
-### 5·补.3 三次零上下文外部验收的插入点
+### 5·Addendum.3 Insertion points for the three zero-context external acceptance reviews
 
-| 时点 | 任务 | 看什么 |
+| Time point | Task | What to look at |
 |---|---|---|
-| **W2 末** | 检索入库 → 建 idea → novelty check → 发起干实验并读回结论 | 子代理做实之后，外部 agent 的摩擦是否真的少了 |
-| **W3 末** | 按 `EXTENDING.md` 用 manifest 加一个全新数据源并过 `ext verify`，**全程不改仓库源码** | 扩展机制是否真的可自助 |
-| **W4 末** | 干净机器 `npx spark-research` 走通完整研究线索 | 发布判据 |
+| **End of W2** | Ingest literature into the database → create an idea → novelty check → launch a dry experiment and read back the conclusion | After the subagent does the work, has friction for the external agent genuinely decreased |
+| **End of W3** | Per `EXTENDING.md`, add a brand-new data source via manifest and pass `ext verify`, **without touching the repo's source code at any point** | Is the extension mechanism truly self-service |
+| **End of W4** | On a clean machine, `npx spark-research` walks through a complete research thread | Release criterion |
 
-**第二次必须由未参与开发的人/会话执行**——自己验自己的扩展机制没有意义。
+**The second review must be run by a person/session that did not participate in the development** — validating your own extension mechanism yourself is meaningless.
 
-### 5·补.4 相对阶段串行的收益与代价
+### 5·Addendum.4 Benefits and costs of wave scheduling vs. phase-serial scheduling
 
-**收益**：关键路径从「P12→P13→P15→P16 四阶段」压缩成「W1→W2→W3 三波」，
-P14 全部与 P15 的一半提前到 W1/W2，E-2…E-6 这类零依赖修复不再压在最后。
+**Benefit**: the critical path compresses from "four phases, P12→P13→P15→P16" to "three waves, W1→W2→W3";
+all of P14 and half of P15 move up to W1/W2, and zero-dependency fixes like E-2…E-6 are no longer pushed to the very end.
 
-**代价（必须正视）**：一个波次会同时触及多个阶段的文件，**跨 lane 冲突面比阶段内更大**。
-对策是文件所有权表按**波次**而非阶段维护，且沿用 P11 已验证的两条：
-① 多方争用的文件（如 `router.ts`、`mcp/tools.ts`、`server/app.ts`）**一律从所有 lane 摘出，收口时统一接线**；
-② 新建但无权接线的模块，lane 自己登记 `ALLOWED_ORPHANS` 并写清「等谁接线」（§5.3·补）。
+**Cost (must be faced head-on)**: a single wave touches files across multiple phases at once, so **the cross-lane conflict surface is larger than within a phase**.
+The countermeasure is to maintain the file ownership table by **wave** rather than by phase, and to keep the two items already validated in P11:
+① files contested by multiple parties (e.g. `router.ts`, `mcp/tools.ts`, `server/app.ts`) are **pulled out of every lane's scope entirely, and wired in centrally at close-out**;
+② for a newly created module with no wiring authority, the lane registers it itself in `ALLOWED_ORPHANS` and states clearly "awaiting wiring by whom" (§5.3·Addendum).
 
-**已知的争用热点**（提前登记，收口时统一接）：
+**Known contention hotspots** (registered in advance, wired in centrally at close-out):
 
-| 文件 | 谁想动 | 处置 |
+| File | Who wants to touch it | Handling |
 |---|---|---|
-| `backend/src/llm/router.ts` | 无（P11 已收口） | — |
-| `backend/src/mcp/tools.ts` | W1-a（ToolBus 读 MCP_TOOLS）· W3-c（外部工具注册）· W4-c（V17 进度） | 只读者不动它；需要写的收口统一接 |
-| `backend/src/server/app.ts` | W2-c（扩展路由）· W2-d（SSE 端点） | 收口统一接 |
-| `backend/src/capabilities/index.ts` | W1-c/W2-c（扩展）· W3-c（外部工具） | 收口统一接 |
-| `tests/unit/narrative_parity.test.ts` | 多个 lane 要加/删登记 | **只许改 `ALLOWED_ORPHANS` / `SKILL_ENTRYPOINTS` 的条目，不许动断言逻辑** |
-| `docs/BACKLOG.md` `CHANGELOG.md` `README.md` | — | **禁止 lane 触碰**，收口统一写 |
+| `backend/src/llm/router.ts` | none (already closed out in P11) | — |
+| `backend/src/mcp/tools.ts` | W1-a (ToolBus reads MCP_TOOLS) · W3-c (external tool registration) · W4-c (V17 progress) | Read-only consumers don't touch it; whoever needs to write is wired in centrally at close-out |
+| `backend/src/server/app.ts` | W2-c (extension routes) · W2-d (SSE endpoint) | Wired in centrally at close-out |
+| `backend/src/capabilities/index.ts` | W1-c/W2-c (extensions) · W3-c (external tools) | Wired in centrally at close-out |
+| `tests/unit/narrative_parity.test.ts` | Multiple lanes need to add/remove registrations | **Only entries in `ALLOWED_ORPHANS` / `SKILL_ENTRYPOINTS` may be changed, the assertion logic may not be touched** |
+| `docs/BACKLOG.md` `CHANGELOG.md` `README.md` | — | **Lanes are forbidden to touch these**; written centrally at close-out |
 
 ---
 
-## 六、验证方案
+## VI. Verification plan
 
-### 6.1 阶段门（每个阶段都要过，无例外）
+### 6.1 Phase gate (every phase must pass, no exceptions)
 
-1. `bun run typecheck` 干净
-2. `bun test tests/unit/` 零回归（基线随阶段推进，v0.4 起点是 **905**）
-3. `tests/concurrency/` + `tests/timeout/` 全绿
-4. **`bun run test:e2e` 全绿** ← v0.3.0 的教训，不可省
-5. `bun run test:py` + `bun run test:lab` 全绿
-6. **阴性对照**：本阶段新增的每一条关键测试，都要验证过「回退实现会红」
-7. `git diff --stat <integration> origin/main` 在合并后为空
+1. `bun run typecheck` clean
+2. `bun test tests/unit/` zero regressions (the baseline advances with each phase; v0.4's starting point is **905**)
+3. `tests/concurrency/` + `tests/timeout/` all green
+4. **`bun run test:e2e` all green** ← the lesson from v0.3.0, cannot be skipped
+5. `bun run test:py` + `bun run test:lab` all green
+6. **Negative control**: every key test added in this phase must be verified to "go red when the implementation is reverted"
+7. `git diff --stat <integration> origin/main` is empty after merging
 
-### 6.2 各阶段专属验证
+### 6.2 Phase-specific verification
 
-| 阶段 | 专属对抗测试 |
+| Phase | Dedicated adversarial tests |
 |---|---|
-| P11 | provider 矩阵契约（tool calling / JSON 模式 / 流式 / usage 各一条录制回放）；**不支持 tool calling 的模型必须走显式降级路径且有独立 e2e**；`ok=false ⇒ content=""` 的类型层断言 |
-| P11 R-d | 每个技能的可达入口断言；`unconsumedWarnings` 在 Web 审批弹窗必须可见的 e2e |
-| P12 | 越权工具被结构化拒绝；预算耗尽 `stopReason:"budget"` 而非 `done`；tool 结果真回灌（断言第二轮 prompt 含第一轮结果）；**子代理调 `lab_approve` 必被拒**（AD-14 红线）；swarm 删除后门禁登记同步消失 |
-| P13 | **伪造完成**：FakeLLM 自称完成但图上无证据 → `allDone()` 为 false；**无进展停机**：两轮无新 record → 第 2 轮停止并报告未完成 stage；**记账诚实**：拿不到 usage 时 `costUsd: null` + `usageUnavailable`，不得填 0 |
-| P14 | 干净机器（无 bun / 无 Python / 无 key）`npx spark-research` → `demo` 30 秒内看到证据图 |
-| P15 | 恶意扩展矩阵：manifest 声明 A 却调 B；未 grant 却取凭据；声明式 connector 塞 `file://` / 内网地址（SSRF）；扩展抛异常主进程存活且 capabilities 标 `failed`；**第三方 connector 必须通过 100 并发参数映射一致性检查** |
-| P16 | 真实网络录制一次并核对上游漂移；真实 v0.2.x 老 `records.db` 迁移演练 |
+| P11 | Provider matrix contract (one recorded-and-replayed case each for tool calling / JSON mode / streaming / usage); **a model that doesn't support tool calling must go through an explicit degradation path with an independent e2e test**; the type-layer assertion for `ok=false ⇒ content=""` |
+| P11 R-d | Reachable-entry-point assertion for every skill; an e2e test that `unconsumedWarnings` must be visible in the Web approval dialog |
+| P12 | Over-privileged tool calls are structurally rejected; when the budget is exhausted, `stopReason:"budget"` rather than `done`; the tool result is genuinely fed back (assert that the second-round prompt contains the first round's result); **a subagent calling `lab_approve` must always be rejected** (AD-14 red line); once swarm is removed, the gate registration disappears in sync |
+| P13 | **Fabricated completion**: FakeLLM claims completion but there's no evidence in the graph → `allDone()` is false; **no-progress halt**: two rounds with no new record → halt on round 2 and report the unfinished stage; **honest accounting**: when usage is unavailable, `costUsd: null` + `usageUnavailable`, must not fill in 0 |
+| P14 | On a clean machine (no bun / no Python / no key), `npx spark-research` → `demo` shows the evidence graph within 30 seconds |
+| P15 | Malicious-extension matrix: manifest declares A but calls B; obtains credentials without a grant; declarative connector injects `file://` / an internal-network address (SSRF); an extension throwing an exception leaves the main process alive with capabilities marked `failed`; **third-party connectors must pass the 100-concurrency parameter-mapping-consistency check** |
+| P16 | Real-network recording once, checked against upstream drift; real v0.2.x legacy `records.db` migration drill |
 
-### 6.3 零上下文外部验收（v0.4 的主验收手段）
+### 6.3 Zero-context external acceptance review (v0.4's primary acceptance method)
 
-v0.2.1 就是这么来的：**一个对本仓库一无所知、被禁止读源码的 agent，只靠 MCP + llms.txt
-跑完整链路，结果 8/10，暴露三个真实摩擦点。** 这是本项目信噪比最高的反馈来源。
+This is exactly how v0.2.1 came to light: **an agent that knows nothing about this repo, forbidden from reading the source,
+ran the full pipeline using only MCP + llms.txt, scoring 8/10 and exposing three genuine friction points.** This is the highest-signal feedback source in this project.
 
-v0.4 **跑三次**，而不是只在最后跑一次：
+v0.4 **runs it three times**, not just once at the end:
 
-| 时点 | 任务 | 看什么 |
+| Time point | Task | What to look at |
 |---|---|---|
-| P12 末 | 检索文献入库 → 建 idea → novelty check → **发起一次干实验并读回结论** | 子代理做实之后，外部 agent 是否真的少了摩擦 |
-| P15 末 | 按 `EXTENDING.md` 用声明式 manifest 加一个全新数据源并 `ext verify` 通过，**全程不改仓库源码** | 扩展机制是否真的可自助 |
-| P16 末 | 干净机器 `npx spark-research` → 完整研究线索走通 | 发布判据 |
+| End of P12 | Ingest literature into the database → create an idea → novelty check → **launch a dry experiment and read back the conclusion** | After the subagent does the work, has friction for the external agent genuinely decreased |
+| End of P15 | Per `EXTENDING.md`, add a brand-new data source via a declarative manifest and pass `ext verify`, **without touching the repo's source code at any point** | Is the extension mechanism truly self-service |
+| End of P16 | On a clean machine, `npx spark-research` → a complete research thread is walked through | Release criterion |
 
-**第二次由未参与开发的人/会话执行**——自己验自己的扩展机制没有意义。
+**The second run must be executed by a person/session who did not participate in development** — validating your own extension mechanism yourself is meaningless.
 
 ---
 
-## 七、排期与模型分配
+## VII. Schedule and model allocation
 
-单位是「会话」（一次完整的范围确认 → 委派 → 跑测试 → 审代码 → 对照设计验收 → PR）。
-v0.3 实测：P10 四条 lane + 串行尾巴 ≈ 一个工作日量级，**其中串行尾巴占了相当比例**。
+The unit is a "session" (one full cycle of scope confirmation → delegation → running tests → code review → design-checklist acceptance → PR).
+v0.3 field data: P10's four lanes + serial tail ≈ roughly one workday's worth, **of which the serial tail took up a considerable share**.
 
-| 阶段 | 量级 | lane | 主用模型 | 依赖 |
+| Phase | Magnitude | lanes | Primary model | Dependency |
 |---|---|---|---|---|
-| P11 | 2–3 会话 | 4（含接口先行） | Opus（接口/R-a）+ Sonnet（R-b/c/d） | v0.3.1 |
-| P12 | 2 会话 | 2 | Opus 5 | P11 |
-| P13 | 2 会话 | 2 | Opus 5 | P12 |
-| P14 | 2 会话 | 2 | Sonnet 5 | P11（流式） |
-| P15 | 2 会话 | 2 | Opus 5 | P12（ToolBus） |
-| P16 | 2 会话 | 3 | Sonnet 5 | P15 |
+| P11 | 2–3 sessions | 4 (incl. interface-first) | Opus (interface/R-a) + Sonnet (R-b/c/d) | v0.3.1 |
+| P12 | 2 sessions | 2 | Opus 5 | P11 |
+| P13 | 2 sessions | 2 | Opus 5 | P12 |
+| P14 | 2 sessions | 2 | Sonnet 5 | P11 (streaming) |
+| P15 | 2 sessions | 2 | Opus 5 | P12 (ToolBus) |
+| P16 | 2 sessions | 3 | Sonnet 5 | P15 |
 
-**分配依据不变**（v0.3 文档 §6.2）：抽象设计 / 原创设计 / 安全边界用 Opus，
-规格明确的机械活与并行 lane 多的阶段用 Sonnet。
-P11 的接口先行与 OpenAI 兼容基座是全版本地基，错了三条主线一起返工，必须 Opus。
+**Allocation rationale unchanged** (v0.3 document §6.2): use Opus for abstract design / original design / security boundaries,
+use Sonnet for phases with clearly specified mechanical work and many parallel lanes.
+P11's interface-first work and the OpenAI-compatible base are the foundation for the entire version — getting them wrong means three main lines have to be redone together, so it must be Opus.
 
-**可裁剪顺序**：P15 的 MCP client → P14 的 brew/curl → P13 的 findings 状态机。
-**不可裁剪**：P11 全部、P12、AD-10 的确定性完成判据、P11 R-d 的可达性闸门。
+**Trimming order if needed**: P15's MCP client → P14's brew/curl → P13's findings state machine.
+**Cannot be trimmed**: all of P11, P12, AD-10's deterministic completion criterion, P11 R-d's reachability gate.
 
 ---
 
-## 八、里程碑
+## VIII. Milestones
 
-| 里程碑 | 完成即可对外说的话 |
+| Milestone | What can be said publicly once complete |
 |---|---|
-| P11 末 | 「模型是真中立的，且能力可运行时查询」+「声称的能力都调得到」 |
-| P12 末 | 「子代理是真的会用工具的 agent」——撤下全部虚标宣传 |
-| P13 末 | **「完成与否由证据图判定，不由模型自报」**——最值得写文章的一条 |
-| P14 末 | 「一条 `npx` 命令，零 key 30 秒看到全貌」 |
-| P15 末 | 「你自己加的数据源，装完就跑契约测试」 |
-| P16 / v0.4.0 | 五大功能域 + 真 agent runtime + 自助扩展，三者中唯一有干湿闭环 |
+| End of P11 | "The model is genuinely provider-neutral, and its capabilities can be queried at runtime" + "every claimed capability is actually reachable" |
+| End of P12 | "The subagent is a genuine tool-using agent" — all overstated marketing claims retracted |
+| End of P13 | **"Completion is judged by the evidence graph, not self-reported by the model"** — the single most publication-worthy line |
+| End of P14 | "One `npx` command, zero keys, the full picture in 30 seconds" |
+| End of P15 | "Add your own data source, and it runs the contract tests the moment it's installed" |
+| P16 / v0.4.0 | Five major functional domains + a real agent runtime + self-service extension — the only one of the three with a closed dry-wet loop |
 
 ---
 
-## 九、风险
+## IX. Risks
 
-| 风险 | 影响 | 缓解 |
+| Risk | Impact | Mitigation |
 |---|---|---|
-| 国产 provider 的 tool calling 兼容性差 | P12 落空 | 能力位运行时可探测；降级路径（JSON 计划模式）有**独立 e2e**，不能只在模型配合时才工作 |
-| AD-10 的 `check()` 写太严 → agent 永远判未完成、空转烧钱 | P13 不可用 | 三条并行停机条件（allDone / noProgress / budget），且 `stopReason` 必须回流 |
-| 声明式 connector 的映射 DSL 越做越像编程语言 | P15 复杂度失控 | 硬约束：受限 JSONPath 子集 + 固定归一化字段；**表达不了就写 TS 扩展**，这是特性不是缺陷 |
-| 外部扩展 = 同 UID 代码执行 | 安全面扩大 | 默认推声明式（不执行代码）；TS 扩展需 `--trust` + 指纹确认；**文档必须直说这不是沙箱**（不重蹈 S-3「沙箱一行逃逸」的过度声明） |
-| 串行尾巴被低估 | 排期失真 | v0.3 实测串行尾巴占相当比例，已在 §七 显式计入 |
-| 又一次跨会话事故 | 成果静默丢失 | 纪律 12/13/14 三条；每次合并后 `git diff` 复核 |
+| Poor tool-calling compatibility in domestic providers | P12 falls short | Capability bits detectable at runtime; the degradation path (JSON plan mode) has an **independent e2e test**, and cannot only work when the model cooperates |
+| AD-10's `check()` written too strictly → the agent forever judges "not done" and spins, burning money | P13 becomes unusable | Three parallel halt conditions (allDone / noProgress / budget), and `stopReason` must flow back |
+| The declarative connector's mapping DSL keeps growing until it resembles a programming language | P15's complexity spirals out of control | Hard constraint: a restricted JSONPath subset + fixed normalized fields; **if it can't be expressed, write a TS extension** — that's a feature, not a defect |
+| External extensions = code execution under the same UID | The security surface expands | Default to pushing declarative (no code execution); TS extensions require `--trust` + fingerprint confirmation; **the documentation must say plainly that this is not a sandbox** (not repeating S-3's overclaiming, "sandbox escaped in one line") |
+| The serial tail is underestimated | The schedule becomes unrealistic | v0.3 field data shows the serial tail took up a considerable share; already explicitly counted in §VII |
+| Yet another cross-session incident | Work is silently lost | Disciplines 12/13/14; re-verify with `git diff` after every merge |
 
 ---
 
-## 十、给维护者
+## X. To the maintainers
 
-v0.3 证明了两件事：**并行开发在这个仓库是可行的**（四条 lane 纪律零违反、
-合起来只有一处语义冲突），以及**「失败长得像成功」是这个项目当前最大的敌人**
-——三次事故全是这个形状，没有一次是「代码写错了」。
+v0.3 proved two things: **parallel development is workable in this repo** (zero violations of the four-lane discipline,
+only one semantic conflict when combined), and **"failure that looks like success" is currently this project's biggest enemy**
+— all three incidents share this shape, and not one of them was "the code was written wrong."
 
-所以 v0.4 的验证设计不是「多写测试」，而是**在每一处可能静默失败的地方装一条显式断言**：
-push 有没有真的推上去、e2e 有没有真的跑、技能有没有真的能被调到、
-模型说完成了图上有没有证据、扩展装上了有没有过契约。
+So v0.4's verification design is not "write more tests," it's **installing an explicit assertion at every point where silent failure is possible**:
+whether the push actually pushed, whether the e2e actually ran, whether a skill can actually be invoked,
+whether there's evidence in the graph when the model says it's done, whether an installed extension actually passes its contract.
 
-功能上 v0.4 只做一件事：**把 README 第一句话里的「agent」两个字变成真的。**
+Functionally, v0.4 does exactly one thing: **make the word "agent" in the README's first sentence true.**

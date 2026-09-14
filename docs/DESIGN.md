@@ -1,473 +1,471 @@
-# Spark Research v0.2 产品设计
+# Spark Research v0.2 Product Design
 
-> 状态：随实现更新 · 终稿核对于 P8 收口（2026-09-09）
-> 上游输入：OpenScience 架构分析、AMiner 集成调研（2026-09-07）、Claude Science 产品形态、现有 v0.1 代码资产
-> 配套文档：[DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)（开发与验证计划）
+> Status: updated alongside implementation · final draft checked at Gate P8 close-out (2026-09-09)
+> Upstream inputs: OpenScience architecture analysis, AMiner integration research (2026-09-07), Claude Science product shape, existing v0.1 code assets
+> Companion document: [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md) (development and verification plan)
 
 ---
 
-## 一、定位
+## I. Positioning
 
-**Spark Research 是面向科研人群的开源科研工作台**：科研人员用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 实验验证 → 数据记录 → 创新性核验 → 结论评审 → 写作」的完整循环，全过程本地优先、证据可溯源。
+**Spark Research is an open-source research workbench for the research community**: researchers drive an auditable research agent with natural language to complete the full loop of "literature research → co-exploration of ideas → experimental verification → data recording → novelty verification → conclusion review → writing," with the whole process local-first and evidence traceable.
 
-一句话主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。**
+One-sentence pitch: **Your research project is a first-class citizen; every step of thinking and every experiment leaves behind an auditable evidence chain.**
 
-### 1.1 目标用户
+### 1.1 Target Users
 
-| 用户 | 核心痛点 | Spark Research 的回答 |
+| User | Core pain point | Spark Research's answer |
 |------|---------|---------------------|
-| 研究生 / 博士后 | 文献调研耗时、综述引用管理混乱 | 项目文献库 + 综述 pipeline + 引用真伪核验 |
-| PI / 课题组长 | 学生结论可信度难核查 | Research Record 证据链 + Reviewer 否决机制 |
-| 企业研发（药物/材料） | 干湿实验数据割裂 | 干湿闭环 + 全流程数据记录 |
-| 独立研究者 | 缺少讨论伙伴、思路难验证新颖性 | Co-explore + Novelty check |
+| Graduate students / postdocs | Literature research is time-consuming; citation management in reviews is chaotic | Project literature library + review pipeline + citation authenticity verification |
+| PIs / lab heads | Hard to verify the credibility of students' conclusions | Research Record evidence chain + Reviewer veto mechanism |
+| Corporate R&D (pharma/materials) | Dry-lab and wet-lab data are siloed | Dry/wet closed loop + full-process data recording |
+| Independent researchers | Lack a discussion partner; hard to verify the novelty of ideas | Co-explore + Novelty check |
 
-### 1.2 非目标（v0.x 明确不做）
+### 1.2 Non-goals (explicitly out of scope for v0.x)
 
-- 不做云端多租户 SaaS（本地优先，单用户/单课题组）
-- 不做通用 IDE / 代码助手（科研任务专用）
-- 不自研模型（模型无关路由，BYOK）
-- 不做文献全文托管服务（只存用户合法获取的 PDF 到本地库）
+- No cloud multi-tenant SaaS (local-first, single user / single research group)
+- No general-purpose IDE / coding assistant (dedicated to research tasks)
+- No in-house models (model-agnostic routing, BYOK)
+- No literature full-text hosting service (only stores PDFs that the user has legally obtained, to a local library)
 
 ---
 
-## 二、参照系：吸收什么、不吸收什么
+## II. Reference Frame: What We Absorb, What We Don't
 
-### 2.1 来自 Claude Science（产品形态）
+### 2.1 From Claude Science (product shape)
 
-**吸收**：研究循环的产品化表达（literature / data / experiment / write-up 四类工作 + review pass）；「给一个目标就能完成整个循环」的交互心智。
-**不吸收**：托管闭源环境。我们本地优先、数据不出用户机器。
+**Absorbed**: the productized expression of the research loop (four categories of work — literature / data / experiment / write-up — plus a review pass); the interaction mental model of "give it a goal and it completes the whole loop."
+**Not absorbed**: a hosted closed-source environment. We are local-first; data never leaves the user's machine.
 
-### 2.2 来自 OpenScience（内核架构，已源码级分析）
+### 2.2 From OpenScience (kernel architecture, already analyzed at the source-code level)
 
-**吸收**：
-1. **单一 research agent + 隐藏任务型子代理**（explore/execute/review 按工作类型委派，不按学科分身）—— v0.1 已实现，保留
-2. **双层 prompt**（provider-neutral system contract + agent workflow prompt）—— v0.1 已实现，保留
-3. **Connector 统一契约**（id/domain/search/fetch，按学科域组织）—— v0.1 有雏形，v0.2 强化
-4. **技能本地优先加载**（instruction bundle 按需加载，不预填 context）—— v0.1 目录为空，v0.2 落地
-5. **Provenance 信封**（每个产物带 lineage）—— v0.1 已实现 SQLite 版
+**Absorbed**:
+1. **A single research agent + hidden task-type subagents** (explore/execute/review delegated by work type, not split by discipline) — already implemented in v0.1, retained
+2. **Two-layer prompt** (provider-neutral system contract + agent workflow prompt) — already implemented in v0.1, retained
+3. **Unified Connector contract** (id/domain/search/fetch, organized by discipline domain) — v0.1 has a prototype, strengthened in v0.2
+4. **Local-first skill loading** (instruction bundles loaded on demand, not pre-filled into context) — the v0.1 directory is empty, landed in v0.2
+5. **Provenance envelope** (every artifact carries lineage) — already implemented in v0.1 as a SQLite version
 
-**不吸收**：
-- 313 技能的铺量路线 —— 我们走「少而深、每个技能有 e2e 验证」路线
-- Modal 单一云算力绑定 —— 保留 provider 抽象，落地顺序按需求定
+**Not absorbed**:
+- The route of scaling up to 313 skills — we take the route of "fewer but deeper, every skill has e2e verification"
+- Tying to a single Modal cloud-compute vendor — keep the provider abstraction, land implementation order as needed
 
-### 2.3 来自 AMiner 集成调研（凭据架构教训，实测得出）
+### 2.3 From the AMiner integration research (credential-architecture lesson, drawn from actual testing)
 
-OpenScience 的三层沙箱隔离（env 白名单 / 文件沙箱 / 网络受限）导致自定义付费数据源无法在 agent 内使用，只能 fork 改源码。**Spark Research 把这个教训变成原生设计**：
+OpenScience's three-layer sandbox isolation (env allowlist / file sandbox / restricted network) causes custom paid data sources to be unusable inside the agent, forcing a fork to modify the source code. **Spark Research turns this lesson into a native design principle**:
 
-> **凭据分层原则**：所有带凭据的外部访问（AMiner、CNKI、付费 API）只发生在 daemon 进程内的 connector 中；kernel/沙箱子进程永远拿不到凭据本体，只能通过 permit set 授权的 `mcp_call` 请求 daemon 代为访问。凭据存储在 `~/.spark-research/credentials.json`（0600）或系统 Keychain，不进 env、不进 prompt、不进日志。
+> **Credential-layering principle**: all credentialed external access (AMiner, CNKI, paid APIs) happens only inside connectors within the daemon process; the kernel/sandbox subprocess can never obtain the credential body itself — it can only request the daemon to access on its behalf via an `mcp_call` authorized by the permit set. Credentials are stored in `~/.spark-research/credentials.json` (0600) or the system Keychain; they never enter env, prompts, or logs.
 
-这让付费/授权数据源成为一等 connector，而不是要开安全口子的例外。
+This makes paid/authorized data sources first-class connectors, rather than exceptions requiring a security hole to be opened.
 
-### 2.4 现有 v0.1 资产盘点（直接复用的地基）
+### 2.4 Inventory of Existing v0.1 Assets (foundation reused directly)
 
-| 资产 | 位置 | v0.2 角色 |
+| Asset | Location | Role in v0.2 |
 |------|------|----------|
-| Daemon + permit set | `backend/src/daemon/` | 控制核心，扩展凭据服务 |
-| 有状态 Python kernel | `backend/src/kernels/` | 干实验执行引擎 |
-| Artifact + lineage（SQLite） | `backend/src/artifacts/` | 扩展为 Research Record 存储 |
-| Reviewer veto（trace-don't-recompute） | `backend/src/reviewer/` | 结论评审 + 引用核验的载体 |
-| 11 个 connector + registry | `backend/src/connectors/` | 扩展凭据层 + 文献域增强 |
-| Orchestrator（+ swarm） | `backend/src/agents/` | 保留 orchestrator；**swarm 已于 v0.4（W4-a）删除**——v0.1 遗留、生产零调用方、`dependsOn` 未实现、`decompose` 是三条正则，评审判定为虚标（BACKLOG V7）。并发与委派现由 ToolBus + 真子代理提供 |
-| Lab protocol compiler + safety gate | `backend/src/lab/` | 湿实验域，mock → 模拟器 |
-| 84 个单元测试 | `tests/unit/` | 测试基线，只增不减（P8 收口时 706） |
-| v0.1 的 `compute/` 任务抽象 | `backend/src/compute/` | **P8 删除**（内存态阻塞契约，被 `SimulationPlatform` 取代） |
+| Daemon + permit set | `backend/src/daemon/` | Control core, extend credential service |
+| Stateful Python kernel | `backend/src/kernels/` | Dry-experiment execution engine |
+| Artifact + lineage (SQLite) | `backend/src/artifacts/` | Extended into Research Record storage |
+| Reviewer veto (trace-don't-recompute) | `backend/src/reviewer/` | Vehicle for conclusion review + citation verification |
+| 11 connectors + registry | `backend/src/connectors/` | Extend the credential layer + literature-domain enhancements |
+| Orchestrator (+ swarm) | `backend/src/agents/` | Orchestrator retained; **swarm was deleted in v0.4 (W4-a)** — a v0.1 legacy with zero production callers, `dependsOn` never implemented, `decompose` being three regexes; the review judged it a false claim (BACKLOG V7). Concurrency and delegation are now provided by the ToolBus + real subagents |
+| Lab protocol compiler + safety gate | `backend/src/lab/` | Wet-experiment domain, mock → simulator |
+| 84 unit tests | `tests/unit/` | Test baseline, only grows, never shrinks (706 at Gate P8 close-out) |
+| v0.1's `compute/` task abstraction | `backend/src/compute/` | **Deleted at P8** (an in-memory blocking contract, superseded by `SimulationPlatform`) |
 
 ---
 
-## 三、差异化主张（相对 OpenScience / Claude Science 的三个赌注）
+## III. Differentiation Thesis (three bets relative to OpenScience / Claude Science)
 
-1. **Project-centric，不是 session-centric**。OpenScience 和 Claude Science 以 workspace/会话为单位；科研的真实单位是**课题**——一个课题横跨数月、数百次会话。Spark Research 的持久层以 Project 为根：文献库、思路库、实验记录、结论卡都挂在项目下跨会话积累。
-2. **全流程 Research Record**。不只记录代码产物（artifact），还记录**思路（idea）、决策（decision）、观察（observation）、结论（conclusion）**，全部进同一张证据图。副产品：天然的电子实验记录本（ELN）+ 可审计的 research trail，直接支撑创新性核验和论文写作。
-3. **干湿闭环**。protocol compiler + safety gate + 设备抽象已有雏形；连同仿真平台 connector，形成「AI 设计 → 干实验仿真 → 湿实验执行 → 数据回传 → 迭代」闭环。这是两个参照系都没有的。
+1. **Project-centric, not session-centric.** OpenScience and Claude Science use the workspace/session as their unit; the real unit of research is the **project** — a project spans months and hundreds of sessions. Spark Research's persistence layer is rooted at Project: the literature library, idea library, experiment records, and conclusion cards all hang under the project and accumulate across sessions.
+2. **Full-process Research Record.** It records not just code artifacts, but also **ideas, decisions, observations, and conclusions** — all going into the same evidence graph. Side effect: a natural electronic lab notebook (ELN) + an auditable research trail, directly supporting novelty verification and paper writing.
+3. **Dry/wet closed loop.** The protocol compiler + safety gate + device abstraction already have a prototype; together with the simulation-platform connector, they form a closed loop of "AI design → dry-experiment simulation → wet-experiment execution → data feedback → iteration." Neither reference system has this.
 
 ---
 
-## 四、五大功能域设计
+## IV. Design of the Five Functional Domains
 
-### 域 A：文献调研与写作
+### Domain A: Literature Research and Writing
 
-**A1 文献检索（多源聚合）**
-- Connector 层扩展：现有 arXiv/PubMed + 新增 OpenAlex、CrossRef、EuropePMC、Semantic Scholar（参照 OpenScience 的 literature 域清单。P2 实测：S2 匿名请求持续 429，实际使用建议配置免费 API key——走凭据服务，connector id `semanticscholar`；无 key 时统一检索自动降级为其余源）
-- **AMiner connector**（带凭据，走 §2.3 凭据分层）：29 个 API 已在调研中验证可用
-- CNKI/万方从占位升级为真实实现（依赖可获得的 API 渠道，无渠道则保持占位并明示）
-- 统一检索接口：跨源查询 → 去重（DOI/标题模糊匹配）→ 合并排序
+**A1 Literature retrieval (multi-source aggregation)**
+- Connector-layer extension: existing arXiv/PubMed plus newly added OpenAlex, CrossRef, EuropePMC, Semantic Scholar (referencing OpenScience's literature-domain list. P2 real-world testing: anonymous S2 requests persistently hit 429s; for practical use it's recommended to configure a free API key — routed through the credential service, connector id `semanticscholar`; without a key, the unified search automatically degrades to the remaining sources)
+- **AMiner connector** (with credentials, via the §2.3 credential layering): 29 APIs already verified usable during research
+- CNKI/Wanfang upgraded from placeholders to real implementations (dependent on obtainable API channels; without a channel, remains a placeholder and is explicitly labeled as such)
+- Unified retrieval interface: cross-source query → deduplication (DOI/fuzzy title match) → merge and rank
 
-**A2 个人科研项目文献库（Project Library）**
-- 每个 Project 一个 `library.db`（SQLite）：论文元数据、作者、venue、标签、阅读状态、笔记
-- PDF 下载管线（复用已验证的 paper-download 经验：arXiv/EuropePMC OA 直下、bioRxiv 403 自救）；PDF 落 `papers/` 目录，库中存路径 + checksum
-- 引用关系：库内论文互引边（数据来自 OpenAlex/Semantic Scholar 引文 API）
-- 导出：BibTeX / CSL-JSON
+**A2 Personal research-project literature library (Project Library)**
+- Each Project has one `library.db` (SQLite): paper metadata, authors, venue, tags, reading status, notes
+- PDF download pipeline (reusing verified paper-download experience: direct OA download from arXiv/EuropePMC, bioRxiv 403 self-recovery); PDFs land in the `papers/` directory, with paths + checksums stored in the library
+- Citation relationships: intra-library paper cross-citation edges (data from OpenAlex/Semantic Scholar citation APIs)
+- Export: BibTeX / CSL-JSON
 
-**A3 综述与写作 pipeline**
-1. 背景调研：给定研究问题 → 多源检索 → 候选论文清单（人审 or 自动入库）
-2. 逐篇精读卡：每篇生成结构化卡片（问题/方法/结论/局限/与本项目关系），卡片是 record，带来源锚点
-3. 综述草稿：基于精读卡组织，**每条引用必须能回链到库内真实论文**
-4. 引用核验：Reviewer 检查草稿中每个引用是否存在于库中且内容对得上（扩展现有 rules——这是现有「检测伪造引用」测试的自然延伸）
+**A3 Review and writing pipeline**
+1. Background research: given a research question → multi-source search → candidate paper list (human review or auto-ingest)
+2. Per-paper close-reading cards: each paper generates a structured card (problem/method/conclusion/limitations/relation to this project); the card is a record and carries source anchors
+3. Review draft: organized based on close-reading cards, **every citation must link back to a real paper in the library**
+4. Citation verification: Reviewer checks whether every citation in the draft exists in the library and whether the content matches (extending existing rules — a natural extension of the existing "detect fabricated citations" test)
 
-P3 落地口径（record 类型映射，不新增 record 类型）：
-- 精读卡 = `reading` record（P3 起独立类型，与实验 `observation` 分离），`evidence=sourced`，`metadata.kind="reading_card"`，`cites` 边指向该论文的 `paper` record；卡片里唯一的推断字段 `relationToProject` 在 `metadata.inferredFields` 中标出，**不参与**引用核验的对照基准
-- 综述草稿 = artifact + `artifact` record，`evidence=inferred`，`derives_from` 边连每张精读卡、`cites` 边连每篇被引论文
-- 引用标记形式为 `[@bibtexKey]`，key 与 `lit export --format bibtex` 完全一致（读者可直接对照 .bib）
+P3 landing spec (record-type mapping, no new record types added):
+- A close-reading card = a `reading` record (an independent type since P3, separated from experiment `observation`), `evidence=sourced`, `metadata.kind="reading_card"`, with a `cites` edge pointing to that paper's `paper` record; the only inferred field on the card, `relationToProject`, is marked under `metadata.inferredFields` and **does not participate** in the reference baseline for citation verification
+- The review draft = an artifact + `artifact` record, `evidence=inferred`, with `derives_from` edges connecting each close-reading card and `cites` edges connecting each cited paper
+- Citation markers take the form `[@bibtexKey]`, with the key exactly matching `lit export --format bibtex` (readers can cross-check directly against the .bib)
 
-**A4 Co-explore（思路共探）**
-- 对话模式：围绕研究问题的苏格拉底式探讨，agent 主动检索文献 grounding 自己的观点
-- 产出物：**Idea 卡**（假设陈述 + 支持文献 + 反对文献 + 待验证点）入思路库
-- 调研反馈：对用户已有的思路/草稿给出基于文献的批判性反馈（引用真实文献，标注证据类型）
+**A4 Co-explore (co-exploring ideas)**
+- Conversation mode: a Socratic discussion around the research question, with the agent proactively searching literature to ground its own views
+- Output: **Idea cards** (hypothesis statement + supporting literature + opposing literature + points to verify) into the idea library
+- Feedback on drafts: gives literature-grounded critical feedback on the user's existing ideas/drafts (citing real literature, labeling evidence type)
 
-P4 落地口径：
-- Idea 卡 = `idea` record，`evidence=inferred`，`metadata.kind="idea_card"`；不新增 record 类型
-- 证据边方向按**语义**读（「A 支持 B」）：`paper --supports--> idea` / `paper --contradicts--> idea`。
-  与 P3 的 `cites`（新产物 → 被引论文）方向相反是有意的——查一条 idea 的支撑文献看它的 incoming 边
-- 两条硬门（schema 校验层，违反即重试一次、仍违反则拒绝落卡）：
-  ① 每条证据要么给库内 bibtex key，要么显式 `inferred:true`；库外 key 视同伪造引用（与 A3-4 同口径）
-  ② `contradicting` 至少 1 条——给不出反面证据的「共探」只是附和；库里没有反证就明说并标 inferred
-- 会话模式挂在 orchestrator 上（`chat({mode:"coexplore"})`），与默认 chat 并列，不走规划/执行/review 循环
+P4 landing spec:
+- An Idea card = an `idea` record, `evidence=inferred`, `metadata.kind="idea_card"`; no new record type added
+- Evidence-edge direction is read by **semantics** ("A supports B"): `paper --supports--> idea` / `paper --contradicts--> idea`.
+  This is deliberately the reverse direction of P3's `cites` (new artifact → cited paper) — to look up an idea's supporting literature, look at its incoming edges
+- Two hard gates (at the schema validation layer; a violation triggers one retry, and if it still violates, the card is rejected):
+  ① every piece of evidence must either give a bibtex key in the library, or explicitly mark `inferred:true`; a key outside the library is treated as a fabricated citation (same standard as A3-4)
+  ② `contradicting` must have at least 1 entry — a "co-exploration" that can produce no counter-evidence is mere agreement; if the library has no counter-evidence, say so explicitly and mark it inferred
+- The conversation mode hangs off the orchestrator (`chat({mode:"coexplore"})`), parallel to default chat, and does not go through the plan/execute/review loop
 
-### 域 B：实验验证
+### Domain B: Experimental Verification
 
-**B1 干实验（in silico）**
-- 执行引擎：现有 stateful Python kernel（RDKit/pandas/numpy 已配）
-- **Simulation adapter 接口**：统一的 `SimulationPlatform` 契约（prepare/submit/poll/collect），参照 connector 模式
-- 能力位 `deterministic`：同一 spec 是否逐位可复现（pyref=true；OpenMM CPU=false，多线程浮点归约所致，P5 实测）。observation record 携带该位，E1 检查器与 P8 报告据此选「重算对账」或「区间对账」
-- 首批参考实现（2 个，证明接口通用性）：
-  - 本地进程型：OpenMM（分子动力学，pip 可装，纯本地）
-  - 命令行型：GROMACS（若本机可装）或退一档用 Python 内置仿真脚本作第二实现
-- 后续按需求接：材料计算（VASP/LAMMPS）、EDA 等——接口先行，实现按用户真实课题拉动
+**B1 Dry experiments (in silico)**
+- Execution engine: the existing stateful Python kernel (RDKit/pandas/numpy already configured)
+- **Simulation adapter interface**: a unified `SimulationPlatform` contract (prepare/submit/poll/collect), modeled on the connector pattern
+- Capability bit `deterministic`: whether the same spec is bit-for-bit reproducible (pyref=true; OpenMM CPU=false, due to multithreaded floating-point reduction, verified at P5). The observation record carries this bit, and the E1 checker and P8 report use it to choose "recompute reconciliation" or "range reconciliation"
+- First reference implementations (2, to prove the interface's generality):
+  - Local-process type: OpenMM (molecular dynamics, pip-installable, fully local)
+  - Command-line type: GROMACS (if installable locally), or fall back a tier to a Python built-in simulation script as the second implementation
+- Further additions on demand: materials computation (VASP/LAMMPS), EDA, etc. — interface first, implementations driven by real user projects
 
-P5 落地口径：
-- 两个实现分别是 `openmm`（水盒子能量最小化 + 短时 NVT 平衡，实测 OpenMM 8.6 有 PyPI wheel，
-  纯 CPU 秒级）与 `pyref`（阻尼谐振子 RK4，**零外部依赖 + 有解析解可对照**）。
-  第二实现选 pyref 而不是 GROMACS：契约测试需要一个在任何环境都跑得通的实现，
-  否则 CI 里 openmm 一缺就整套 skip，等于没有契约测试
-- 两个 adapter 都是**子进程型**而非 kernel 内执行：MD 任务动辄数分钟起，占着 stateful kernel
-  会把会话堵死；更关键的是「编排进程被 kill 后任务还在跑」要求任务是独立进程
-- 状态真源在磁盘：`experiments/<platform>/runs/<runId>/{run.json,params.json,done.json,stdout.log}`，
-  `prepared/<specHash>/params.json` 存归一化输入。`poll` **先看 done.json 再看 pid**——
-  任务写完结果才退出，所以结果在就以结果为准，PID 复用最坏只让已死任务多「运行中」一会儿，
-  不会把失败报成成功
-- 不复用 v0.1 的 `compute/providers.ts`（`ComputeProvider`）：那套 `wait()` 是阻塞语义、状态全在
-  内存，跨进程接不上，与 AD-4 要的生命周期契约不是一回事。该模块已在 P8（BACKLOG G6）连同其
-  v0.1 测试一并删除——留着两套「提交任务」抽象只会让下一个人选错
+P5 landing spec:
+- The two implementations are respectively `openmm` (water-box energy minimization + short NVT equilibration; tested with OpenMM 8.6, which has a PyPI wheel, second-scale on pure CPU) and `pyref` (a damped harmonic oscillator via RK4, **zero external dependencies + has an analytical solution to check against**).
+  The second implementation chose pyref over GROMACS: the contract test needs an implementation that runs in any environment,
+  otherwise the whole test suite gets skipped in CI whenever openmm happens to be missing, which is equivalent to having no contract test at all
+- Both adapters are **subprocess-based** rather than executing inside the kernel: MD tasks routinely take minutes and up,
+  and occupying the stateful kernel would block the session to a halt; more critically, the requirement that "the task keeps running even after the orchestrating process is killed" demands that the task be an independent process
+- The source of truth for state lives on disk: `experiments/<platform>/runs/<runId>/{run.json,params.json,done.json,stdout.log}`,
+  with `prepared/<specHash>/params.json` storing the normalized input. `poll` **checks done.json before checking the pid**——
+  a task only exits after writing its results, so if the result exists it is authoritative; PID reuse at worst makes an already-dead task appear "still running" for a little longer,
+  and never reports a failure as a success
+- The v0.1 `compute/providers.ts` (`ComputeProvider`) is not reused: its `wait()` has blocking semantics with all state
+  in memory, which does not carry across processes and is not the same thing as the lifecycle contract AD-4 requires. This module was deleted at P8 (BACKLOG G6) along with
+  its v0.1 tests — leaving two "submit a task" abstractions around would only cause the next person to pick the wrong one
 
-**B2 湿实验（wet lab）**
-- 现有：protocol compiler（自然语言 → 设备指令）+ safety gate（试剂兼容/浓度上限/生物安全）+ mock 设备
-- v0.2 目标：**用 Opentrons 官方模拟器（`opentrons_simulate`）替换 mock**，跑通一次真实协议编译 → 模拟执行 → 结果回传
-- 物理设备对接留 v0.3+（需要真实硬件）
+**B2 Wet lab experiments**
+- Existing: protocol compiler (natural language → device instructions) + safety gate (reagent compatibility / concentration caps / biosafety) + mock devices
+- v0.2 target: **replace the mock with the official Opentrons simulator (`opentrons_simulate`)**, running one real protocol compile → simulated execution → result feedback pass end-to-end
+- Physical device integration is left for v0.3+ (requires real hardware)
 
-P6 落地口径：
-- 编译目标是 **Opentrons Flex** / Python Protocol API v2（`apiLevel 2.21`），不是 OT-2。
-  两条理由：① opentrons 9.x 已移除 OT-2 支持，`simulate()` 对 OT-2 协议直接 `RuntimeError`；
-  ② OT-2 没有吸光度读板模块，「600 nm 读 OD」在 Flex 上才有真模块，不必退化成注释
-- 执行后端两个：`opentrons_simulate`（**默认**，官方模拟器）与 `mock_devices`（单测后端，
-  零依赖）。mock 验管线、不验协议合法性——一个 opentrons 拒绝解析的脚本在 mock 上一样「跑成功」，
-  所以默认必须是真模拟器
-- **Opentrons 上没有的硬件不假装有**：离心、非四档波长读数、<37 °C 孵育、离机配液一律编译成
-  `[spark-note]` 注释并标 `execution: "manual"`，run log 里是 note 不是执行记录
-- run log 锚定：编译器在每步前注入 `protocol.comment("[spark-step] <id> <action>")`，
-  结构化解析靠这个锚点把每条命令绑回编译产物里的某一步，不依赖 opentrons 的文案措辞
-- `protocolHash` = sha256(生成的脚本源码)，源码里刻意不含编译时间戳——approve gate 批的是这个
-  hash，带时间戳则每次编译都换 hash，approve 永远失效
-- 安全门从三段 if 拆成**四条彼此独立的纯函数规则**（`chemical_compatibility` /
-  `concentration_limit` / `biosafety` / **新增 `volume_capacity`**）。`volume_capacity` 吃编译产物：
-  「单孔累计溢孔」在自然语言层面看不出来，只有排完 deck 累加才知道
-  - **v0.3.0（P10 D-8）口径收敛**：「四条规则」说的是**规则本身存在且各有对抗测试**，
-    不等于四条都在自然语言主管线上生效。实测：`volume_capacity` 全程可信；
-    `chemical_compatibility` 词表已扩到中英文+分子式但仍有限；
-    `concentration_limit` / `biosafety` 所需字段编译器从不产生，**在主管线上恒空转**。
-    对抗测试当初是用 `withReagents()` 手工注入验证规则本身的——这验证了规则，没验证接线。
-    补位机制是 `unconsumedWarnings`（见 `lab/protocol.ts`）：本句出现了量纲/试剂/条件
-    却无任何规则消费 → 产出显式告警并强制在审批面前显示。
-    **「规则能被单独测到」不等于「规则在管线上生效」，这是本次外部评审最值得记住的一条教训。**
+P6 landing spec:
+- The compilation target is the **Opentrons Flex** / Python Protocol API v2 (`apiLevel 2.21`), not the OT-2.
+  Two reasons: ① opentrons 9.x has removed OT-2 support, and `simulate()` raises a `RuntimeError` directly for OT-2 protocols;
+  ② the OT-2 has no absorbance plate-reader module, so "read OD at 600 nm" only has a real module on the Flex, sparing it from degrading into a comment
+- Two execution backends: `opentrons_simulate` (**default**, the official simulator) and `mock_devices` (the unit-test backend,
+  zero dependencies). The mock validates the pipeline, not protocol legality — a script that opentrons refuses to parse would still "run successfully" on the mock,
+  so the default must be the real simulator
+- **Never pretend to have hardware that Opentrons doesn't have**: centrifugation, non-quad-wavelength readings, incubation below 37 °C, off-deck liquid dispensing are all compiled to
+  `[spark-note]` comments and marked `execution: "manual"`; in the run log this is a note, not an execution record
+- Run-log anchoring: before every step the compiler injects `protocol.comment("[spark-step] <id> <action>")`;
+  structured parsing binds every command back to a specific step in the compilation artifact via this anchor, without depending on opentrons's own wording
+- `protocolHash` = sha256(the generated script source code), the source deliberately excludes a compile timestamp — the approve gate approves this
+  hash; if it included a timestamp, every compile would produce a different hash and the approval would forever be stale
+- The safety gate was split from three sequential `if`s into **four mutually independent pure-function rules** (`chemical_compatibility` /
+  `concentration_limit` / `biosafety` / **newly added `volume_capacity`**). `volume_capacity` consumes the compiled artifact:
+  "cumulative well overflow" is invisible at the natural-language layer — it's only knowable after summing the deck layout
+  - **v0.3.0 (P10 D-8) spec convergence**: "four rules" refers to the fact that the rules themselves exist and each has its own adversarial tests,
+    not that all four are actually active on the natural-language main pipeline. In practice: `volume_capacity` is trustworthy throughout;
+    `chemical_compatibility`'s word list has been expanded to cover both Chinese and English plus molecular formulas but is still limited;
+    the fields `concentration_limit` / `biosafety` require are never produced by the compiler, so they **idle permanently on the main pipeline**.
+    The adversarial tests were originally written by manually injecting via `withReagents()` to validate the rule itself — that validated the rule, not the wiring.
+    The compensating mechanism is `unconsumedWarnings` (see `lab/protocol.ts`): when a sentence contains a quantity/reagent/condition
+    that no rule consumes, an explicit warning is produced and is forced to display before approval.
+    **"A rule can be tested in isolation" does not imply "the rule is active on the pipeline" — this is the single most important lesson from this round of external review.**
 
-**B3 干湿闭环引擎**
-- 状态机：`design → dry_run → (approve gate) → approved → (execution gate) → executing → collect → analyze → iterate | conclude`
-  - **v0.3.0（P10 D-10）**：原 `wet_run` 一个状态同时表示「已批准待执行」与「执行中」，
-    拆成 `approved` / `executing` 两态。第二道门（`approved → executing`）由 `execute()` 用
-    乐观并发 CAS 原子声明执行权，**并在那一刻一次性消费 approval**——重跑必须重新审批，
-    崩溃重启后也不例外。两道门都在 `/api/lab/machine` 有机器可读形态（`approvalGate` / `executionGate`）
-- 每次迭代是一个 Experiment record，输入/输出/参数全进证据图
-- 断点续跑：状态持久化到 Project 存储，进程重启可恢复
-- 人在环：湿实验执行前强制 approve gate（安全门通过 ≠ 自动执行）
+**B3 Dry/wet closed-loop engine**
+- State machine: `design → dry_run → (approve gate) → approved → (execution gate) → executing → collect → analyze → iterate | conclude`
+  - **v0.3.0 (P10 D-10)**: the original `wet_run` state simultaneously represented "approved and awaiting execution" and "currently executing";
+    it was split into `approved` / `executing`. The second gate (`approved → executing`) is claimed atomically by `execute()` using
+    an optimistic-concurrency CAS, **consuming the approval in that same moment** — a re-run always requires re-approval,
+    with no exception after a crash and restart. Both gates have a machine-readable representation at `/api/lab/machine` (`approvalGate` / `executionGate`)
+- Each iteration is one Experiment record, with all inputs/outputs/parameters going into the evidence graph
+- Resumable after interruption: state is persisted to Project storage, recoverable after a process restart
+- Human-in-the-loop: an approve gate is mandatory before wet-experiment execution (passing the safety gate ≠ automatic execution)
 
-P5 落地口径（干实验部分；`wet_run` 与 approve gate 留 P6）：
-- 状态集 7 个：`design / dry_run / collect / analyze / concluded / iterated / failed`。
-  `iterate` 与 `conclude` 实现为**终态**而不是动作名——iterate 的语义是「这条实验到此为止，
-  另起一条」，新实验是新的 experiment record，用 `supersedes` 边连回旧的
-- 合法转移只有 7 条（`design→dry_run`、`dry_run→collect|failed`、`collect→analyze`、
-  `analyze→concluded|iterated`、`failed→dry_run`）；表外一律拒绝，**不做「顺手纠正」**
-- 状态回写全部走 `RecordStore.update()` 窄口（P4 定的口径：生命周期字段可变，
-  `type/evidence/origin/artifactId/createdAt` 不可变）；每次转移在
-  `metadata.history` 与 `metadata.timestamps` 留时间戳
-- 断点续跑的三种情形由 `resume()` 区分：**任务仍在跑**（无 done.json 且 pid 活着）→ 保持 dry_run；
-  **任务已完成**（有 done.json）→ 直接 collect；**任务已丢失**（无 done.json 且 pid 没了）→
-  标 `failed` 且 `recoverable=true`，可 `retry` 换新 run。
-  「随进程一起被杀」与「算例本身跑挂」必须能分开——前者重跑就好，后者要改参数
-- 证据图：`artifact record --derives_from--> experiment`（每个产出一条）、
-  `observation --derives_from--> experiment` 与各 artifact record、
-  `conclusion --derives_from--> observation/experiment`。
-  experiment 的 evidence 是 `inferred`（设计是推的），observation 是 `computed`（结果是算的）
-- 结论卡在 P5 只落最小结构且 `review` 一律 `pending`（完整 review 门槛见域 E2/P8）
+P5 landing spec (dry-experiment half; `wet_run` and the approve gate left for P6):
+- 7 states: `design / dry_run / collect / analyze / concluded / iterated / failed`.
+  `iterate` and `conclude` are implemented as **terminal states** rather than action names — the semantics of iterate is "this experiment ends here,
+  a new one starts," and the new experiment is a new experiment record connected back to the old one via a `supersedes` edge
+- Only 7 legal transitions (`design→dry_run`, `dry_run→collect|failed`, `collect→analyze`,
+  `analyze→concluded|iterated`, `failed→dry_run`); anything off the table is rejected outright, with **no "helpful auto-correction"**
+- State write-back always goes through the narrow `RecordStore.update()` interface (a spec set at P4: lifecycle fields are mutable,
+  `type/evidence/origin/artifactId/createdAt` are not); every transition leaves a timestamp in
+  `metadata.history` and `metadata.timestamps`
+- Three cases of resumption after interruption, distinguished by `resume()`: **task still running** (no done.json and the pid is alive) → stays dry_run;
+  **task already completed** (done.json exists) → goes straight to collect; **task lost** (no done.json and the pid is gone) →
+  marked `failed` with `recoverable=true`, retryable with a fresh run.
+  "Killed alongside the process" and "the computation itself crashed" must be distinguishable — the former just needs a re-run, the latter needs a parameter change
+- Evidence graph: `artifact record --derives_from--> experiment` (one per output), `observation --derives_from--> experiment` and each artifact record,
+  `conclusion --derives_from--> observation/experiment`.
+  The experiment's evidence is `inferred` (the design is inferred), while the observation is `computed` (the result is computed)
+- At P5, conclusion cards land with only a minimal structure and `review` is always `pending` (the full review threshold is described in Domain E2/P8)
 
-P6 落地口径（湿实验半边 + approve gate）：
-- 湿实验用**另一张状态机**，11 个状态：`design / compile / safety_check / awaiting_approval /
-  wet_run / collect / analyze / concluded / iterated / rejected / failed`，18 条合法转移。
-  与 P5 干实验状态机**刻意分表**：两条链的状态集不同，而且 P5 的转移表被一组穷举测试锁死，
-  往里加状态会把那组测试的语义悄悄改掉。两者共用的是 record 存储、边语义与
-  `RecordStore.update()` 窄口——那些才是该复用的
-- **AD-6 的落点在转移表**：`wet_run` 的唯一入边是 `awaiting_approval → wet_run`，
-  而这条边只有 `approve()` 会走。安全门通过后 `safetyCheck()` 连做两条转移
-  （`compile → safety_check` 与 `safety_check → awaiting_approval`），
-  「门过了」与「停下来等人」在证据图上分得开
-- approve / reject 各落一条 `decision` record（`evidence=inferred`，`derives_from` 边连实验），
-  metadata 记 **谁 / 何时 / 批的是哪个 protocolHash**；正文里列出批的那一版步骤表与当时的安全门结论
-- **重新编译一律清掉已有的 approve/reject 与安全门结论**：协议在改，旧批准不能跨版本存活。
-  另有第二道防线——`execute()` 在执行前把审批的 hash 与当前编译产物的 hash 再对一次，
-  防的是状态机之外的路径（有人直接改了 record、并发编译）
-- 干湿闭环接通两条路径：干实验在 `analyze` → 干线转 `iterated`、湿线 `supersedes` 接棒；
-  干实验已 `concluded` → 只连 `derives_from`（结论成立、拿去湿实验验证）
-- 湿实验的执行产出与 observation 的 `evidence` 是 **`observed`**（run log 记的是设备做了什么），
-  与干实验的 `computed` 区分。模拟器执行同样算 observed，但正文与 metadata 里明写
-  「硬件为模拟」——数据来源必须能被读图的人分辨
-- 湿实验模拟是秒级同步任务（实测单协议 30–60 ms），所以 `execute()` await 子进程结束，
-  不做 P5 那套 detach + poll。磁盘仍是真源（`protocol.py` / `runlog.json` / `done.json`
-  由 python 侧原子写），换进程照样能接回来
+P6 landing spec (wet-experiment half + approve gate):
+- Wet experiments use **a separate state machine**, with 11 states: `design / compile / safety_check / awaiting_approval /
+  wet_run / collect / analyze / concluded / iterated / rejected / failed`, with 18 legal transitions.
+  This is **deliberately kept as a separate table** from the P5 dry-experiment state machine: the two chains have different state sets, and P5's transition table is locked down by a suite of exhaustive tests;
+  adding states into it would quietly change that suite's semantics. What the two share is record storage, edge semantics, and
+  the narrow `RecordStore.update()` interface — those are what should be reused
+- **AD-6 lands in the transition table**: `wet_run`'s only incoming edge is `awaiting_approval → wet_run`,
+  and only `approve()` ever takes this edge. Once the safety gate passes, `safetyCheck()` makes two transitions in sequence
+  (`compile → safety_check` and `safety_check → awaiting_approval`),
+  so "the gate passed" and "stopped, waiting for a human" are kept distinguishable on the evidence graph
+- Approve / reject each produces a `decision` record (`evidence=inferred`, `derives_from` edge connecting to the experiment),
+  with metadata recording **who / when / which protocolHash was approved**; the body lists the step table approved in that version and the safety-gate conclusion at that time
+- **A recompile always clears any existing approve/reject and safety-gate conclusions**: once the protocol changes, an old approval cannot carry over across versions.
+  There is a second line of defense — `execute()` re-compares the approved hash against the current compiled artifact's hash before execution,
+  which guards against paths outside the state machine (someone directly editing a record, or concurrent compilation)
+- The dry/wet closed loop connects two paths: a dry experiment at `analyze` → the dry chain transitions to `iterated`, and the wet chain picks up via `supersedes`;
+  a dry experiment already `concluded` → connects only via `derives_from` (the conclusion holds, taken forward to be verified by the wet experiment)
+- The wet experiment's execution output has an observation `evidence` of **`observed`** (the run log records what the device did),
+  in contrast to the dry experiment's `computed`. Simulator execution likewise counts as observed, but the body text and metadata explicitly state
+  "hardware is simulated" — the data's provenance must be distinguishable by whoever reads the graph
+- Wet-experiment simulation is a second-scale synchronous task (measured at 30–60 ms per protocol), so `execute()` awaits the subprocess's completion
+  rather than doing the detach + poll approach from P5. Disk is still the source of truth (`protocol.py` / `runlog.json` / `done.json`
+  are atomically written from the python side), so switching processes can still pick it back up
 
-### 域 C：全流程数据记录（Research Record）
+### Domain C: Full-Process Data Recording (Research Record)
 
-**C1 数据模型**（扩展现有 artifact/lineage 架构，同一张图）
+**C1 Data model** (extending the existing artifact/lineage architecture, into the same graph)
 
 ```
-Record 类型：
-  idea         思路卡（来自 Co-explore 或手动）
-  decision     决策点（为什么选方案 A 不选 B）
-  experiment   实验（干/湿，含参数、状态机状态）
-  observation  观察（实验产出的原始发现）
-  reading      精读卡（文献的结构化阅读笔记）
-  conclusion   结论卡（claim + evidence + limitations + review 状态）
-  paper        文献（库内论文的引用锚点）
-  artifact     产物（现有：代码/图/数据文件，带 lineage）
+Record types:
+  idea         idea card (from Co-explore or manual)
+  decision     decision point (why option A was chosen over B)
+  experiment   experiment (dry/wet, including parameters, state-machine state)
+  observation  observation (raw finding produced by an experiment)
+  reading      close-reading card (a structured reading note on a paper)
+  conclusion   conclusion card (claim + evidence + limitations + review status)
+  paper        literature (a citation anchor for a paper in the library)
+  artifact     artifact (existing: code/figures/data files, with lineage)
 
-边类型：
+Edge types:
   supports / contradicts / derives_from / cites / supersedes
 ```
 
-- 每条 record 带：类型、内容、时间戳、来源（会话/cell/connector 调用）、证据类型标签（observed/sourced/computed/inferred —— 现有 core.txt 已定义此分类）
-- 存储：`records.db`（每 Project 一个），与 `artifacts` 表通过 id 互链
+- Every record carries: type, content, timestamp, source (session/cell/connector call), and an evidence-type label (observed/sourced/computed/inferred — this classification is already defined in the existing core.txt)
+- Storage: `records.db` (one per Project), cross-linked with the `artifacts` table via id
 
-**C2 时间线与导出**
-- 项目时间线视图（前端）：按时间/类型过滤的 record 流
-- 导出：Markdown 研究报告（按证据图组织：问题 → 思路 → 实验 → 结论，每条带证据链接）；后续可加 PDF
+**C2 Timeline and export**
+- Project timeline view (frontend): a record stream filterable by time/type
+- Export: Markdown research report (organized by the evidence graph: question → idea → experiment → conclusion, each with an evidence link); PDF may be added later
 
-P7 落地口径：
-- 时间线端点 `GET /api/records`，过滤维度 `type`（多选）/ `evidence` / `session` / `since` / `until`，
-  分页 `limit` + `offset`。过滤谓词在 `RecordStore` 里抽成单一真源，`list()` 与 `count()` 共用——
-  否则「这一页」与「总数」两套口径，翻页时总数会自相矛盾
-- 证据子图 `GET /api/records/:id/graph?depth`（1-5），前端用**确定性环形布局**渲染：
-  力导向每次打开长得不一样、截图对不上，不适合做审计用的图
-- record 详情附带 artifact 内容（AD-3 的 id 互链在 API 层一次取到）
+P7 landing spec:
+- Timeline endpoint `GET /api/records`, filter dimensions `type` (multi-select) / `evidence` / `session` / `since` / `until`,
+  paginated via `limit` + `offset`. The filter predicate is factored into a single source of truth inside `RecordStore`, shared by `list()` and `count()` —
+  otherwise "this page" and "the total count" would be two separate specs, and the total would contradict itself while paging
+- The evidence subgraph `GET /api/records/:id/graph?depth` (1–5), rendered on the frontend with a **deterministic ring layout**:
+  a force-directed layout looks different every time it opens and screenshots won't match, unsuitable for an audit-grade graph
+- Record detail includes the artifact content (AD-3's id cross-linking retrieved in one shot at the API layer)
 
-P8 落地口径（报告导出，`backend/src/report/export.ts`）：
-- 分区：一、问题（项目描述 + idea 卡的 openQuestions + 文献基础统计）／二、思路（每张 idea 卡的
-  假设、novelty 状态、支持与反对文献，走 supports/contradicts 边）／三、实验（干湿实验的状态、
-  平台或后端、假设、摘要、观察）／四、结论（**只有 review approved 的卡**）／五、待验证
-  （pending 与 vetoed，逐条列出阻塞它的 hard finding）／附录 A 证据索引／附录 B 参考文献
-- **正文全部由代码渲染，不经过模型**。让模型写报告等于给它一次改数据的机会；
-  同一条纪律已经用在 experiment record 与 novelty 报告上
-- 每条陈述带 record id，读者可用 `conclusion show <id>` 或 `GET /api/records/<id>` 回原始记录核对；
-  附录 A 的每个 id 都必须在 records.db 里解析得到（有测试守着，不许有幽灵条目）
-- 能力位进措辞：`deterministic=false` → 「区间/趋势对账」；`simulated=true` → 结论标题挂
-  `[模拟数据]` 并附「模拟器不验证生物学」。混合证据取最保守的一条
-- 出口：`spark-research report export|stats`、`GET /api/report[?format=markdown]`、工作台导出按钮
+P8 landing spec (report export, `backend/src/report/export.ts`):
+- Sections: I. Question (project description + idea cards' openQuestions + literature-base statistics) / II. Ideas (each idea card's
+  hypothesis, novelty status, supporting and opposing literature, following supports/contradicts edges) / III. Experiments (dry/wet experiment status,
+  platform or backend, hypothesis, summary, observations) / IV. Conclusions (**only cards with review approved**) / V. To be verified
+  (pending and vetoed, each listing the hard finding blocking it) / Appendix A Evidence index / Appendix B References
+- **The body text is entirely rendered by code, never passing through the model.** Letting the model write the report would be handing it a chance to alter the data;
+  the same discipline is already applied to experiment records and novelty reports
+- Every statement carries a record id, so readers can use `conclusion show <id>` or `GET /api/records/<id>` to cross-check the original record;
+  every id in Appendix A must be resolvable in records.db (guarded by a test — no ghost entries allowed)
+- Capability bits feed into wording: `deterministic=false` → "range/trend reconciliation"; `simulated=true` → the conclusion title carries
+  `[simulated data]` with an appended note that "the simulator does not verify biology." Mixed evidence takes the most conservative label
+- Exit points: `spark-research report export|stats`, `GET /api/report[?format=markdown]`, the workbench's export button
 
-### 域 D：创新性验证与梳理
+### Domain D: Novelty Verification and Organization
 
 **D1 Novelty check pipeline**
-1. Claim 提取：从 idea 卡或结论卡提取可检验的创新点陈述（P4：1-5 条，每条配 2-3 个英文检索式）
-2. 密集检索：针对每个 claim 多源检索（含语义近邻检索，Semantic Scholar/OpenAlex 的相关论文 API）
-3. 对比报告：逐 claim 列出最接近的已有工作 + 相同点 + 差异点 + 新颖性评级（novel / incremental / existing，附证据）
-4. **评级校验层（P4 新增，确定性代码）**：模型给的评级要被检索结果的可计算特征约束，否则「新颖性」等于让模型给自己的想法打分。规则见下表
-5. Reviewer 复核：报告里每条「已有工作」引用必须真实存在（走 A3-4 同一套引用核验；knownKeys = 库内 key ∪ 本次检索候选）
+1. Claim extraction: extract testable statements of novelty from idea cards or conclusion cards (P4: 1–5 statements, each paired with 2–3 English search queries)
+2. Dense retrieval: multi-source search targeting each claim (including semantic near-neighbor search, via Semantic Scholar/OpenAlex related-paper APIs)
+3. Comparison report: for each claim, list the closest existing work + similarities + differences + a novelty rating (novel / incremental / existing, with evidence attached)
+4. **Rating-validation layer (added at P4, deterministic code)**: the model's rating must be constrained by computable features of the search results, otherwise "novelty" reduces to letting the model grade its own idea. Rules are in the table below
+5. Reviewer re-verification: every "existing work" citation in the report must genuinely exist (via the same citation-verification pipeline as A3-4; knownKeys = library keys ∪ this search's candidates)
 
-评级校验规则（每条都是纯函数，可单测）：
+Rating-validation rules (each is a pure function, unit-testable):
 
-| 规则 | 触发 | 后果 |
+| Rule | Trigger | Consequence |
 |------|------|------|
-| `no_candidates` | 检索一条候选都没返回 | 结论不可用（**检索不到 ≠ 新颖**） |
-| `rating_without_nearest` | 有候选却不列最近邻 | 结论不可用 |
-| `unknown_work` | 引用了候选清单外的 key | 结论不可用 |
-| `existing_without_high_affinity` | 评 existing 却没引到高相似候选 | 降级为 incremental |
-| `novel_despite_high_affinity` | 存在高相似候选却评 novel | 升级为 existing |
+| `no_candidates` | The search returned zero candidates | Conclusion unusable (**failing to find something ≠ novel**) |
+| `rating_without_nearest` | Candidates exist but the nearest neighbor is not listed | Conclusion unusable |
+| `unknown_work` | Cites a key outside the candidate list | Conclusion unusable |
+| `existing_without_high_affinity` | Rated existing but no highly similar candidate is cited | Downgraded to incremental |
+| `novel_despite_high_affinity` | A highly similar candidate exists but was rated novel | Upgraded to existing |
 
-「相似度」是确定性计算（claim/检索式与候选标题+摘要的内容词覆盖率），不是模型给的分；报告里模型评级与校正后评级都列出。
+"Similarity" is a deterministic computation (content-word coverage between the claim/search query and the candidate's title + abstract), not a model-assigned score; the report lists both the model's rating and the corrected rating.
 
-**D2 与思路库联动**：每个 Idea 卡有 novelty 状态字段（unchecked / checked-novel / checked-incremental / checked-overlap），检查结果作为 record 挂到证据图。
+**D2 Coupling with the idea library**: every Idea card has a novelty status field (unchecked / checked-novel / checked-incremental / checked-overlap); the check result is attached to the evidence graph as a record.
 
-P4 落地口径：
-- 报告 = artifact + `artifact` record（`metadata.kind="novelty_report"`，`evidence=inferred`），`derives_from` 边连 idea，`cites` 边连命中库内的候选论文
-- 状态取最保守的一条：任一 claim `existing` → checked-overlap；否则任一 `incremental` → checked-incremental；全 `novel` → checked-novel
-- 任一 claim 结论不可用 → 状态**维持 unchecked**，但报告指针仍写回 idea（「查过但没查出来」与「没查过」必须能区分）
+P4 landing spec:
+- The report = an artifact + `artifact` record (`metadata.kind="novelty_report"`, `evidence=inferred`), `derives_from` edge connecting to the idea, `cites` edges connecting to matched candidate papers within the library
+- Status takes the most conservative value: if any claim is `existing` → checked-overlap; else if any is `incremental` → checked-incremental; if all are `novel` → checked-novel
+- If any claim's conclusion is unusable → the status **remains unchecked**, but the report pointer is still written back to the idea ("checked but couldn't determine" must be distinguishable from "never checked")
 
-### 域 E：结论分析与 Review
+### Domain E: Conclusion Analysis and Review
 
-**E1 Reviewer 强化**（在现有 veto 机制上叠加）
-- 现有：lineage 版本冲突检测（stale_input/version_mix）、trace-don't-recompute、否决完成
-- 新增检查器（每个都是独立 rule，可单测）：
-  - 引用真实性（服务域 A/D）—— P3 已落地为 `citation-integrity`：库外 key（含编造 key 与库外真文献）= hard veto；与精读卡冲突 = soft（LLM 辅助，标 inferred）；强断言无引用 = soft
-  - 数据-结论一致性：结论卡引用的 observation 是否真实存在于执行记录
-  - 统计合理性提示（soft finding）：样本量、多重比较、p-hacking 模式的启发式提示
-- 按位置加权保留：figure/report 中的 claim 比 chat 中的严格。
-  **例外**：`citation-integrity` 的 finding 严重度由规则自身定义，不参与位置加权——否则综述草稿（text/markdown）里所有 soft 提示都会被升成 veto，与「soft 只提示不否决」直接冲突（P3 决策 D3）
+**E1 Reviewer strengthening** (layered on top of the existing veto mechanism)
+- Existing: lineage version-conflict detection (stale_input/version_mix), trace-don't-recompute, veto completion
+- New checkers (each an independent rule, unit-testable):
+  - Citation authenticity (serving domains A/D) — landed at P3 as `citation-integrity`: a key outside the library (whether a fabricated key or a real work outside the library) = hard veto; a conflict with a close-reading card = soft (LLM-assisted, marked inferred); a strong assertion with no citation = soft
+  - Data-conclusion consistency: whether the observation cited by a conclusion card actually exists in the execution record
+  - Statistical plausibility hints (soft finding): heuristic hints on sample size, multiple comparisons, and p-hacking patterns
+- Position-weighted retention: a claim in a figure/report is held to a stricter standard than one in chat.
+  **Exception**: `citation-integrity` findings' severity is defined by the rule itself and is not subject to position weighting — otherwise every soft hint in a review draft (text/markdown) would get upgraded to a veto, directly conflicting with "soft only hints, never vetoes" (P3 decision D3)
 
-**E2 结论卡（Conclusion card）**
-- 结构：claim + 证据列表（record 链接）+ limitations + confidence + review 状态（pending / approved / vetoed）
-- 只有 review approved 的结论卡才能进入导出报告的「结论」区（vetoed/pending 的进「待验证」区）
+**E2 Conclusion card**
+- Structure: claim + evidence list (record links) + limitations + confidence + review status (pending / approved / vetoed)
+- Only conclusion cards with review approved can enter the "conclusions" section of the exported report (vetoed/pending cards go to the "to be verified" section)
 
-P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_rules.ts`）：
+P8 landing spec (`backend/src/conclusion/` + `backend/src/reviewer/conclusion_rules.ts`):
 
-三个新检查器（与 `citation-integrity` 同形态：零 IO、可单测、**豁免位置加权**——
-结论卡正文是 markdown，位置加权会把所有 soft 升成 veto，直接毁掉「启发式只提示不否决」）：
+Three new checkers (in the same form as `citation-integrity`: zero IO, unit-testable, **exempt from position weighting** —
+a conclusion card's body is markdown, and position weighting would upgrade every soft to a veto, wrecking "heuristics only hint, never veto"):
 
-| rule | 严重度 | 判据 |
+| rule | severity | acceptance criterion |
 |------|--------|------|
-| `data-consistency` | hard / soft | 证据必须是本项目里真实存在的 observation：断链 / 跨项目 / 类型不对 / 零证据 = hard；无 runId 与 experimentId 锚点（手工登记）、证据图上没连 derives_from 边 = soft |
-| `capability-labeling` | hard | 引用 `simulated=true` 的 observation 却没在 claim/limitations 标注 = hard；证据来自 `deterministic=false` 的平台却声称逐位/完全一致 = hard |
-| `stats-plausibility` | **只有 soft** | 启发式：样本量 < 6 / 多重比较未校正 / p ∈ [0.04, 0.05] / 强因果断言 + 弱证据基础。每条 finding 带 `heuristic: true`，误报漏报都在预期内 |
+| `data-consistency` | hard / soft | evidence must be an observation that genuinely exists within this project: broken link / cross-project / wrong type / zero evidence = hard; missing runId and experimentId anchors (manually registered), or no derives_from edge connecting it on the evidence graph = soft |
+| `capability-labeling` | hard | citing an observation with `simulated=true` without labeling it in the claim/limitations = hard; evidence coming from a `deterministic=false` platform yet claiming bit-for-bit/complete consistency = hard |
+| `stats-plausibility` | **soft only** | heuristics: sample size < 6 / multiple comparisons uncorrected / p ∈ [0.04, 0.05] / a strong causal claim + a weak evidentiary basis. Every finding carries `heuristic: true`; both false positives and false negatives are expected |
 
-- **判定规则不可协商**：任一 hard → `vetoed`，零 hard → `approved`。不提供「人工推翻 hard」
-  的路径——三条 hard 全部是可核对的事实判断，不是审美问题；反方向提供 `--veto`
-  （人挡下一条本来会自动通过的结论，理由必填）
-- 每次评审落一条 `decision` record（`kind=conclusion_review`，derives_from → 结论卡），
-  记谁、何时、判了什么、依据哪些 finding。CLI 落 `$USER` 时 `actorSource` 记 `env:USER`；
-  HTTP 缺 actor 直接 400 并记 `http:explicit`（AD-6 的 P7 补充）
-- **报告看的是卡上已落的 review 状态，不是「现在跑一遍会通过」**。没评审就是没评审，
-  报告不替评审人按通过键
-- `review` 字段兼容 P5/P6 的裸字符串形态；解析不出来一律落回 `pending`——
-  一个读不懂的 review 字段绝不能被当成 approved
+- **The ruling logic is non-negotiable**: any hard → `vetoed`; zero hard → `approved`. There is no path
+  for "manually override a hard" — the three hard rules are all verifiable factual judgments, not matters of taste; in the reverse direction, a `--veto` is provided
+  (a human blocking a conclusion that would otherwise auto-pass, with a mandatory reason)
+- Every review produces one `decision` record (`kind=conclusion_review`, `derives_from` → the conclusion card),
+  recording who, when, what was ruled, and on which findings it was based. When the CLI falls back to `$USER`, `actorSource` records `env:USER`;
+  HTTP with no actor returns a 400 directly and records `http:explicit` (a P7 addition to AD-6)
+- **The report reflects the review status already recorded on the card, not "would it pass if run right now."** Not reviewed means not reviewed —
+  the report does not press the approve button on the reviewer's behalf
+- The `review` field is backward-compatible with the bare-string form from P5/P6; anything unparseable falls back to `pending` —
+  a review field that can't be understood must never be treated as approved
 
 ---
 
-## 五、系统架构
+## V. System Architecture
 
-### 5.1 分层图
+### 5.1 Layer diagram
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│  界面层                                                      │
-│  CLI（完整功能）· Web 工作台（项目导航+会话+时间线+实验面板）    │
-│  MCP server（P9：24 工具，外部 agent 接入；审批类刻意不暴露）    │
-│  ↕ HTTP API（P7：域端点 + 长任务句柄 + SSE，UI 与 MCP 都是投影） │
+│  Interface layer                                            │
+│  CLI (full functionality) · Web workbench (project nav+session+timeline+experiment panel) │
+│  MCP server (P9: 24 tools, for external agent integration; approval-type actions deliberately not exposed) │
+│  ↕ HTTP API (P7: domain endpoints + long-task handles + SSE, both UI and MCP are projections) │
 ├────────────────────────────────────────────────────────────┤
-│  Agent 层（TypeScript）                                      │
-│  research agent（唯一用户可见）                               │
-│   └ 任务型子代理：explore / execute / review（现有）           │
-│     + literature / lab（新增配置，同一委派机制）               │
-│  双层 prompt：core.txt（provider-neutral）+ workflow prompt   │
+│  Agent layer (TypeScript)                                    │
+│  research agent (the only one visible to the user)          │
+│   └ task-type subagents: explore / execute / review (existing) │
+│     + literature / lab (newly configured, same delegation mechanism) │
+│  Two-layer prompt: core.txt (provider-neutral) + workflow prompt │
 ├────────────────────────────────────────────────────────────┤
-│  Daemon 控制层（TypeScript，唯一持凭据进程）                   │
-│  permit set · 凭据服务(新) · Project 管理(新) ·               │
-│  Record/Artifact 存储 · 执行记录 · Reviewer                   │
+│  Daemon control layer (TypeScript, the only credential-holding process) │
+│  permit set · credential service (new) · Project management (new) ·  │
+│  Record/Artifact storage · execution records · Reviewer      │
 ├────────────┬──────────────┬──────────────┬─────────────────┤
-│ Kernel 层   │ Connector 层  │ Simulation   │ Lab 层           │
-│ Python      │ 文献×8 蛋白×3 │ adapter 接口  │ protocol compiler│
-│ (stateful)  │ 基因×3 化学×2 │ +OpenMM 等   │ +safety gate     │
-│ control_repl│ +AMiner(凭据) │              │ +Opentrons 模拟器 │
+│ Kernel layer│ Connector layer│ Simulation  │ Lab layer        │
+│ Python      │ Lit.×8 Protein×3│ adapter interface│ protocol compiler│
+│ (stateful)  │ Gene×3 Chem×2  │ +OpenMM etc. │ +safety gate     │
+│ control_repl│ +AMiner(credentialed)│         │ +Opentrons simulator │
 ├────────────┴──────────────┴──────────────┴─────────────────┤
-│  存储层（本地优先）                                            │
+│  Storage layer (local-first)                                 │
 │  ~/.spark-research/projects/<slug>/                          │
-│    project.json  · library.db · records.db ·                 │
-│    papers/ · artifacts/(含 artifacts.db) ·                   │
-│    experiments/<platform>/{prepared,runs}/  (P5 仿真状态真源)  │
-│  ~/.spark-research/state.json (当前项目 + session→project)    │
+│    project.json · library.db · records.db ·                 │
+│    papers/ · artifacts/(incl. artifacts.db) ·                │
+│    experiments/<platform>/{prepared,runs}/  (P5 simulation state source of truth) │
+│  ~/.spark-research/state.json (current project + session→project) │
 │  ~/.spark-research/credentials.json (0600, daemon-only)      │
-│  ~/.spark-research/config.json (P9：配置真源，env > file > 默认)│
+│  ~/.spark-research/config.json (P9: config source of truth, env > file > default)│
 └────────────────────────────────────────────────────────────┘
 ```
 
-### 5.2 关键架构决策（ADR 摘要）
+### 5.2 Key Architecture Decisions (ADR summary)
 
-| # | 决策 | 理由 |
+| # | Decision | Rationale |
 |---|------|------|
-| AD-1 | Project 为持久层根，session 挂在 project 下 | 科研单位是课题；差异化主张 §3.1 |
-| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt。P1 落地口径：daemon 的 `credentials` 方法只回「是否已配置 + 字段名」，值本体不出 daemon；无该 permit 的 kernel 连元数据都拿不到 |
-| AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致。P1 落地：`records.artifact_id` → `artifacts.id`，且 `artifacts.project_slug` 指向真实 project |
-| AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
-| AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
-| AD-6 | 湿实验执行前强制人工 approve gate | 安全门是必要非充分条件；物理世界操作不自动化审批。**P7 补充（HTTP 层比 CLI 更严）**：CLI 缺 `--actor` 时落到 `$USER` 是诚实的（就是这个人在这台机器上敲的命令）；HTTP **不许**有 env 兜底——服务进程的 OS 用户与点「批准」的人无关，缺 `actor` 直接 400，`actorSource` 记 `http:explicit` 以便审计分辨来源。注意当前是单用户本地场景下的「谁自称就是谁」，做多用户时这里要换成真实身份 |
-| AD-7 | 前端 vanilla JS 保持到 P7；P7 起迁 SolidJS，对标 OpenScience workspace 体验（2026-09-09 用户定档），API 先行 | CLI/API 是能力真源，UI 是投影。**P7 已落地**：SolidJS + Vite（依赖只有 solid-js/vite/vite-plugin-solid，Markdown/图表/证据图全自写），构建产物由 server 静态托管，产物不入 git、缺失时 UI 路径回 503 + 构建指引而 API 照常。UI 与 CLI 的行为对照见 `tests/unit/ui_cli_parity.test.ts` |
-| AD-8 | 凡是「模型给结论、结论会影响下游动作」的地方，都要有一层确定性代码按可计算特征约束它（P4 的评级校验层是第一例） | LLM 判断可以作为输入，但不能既当运动员又当裁判。约束层必须零 IO、纯函数、可单测，并把「模型原判」与「校正后」都留在产物里 |
-| AD-9 | **MCP 暴露面按「谁承担后果」切，而不是按「能不能实现」切**（P9 新增） | `lab approve/reject/simulate` 与 `conclusion review` 不做成 MCP 工具：若外部 agent 能自己批准，它就能自己编译协议、自己批准、自己执行，AD-6 的 approve gate 退化成注释；结论评审同理，那是可信度的最后一道闸。落地要求三条：① 不暴露清单是**显式数据**（`MCP_WITHHELD`），进 capabilities 输出与 server instructions，让外部 agent 一眼看到边界；② 相邻的只读能力照常开放（`lab_status` / `conclusion_get` 的预评估），拒绝要精确不要一刀切；③ **结构性防线**——测试遍历全部已暴露工具的请求构造，断言没有一个能打到审批类端点，防的是「换个名字绕过去」。<br>**主会话裁定（v0.2.0）**：MCP 工具清单是**能力声明，不是访问控制**。真正的访问控制在别处（daemon 的 permit set、文件权限、物理设备要人去按）。一个有 Bash 权限的 agent 确实能绕道调 CLI——承认这一点，不假装挡得住。这条边界起的作用是另外三件事：**默认路径**（agent 的第一反应是「我有哪些工具」，自动批准不在默认可达集合里）、**意图显性化**（绕道要主动构造命令，是一个「我知道我在绕过设计」的留痕动作，用户在 permission 层看得见）、**责任归属**（经 MCP 调用是我们授权的能力；经 Bash 绕过是用户授予 Bash 权限的后果）。所以它是纵深防御的一层，不是唯一一层——说它能挡住有意绕过者是安全剧场，但说「反正能绕过所以不该做」同样错：默认值决定 99% 的行为。若要真正堵住绕道，正确做法不是加固 MCP 层，而是在 CLI 层要求审批必须来自可交互终端（见 BACKLOG V19） |
-| AD-12 | **对外声称的每一项能力必须机器可核**（v0.3.0 新增，门禁在 `tests/unit/narrative_parity.test.ts`） | 外部评审最大的一条发现是「叙事超前于实现」：README 宣传 100 并发 swarm 而 `swarm.ts` 生产代码零调用方、架构图写 18 个 connector 实际 17 个。这类漂移**不报错**——能编译、测试全绿、只有人去读才发现对不上，所以靠人自觉不可持续。门禁做三件事：① **孤儿模块检测**（生产代码零引用者必须在册且写清理由，白名单只许缩短不许悄悄变长）；② 文档里的数量声称与运行期真源对撞；③ **自描述端点必须能从真源推导**——`/api/lab/machine` 的两道门由转移表算出来比对，而不是手写（P10 就撞上过：D-10 拆了状态之后该端点仍自称 `to: "wet_run"`，AD-6 的机器可读表达对外撒谎且全部测试皆绿）。<br>**编号说明**：AD-10 / AD-11 预留给 v0.4 的 P13（完成判定问图不问模型）与 P15（扩展过契约才算装好），见 `docs/DEVELOPMENT_PLAN_v0.3.md` §八 |
-| AD-15 | **原始层只追加不改；证据图是派生层**（v0.7 方案新增，落地在 W7-D0/D1，设计见 `DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md`） | 三次外部验收与 B2 三轮实证跑完后发现：connector 原始响应在 `JSON.parse` 前被丢弃、LLM 原文只剩 hash、`RecordStore.update()` 覆写不留旧值——归一化逻辑一改旧结果无法重算，研究过程数据不可追溯。可变投影（状态机需要）之下必须有不可变日志；L0 raw + records_journal 满足审计与恢复，不做全量事件重放（9 处状态机调用方不重写） |
-| AD-16 | **`provenanceClass = upstream` 的数据永不进入任何共享集合**（v0.7 方案新增，门禁 G6） | 上游镜像（尤其带凭据协议的 AMiner/CNKI/万方与带非商业条款的公共 API）不是可售卖标的；只有 derived / user_authored / model_generated 且 license 允许的才可导出 for-sharing。上游节点在导出里以 stub 保边不保内容。AD-13/14 的编号说明见 `DEVELOPMENT_PLAN_v0.4.md` |
+| AD-1 | Project is the root of the persistence layer; sessions hang under a project | The unit of research is the project; differentiation thesis §3.1 |
+| AD-2 | Credentials only ever live in the daemon; the kernel accesses them via `mcp_call` on its behalf | Lesson from the AMiner research; credentials must never enter the sandbox/env/prompt. P1 landing spec: the daemon's `credentials` method only returns "whether configured + field names," never the value body; a kernel without that permit can't even obtain the metadata |
+| AD-3 | Record and Artifact are the same graph in different tables, cross-linked by id | Reuses the already-verified lineage mechanism, avoiding a two-graph inconsistency. P1 landing: `records.artifact_id` → `artifacts.id`, and `artifacts.project_slug` points to a real project |
+| AD-4 | Simulation adapter is independent of connector | connector is data reading (idempotent), simulation is a long-running task lifecycle (prepare/submit/poll/collect) — different contracts |
+| AD-5 | Fewer, deeper skills: a skill is only considered complete when it has matching e2e verification | A differentiated response to OpenScience's "uneven quality across 313 skills" |
+| AD-6 | A mandatory human approve gate before wet-experiment execution | The safety gate is necessary but not sufficient; physical-world actions are not auto-approved. **P7 addition (HTTP layer stricter than CLI)**: when the CLI lacks `--actor`, falling back to `$USER` is honest (it really is the person who typed the command on this machine); HTTP is **not** allowed an env fallback — the service process's OS user has nothing to do with the person clicking "approve," so a missing `actor` returns a 400 directly, with `actorSource` recording `http:explicit` for audit disambiguation. Note that this is currently the "whoever claims to be who" model appropriate to a single-user local scenario; this must be replaced with real identity once multi-user support is built |
+| AD-7 | Frontend stays vanilla JS through P7; migrates to SolidJS starting at P7, matching the OpenScience workspace experience (user-scheduled on 2026-09-09), API-first | CLI/API is the source-of-truth for capability, the UI is a projection. **Already landed at P7**: SolidJS + Vite (dependencies are only solid-js/vite/vite-plugin-solid; Markdown, charts, and the evidence graph are all hand-rolled), the build artifact is served statically by the server, artifacts are not checked into git, and when missing the UI path falls back to a 503 + build instructions while the API keeps working normally. UI/CLI behavioral parity is checked in `tests/unit/ui_cli_parity.test.ts` |
+| AD-8 | Anywhere "the model produces a conclusion, and the conclusion drives downstream action" must have a layer of deterministic code constraining it via computable features (P4's rating-validation layer is the first instance) | LLM judgment can serve as input, but cannot be both player and referee. The constraint layer must be zero-IO, pure functions, unit-testable, and must retain both "the model's original ruling" and "the corrected ruling" in the artifact |
+| AD-9 | **The MCP exposure surface is cut by "who bears the consequences," not by "what's technically feasible"** (added at P9) | `lab approve/reject/simulate` and `conclusion review` are not made into MCP tools: if an external agent could approve on its own, it could compile the protocol, approve it, and execute it all by itself, and AD-6's approve gate would degrade into a comment; conclusion review is the same — it is the last gate on credibility. Landing requires three things: ① the withheld list is **explicit data** (`MCP_WITHHELD`), surfaced in the capabilities output and the server instructions, so an external agent sees the boundary at a glance; ② adjacent read-only capabilities remain open as usual (`lab_status` / `conclusion_get`'s pre-assessment) — the refusal is precise, not a blanket cut; ③ **a structural defense** — a test that enumerates request constructions against every exposed tool and asserts that none of them can reach an approval-type endpoint, guarding against "sneak past it under a different name." <br>**Main-session ruling (v0.2.0)**: the MCP tool list is a **declaration of capability, not an access-control mechanism**. The real access control lives elsewhere (the daemon's permit set, file permissions, the physical device requiring a human to press it). An agent with Bash access genuinely can route around it and call the CLI directly — we acknowledge this rather than pretending it's blocked. What this boundary actually does is three other things: the **default path** (an agent's first instinct is "what tools do I have," and auto-approval isn't in that default reachable set), **making intent explicit** (routing around it requires actively constructing a command — a self-evident "I know I'm bypassing the design" trace that's visible to the user at the permission layer), and **attribution of responsibility** (a call made via MCP is a capability we authorized; a bypass via Bash is a consequence of the Bash permission the user granted). So this is one layer of defense in depth, not the only layer — claiming it stops a deliberate bypasser is security theater, but "since it can be bypassed anyway, it isn't worth doing" is equally wrong: defaults determine 99% of behavior. If truly blocking the bypass is the goal, the correct fix isn't to harden the MCP layer, but to require at the CLI layer that approvals come only from an interactive terminal (see BACKLOG V19) |
+| AD-12 | **Every capability claimed publicly must be machine-verifiable** (added in v0.3.0, gated by `tests/unit/narrative_parity.test.ts`) | The single biggest finding from the external review was "narrative running ahead of implementation": the README advertised a 100-concurrency swarm while `swarm.ts` had zero callers in production code, and the architecture diagram claimed 18 connectors when there were actually 17. This kind of drift **produces no error** — it compiles, all tests are green, and only a human reading closely notices the mismatch, so relying on self-discipline is unsustainable. The gate does three things: ① **orphan-module detection** (a production-code module with zero referrers must be registered with a stated reason, and the allowlist may only shrink, never quietly grow); ② document-stated counts are checked against the runtime source of truth; ③ **self-describing endpoints must be derivable from the source of truth** — the two gates of `/api/lab/machine` are computed from the transition table for comparison, rather than hand-written (P10 actually hit this: after D-10 split the states, the endpoint still claimed `to: "wet_run"`, so AD-6's machine-readable representation was lying externally with every test green). <br>**Numbering note**: AD-10 / AD-11 are reserved for v0.4's P13 (completion determined by querying the graph, not the model) and P15 (only counts as "installed" once it has passed through the contract), see `docs/DEVELOPMENT_PLAN_v0.3.md` §VIII |
+| AD-15 | **The raw layer is append-only and never modified; the evidence graph is a derived layer** (added in the v0.7 proposal, landed in W7-D0/D1, design in `DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md`) | After three rounds of external acceptance review and B2's three rounds of empirical runs, it was discovered that connector raw responses were discarded before `JSON.parse`, that only a hash of the LLM's original text was kept, and that `RecordStore.update()`'s overwrite left no trace of the old value — once normalization logic changes, old results can no longer be recomputed, and the research-process data is untraceable. Underneath the mutable projection (which the state machine requires) there must be an immutable log; L0 raw + records_journal satisfies audit and recovery needs without doing full event replay (the 9 state-machine call sites are not rewritten) |
+| AD-16 | **Data with `provenanceClass = upstream` never enters any shared collection** (added in the v0.7 proposal, gated at G6) | Upstream mirrors (especially credentialed-protocol AMiner/CNKI/Wanfang and public APIs under non-commercial terms) are not a sellable asset; only derived / user_authored / model_generated data whose license permits it may be exported for-sharing. Upstream nodes appear in exports as stubs that preserve edges but not content. AD-13/14's numbering is explained in `DEVELOPMENT_PLAN_v0.4.md` |
 
-### 5.3 技能目录（v0.2 首批，共 10 个）
+### 5.3 Skill catalog (v0.2 first batch, 10 in total)
 
-| 技能 | 域 | 验证方式 |
+| Skill | Domain | Verification method |
 |------|-----|---------|
-| literature-search | A | 真实多源检索 e2e（fixture 回放进 CI） |
-| paper-download | A | arXiv+EuropePMC 真实下载（已有验证经验） |
-| library-curation | A | 入库/去重/BibTeX 导出单测 |
-| literature-review | A | 10 篇文献 → 综述 → 引用核验全过 |
-| idea-coexplore | A | 对话产出 Idea 卡 + 文献 grounding 检查 |
-| novelty-check | D | 已知领域 idea → 对比报告 → 引用真实性核验 |
-| protein-analysis | B | UniProt/PDB/AlphaFold 链路（P5：真实录制 fixture 回放 e2e，12 用例） |
-| dry-experiment | B | OpenMM 最小 MD 任务端到端（P5：契约测试 ×2 实现 + 真实 SIGKILL 恢复 e2e） |
-| wet-protocol | B | 协议编译 → Opentrons 模拟器执行（P6：2 类协议真模拟器 e2e + 安全门 4 条规则对抗矩阵 + approve gate 单测） |
-| research-report | C/E | 证据图 → Markdown 报告，结论卡 review 门槛生效（P8：三检查器单测 + 报告分区归属 + 全链路演练脚本） |
+| literature-search | A | real multi-source retrieval e2e (fixtures replayed in CI) |
+| paper-download | A | real arXiv+EuropePMC downloads (existing verified experience) |
+| library-curation | A | unit tests on ingest/dedup/BibTeX export |
+| literature-review | A | 10 papers → review → citation verification, all passing |
+| idea-coexplore | A | conversation produces an Idea card + literature-grounding check |
+| novelty-check | D | idea in a known field → comparison report → citation-authenticity verification |
+| protein-analysis | B | UniProt/PDB/AlphaFold pipeline (P5: real recorded fixtures replayed as e2e, 12 cases) |
+| dry-experiment | B | OpenMM minimal MD task end-to-end (P5: contract tests ×2 implementations + real SIGKILL recovery e2e) |
+| wet-protocol | B | protocol compile → Opentrons simulator execution (P6: 2 protocol classes real-simulator e2e + safety-gate 4-rule adversarial matrix + approve-gate unit tests) |
+| research-report | C/E | evidence graph → Markdown report, conclusion-card review threshold in effect (P8: three-checker unit tests + report-section attribution + full-chain rehearsal script) |
 
-### 5.4 模型路由
+### 5.4 Model routing
 
-- 保持模型无关（现有 LLMRouter：kimi/openai/anthropic/deepseek/qwen/openrouter）
-- 子代理可配置独立模型（重任务用强模型，检索/摘要用快模型）。P9 核对：这一层目前是**代码内配置**，暴露成用户配置项记在 BACKLOG V16
-- 默认模型保持 OpenRouter 路由，用户 BYOK
+- Stays model-agnostic (existing LLMRouter: kimi/openai/anthropic/deepseek/qwen/openrouter)
+- Subagents can be configured with an independent model (heavy tasks use a stronger model, retrieval/summarization uses a faster model). Checked at P9: this layer is currently **configured in code**; exposing it as a user-facing config option is logged in BACKLOG V16
+- The default model stays routed through OpenRouter, with the user supplying BYOK
 
-## 5.5 扩展面与自描述（P9）
+## 5.5 Extension Surface and Self-Description (P9)
 
-- **六个扩展点**（Skill / Connector / SimulationPlatform / WetLabBackend / 安全门规则 / Prompt 与模型路由）的契约、最小可运行示例、测试方法与文件位置见 [EXTENDING.md](EXTENDING.md)
-- **脚手架**：`spark-research new skill|connector|platform`，生成的测试桩当场可跑（CI 真跑一遍）
-- **能力自描述**：`spark-research capabilities [--json] [--probe]`，**全部从真实注册表生成**并有双向一致性测试（清单里的每一项可实例化；注册表里的每一项都在清单里）。可用性分静态档（零 IO）与探测档（spawn 子进程）两层，不混
-- **配置面收口**：`~/.spark-research/config.json` + 一张设置表（`backend/src/config/index.ts`）作单一真源，优先级 env > config.json > 默认值；凭据与设置同文件但标 `secret`，值永不打印、永不进 env
-- **SKILL.md frontmatter 规范化**：新增 `triggers` / `connectors` / `validation` 三个必填字段，schema 校验进 CI；`validation` 让 AD-5 从口号变成一道门（校验器去磁盘核对测试文件存在）
-- **llms.txt / llms-full.txt**：由 `bun run gen:llms` 幂等生成，CI 守与文档同步
-- **命名修正**：connector 基类 `MCPConnector` → `HttpConnector`（与 MCP 协议无关，是 v0.1 的历史包袱）。旧名保留 deprecated 别名，移除记在 BACKLOG V15
+- The contract, minimal runnable example, testing method, and file location for the **six extension points** (Skill / Connector / SimulationPlatform / WetLabBackend / safety-gate rules / Prompt and model routing) are in [EXTENDING.md](EXTENDING.md)
+- **Scaffolding**: `spark-research new skill|connector|platform` generates test stubs that are runnable on the spot (CI actually runs them once)
+- **Capability self-description**: `spark-research capabilities [--json] [--probe]`, **generated entirely from the real registry** with a bidirectional consistency test (every item in the listing can be instantiated; every item in the registry appears in the listing). Availability is split into a static tier (zero IO) and a probe tier (spawns a subprocess), kept separate
+- **Config-surface close-out**: `~/.spark-research/config.json` + one settings table (`backend/src/config/index.ts`) serve as the single source of truth, with precedence env > config.json > default; credentials and settings share the same file but are labeled `secret`, and values are never printed and never enter env
+- **SKILL.md frontmatter standardization**: three newly required fields — `triggers` / `connectors` / `validation` — with schema validation running in CI; `validation` turns AD-5 from a slogan into an actual gate (the validator checks the disk to confirm the test files exist)
+- **llms.txt / llms-full.txt**: idempotently generated by `bun run gen:llms`, with CI enforcing sync with the docs
+- **Naming fix**: the connector base class `MCPConnector` → `HttpConnector` (unrelated to the MCP protocol; a v0.1 historical holdover). The old name is kept as a deprecated alias; its removal is logged in BACKLOG V15
 
 ---
 
-## 六、风险与缓解
+## VI. Risks and Mitigations
 
-| 风险 | 缓解 |
+| Risk | Mitigation |
 |------|------|
-| CNKI/万方无公开 API | 保持占位 + 文档明示；AMiner 覆盖中文文献检索需求的主路径 |
-| 仿真平台差异大，adapter 过度抽象 | 先 2 个参考实现验证契约，不预设第 3 个 |
-| 证据图复杂化拖慢日常使用 | record 写入全部走 daemon 异步落库；agent 端只感知「记录成功」 |
-| Reviewer 误杀（false veto）拖慢研究 | hard/soft 分级已有；soft 只提示不否决；veto 必须给出可操作的修复指引 |
-| 单人维护 + 上游参照系快速迭代 | 每阶段 devlog 记录与 OpenScience 的架构 diff，季度性对齐一次 |
+| CNKI/Wanfang have no public API | Keep as placeholders + document it explicitly; AMiner covers the main path for Chinese-literature search needs |
+| Simulation platforms vary widely; the adapter is over-abstracted | Validate the contract with 2 reference implementations first, without presupposing a 3rd |
+| Evidence-graph complexity slows down daily use | Record writes all go through the daemon asynchronously; the agent side only perceives "recorded successfully" |
+| Reviewer false vetoes slow down research | hard/soft grading already exists; soft only hints, never vetoes; a veto must come with an actionable fix pointer |
+| Single-person maintenance + a fast-iterating upstream reference system | Each phase's devlog records an architecture diff against OpenScience, aligned once per quarter |
 
 ---
 
-## 七、成功标准（v0.2 发布判据）
+## VII. Success Criteria (v0.2 release acceptance criteria)
 
-1. 一条真实研究线索可以完整走通：提出问题 → 文献调研入库 → Co-explore 出 idea → novelty check → 干实验（OpenMM）→ 结论卡过 review → 导出带证据链的研究报告
-2. 湿实验路径：一个自然语言协议 → 编译 → 安全门 → Opentrons 模拟器执行成功
-3. 测试基线：单元测试从 84 只增不减；每个技能有 e2e 验证；CI 全绿
-4. 文档：README 重写 + 每阶段 devlog + 本设计文档随实现更新
+1. One real research thread can be walked through end to end: raise a question → literature research into the library → Co-explore produces an idea → novelty check → dry experiment (OpenMM) → conclusion card passes review → export a research report with an evidence chain
+2. Wet-experiment path: a natural-language protocol → compile → safety gate → successful Opentrons simulator execution
+3. Test baseline: unit tests only grow from 84, never shrink; every skill has e2e verification; CI fully green
+4. Documentation: README rewrite + per-phase devlog + this design document updated alongside implementation
 
-P8 核验结论（逐条证据见 [devlog/P8-wrapup.md](devlog/P8-wrapup.md)）：
+P8 verification conclusion (evidence itemized in [devlog/P8-wrapup.md](devlog/P8-wrapup.md)):
 
-| 判据 | 结论 | 证据 |
+| Criterion | Conclusion | Evidence |
 |------|------|------|
-| 1 完整研究线索 | ✅ | `scripts/demo-research-thread.ts`（可重放、零网络、CI 入口 `tests/unit/demo_thread.test.ts`）+ 浏览器版 Playwright ①–⑫。**一处偏差**：干实验用 pyref 而非 OpenMM——CI 里不能依赖 openmm 装没装，OpenMM 走的是同一套契约测试 |
-| 2 湿实验路径 | ✅ | `tests/unit/wet_e2e.test.ts` 两类协议在**真** `opentrons.simulate` 下执行；安全门 4 条规则对抗矩阵；Playwright ⑦⑧⑨ 走浏览器版 |
-| 3 测试基线 | ✅ | 单元 706（基线 84 → 655 → 706；P8 删除 v0.1 compute 模块的 12 条属 G6 授权清理）· pytest 48 · Playwright 12 · typecheck 干净 |
-| 4 文档 | ✅ | README 重写、CHANGELOG v0.2.0、9 篇 devlog、本文档随实现更新 |
+| 1 Complete research thread | ✅ | `scripts/demo-research-thread.ts` (replayable, zero network, CI entry point `tests/unit/demo_thread.test.ts`) + browser-version Playwright ①–⑫. **One deviation**: the dry experiment uses pyref rather than OpenMM — CI cannot depend on whether openmm happens to be installed, and OpenMM goes through the same contract test suite |
+| 2 Wet-experiment path | ✅ | `tests/unit/wet_e2e.test.ts` runs two protocol classes under the **real** `opentrons.simulate`; safety-gate 4-rule adversarial matrix; Playwright ⑦⑧⑨ run the browser version |
+| 3 Test baseline | ✅ | unit 706 (baseline 84 → 655 → 706; the 12 tests deleted with the v0.1 compute module at P8 fall under G6-authorized cleanup) · pytest 48 · Playwright 12 · typecheck clean |
+| 4 Documentation | ✅ | README rewrite, CHANGELOG v0.2.0, 9 devlog posts, this document updated alongside implementation |
 
-P9 追加核验（扩展面与 LLM 友好化，逐条证据见 [devlog/P9-extensibility.md](devlog/P9-extensibility.md)）：
+P9 additional verification (extension surface and LLM-friendliness, evidence itemized in [devlog/P9-extensibility.md](devlog/P9-extensibility.md)):
 
-| 项 | 结论 | 证据 |
+| Item | Conclusion | Evidence |
 |----|------|------|
-| 六个扩展点有文档且示例可跑 | ✅ | [EXTENDING.md](EXTENDING.md) 六节；skill/connector/platform 示例=脚手架产物，CI 生成后真跑；安全门规则示例 `examples/extending/flammable_over_heat_rule.ts` 带 11 例（含阴性对照） |
-| 能力清单从注册表生成 | ✅ | `tests/unit/capabilities.test.ts` 双向一致（19 例） |
-| MCP 可被真实客户端跑通 | ✅ | `tests/unit/mcp_e2e.test.ts` 用 SDK Client + InMemoryTransport 走完 capabilities → 检索入库 → idea → novelty → 时间线 → 报告 |
-| 审批类动作在 MCP 层不可达 | ✅ | `tests/unit/mcp_server.test.ts` 对抗组，含遍历全部工具请求构造的结构性防线 |
-| llms.txt 幂等 | ✅ | `tests/unit/llms_txt.test.ts`（含「改了文档忘了重新生成 → 红」这道门） |
-| 测试基线 | ✅ | 单元 716 → 824（+108）· pytest 48 · Playwright 12 · typecheck 干净 |
+| The six extension points are documented with runnable examples | ✅ | [EXTENDING.md](EXTENDING.md) six sections; skill/connector/platform examples = scaffolding output, generated then actually run in CI; safety-gate rule example `examples/extending/flammable_over_heat_rule.ts` with 11 cases (including negative controls) |
+| Capability listing generated from the registry | ✅ | `tests/unit/capabilities.test.ts` bidirectionally consistent (19 cases) |
+| MCP can be driven end-to-end by a real client | ✅ | `tests/unit/mcp_e2e.test.ts` uses the SDK Client + InMemoryTransport to walk through capabilities → search-to-ingest → idea → novelty → timeline → report |
+| Approval-type actions are unreachable at the MCP layer | ✅ | `tests/unit/mcp_server.test.ts` adversarial suite, including the structural defense enumerating request constructions across every tool |
+| llms.txt is idempotent | ✅ | `tests/unit/llms_txt.test.ts` (including the gate for "docs changed but forgot to regenerate → red") |
+| Test baseline | ✅ | unit 716 → 824 (+108) · pytest 48 · Playwright 12 · typecheck clean |
