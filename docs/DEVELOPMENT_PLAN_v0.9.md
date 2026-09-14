@@ -1,8 +1,10 @@
 # 开发与验证计划 · v0.9
 
-> 状态：**草案，待用户评审**。执行方式与时间盒由用户启动时定。
+> 状态：**定稿 v1（2026-09-14）**，待用户在 session 里敲启动命令。
 > 输入：`docs/USAGE_LOG.md`（U1–U10 + P1，真实使用现场）· `docs/BACKLOG.md` 未决项 ·
-> OpenScience 上游源码对读（`backend/cli/src/session/`）。
+> OpenScience 上游源码对读（`backend/cli/src/session/`：`retry.ts` / `output-watchdog.ts` / `contract-progress.ts`）。
+> 任务书：`docs/taskbooks/v0.9/`（`_COMMON.md` 共同纪律 · `GATE_I.md` · `LANE_{alpha,beta,gamma,delta}.md` · `T5_config_ops.md` · `R6_A8.md`）。
+> 前置：**闸门 H（PR #109，V134–V141）合入 main**——它不在本计划范围内，但 V137（零重试）是主线 α 的地基。
 
 ---
 
@@ -10,197 +12,196 @@
 
 **v0.7 把数据留下了，v0.8 把钱和权限的硬伤补上，v0.9 修「人在用它的时候」那条路。**
 
-这一版的主题不是新功能域，是**交互链路的速度、稳定性与可控性**。
-方向来自一次真实使用：一轮 chat 发出 4–6 次串行模型调用，在不稳定网络下
-一轮里两次失败、其中一次空等 75 秒，而界面上始终只有一句不动的「规划与执行中」。
+主题不是新功能域，是**交互链路的速度、稳定性与可控性**。方向来自一次真实使用：
+一轮 chat 发出 4–6 次串行模型调用，不稳定网络下一轮里两次失败、其中一次空等 75 秒，
+界面上始终只有一句不动的「规划与执行中」；想换个模型试试，发现 `model` 参数声明了从没被读过。
 
 ### 已锁定
 
-- **不加新功能域**（同 v0.3 / v0.8 口径）。
-- **不把四段管线改成 message loop**。OpenScience 是 session + message loop，
-  我们是 plan → executeTask\* → summarize → review。改架构是大手术，
-  收益主要在灵活性不在速度；当前的慢有更近的原因可以先解决。**v0.9 明确不做。**
-- **凭据不走 HTTP 写入**（U6·B）。与 AD-2「凭据只在 daemon 进程」正面冲突，
-  本版只做非密配置面（U6·A），并把「去终端 `spark-research auth`」这条下一步补进 UI。
-- **闸门 H 六条（V134–V141）是本版前置**，不在本计划范围内——它已单独 PR 合入 main。
-  其中 **V137（零重试）是主线 A 的地基**，没有它，A 线其余各条都建在沙子上。
+| # | 决策 | 理由 |
+|---|---|---|
+| 1 | **不加新功能域** | 同 v0.3 / v0.8 口径 |
+| 2 | **不把四段管线改成 message loop** | OpenScience 是 session + message loop，我们是 plan → executeTask\* → summarize → review。改架构是大手术，收益在灵活性不在速度；当前的慢有更近的原因。**v0.9 明确不做。** |
+| 3 | **凭据不走 HTTP 写入**（U6·B） | 与 AD-2「凭据只在 daemon 进程」正面冲突。本版只做非密配置面（U6·A）+ UI 里补「去终端 `spark-research auth`」的下一步。**裁定推 v0.10**，输入是 USAGE_LOG U6 列的三个前置问题。 |
+| 4 | **闸门 I 先跑门禁再修 bug** | 已知至少三处「声明了、赋值了、没有读者」（V40 / V137 / U10）。先修单个实例等于承认还会有第四第五个；让门禁把这一类的全体人口找出来，名单决定 lane 分配。 |
+| 5 | **δ-2 用「探端口」不用 pid 文件** | 零新状态；我们撞到的失败模式（默认端口上的孤儿）探端口就抓得到。pid 文件引入陈旧状态维护，收益不抵。 |
+| 6 | **β-3 改抛错之前必须先盘点在用模型名** | 否则可能当场打断正在用的模型。盘点脚本在 `LANE_beta.md`，先跑盘点、补登记、再落抛错。 |
+| 7 | **R6 基线必须在稳定网络下建立**，网络前提写进任务书 | 本次实测 OpenRouter 建连 0.14s / 15.15s / 15.15s——这种网络上的数字没有可比性。判据：`time_connect` 五次中位数 < 1s 且最大 < 3s，否则不建基线。 |
+| 8 | **执行编排沿用 v0.8**：主会话（Fable 5.1）做闸门 I / 收口 / 验收；四条 lane 委派子代理（默认 Sonnet 5，启动时可改），各自 worktree | 纪律 5 + 纪律 7；lane 数 4 属中等规模 |
+| 9 | **规划真源只在仓库内**（本文 + `docs/taskbooks/v0.9/`），不另建仓库外规划目录 | v0.7 的仓库外目录是唯一副本、无版本控制（V76 同病）。注意：`~/Desktop/AI4S/spark-research-v0.9-plan` 是本文所在的 **git worktree**，不是以前那种非 git 草稿目录，别被名字误导。 |
 
 ---
 
 ## 一、基线闸（第 0 步，不过不开工）
 
-1. `main` 已含闸门 H 六条，六套件全绿（unit / concurrency / timeout / e2e / lab / py）。
+1. `main` 已含闸门 H 六条（PR #109 squash 合入），六套件全绿。
 2. `bun run typecheck` 与 `bun run check:llms` 干净。
-3. `bash scripts/smoke-binary.sh > log; test $? -eq 0` —— **冒烟不进管道**（v0.7 alpha.3 教训）。
-4. 登记任何新条目前，先 grep 远端所有分支取最大 V 号。**当前最大 V141，下一个 V142。**
+3. `bash scripts/smoke-binary.sh > /tmp/smoke.log; test $? -eq 0`——**冒烟不进管道**（v0.7 alpha.3 教训）。
+4. 登记任何新条目前先取远端所有分支的最大 V 号。**当前最大 V141，下一个 V142。**
+5. 主会话 `cd` 回中立目录（主仓 `~/Desktop/AI4S/spark-research`）再 spawn 子代理（纪律：spawn 时 cwd 会被继承并被误读成指派信号）。
 
 ---
 
-## 二、闸门 I · 「声明即须有读者」（地基，主会话串行，不过不开工）
+## 二、闸门 I · 「声明即须有读者」（地基，主会话串行；合完 → `v0.9.0-alpha.1`）
 
-> **这一条必须最先做，而且要先跑门禁再修 bug。**
-> 理由：本仓已知至少三处「字段声明了、赋值了、没有任何读者」——
-> `defaultProvider`（V40）· `retryable`/`maxRetries`（V137）· `chat()` 的 `model`（U10）。
-> 先修单个实例，等于承认还会有第四第五个。**先建门禁，让它把这一类的全体人口找出来，再排修复。**
+任务书 `taskbooks/v0.9/GATE_I.md`。要点：
 
-- **I-1 门禁本体**：对若干"契约面"做「声明处 → 读取处」可达性检查，缺读者即测试失败。
-  覆盖三类载体：① 可写入的配置项（V40 形状）② 公开函数/接口的可选参数（U10 形状）
-  ③ 类型上的行为开关字段（V137 形状）。
-- **I-2 阴性对照**：新增一个有声明无读者的字段 → 门禁必须变红。**没有阴性对照的门禁不算数。**
-- **I-3 全量盘点**：门禁跑出的完整名单进 BACKLOG，逐条定去向（修 / 删声明 / 明确保留并注明原因）。
-  **盘点结果决定 W9-1 的 lane 分配，所以闸门 I 必须先于波次开跑。**
+- **I-1 门禁本体**：现有 `tests/unit/config_reader_parity.test.ts` 只覆盖**配置项**（V40 形状），且自己注明「key → helper 的绑定是否正确核不了」。闸门 I 补另外两个形状：
+  ② **公开函数/方法的对象参数属性**在函数体内必须被引用（U10 形状：`chat(req)` 声明 `req.model` 但函数体从没读它）——用 TypeScript 编译器 API 解析函数体，不靠 grep。
+  ③ **类型上的行为开关字段**必须有读取点（V137 形状：`retryable` / `maxRetries` 只在对象字面量里出现过）——文本级启发式 + 显式登记表，测试注释里写清能力边界（照 `config_reader_parity` 的做法）。
+- **I-2 阴性对照**：各形状各一条「新增一个有声明无读者的成员 → 门禁必须红」，真跑，终端输出进 devlog。**没有阴性对照的门禁不算数。**
+- **I-3 全量盘点**：门禁跑出的名单**逐条**进 BACKLOG（从 V142 起编号），每条定去向：修 / 删声明 / 保留并注明原因（进 allowlist 必须带原因字符串）。
+- **I-4 AD-17**：把「声明即须有读者」写进 `docs/DESIGN.md` 作为 AD-12 的延伸：从「声称的能力存在吗」推进到「声称的能力接线了吗」。
 
-**退出标准**：门禁绿 + 阴性对照红 + 名单入 BACKLOG 且每条有去向。合完 → `v0.9.0-alpha.1`。
+**退出标准**：门禁绿 + 三条阴性对照红 + 名单入 BACKLOG 且每条有去向 + AD-17 入库。
+**盘点名单决定 W9-1 各 lane 的最终清单**——若名单里冒出与 α/β/γ/δ 足迹重叠的新条目，主会话在 spawn 前把它塞进对应任务书的「追加」段。
 
 ---
 
-## 三、W9-1 · 四条并行 lane（子代理，各自 worktree；合完 → `alpha.2`）
+## 三、W9-1 · 四条并行 lane（子代理，各自 worktree；lane → `integration/v0.9-w1` → 一个 PR 进 main → `alpha.2`）
 
-### lane α · 交互链路的速度与稳定性（主线，用户点名）
+任务书各一份，共同纪律见 `_COMMON.md`。**枢纽文件从所有 lane 摘出，收口统一接线**（§六）。
 
-对读上游 `backend/cli/src/session/` 后确认的三个机制，按价值排序：
+| lane | 主题 | 关闭 | 一句话 |
+|---|---|---|---|
+| **α** | 交互链路的速度与稳定性 | U1 U4 · V77 | 输出看门狗（超时只计模型等待、真实输出续期）· 跨 provider 错误规范化与分类 · 三段结构化进度 · 失败落 `errorKind` |
+| **β** | 模型控制面 | U5 U9 U10 · V16 | `chat()` 真的读 `model`（含「无 key provider 必失败」整类门禁）· `chat` 子命令补旗标且 `--help` 零调用 · 路由兜底改显式拒绝 + 两份模型清单合一 |
+| **γ** | 非密配置面 + 工作台收尾 | U6·A U3 · V130 | `GET/PUT /api/config` + 设置面板 · 已归档项目在下拉框折叠 · 顶栏显示 server 版本 · 凭据「去终端」指引 |
+| **δ** | 门禁与小项 | U2 U7 U8 · V120 V62 | 集成套件跳过不再像通过 · `doctor` 探运行实例 · 删重复启动日志 · `database is locked` · 补 `DEVELOPMENT_PLAN_v0.8.1.md` |
 
-- **α-1 输出看门狗**（对标 `output-watchdog.ts`，99 行）。
-  现在 `llmTimeoutMs: 120000` 是整个调用的平摊墙钟超时，所以一次真卡住要等满两分钟。
-  改成：**只计等待模型事件的时间**，不计本地持久化、工具执行、权限对话框；
-  **真实输出到达即续期预算，元数据事件不续期**。
-  效果是正在吐 token 的流永远不会被误杀，真停住的很快失败。
-  与 V137 的重试配合：快速失败 + 有界重试 > 慢速失败 + 无重试。
-- **α-2 错误规范化与分类**（对标 `retry.ts` 的 `normalizeProviderError`，306 行里最值钱的部分）。
-  把各家形状不同的错误 JSON 压平成统一 `{statusCode, code, type, message}`，一个分类器管所有 provider。
-  关键细节照抄：**限流措辞必须排除在"上下文溢出"模式之外**，
-  否则瞬时限流会被误判成终态的「输入太大」；`Retry-After` / `retry-after-ms` 头按 provider 自己的时间表走。
-  退避封顶 60 秒、±25% 抖动（上游注释记录：齐步重试会重建导致故障的尖峰，
-  无上限翻倍曾让一次尝试沉默十七分钟）。
-- **α-3 结构化进度**（对标 `contract-progress.ts`）。
-  现在 `session.ts:95` 只发一次固定文案，plan 跑三秒还是三十秒界面都不动。
-  改成 plan / execute / review 三段各发一次，**带 `complete/total` 计数**。
-  不必照搬上游完整的 contract + fingerprint 机制，**但决策枚举值得抄**：
-  `ready | continue | repair | await_user` 比一个布尔更能表达当前到底在等什么。
-  → 关闭 **U4**。
-- **α-4 失败可诊断**（U1）。`usage.jsonl` 在 `ok:false` 时落 `errorKind`（复用现成的
-  `LlmErrorKind` 七值）与脱敏后的 `errorMessage` 摘要；server 对失败调用打一行结构化日志。
-  **注意脱敏**：错误体里可能带 key 片段。
-  `usage --json` 增加 errorKind 分布，与 `unknownCostCalls` 并列。
-  → 关闭 **U1**。
-
-**足迹**：`llm/router.ts` · `llm/providers/*` · `llm/types.ts` · `routes/session.ts` ·
-`agents/orchestrator.ts`（只加进度回调点）· usage 记账。
-
-### lane β · 模型控制面（U10 + U9 + U5）
-
-- **β-1**（U10）`chat()` 真的把 `req.model` 用起来，按 `budgetUsd` 的同一套路存进会话状态。
-  门禁写成能抓整类的形式：**传一个已登记但当前 provider 无 key 的模型，断言调用必须失败**——
-  只有覆盖真正生效才通过。同时 usage 的 `model`/`provider` 必须取自**实际发出的那次调用**，
-  现在这两个字段会撒谎。
-  **顺带核 `/api/session/stream`**：它单独读了 `model`，是否同样丢弃，未验。
-- **β-2**（U9）`chat` 子命令补旗标解析：`--help`/`-h` 先于消息解析（现在 `--help` 是一次要花钱的调用）、
-  `--model` / `--budget-usd` / `--allow-unpriced` / `--project` 透传。
-  门禁：**每个会调 LLM 的子命令，`--help` 不得产生任何模型调用**。
-  （V128 修过同名问题却漏了 `chat`，说明靠人记不够。）
-- **β-3**（U5）`providerForModel` 结尾的无条件 `return "kimi"` 改为**显式抛错**，
-  错误消息列出已登记模型并指向 `config set defaultModel`；关键词兜底分支至少 log 一行。
-  根治方向：单价表本就是 provider → model → price 的嵌套结构、已携带 provider 归属，
-  `PROVIDER_MODELS` 应从它派生；做不到就加对撞门禁（两份清单模型集合必须相等）。
-  **风险**：改成抛错后，正在用的未登记模型会当场失败——本条须配一次全量模型名盘点。
-
-### lane γ · 非密配置面（U6·A）
-
-- **γ-1** 路由：`GET /api/config`（`config list` 的投影）+ `PUT /api/config/:key`。
-  契约机械生成，加完 `contract --json` 与 Python SDK 自动跟上。
-- **γ-2** 前端：左栏「运维」下加「设置」，中栏表单视图。
-  **说明文字直接用 `config list` 已有的，不要另写一份**（否则就是第 N 次同一事实两份副本）。
-- **γ-3** 写入时校验（模型名是否已登记、超时是否正整数），不要等运行时才炸——与 β-3 同源。
-- **γ-4** 凭据半边**本版不做写入**，但补「未配置 → 去终端跑 `spark-research auth`」的下一步指引。
-  现在只显示状态不说去哪做，违反本项目「失败消息都要带可执行下一步」的约定。
-  → 关闭 **U6·A**，U6·B 留待裁定。
-
-### lane δ · 门禁与小项
-
-- **δ-1**（U7）集成套件跳过时打显著提示「本轮未验证」，让跳过和通过在输出上长得不一样。
-  **并确认一件事**：fixture 已录好，回放不需要网络，为什么连回放都跳？
-  如果回放能跑，默认就该跑，只有重录才需要开关。
-  CI 增加每周一次 `FIXTURE_MODE=live`，暴露上游接口漂移。
-- **δ-2**（U2）`doctor` 增加「运行实例」一档：探本机端口上有没有 spark-research 在监听、
-  版本是多少、与当前 checkout 是否一致。**另需拍板**：探端口（零新状态，只能探已知端口）
-  还是落 `server.json` pid 文件（能发现任意端口，但引入需维护的状态，异常退出留陈旧文件）。
-  顺带：工作台顶栏显示 server 版本——版本困惑能持续两天，这是直接原因。
-- **δ-3**（U3）项目归档：先确认 `project archive` 是否真的落状态、网页端读不读；
-  下拉框默认折叠已归档。一次性归档 20 多个 `r4-*`/`r5-*`/`a5-*`/`*-copy` 验收产物。
-- **δ-4**（U8）删掉 `index.ts:686-687` 的重复启动日志，留 `server/server.ts` 的
-  （后者拿的是真实 url，前者硬编码 `127.0.0.1`，将来绑别的地址会打印错误地址）。
-- **δ-5**（V120）`records_write_race` 偶发 `database is locked`。
-- **δ-6** 补 `docs/DEVELOPMENT_PLAN_v0.8.1.md`——V137 的提交信息引用了它，但仓库里没有这个文件。
+每条 lane 的交付 / 测试 / 阴性对照 / 真实核验 / 足迹 见各自任务书。
 
 ---
 
-## 四、W9-2 · 验收方法本身（P1，主会话）
+## 四、W9-2 · 验收方法本身（P1，主会话；与 W9-1 并行进行，不阻塞）
 
-> P1 的结论：十条里八条是三道防线（OpenScience 对比 / AD-12 门禁 / 零上下文验收）
-> **都没抓到**的，因为三者盲区重合。**再加一轮对比没用**，对比看能力不看接线。
-
-- **W9-2-1 新增第五份验收任务书：「配置与运维」**，与四份研究课题并列。
-  内容是普通用户真会做的事：换模型、改检索源、配一个 connector 凭据、重启服务、
-  跑一轮然后核对用量台账对不对得上。
-  **实证依据**：本次十条里至少 U1 U2 U3 U5 U9 U10 六条会被这一份课题撞出来。
-- **W9-2-2 AD 补强**：把闸门 I 的门禁写进架构决策，作为 AD-12 的延伸——
-  从「声称的能力存在吗」推进到「声称的能力接线了吗」。新编号 **AD-17**。
+- **W9-2-1 第五份验收任务书「配置与运维」**：`taskbooks/v0.9/T5_config_ops.md`（本版已写好草案，R6 前冻结）。
+  与四份研究课题并列。**实证依据**：本次十条里 U1 U2 U3 U5 U9 U10 六条会被它撞出来。
+- **W9-2-2 R6 基线测量方法**：`taskbooks/v0.9/R6_A8.md` §基线——一轮 chat 的墙钟 P50/P90、每轮模型调用次数、失败占比与 errorKind 分布。**v0.9 前没有这些数，R6 就是基线。**
 
 ---
 
-## 五、R6 + A8 · 实证回环与验收（→ `alpha.3` → `v0.9.0`）
+## 五、R6 + A8 · 实证回环与验收（→ `alpha.3` → 修复窗口 → `v0.9.0`）
 
-- **R6**：四课题复跑（零上下文），**外加第五份「配置与运维」课题**。
-  重点量三个数：① 一轮 chat 的墙钟中位数与 P90 ② 失败调用占比与其 errorKind 分布
-  ③ 一轮内的模型调用次数。**v0.9 前无基线，R6 就是基线**，所以要在稳定网络下跑。
-- **A8**：第七次零上下文验收，由未参与开发的人执行。
-  **须单列并预先约定预算**——V57 的教训是「花钱操作不自动批准」会让 LLM 路径永远没验过。
-
----
-
-## 六、DONE 定义（七条全满足才发 v0.9.0）
-
-- [ ] 闸门 I 门禁绿 + 阴性对照红；盘点名单全部入 BACKLOG 且每条有去向
-- [ ] 一轮 chat 的墙钟 P90 相对 R6 基线下降，**或**给出机制解释（如网络受限）并附实测数字
-- [ ] 失败调用 100% 带 `errorKind`；`usage --json` 能按 errorKind 分布出报表
-- [ ] 传一个无 key provider 的已登记模型 → 调用必失败（β-1 门禁实跑通过）
-- [ ] 每个会调 LLM 的子命令，`--help` 零模型调用（β-2 门禁实跑通过）
-- [ ] 网页端能改非密配置并即时生效（A8 实测，含换模型后台账里 model 字段跟着变）
-- [ ] 第五份「配置与运维」任务书跑通，其发现全部登记
+- **R6**（零上下文子代理）：四课题复跑 + **T5 配置与运维**。先过网络前提（§〇 第 7 条），再建基线。
+- **修复窗口**：R6 的每条 P0/P1 由主会话**独立复现后才动手**（v0.8 R5 的两条自报缺陷经复核不成立）。
+- **A8**（第七次零上下文验收，未参与开发者执行）：浏览器 + 花钱 + 换模型 + 导出 + 审批令牌门。
+  **花钱操作须在任务书里单列并预先约定预算**（V57 教训）。
+- **发布**：`gh release create v0.9.0` **先于**打 tag（v0.7.0 事故：只推 tag 没建 Release，upload 报 not found）。CHANGELOG 发布段开头放「如实交代」，不放附录。
 
 ---
 
-## 七、明确不做（v0.9）
+## 六、lane 足迹总表（一文件一主；枢纽文件收口专属）
 
-- **架构改 message loop**（见〇）
-- **凭据走 HTTP 写入**（U6·B，等裁定）
+| 文件 / 目录 | 主 | 说明 |
+|---|---|---|
+| `backend/src/llm/router.ts` | **收口** | α 的看门狗/规范化接入点 + β-3 的抛错，两条 lane 都要碰 → 各自交 ≤10 行 diff，收口合 |
+| `backend/src/agents/orchestrator.ts` | **收口** | α-3 在 `plan`(683) / `executeTask`(749) / `summarize`(909) / `reviewSession`(959) 各加一个进度回调点；β-1 在 `sessionBudget`(460) 旁加 `sessionModel` 并让 `llmFor`(462) 读它 |
+| `backend/src/index.ts` | **收口** | β-2 `case "chat"` 改走 `cli/chat_args.ts`；δ-4 删 686–687 两行 |
+| `backend/src/server/app.ts` | **收口** | γ-1 挂载 `routes/config.ts` |
+| `backend/src/server/routes/session.ts` | **收口** | α-3 把结构化进度转发到 SSE（现 :95 那一行改成转发回调） |
+| `backend/src/llm/watchdog.ts`（新） | α | α-1 |
+| `backend/src/llm/provider_error.ts`（新） | α | α-2 |
+| `backend/src/llm/types.ts` | α | `LlmError` 加规范化字段；`CallOptions` 加看门狗选项 |
+| `backend/src/llm/providers/openai_compat.ts` · `anthropic.ts` | α | 错误体透传给规范化函数 |
+| `backend/src/agents/progress.ts`（新） | α | α-3 进度事件类型 + 决策枚举 |
+| `backend/src/usage/ledger.ts` | α | α-4 `errorKind` / `errorMessage`（脱敏） |
+| `backend/src/cli/chat_args.ts`（新） | β | β-2 旗标解析（`--help` 先于消息） |
+| `backend/src/llm/providers/registry.ts` | β | β-3 从单价表派生 provider 归属；导出 `MODELS_BY_PROVIDER` |
+| `backend/src/agents/session_model.ts`（新，可选） | β | β-1 若 helper 不止 5 行，抽成文件 |
+| `scripts/inventory-model-names.ts`（新） | β | β-3 前置盘点：扫 `~/.spark-research` 全部 `config.json` / `usage.jsonl` 里出现过的模型名 |
+| `backend/src/server/routes/config.ts`（新） | γ | γ-1 |
+| `backend/src/config/index.ts` | γ | γ-3 写入校验（模型名已登记 / 超时为正整数），**只加不改** |
+| `frontend/workspace/src/**` | γ | 设置视图（新 `components/settings.tsx`）· `left.tsx` 归档折叠 + 「设置」导航 · `app.tsx` 顶栏版本 · 凭据指引文案 |
+| `tests/e2e/workbench.spec.ts` | γ | 新增用例只追加，不改既有编号 |
+| `backend/src/contract/**` | γ | 只跑生成器，不手改 |
+| `sdk/python/**` | γ | 只跑 `bun run gen:sdk`，不手改 |
+| `backend/src/doctor/*.ts` | δ | δ-2 运行实例探测 |
+| `backend/src/records/**` | δ | δ-5 V120 |
+| `tests/integration/*.test.ts` · `.github/workflows/ci.yml` | δ | δ-1 |
+| `tests/e2e/tsconfig.json` | δ | V62 |
+| `docs/DEVELOPMENT_PLAN_v0.8.1.md`（新） | δ | δ-6 |
+| `tests/unit/gate_i_*.test.ts`（新） | **主会话** | 闸门 I |
+| `docs/DESIGN.md` · `docs/BACKLOG.md` · `CHANGELOG.md` · `README.md` · `llms*.txt` · `docs/DEVELOPMENT_PLAN*.md` | **收口** | 一律不许 lane 改 |
+| `docs/devlog/W9-<lane>.md` | 各 lane | 新文件，属于 lane |
+
+**冲突预判**：γ 与 δ 都想碰 `left.tsx`（γ 导航项、原 δ-3 归档折叠）→ **归档折叠已整体划给 γ**（U3 在 γ）。α 与 β 都要 `router.ts` / `orchestrator.ts` → 全部走收口 diff。
+
+---
+
+## 七、执行编排
+
+```
+基线闸 ─→ 闸门 I（主会话串行，I-1→I-4）─→ alpha.1
+        ─→ [盘点名单回填各 lane 任务书「追加」段]
+        ─→ 四 lane 并行（子代理，各自 worktree，各自 feat/W9-<lane> 分支）
+        ─→ 主会话收口：integration/v0.9-w1 ← 四 lane；接线枢纽文件；跑全量；独立复跑关键阴性对照
+        ─→ 一个 PR 进 main ─→ alpha.2
+        ─→ W9-2（主会话，与上并行）：T5 冻结、R6 方法冻结
+        ─→ R6（零上下文子代理，含 T5）─→ 修复窗口（主会话复现后才修）─→ alpha.3
+        ─→ A8（未参与者）─→ blocker 修 ─→ CHANGELOG/BACKLOG 归账 ─→ gh release create ─→ tag v0.9.0
+```
+
+- **砍尾顺序**（做不完时从后往前砍）：δ-6 · δ-5 · V62 · γ 顶栏版本 · α-2 的 `Retry-After` 解析（保留退避+抖动）· 最后才是 α-3 的决策枚举（保留三段计数）。**闸门 I、α-1、α-4、β-1、β-2、T5 不砍。**
+- **别信 lane 自报数字**：收口对每条 lane 独立重跑其阴性对照与至少一条线格式探针（二进制是另一个运行时）。
+- **中间成果全部落盘**：每个 alpha 打 tag；每条 lane 一份 devlog；额度中断先落 wip commit 并标「未经任何验证」。
+
+### 启动命令（用户在 session 里敲）
+
+```
+/loop 按 docs/DEVELOPMENT_PLAN_v0.9.md 执行 v0.9：从基线闸开始，闸门 I 四条串行做完打 alpha.1，
+回填盘点名单到 taskbooks/v0.9 各 lane「追加」段，然后四条 lane 并行（子代理，任务书在 docs/taskbooks/v0.9/）、
+收口进 integration/v0.9-w1 → PR → alpha.2，W9-2 并行冻结 T5 与 R6 方法，R6（含 T5）、修复窗口、alpha.3、A8，
+直到 v0.9.0 tag。每个唤醒点报一段进度；遇额度中断落 wip 并等待；中间成果全部落盘（tag/devlog/PR），
+不需要我确认，做不完按 §七 砍尾顺序砍。子代理模型默认 Sonnet 5。
+```
+
+---
+
+## 八、v0.9.0 DONE 定义（八条全满足）
+
+- [ ] 闸门 I 门禁绿 + 三条阴性对照红；盘点名单全部入 BACKLOG 且每条有去向；AD-17 入库
+- [ ] 一轮 chat 墙钟 P90 相对 R6 基线下降，**或**给出机制解释并附实测数字（R6 与 A8 各测一次，网络前提达标）
+- [ ] 失败调用 100% 带 `errorKind`；`usage --json` 能按 errorKind 分布出报表；一次人为断网下的 chat 失败在台账里可归因
+- [ ] 传一个已登记但当前 provider 无 key 的模型 → 调用必失败（β-1 门禁实跑）；台账 `model` / `provider` 字段与实际调用一致
+- [ ] 每个会调 LLM 的子命令 `--help` 零模型调用（β-2 门禁实跑，含 `chat`）
+- [ ] 网页端改非密配置即时生效（A8 实测：换模型后台账 model 字段跟着变）；凭据「未配置」旁有可执行下一步
+- [ ] T5「配置与运维」跑通，其发现全部登记（含不成立的复核记录）
+- [ ] 集成套件在 CI 里**要么真跑要么显式报「本轮未验证」**，不再出现 `0 pass / 8 skip / 0 fail` 静默形态
+
+---
+
+## 九、明确不做（v0.9）
+
+- 架构改 message loop（§〇 第 2 条）
+- 凭据走 HTTP 写入（§〇 第 3 条，推 v0.10 裁定）
 - 物理设备 / 售卖通道 / 计费许可 / 3D 查看器 / 多用户身份 / R kernel
-- skill / connector 铺量（口径不变：AD-5 少而深，按课题拉动每轮 ≤2–3 个）
+- skill / connector 铺量（AD-5 少而深，按课题拉动每轮 ≤2–3 个）
 - **再做一轮上游对比**——P1 已论证病根不在信息不足，在检验方式与缺陷形态不匹配
 
 ---
 
-## 八、BACKLOG 归口（本版）
+## 十、BACKLOG 归口（本版）
 
 | 去向 | 条目 |
 |---|---|
-| **闸门 I** | V40（形状登记转实做）· U10 · 门禁盘点出的全部新条目 |
-| **lane α** | U1 · U4 · V77（未知成本率，若 α-2 落地后可顺带估算） |
-| **lane β** | U5 · U9 · U10 · V16（子代理独立模型暴露成配置项，与 γ 同源） |
-| **lane γ** | U6·A · V130（`/api/usage` 不带 project 返回当前项目而非全局汇总） |
-| **lane δ** | U2 · U3 · U7 · U8 · V120 · V62（e2e tsconfig 类型错误） |
+| **闸门 I** | V40（形状登记 → 实做门禁）· U10 · 门禁盘点出的全部新条目（V142 起） |
+| **lane α** | U1 · U4 · V77 |
+| **lane β** | U5 · U9 · U10 · V16 |
+| **lane γ** | U6·A · U3 · V130 |
+| **lane δ** | U2 · U7 · U8 · V120 · V62 |
 | **W9-2** | P1 |
-| **等外部 / 明确不做** | V4 V5 V6 V10 V52 V76 · U6·B |
-| **裁定后关闭** | V42（local `network` 声明不强制）· V49（`deterministic` 口径，用户已推迟两版） |
+| **等外部 / 明确不做** | V4 V5 V6 V10 V52 V76 · U6·B（v0.10 裁定） |
+| **裁定后关闭** | V42（local `network` 声明不强制，登记形状即可）· V49（`deterministic` 口径，用户已推迟两版，本版再问一次） |
 
 ---
 
-## 九、开放问题（待用户答）
+## 十一、已决的开放问题（原§九，2026-09-14 定稿时拍板；用户可推翻）
 
-1. **δ-2 选哪种方案**：`doctor` 探端口，还是 server 落 pid 文件？
-2. **U6·B 凭据**：本版只做指引，还是启动设计裁定（三个前置问题见 `USAGE_LOG.md` U6）？
-3. **β-3 的风险处置**：`providerForModel` 改抛错前要不要先跑一轮全量模型名盘点，
-   把在用的都补登记？（建议要，否则可能当场打断正在用的模型。）
-4. **R6 的网络前提**：本次实测 OpenRouter 建连 0.14s / 15.15s / 15.15s，
-   基线必须在稳定网络下建立，否则数字没有可比性。**要不要把"网络前提"写进验收任务书？**
-5. **执行编排**：沿用 v0.8 的「主会话设计验收 + 子代理实现」，还是本版全程主会话？
+| 原问题 | 决定 | 见 |
+|---|---|---|
+| δ-2 探端口还是 pid 文件 | 探端口 | §〇 第 5 条 |
+| U6·B 凭据 | 本版只做指引，裁定推 v0.10 | §〇 第 3 条 |
+| β-3 抛错前是否盘点 | 必须先盘点 | §〇 第 6 条 · `LANE_beta.md` |
+| R6 网络前提是否进任务书 | 进，且是硬前置 | §〇 第 7 条 · `R6_A8.md` |
+| 执行编排 | 沿用 v0.8：主会话 + 子代理 lane | §〇 第 8 条 |
