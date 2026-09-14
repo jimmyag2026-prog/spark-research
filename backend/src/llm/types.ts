@@ -42,6 +42,17 @@ export interface LlmError {
   message: string;
   /** 只有幂等且可能自愈的失败才是 true（限流 / 超时 / 5xx）。 */
   retryable: boolean;
+  // α-2（U1）：跨 provider 规范化字段，来自 `provider_error.ts` 的
+  // `normalizeProviderError()`。可选——不是每条失败都过了规范化（本地网络失败、
+  // 超时等在到达这一层之前就已经分类完，没有原始 HTTP 错误体可提取）。
+  /** 上游 HTTP 状态码；流式错误帧（无状态码）时为 undefined。 */
+  statusCode?: number;
+  /** provider 自己的错误码（字符串化；OpenRouter 的 `error.code` 数字也转成字符串）。 */
+  code?: string;
+  /** provider 自己的错误类型（如 Anthropic 的 `error.type`、OpenRouter metadata 的 `error_type`）。 */
+  type?: string;
+  /** `Retry-After` / `retry-after-ms` 头解析出的建议重试延迟（毫秒）。V137 的退避有它时按它走。 */
+  retryAfterMs?: number;
 }
 
 interface LlmResponseBase {
@@ -101,7 +112,21 @@ export interface CallOptions {
   maxTokens?: number;
   /** BACKLOG V12 的根治：不再靠「解析失败重试一次」治标。 */
   responseFormat?: "text" | "json_object";
+  /**
+   * **总时长硬上限**（毫秒）。α-1 之后它不再是唯一的超时：静默时长由
+   * `idleTimeoutMs` 管，这一条只负责「无论多活跃都到点结束」。
+   * 不传时由看门狗取 `idleTimeoutMs × 3`（见 `llm/watchdog.ts` 的 `resolveCallTimeouts`）。
+   * provider 适配器内部仍把它当作自己那层 AbortController 的超时，语义不变。
+   */
   timeoutMs?: number;
+  /**
+   * α-1（U4）：**静默超时**——只计「等待模型事件」的时间，真实内容增量到达即重置为满额，
+   * 元数据帧（usage / role / 空 delta）不续期。默认取配置的 `llmTimeoutMs`
+   * （**语义变了**：同一个数从「总时长」变成「静默时长」）。
+   * 只对流式调用生效（`onDelta` + `capabilities.streaming`）——非流式没有中途事件，
+   * 对它开静默看门狗等于换名字重新实现总超时，会杀掉正常的慢响应。
+   */
+  idleTimeoutMs?: number;
   /** 仅对 `retryable` 的失败生效。 */
   maxRetries?: number;
   signal?: AbortSignal;
@@ -142,7 +167,19 @@ export function llmText(
 
 /** 构造一个失败响应。**保证 AD-13 的不变式**（content 恒空，错误只在 error）。 */
 export function llmFailure(
-  args: { provider: string; model: string; kind: LlmErrorKind; message: string; retryable?: boolean },
+  args: {
+    provider: string;
+    model: string;
+    kind: LlmErrorKind;
+    message: string;
+    retryable?: boolean;
+    // α-2：规范化字段（`llm/provider_error.ts` 填）。不传就不出现在 error 上——
+    // 本地网络失败 / 预算闸拒绝这类失败根本没有上游 HTTP 错误体可提取。
+    statusCode?: number;
+    code?: string;
+    type?: string;
+    retryAfterMs?: number;
+  },
 ): LlmResponse {
   return {
     ok: false,
@@ -151,7 +188,15 @@ export function llmFailure(
     content: "",
     toolCalls: [],
     usage: { inputTokens: 0, outputTokens: 0, costUsd: null, usageUnavailable: true },
-    error: { kind: args.kind, message: args.message, retryable: args.retryable ?? false },
+    error: {
+      kind: args.kind,
+      message: args.message,
+      retryable: args.retryable ?? false,
+      ...(args.statusCode !== undefined ? { statusCode: args.statusCode } : {}),
+      ...(args.code !== undefined ? { code: args.code } : {}),
+      ...(args.type !== undefined ? { type: args.type } : {}),
+      ...(args.retryAfterMs !== undefined ? { retryAfterMs: args.retryAfterMs } : {}),
+    },
   };
 }
 

@@ -1,5 +1,6 @@
 import type { ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, Usage } from "../types";
 import { redactSecrets } from "../types";
+import { MAX_ERROR_BODY_CHARS, normalizeProviderError, providerFailure } from "../provider_error";
 import { failure, raceWithAbort, type ProviderAdapter, type ProviderRequest } from "./types";
 
 // OpenAI 兼容基座。
@@ -217,8 +218,10 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
       if (!response.ok) {
         let body2: string;
         try {
-          // 响应体可能回显请求内容（含鉴权头），过一遍脱敏再截断。
-          body2 = redactSecrets((await raceWithAbort(response.text(), effectiveSignal)).slice(0, 200));
+          // α-2：脱敏统一在 `normalizeProviderError` 里做（错误体可能回显请求内容含鉴权头）；
+          // 截断从 200 放宽到 MAX_ERROR_BODY_CHARS——200 字符装不下一条完整的错误 JSON，
+          // 截断点常常正好落在 `error.message` 中间，事后连上游说了什么都读不全。
+          body2 = (await raceWithAbort(response.text(), effectiveSignal)).slice(0, MAX_ERROR_BODY_CHARS);
         } catch (error) {
           const timedOut = error instanceof Error && error.name === "AbortError";
           return failure(this.id, model, {
@@ -229,12 +232,14 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
             retryable: true,
           });
         }
-        const kind = response.status === 401 || response.status === 403 ? "auth" : response.status === 429 ? "rate_limit" : "upstream";
-        return failure(this.id, model, {
-          kind,
-          message: `HTTP ${response.status}${body2 ? `: ${body2}` : ""}`,
-          retryable: response.status === 429 || response.status >= 500,
-        });
+        // α-2：分类不再是这里手写的一行三元式（401/403→auth、429→rate_limit、其余→upstream，
+        // 429 与 5xx 可重试）——那份判据与 anthropic.ts 的 classifyHttpError 各自演化，
+        // 而且两边都不读 `response.headers`，`Retry-After` 白扔。统一交给 provider_error。
+        return providerFailure(
+          this.id,
+          model,
+          normalizeProviderError({ statusCode: response.status, body: body2, headers: response.headers }),
+        );
       }
 
       if (streaming) {
@@ -309,6 +314,10 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
     // 拿不到 usage 就如实 usageUnavailable：true（不许填 0 冒充）——见 R-a-2。
     let usage: Usage = { inputTokens: 0, outputTokens: 0, costUsd: null, usageUnavailable: true };
     const toolCallAcc = new Map<number, { id?: string; name?: string; args: string }>();
+    // α-2：流内错误帧。此前 `data: {"error": {...}}` 帧走到下面 `json.choices?.[0]`
+    // 读成 undefined 后被**静默丢弃**——一次上游 502 于是变成一个 `ok:true` 的空回答
+    // （USAGE_LOG U1 那条「失败没留下痕迹」的极端形态）。现在规范化 + 分类后显式失败。
+    let streamError: LlmResponse | undefined;
 
     const processLine = (line: string): void => {
       const trimmed = line.trim();
@@ -318,11 +327,18 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
       let json: {
         choices?: Array<{ delta?: { content?: string; tool_calls?: WireToolCall[] }; finish_reason?: string }>;
         usage?: { prompt_tokens?: number; completion_tokens?: number };
+        error?: unknown;
       };
       try {
         json = JSON.parse(payload);
       } catch {
         // 忽略解析不了的行（少数网关会插入注释/keep-alive 行，不是错误）。
+        return;
+      }
+      if (json.error !== undefined && json.error !== null) {
+        // 帧里没有 HTTP 状态码；OpenRouter 会把 HTTP 类放在数字 `error.code` 里，
+        // normalizeProviderError 认这种形状。第一条错误帧即终结本次流。
+        streamError ??= providerFailure(this.id, model, normalizeProviderError({ body: payload }));
         return;
       }
       const choice = json.choices?.[0];
@@ -380,8 +396,20 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const line of lines) processLine(line);
+      if (streamError) {
+        // 已经通过 onDelta 吐出去的增量**不会被撤回**——调用方拿到的是一个残缺的答案
+        // 加一条明确的失败（AD-13：失败响应的 content 恒空）。这比返回 ok:true 的
+        // 半截内容诚实：后者会被 review 当成完整产出放行。如实记在 devlog。
+        try {
+          await reader.cancel();
+        } catch {
+          // 已在异常路径上，取消失败不影响要返回的错误。
+        }
+        return streamError;
+      }
     }
     if (buffer.trim()) processLine(buffer);
+    if (streamError) return streamError;
 
     let toolCalls: ToolCall[] = [];
     if (toolCallAcc.size > 0) {

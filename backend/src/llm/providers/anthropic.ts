@@ -1,5 +1,6 @@
 import type { ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, Usage } from "../types";
 import { redactSecrets } from "../types";
+import { MAX_ERROR_BODY_CHARS, normalizeProviderError, providerFailure } from "../provider_error";
 import { failure, raceWithAbort, type ProviderAdapter, type ProviderRequest } from "./types";
 
 // Anthropic 原生适配器（lane R-b，方案 §4.1）。
@@ -39,11 +40,6 @@ interface MessagesResponse {
   content?: AnthropicContentBlock[];
   stop_reason?: string;
   usage?: { input_tokens?: number; output_tokens?: number };
-}
-
-interface AnthropicErrorBody {
-  type?: string;
-  error?: { type?: string; message?: string };
 }
 
 const CAPABILITIES: ProviderCapabilities = {
@@ -226,20 +222,11 @@ function usageOf(data: MessagesResponse): Usage {
   return { inputTokens: input, outputTokens: output, costUsd: null };
 }
 
-function classifyHttpError(status: number, errType?: string): { kind: "auth" | "rate_limit" | "upstream"; retryable: boolean } {
-  if (status === 401 || status === 403 || errType === "authentication_error" || errType === "permission_error") {
-    return { kind: "auth", retryable: false };
-  }
-  if (status === 429 || errType === "rate_limit_error") {
-    return { kind: "rate_limit", retryable: true };
-  }
-  // 529 是 Anthropic 专用的 "overloaded_error" 状态码（上游过载，语义上等价于
-  // 5xx，值得重试）。
-  if (status === 529 || errType === "overloaded_error" || status >= 500) {
-    return { kind: "upstream", retryable: true };
-  }
-  return { kind: "upstream", retryable: false };
-}
+// α-2：本文件原有的 `classifyHttpError(status, errType)` 已整体让位给
+// `llm/provider_error.ts` 的 `classifyProviderError`——它保留了这里全部四条判据
+// （401/403/authentication_error/permission_error → auth；429/rate_limit_error →
+// rate_limit；529/overloaded_error/≥500 → upstream 可重试；其余 upstream 不可重试），
+// 并补上了这里没有的两类：上下文溢出（终态，不该重试）与「429 优先于溢出措辞」。
 
 export class AnthropicAdapter implements ProviderAdapter {
   readonly id: string;
@@ -311,7 +298,9 @@ export class AnthropicAdapter implements ProviderAdapter {
       if (!response.ok) {
         let rawText: string;
         try {
-          rawText = (await raceWithAbort(response.text(), effectiveSignal)).slice(0, 400);
+          // α-2：400 字符放宽到 MAX_ERROR_BODY_CHARS——要能装下一整条错误 JSON，
+          // 否则 `error.message` 常常被截在半截，事后读不出上游说了什么。
+          rawText = (await raceWithAbort(response.text(), effectiveSignal)).slice(0, MAX_ERROR_BODY_CHARS);
         } catch (error) {
           const timedOut = error instanceof Error && error.name === "AbortError";
           return failure(this.id, model, {
@@ -322,21 +311,14 @@ export class AnthropicAdapter implements ProviderAdapter {
             retryable: true,
           });
         }
-        let errType: string | undefined;
-        let errMessage = rawText;
-        try {
-          const parsed = JSON.parse(rawText) as AnthropicErrorBody;
-          errType = parsed.error?.type;
-          if (parsed.error?.message) errMessage = parsed.error.message;
-        } catch {
-          // 上游没回合法 JSON 错误体，退回原始文本。
-        }
-        const { kind, retryable } = classifyHttpError(response.status, errType);
-        return failure(this.id, model, {
-          kind,
-          message: `HTTP ${response.status}${errMessage ? `: ${redactSecrets(errMessage.slice(0, 200))}` : ""}`,
-          retryable,
-        });
+        // α-2：`{"error":{"type","message"}}` 的提取与分类都交给 provider_error——
+        // 本文件那份 classifyHttpError 是全仓唯一一份分类，openai_compat 另写了一行
+        // 三元式，两份各自演化（而且都不读 `response.headers`，`Retry-After` 白扔）。
+        return providerFailure(
+          this.id,
+          model,
+          normalizeProviderError({ statusCode: response.status, body: rawText, headers: response.headers }),
+        );
       }
 
       if (streaming) {
@@ -416,7 +398,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     let inputTokens = 0;
     let outputTokens = 0;
     let usageSeen = false;
-    let streamError: { message: string } | null = null;
+    let streamError: { message: string; type?: string } | null = null;
     const toolCallAcc = new Map<number, { id?: string; name?: string; args: string }>();
     const blockKinds = new Map<number, string>();
 
@@ -478,7 +460,12 @@ export class AnthropicAdapter implements ProviderAdapter {
           break;
         }
         case "error": {
-          streamError = { message: json.error?.message ?? "上游流式响应中途报错（error 事件）" };
+          // α-2：流内错误帧没有 HTTP 状态码，此前一律硬编码成 `upstream` + 可重试——
+          // 一个 `overloaded_error` 与一个上下文溢出被判成同一类，后者重试必然复现。
+          streamError = {
+            message: json.error?.message ?? "上游流式响应中途报错（error 事件）",
+            ...(json.error?.type ? { type: json.error.type } : {}),
+          };
           break;
         }
         default:
@@ -520,11 +507,14 @@ export class AnthropicAdapter implements ProviderAdapter {
     if (!streamError && buffer.trim()) processLine(buffer);
 
     if (streamError) {
-      return failure(this.id, model, {
-        kind: "upstream",
-        message: `流式响应中途报错：${redactSecrets((streamError as { message: string }).message)}`,
-        retryable: true,
-      });
+      return providerFailure(
+        this.id,
+        model,
+        normalizeProviderError({
+          body: JSON.stringify({ error: { type: streamError.type, message: streamError.message } }),
+          message: streamError.message,
+        }),
+      );
     }
 
     let toolCalls: ToolCall[] = [];
