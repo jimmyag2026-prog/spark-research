@@ -30,6 +30,8 @@
 | [U6](#u6) | 网页端没有设置入口，32 个配置项一个也够不着 | **高** | 功能缺失 | 待转 V |
 | [U7](#u7) | 集成套件默认整体跳过，「8 skip」读起来像通过 | 中 | 测试门禁 | 待转 V |
 | [U8](#u8) | server 启动日志打两遍，两处手写副本 | 低 | 整洁 | 待转 V |
+| [U9](#u9) | CLI `chat` 没有任何参数：无预算闸、无 `--model`、`--help` 会被当消息发出去 | **高** | 正确性 | 待转 V |
+| [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | 待转 V |
 
 ### 修改方向速览
 
@@ -44,6 +46,8 @@
 | U6·A | 非密配置的设置面板 + 一组写路由 | 中 | 否 |
 | U6·B | 凭据能否走 HTTP 写入 | 大 | **是（与 AD-2 冲突）** |
 | U2 | `doctor` 增加运行实例探测，或 server 落 pid 文件 | 中 | 是（选哪种方案） |
+| U10 | `chat()` 真的把 `req.model` 用起来；加一条「换模型真换了」的门禁 | 小 | 否 |
+| U9 | `chat` 补 `--model` / `--budget-usd` / `--project`；`--help` 先于消息解析 | 小 | 否 |
 
 ---
 
@@ -485,6 +489,173 @@ backend/src/server/server.ts:27  console.log("Press Ctrl+C to stop");
 
 **修改方向**：删掉 `index.ts` 里那两行，留 `server.ts` 的（它拿的是真实 url）。
 一分钟的改动。
+
+---
+
+<a id="u10"></a>
+## U10 · `model` 覆盖声明了但从不读取，换模型是静默空操作
+
+> **这条是在排查「chat 为什么慢」时撞出来的，顺带作废了我自己的一次测量。**
+
+**现场**：想对比 `z-ai/glm-5.3-flash` 与 `deepseek-v4-flash` 的速度，
+用 HTTP 接口传 `body.model` 切模型跑同一个问题。两轮墙钟差了近三倍
+（162.8s vs 43.9s），一度以为换模型有效。
+
+**证据一 · 用量记录出卖了它**
+
+两轮跑完，`speed-probe` 项目的台账里**一条 deepseek 记录都没有**：
+
+```
+$ spark-research usage --project speed-probe
+  LLM 调用 9 次 · 输入 4225 tokens · 输出 8740 tokens
+  按模型:
+    z-ai/glm-5.3-flash: 9 次 · $0.0026 · 2 次未知
+```
+
+逐条看，deepseek 那轮产生的三条记录是：
+
+```json
+{"provider": "openrouter", "model": "z-ai/glm-5.3-flash", "ok": true, ...}
+```
+
+**证据二 · 决定性实验**
+
+指定 `qwen-max`——`QWEN_API_KEY` **未配置**。如果模型覆盖真的生效，
+这次调用必然因为拿不到 key 而失败。实际结果是**正常回答**：
+
+```
+$ curl -X POST .../api/session/chat -d '{"model":"qwen-max", ...}'
+[session probe-qwen]
+## 结果摘要
+**最终答复**：> 今天天气很好，适合出门散步。
+```
+
+落的记录仍是 `provider=openrouter model=z-ai/glm-5.3-flash`。
+
+**证据三 · 根因在签名与实现之间**
+
+HTTP 路由读了，也传下去了：
+
+```ts
+// backend/src/server/routes/session.ts:37
+result = await ctx.agent.chat({
+  sessionId, message,
+  model: optionalString(body, "model"),      // ← 读到了，传下去了
+  mode, budgetUsd: ..., allowUnpriced: ...,
+});
+```
+
+`chat()` 的签名也声明了：
+
+```ts
+// backend/src/agents/orchestrator.ts:1053
+async chat(req: {
+  sessionId: string;
+  message: string;
+  model?: string;          // ← 声明了
+  ...
+}) {
+  if (req.budgetUsd !== undefined || req.allowUnpriced !== undefined) {
+    this.sessionBudget.set(req.sessionId, { budgetUsd: ..., allowUnpriced: ... });
+  }
+  ...                      // ← req.model 之后再也没出现过
+}
+```
+
+**`req.model` 被声明、被传入，然后从头到尾没有任何一处读它。**
+`budgetUsd` 和 `allowUnpriced` 在紧邻的几行里都被存进了 `sessionBudget`，唯独 `model` 没有。
+
+**后果**
+
+1. **换模型是静默空操作**。传什么都用 `config.json` 里的 `defaultModel`，不报错不告警。
+2. **没有任何办法只为一次对话换模型**。CLI 的 `chat` 也没有 `--model`（见 U9），
+   于是唯一能换模型的途径是改全局配置。
+3. **把我的测量作废了**。162.8s 与 43.9s 的差距**不是模型差异**，两轮跑的都是 glm。
+   真实差异来自网络抖动，以及第一轮里两次失败调用（其中一次等了 75 秒才放弃）。
+   **如果不是记账里的 `provider` 字段露了馅，这个错误结论就发出去了。**
+
+**这正是本仓反复出现的那个形态**：参数建好了、接口签名有了、调用方也传了，
+**就是没有生产读取方**。CHANGELOG 记载过 `defaultProvider` 只写不读（V40），
+说它「藏在配置项里，孤儿门禁抓不到」。这次是藏在函数签名里，同样抓不到。
+
+**修改方向**
+
+- `chat()` 真的把 `req.model` 用起来——按 `budgetUsd` 的同一套路存进会话状态，
+  让本次会话的所有模型调用都走它。
+- 加一条门禁，形式要能抓住这一类而不只是这一个：
+  **传一个已登记但当前 provider 无 key 的模型，断言调用失败**。
+  这条断言只有在覆盖真的生效时才通过，静默忽略必然被抓。
+- usage 记录的 `model` / `provider` 必须来自**实际发出请求的那次调用**，
+  而不是配置默认值。现在这两个字段会撒谎。
+- 顺带核一遍 `/api/session/stream`：它单独读了 `const model = optionalString(body, "model")`，
+  是不是也一样丢掉了，没验。**本条只对 `/chat` 路径有实证。**
+
+**影响面**：`agents/orchestrator.ts` 的 `chat()` 与其下游取模型的地方；usage 记账的取值来源。
+
+**风险**：修好之后，之前「传了 model 但其实没生效」的调用会开始真的换模型。
+如果有脚本依赖了这个错误行为（传了某个模型但实际跑 glm），行为会变。
+考虑到这个覆盖从来就没生效过，依赖它的可能性极低。
+
+---
+
+<a id="u9"></a>
+## U9 · CLI `chat` 没有任何参数，`--help` 会被当成消息发给模型
+
+**现场**：想给 `chat` 加个 `--model` 试别的模型，先跑 `spark-research chat --help` 看用法。
+命令**挂了两分多钟没有任何输出**，被迫 kill 掉。
+
+**证据 · 整条命令只做一件事**
+
+```ts
+// backend/src/index.ts:489
+case "chat": {
+  const msg = process.argv.slice(3).join(" ");   // ← 整个 argv 拼成消息
+  if (!msg) {
+    console.log("用法: spark-research chat <消息>");
+    process.exitCode = 1;
+    break;
+  }
+  chatOnce(msg);
+  break;
+}
+```
+
+`--help` 非空，于是它成了消息本身，被原样发给模型。那两分钟是真的在等模型回答
+「--help」这个问题。**只有一个字都不传时才会打印用法。**
+
+**证据 · `chatOnce` 不带预算、不带项目、不带模型**
+
+```ts
+// backend/src/index.ts:427
+async function chatOnce(message: string) {
+  ...
+  const result = await orch.chat({ sessionId, message });   // ← 只有这两个
+```
+
+对比同一个 `chat()` 接受的参数：`model`、`budgetUsd`、`allowUnpriced`、`mode`、`onDelta`
+一个都没传。
+
+**后果**
+
+1. **CLI 的 chat 完全没有预算闸。**agent 指南里写的是「每条会调 LLM 的命令都带
+   `--budget-usd`」，`chat` 是个例外，而且是无声的例外——没有地方说明它不支持。
+   一轮 chat 实测会发出 4 到 6 次模型调用（见 U10 的台账），没有任何上限。
+2. **`--help` 是一次要花钱的模型调用。**误打一次就是几分钱加两分钟。
+   CHANGELOG 里 V128 记的是「`--help` 无副作用」，那条修复显然没覆盖到 `chat`。
+3. **`chat` 也不接 `--project`。**会话绑哪个项目取决于全局指针，
+   与 agent 指南「每条涉及项目数据的命令都带 `--project`」相冲突。
+
+**修改方向**
+
+- 在拼消息之前先解析旗标：`--help` / `-h` 打印用法即退出，
+  `--model` / `--budget-usd` / `--allow-unpriced` / `--project` 透传给 `orch.chat()`。
+- 更根本的一条：**旗标解析应该统一，不要每个子命令各写一套。**
+  `lit` / `idea` / `exp` 都有完整旗标，唯独 `chat` 是裸 `argv.join(" ")`。
+  这又是一处「同一件事多份手写副本」。
+- 门禁：给每个会调 LLM 的子命令加一条「`--help` 不产生任何模型调用」的断言。
+  V128 修过一次同名问题却漏了 `chat`，说明靠人记是不够的。
+
+**影响面**：`backend/src/index.ts` 的 `chat` 分支与 `chatOnce`。不动 orchestrator。
 
 ---
 
