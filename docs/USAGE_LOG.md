@@ -24,6 +24,7 @@
 | U3 | 2026-09-14 | 打开网页工作台时，当前项目指针停在验收测试项目 | 中 | /api/projects/current | 待转 V |
 | U4 | 2026-09-14 | 聊天等待期的进度文案只有一句、只发一次，长回复时像卡死 | 低 | session.ts:95 + usage.jsonl | 待转 V |
 | U5 | 2026-09-14 | 单价表里模型键有两种形态，切模型时不知道该填哪种 | 待核实 | registry.ts | 待核实 |
+| U6 | 2026-09-14 | 网页端没有设置入口：模型、检索源、connector 凭据全都改不了 | **高** | 78 条路由 0 条可写配置 | 待转 V |
 
 ## 已转入 BACKLOG
 
@@ -195,6 +196,80 @@ claude-opus-5     claude-sonnet-5      claude-haiku-4-5-20251001     ← 裸模�
 
 **怎么核实**：读 `LLMRouter` 的 provider 推断逻辑，再拿一个错误形态实际试一次，
 看它是拒绝还是静默降级。
+
+---
+
+## U6 · 网页端没有设置入口，什么配置都改不了
+
+**现场**：在网页工作台想换个更快的模型、想调整默认检索源、想给
+Semantic Scholar 配个 key，**找遍四栏没有任何设置按钮**。
+最后只能回终端敲 `spark-research config set` 和 `spark-research auth`。
+
+**证据一 · 78 条 HTTP 路由里，没有一条能写配置**
+
+```
+$ spark-research contract --json | <按前缀统计>
+HTTP 路由总数: 78
+  /api/artifacts 4 · /api/capabilities 1 · /api/chat 1 · /api/chem 1
+  /api/compute 8 · /api/conclusions 4 · /api/connectors 1 · /api/experiments 7
+  /api/health 1 · /api/ideas 4 · /api/lab 11 · /api/lineage 1 · /api/lit 11
+  /api/projects 6 · /api/proteins 1 · /api/records 5 · /api/report 1
+  /api/session 4 · /api/tasks 3 · /api/usage 2
+```
+
+涉及配置、凭据、数据源的只有三条，**全是 GET**：
+
+```
+GET  /api/capabilities
+GET  /api/connectors
+GET  /api/lit/sources
+```
+
+`backend/src/server/routes/` 下 13 个路由模块，没有 `config.ts`、没有 `auth.ts`、
+没有 `credentials.ts`。
+
+**证据二 · 前端知道凭据状态，只是没法写**
+
+```ts
+// frontend/workspace/src/lib/api.ts:207
+apiKeyRequired: boolean;
+credentialConfigured: boolean | null;
+```
+
+这是最刺眼的地方：界面**能告诉你**某个源需要 key、以及配没配，
+**却不给你任何地方把 key 填进去**。诊断做完了，动作缺失。
+
+全前端搜「设置 / setting / config / 凭据」只命中上面这两行类型声明，没有任何 UI。
+
+**证据三 · 配置项一共 32 个，网页端一个也够不着**
+
+`spark-research config list` 列出 32 个键，包括 `defaultModel`、`contactEmail`、
+`httpTimeoutMs`、`llmTimeoutMs`、`wetBackend`、`simulationPlatform`、
+`computeTarget`、`embeddingModel`、五个 `subAgentModel_*` 等等。
+
+**这条要拆成两半看，不要一起处置**
+
+| | 内容 | 判断 |
+|---|---|---|
+| **A 非密配置** | `defaultModel`、检索源、各类超时、`contactEmail`、`computeTarget`… | **没有理由不能在网页端改。**这些不是秘密，写进 `config.json` 而已。缺的就是一个设置面板加一组 PUT 路由。 |
+| **B 凭据** | 各家 LLM API key、connector 的 key | **需要先做设计裁定，别默认照做。**AD-2 定的是「凭据只在 daemon 进程」，`auth` 命令 V115 起连回显都掐了。让 key 经 HTTP body 进来，和这条架构决策正面冲突。 |
+
+B 这半边如果要做，至少得回答：key 走 HTTP 进来时怎么不落日志、不落 raw、
+不进 usage？server 现在绑 127.0.0.1，但 `originAllowlist` 是可配的，
+放开之后这条路径就暴露了。
+
+**期望**
+
+先做 A：一个「设置」面板 + 一组配置写路由，把 32 个键里非密的那些暴露出来。
+光是能在网页端换模型，就解决了现在「用着用着得开终端」的断裂感。
+
+B 单独立项讨论。**在裁定之前，网页端应该明确告诉用户「凭据请在终端用
+`spark-research auth` 配置」，而不是像现在这样只显示一个「未配置」然后不说下一步。**
+——后者违反了这个项目自己的约定：失败消息都要带可执行的下一步。
+
+**关联**：v0.6 的 agent 指南里写过「审批类动作不暴露为 MCP 工具，这是设计不是缺陷」，
+并且明确了正确做法是把待办呈现给人类。凭据这件事应该照同一个模式处理：
+不提供写入口可以，但要把「去哪做」说清楚。
 
 ---
 
