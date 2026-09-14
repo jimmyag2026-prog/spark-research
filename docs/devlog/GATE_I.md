@@ -94,5 +94,5 @@ probeFlag
 ## 待办（本文随进度更新）
 - [x] I-1 形状 ② `gate_i_param_readers.test.ts`（TS 编译器 API）
 - [x] I-2 三条阴性对照（②人造、③人造、③历史）
-- [ ] I-3 盘点入 BACKLOG（V143 起，先复核远端最大 V 号）
-- [ ] I-4 AD-17 入 `docs/DESIGN.md`
+- [x] I-3 盘点入 BACKLOG（V143–V146；远端最大 V 号因网络未复核，合入时核）
+- [x] I-4 AD-17 入 `docs/DESIGN.md`

@@ -34,7 +34,13 @@ const BACKEND_SRC = join(import.meta.dir, "../../backend/src");
 type Key = string; // `<相对文件>::<函数或 类.方法>::<参数名>.<属性>`
 
 /** 故意留空的参数属性：必须写清为什么。空 reason 不算登记。 */
-const GATE_I_ALLOWLIST: Record<Key, string> = {};
+const GATE_I_ALLOWLIST: Record<Key, string> = {
+  // ---- v0.9 闸门 I-3 盘点（2026-09-14，main@644cccd 首跑抓到；对应 lane 合入时按陈旧检查移除）----
+  "lab/wet_loop.ts::WetLabLoop.execute::options.note":
+    "V144：note 声明了从未读。lane δ 修：把 note 落进 execute 产生的 observation record，合入后移除",
+  "agents/orchestrator.ts::OrchestratorAgent.chat::req.model":
+    "V145（= USAGE_LOG U10）：chat() 只在 coexplore 分支转发时读 model，主路径静默丢弃。lane β-1 修：存进 sessionModel 让 llmFor 读，合入后移除",
+};
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
