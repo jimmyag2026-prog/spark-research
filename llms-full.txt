@@ -2577,6 +2577,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V131 | 其余模块的子命令级 `--help` 未逐个排查（V128 残余） | `data`/`auth` 已修；`exp`/`lab`/`compute`/`protein`/`chem`/`report`/`conclusion`/`review`/`ext`/`new` 未逐条验证「子命令 --help 无副作用」。去向：v0.9（或加一条结构性门禁：所有 runXCommand 见 --help 必须先返回） |
 | V132 | **契约漏声明 `budgetUsd`/`allowUnpriced`（A7 High-2，A7 判断正确）** | 路由接受这两个字段（V119），但 `server/types.ts` 的 `ChatRequest` 没声明；契约 HTTP schema 从 TS 接口生成 → `contract --json` 与 SDK 都看不见，契约以遗漏的方式说谎。<br>✅ **v0.8 A7 窗口已修**：`ChatRequest` 补两字段并重新生成 schemas。**残余**：契约门禁只对撞路由集合，不对撞「路由实际读了哪些 body 字段」→ V133 |
 | V133 | 契约门禁不对撞「路由实际读取的 body 字段」（V132 残余） | 加路由参数时若忘了同步 `server/types.ts`，现有门禁察觉不到。修：从路由源码提取 `optionalString(body,"x")`/`requireString(body,"x")` 调用，与对应请求类型的属性集合对撞。去向：v0.9 |
+| V142 | **CI 在 v0.8.0 起就是红的：`v118_openmm_probe.test.ts` 假设 `.venv/bin/python` 存在** | 2026-09-14 合 PR #109 时发现 CI `test-and-smoke` 红，追到 main@644cccd（v0.8.0）与 ddad14e 两次 run 同样 `failure`——**v0.8.0 是在 CI 红的状态下发布的**，此前无人看 CI 结论。根因：测试第 22 行 `Bun.spawnSync(".venv/bin/python")`，runner 上没有 venv → ENOENT 先于「没装 openmm 则 skip」抛出，skip 分支不可达（与 F-5「守卫存在但不可达」同形状）。修：spawn 前 `existsSync` 守卫，缺 venv 与缺 openmm 同档跳过并说明。**教训**：发布前 DONE 里要有「CI 结论 = success」这一条，本地六套件绿不算。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
