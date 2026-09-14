@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { fixtureModeFromEnv } from "../../backend/src/http/fixture";
 import {
   MISSING_ALPHAFOLD_ACCESSION,

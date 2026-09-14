@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,19 @@ import {
 
 const MODE = fixtureModeFromEnv();
 const RECORDING = MODE === "record" || MODE === "live";
+
+// δ-1（U7）：这个 beforeAll 在模块顶层注册（不在被 skipIf 掉的 describe 里面），
+// 所以全跳过时它照样会跑，把「全 skip」在输出里打成显著提示，别让 `0 fail` 看着像过了。
+beforeAll(() => {
+  if (!RECORDING) {
+    console.warn(
+      `\n⚠️ 集成套件已整体跳过（FIXTURE_MODE=${MODE}）——` +
+        "跨源检索 / DOI 取单篇 / PDF 下载 / AMiner 连通性四条链路本轮未打真实网络验证。\n" +
+        "   replay 覆盖见 tests/unit/literature_e2e.test.ts（同一批 fixture，CI 主流水线跑）；" +
+        "要真验证这四条链路本身：FIXTURE_MODE=record 或 FIXTURE_MODE=live bun run test:integration",
+    );
+  }
+});
 
 describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
   test(

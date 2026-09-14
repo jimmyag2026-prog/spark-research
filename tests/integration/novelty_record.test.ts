@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { fixtureModeFromEnv } from "../../backend/src/http/fixture";
 import {
   FABRICATED_CLAIM,
@@ -18,6 +18,17 @@ import {
 
 const MODE = fixtureModeFromEnv();
 const RECORDING = MODE === "record" || MODE === "live";
+
+// δ-1（U7）：顶层 beforeAll，不在被 skipIf 掉的 describe 里，全跳过时照样打印。
+beforeAll(() => {
+  if (!RECORDING) {
+    console.warn(
+      `\n⚠️ 集成套件已整体跳过（FIXTURE_MODE=${MODE}）——novelty 检索式验证链路本轮未打真实网络验证。\n` +
+        "   replay 覆盖见 tests/unit/novelty_e2e.test.ts（同一批 fixture，CI 主流水线跑）；" +
+        "要真验证这条链路本身：FIXTURE_MODE=record 或 FIXTURE_MODE=live bun run test:integration",
+    );
+  }
+});
 
 describe.skipIf(!RECORDING)("真实网络 · novelty 检索式录制", () => {
   test(
