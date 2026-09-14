@@ -34,10 +34,16 @@ for i in 1 2 3 4 5; do curl -s -o /dev/null -m 20 -w "%{time_connect}\n" https:/
 | 15 | 关掉所有 server，`doctor` | 报「无运行实例」 | U2 |
 | 16 | `spark-research project archive t5-<日期>`，刷新工作台 | 下拉框默认不见它，「显示已归档」能切出来 | U3 |
 | 17 | `bun run test:integration`（在源码 checkout 里） | **要么真跑要么显式报「本轮未验证」**；不得出现静默 `0 pass / N skip / 0 fail` | U7 · δ-1 |
+| 18 | 设置 ▸ 凭据：给 `semanticscholar` 填一个**假 key**（如 `T5-FAKE-KEY-<日期>`）保存 | 该行显示「已设字段：api_key」；**值不再出现在页面任何位置**；`spark-research lit sources` 显示已配置；`ls -l ~/.spark-research/credentials.json` 权限 `-rw-------` | **乙 · AD-18 · γ/ε** |
+| 19 | 第 18 步之后：`grep -r "T5-FAKE-KEY" ~/.spark-research/ <server 日志> ` 并在浏览器 DevTools 里搜所有 XHR 响应体 | **只在 `credentials.json` 里命中一处**；日志、raw、record、usage、任何 HTTP 响应体里零命中 | AD-18 write-only |
+| 20 | 用另一台机器或 `curl --interface <非 loopback 地址>` 对 `PUT /api/settings/credentials/semanticscholar` 发同样请求；再把该来源加进 `originAllowlist` 重发 | 两次都 **403**，消息指向终端 | AD-18 loopback 硬限 |
+| 21 | 设置 ▸ 凭据：删除第 18 步的 key | 有确认文案「只删本机保存的值」；删后 `lit sources` 显示未配置；文件里该值消失 | γ |
+| 22 | 依次打开设置里的每个面板，对照 `spark-research capabilities --json` / `config list` / `compute targets` / `ext list` | 每个面板的每一行都能在对应命令输出里找到同一个值；**没有** `sandbox` 面板；compute 面板**没有**派发/审批按钮 | ε 面板清单 · AD-12 |
 
 ## 成功判据
 
 1. 第 6、8、10 三步**必须全过**——它们分别是 U10、U9、U1 的直接复现，任一不过即 P0。
+   第 **18、19、20** 三步同样 P0——它们是「乙」（凭据经 HTTP 写入，AD-18）的三条牙齿：能写、永不泄露、非 loopback 必拒。**第 19 步若在任何地方多命中一处，整个凭据面板视为不可发布。**
 2. 其余每步：过 / 不过 / 不适用，三选一，**不适用要写原因**。
 3. 全程 LLM 实花 ≤ $0.50（第 5、9、10、11 四步会花钱）。
 
