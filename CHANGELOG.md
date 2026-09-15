@@ -5,6 +5,57 @@
 
 ---
 
+## [0.9.0-alpha.2] — 2026-09-15
+
+**v0.9 W9-1：五条 lane 全部合入，USAGE_LOG U1–U10 关九条半。** 对应 `docs/DEVELOPMENT_PLAN_v0.9.md` §三，
+每条 lane 的过程与阴性对照见 `docs/devlog/W9-{alpha,beta,gamma,delta,epsilon}.md`。
+
+### 新增
+
+- **网页端设置面（U6，AD-18）**：左栏「运维 → 设置」（数字键 `6`），12 个面板：general / models /
+  credentials / sources / connectors(extensions) / scientific-tools / compute / network / storage /
+  permissions / local / catalog。后端 `GET/PUT /api/settings/*`。**凭据只写不读、只认 loopback**：
+  值写盘后任何响应都不回显；取不到远端地址时 403（fail-closed）；写入的值即时登记进日志脱敏集合，
+  进程启动时把盘上已有 connector 凭据一并登记。
+- **`spark-research auth --connector <id> [--field <name>]`**：CLI 录入 connector 凭据，与 HTTP 写路径共用同一个存储。
+- **`spark-research chat` 有参数了（U9）**：`--model` `--budget-usd` `--allow-unpriced` `--project` `--help`；
+  `--help` 不再被当消息发给模型。
+- **LLM 看门狗与分级重试（U1 同族）**：流式调用有静默超时（上游长时间不给增量即断）与总时长上限；
+  重试延迟按错误类别分级并读上游 `Retry-After`；台账 `usage.jsonl` 每条失败带 `errorKind`
+  （auth / rate_limit / timeout / network / upstream / unsupported …），`usage --json` 出 `byErrorKind`。
+- **聊天进度按阶段推送（U4）**：`/api/session/stream` 的 `progress` 事件从「一句占位」变成
+  planStarted → planned → taskCompleted(×n) → summarizing → reviewed / repairing。
+- **`doctor` 探运行实例（U2）**：报告 4321 端口上正在监听的 server 及其版本；ε 顶栏显示 server 版本徽标。
+- **`/api/usage` 不带 `project` 返全局汇总（V130）**，含归档项目；`GET /api/projects?includeArchived=1`。
+- **门禁**：`model_registry_parity`（单价表 ⇔ 路由清单一一对应）· `gate_model_override`（覆盖必须真的换模型，
+  无 key 的 provider 零出站）· `gate_help_no_llm`（任何 `--help` 不打模型）· `check-integration-skip`
+  （集成套件 skip>0 即红，U7）· 设置面 loopback / write-only / 脱敏三条阴性对照。
+
+### 变更
+
+- **模型名判据只有一份（U5）**：`llm/providers/registry.ts` 的单价表即模型清单，`assertKnownModel` 被
+  router / `config set` / 设置面三处共用；`return "kimi"` 静默兜底已删，未登记的模型名在**写入时**就 422。
+- **⚠️ 显式指名的模型所属 provider 没配 key → 直接报错（V154）**。以前会静默换到任一已配置 provider
+  去调（跑了、但跑错模型、记账也记错）。现在返回 `auth` 类错误并点名缺哪个环境变量。
+  如果你的配置一直「能跑」但其实靠的是这个兜底，升级后会立刻看到错误——这是刻意的。
+- **`chat()` / `/api/session/*` 的 `model` 覆盖真的生效了（U10 / V145）**：之前声明了但从不读。
+- 集成套件默认真跑（U7）：`bun run test:integration` 缺前置条件是红而不是「8 skip」。
+- `spark-research lit search` 未显式 `--sources` 时用设置面勾选的源。
+- server 启动日志只打一份（U8）。`tests/e2e` 纳入 `typecheck`（V62）。
+- Python SDK：生成器修两处（布尔字面量出 `True/False`；路径段 `-` 转 `_`），新增 `settings_*` 方法。
+- 仓库根新增 `NOTICE`：设置面注册表形状与壳结构参考 OpenScience（Apache-2.0），实现为原创。
+
+### 修复
+
+- SSE `progress` 多帧后 `server_session` 序断言收紧为「首帧 start、末 result/done、中间全是 progress」。
+- `auth --connector --help` 不再把 `--help` 当 connector id。
+
+### 内部
+
+- 版本号：`v0.9.0-alpha.1` 打 tag 时 `package.json` 仍是 0.8.0（漏改）；本版起同步 `0.9.0-alpha.2` / `0.9.0a2`。
+- BACKLOG：新登记 V154 V155；关 V62 V130 V143 V144 V145；V147–V153 号段已被未合分支占用，从 V154 续编。
+- 残余去向：ε 对 γ 的四条契约请求 → V155；W9-2（T5 冻结、R6 基线测量）与 A8 验收未开始。
+
 ## [0.9.0-alpha.1] — 2026-09-15
 
 **v0.9 的地基：闸门 I「声明即须有读者」（AD-17）。** 这一版不加功能，只加一双眼睛。

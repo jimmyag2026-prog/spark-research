@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.8.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.9.0-alpha.2，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2358,7 +2358,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 > 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
 > P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
 > ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
-> 最后更新：2026-09-11 晚（v0.8 方案入库：去向总表加 v0.8 行，补标 R1/R3/S12/V57/V83；合入 v0.6.0 外部 review 归账并改号 V92–V103；v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-15（v0.9.0-alpha.2 收口：去向总表加 v0.9 行；新登记 V154 V155；关 V62 V130 V143 V144 V145；**V147–V153 已被未合分支 `docs/v0.8.1-plan-and-english-i18n` 的 `DEVELOPMENT_PLAN_v0.8.1.md` 占用**（δ 复原该文档时由 V142–V148 重编号），本表从 V154 续编）；2026-09-11 晚（v0.8 方案入库：去向总表加 v0.8 行，补标 R1/R3/S12/V57/V83；合入 v0.6.0 外部 review 归账并改号 V92–V103；v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2373,6 +2373,7 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.9 归口**（`DEVELOPMENT_PLAN_v0.9.md` §十）· **alpha.2 状态**：闸门 I 两条 ✅ · α β γ δ ε 全部合入 ✅ · 枢纽接线完成 · 待 W9-2（T5 冻结、R6 基线）与 A8 | 闸门 I：V143 V144 V145 V146(边界) · α：U1 U4 V143 · β：U5 U9 U10/V145 V154 · γ：U6(后端) V130 · δ：U2 U7 U8 V62 V144 · ε：U6(前端) U3(半) · 收口：V154 · 新登记：V155 |
 | **v0.8 归口**（`DEVELOPMENT_PLAN_v0.8.md` §十，用户 2026-09-11：全部可动手的都进）· **alpha.2 状态**：闸门 G 六条 ✅ · α β γ δ ε ζ 全部合入 ✅ · V102 拆为 V104–V117 · 残余 V118 V119 V120 | 闸门 G：V100 V101 V93 V94 V96 V21 · α：V67 V86 V87 V73 · β：V85 V78 V63 V97 V99 V98 · γ：V88 V89 V90 V79 · δ：V92 V13 V14 V51 · ε：V95(软件) V55 V59(软件) · ζ：V2 · 裁定：V12 V102 V42 · 等外部：V4 V5 V6 V10 V52 D1 D2 D3 V76 |
 | **v0.7.0 发布时仍开**（进 v0.8 首批） | V67/V86 召回复测（需 contactEmail）· V85 仿真不在 raw · V83 真实目录污染处置（等用户）· V88 V89 V90 A6 体验项 · V87 引用判定计数差额 · V78 残余 subAgentLlm · V60/V70 残余 |
 | **v0.7 归口**（`DEVELOPMENT_PLAN_v0.7.md` §十一） | 做：V24 V30 V41 V48 V60 V62 V63 V64 V67 V69 V70 V71 V72 V78 V80 V3 V21 · 裁定关闭：V12(R4 后) V13 V16 · 登记不做：V14 V42 · 本 PR 补标已完成：V1 V7 V11 V15 V17 V18 V19 |
@@ -2508,7 +2509,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V59 | 安全门的剩余缺口（窄范围验收，发布前**未修**，如实列出） | 发布前最后一次窄范围验收（只打安全门）在两条 blocker 修好之后又挖出这些，**v0.5 没修**：<br>· **限值表只覆盖 4 类试剂**（盐酸/硫酸 · 次氯酸钠 · 乙醇），且其中三类阈值就是 100 ——与「物理上不可能」那条完全重合，**所以 `100% 硫酸 → ✅` 只表示「没超物理极限」，不表示「在安全限值内」**。审批人看到这一行会被误导。<br>· **`biosafety` 只认字面 `BSL-n` / `生物安全N级`**：`P3 实验室`（最常见的中文口语写法）静默通过且零告警。<br>· **`chemical_compatibility` 不看孔位**：A1 的次氯酸钠 + B1 的盐酸也拦，消息没说「本规则不看孔位」。<br>· **旧的 `over-limit` 消息不合格**：英文残句、不说限值是多少、不说单位、不给下一步——同一条规则里新分支的消息质量比它高一个数量级。`volume capacity` / `chemical compatibility` 同样没有下一步。<br>· **`lab compile` 那一屏不打印覆盖范围声明**（`lab status` 有，写得很好）——**而绝大多数人是在 compile 那一屏看到四行 ✅ 的**。<br>✅ **v0.8.0-alpha.2 软件四条已修**（#100：compile 打覆盖声明（唯一真源 SAFETY_COVERAGE_STATEMENT）· biosafety 认 P-level · 不看孔位说明 · 三类消息限值+单位+下一步；硬件半边不做） |
 | V60 | 词表外试剂的身份仍然丢失（只止住了塌缩） | v0.5 收口把占位符按步骤唯一化（`未识别试剂#step-1`），**止住了「两种不同试剂共用同一个 reservoir 孔」**这个真实的物理别名，并补了未消费告警。**但用户写的原文没有保留进编译产物**——人在审批时仍然看不到自己写的是「硝酸」。要真正修好得让编译产物携带原文片段，属解析器工作。<br>✅ **v0.7 alpha.2 C-3 已做主体**（PR #66）：编译产物带 `unrecognizedReagentText`，步骤名 `未识别试剂#step-1（原文：硝酸）`，CLI + 前端审批弹窗显示原文与「词表外，安全规则未覆盖」，e2e ⑨c。**残余**：`serialDilute` 的 stock 名、`mergeReagents` 续句合并里的词表外试剂未接原文；原文提取是启发式（抠不出就不显示，不瞎猜） |
 | V61 | **`existsSync("/$bunfs/…")` 的语义平台相关**（已修一处，登记形状） | v0.6 G-2 的首个 Linux CI 冒烟抓到：macOS 上对虚拟路径返回 false（内嵌兜底生效），Linux 上返回 true 但枚举拿不到内容——于是 Linux 二进制的技能索引**恒为 0 且不报错**，AD-12 最忌讳的安静错误答案。`skills/frontmatter.ts` 已改显式 `/$bunfs` 前缀判据。**登记是为了形状**：任何「用 existsSync 判断要不要走内嵌兜底」的代码在 Linux 上都可能悄悄走错分支；grep 过一遍，`agents/prompts.ts`（try/catch 兜底）与 server/index 的前端路径（materialize 后真实目录）均不受影响，当前无第二处。新增此类兜底时判据一律用 `/$bunfs` 前缀不用 existsSync |
-| V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫<br>📐 **v0.7 W7-D0 裁定：豁免并写明理由**——45 个错误全部是 Bun 特有 import 属性（`.sql/.py/.md with { type }`）在 e2e 的 plain tsconfig 下报错，与代码正确性无关；e2e 实跑本身就是它的类型检查。不纳入 `typecheck`，`tests/e2e/tsconfig.json` 保持现状。若将来 e2e 里真出现类型错误被这层噪声掩盖，再回来做 ambient 声明 |
+| V62 | `tests/e2e/tsconfig.json` 约 45 个既有类型错误 | W6-1 β 如实交代：Bun 特有 import（.sql/.py/.md with type）在 e2e 的 tsconfig 下报错，先于本轮存在、不在任何检查集里（`bun run typecheck` 不含 e2e tsconfig）。要么把 e2e tsconfig 修到能过并纳入 typecheck，要么明写豁免理由。归 v0.6 后续清扫<br>📐 **v0.7 W7-D0 裁定：豁免并写明理由**——45 个错误全部是 Bun 特有 import 属性（`.sql/.py/.md with { type }`）在 e2e 的 plain tsconfig 下报错，与代码正确性无关；e2e 实跑本身就是它的类型检查。不纳入 `typecheck`，`tests/e2e/tsconfig.json` 保持现状。若将来 e2e 里真出现类型错误被这层噪声掩盖，再回来做 ambient 声明<br>✅ **v0.9.0-alpha.2 已关**（lane δ：`tsc -p tests/e2e` 清零并纳入 `typecheck`，devlog W9-delta「V62」段） |
 | V63 | connector 台账的 `rateLimitWaitMs` 恒为 0 | W6-1 α 如实交代：base.ts 只见 `HttpClient` 接口，看不到 `RateLimitedHttp` 内部令牌桶等了多久；要真实记录需改 ratelimit.ts 的返回形状（不在 α 所有权内）。当前字段存在但恒 0，代码注释已如实说明。B2 轮次若观察到限速等待成为瓶颈再接线<br>✅ **v0.8.0-alpha.2 已修**（#96：ratelimit 返回真实等待毫秒，台账真记） |
 | V64 | **全局 currentProject 指针无锁，并发会话互相污染**（R1 头号发现，双向实锤） | B2 R1 两个并发零上下文会话互相把论文写进对方项目，双双弃项目重建（R1/T1_report.md、T3_report.md）。**最小防线已做（本轮）**：lit/idea/report 全命令 `--project <slug>` 显式覆盖 + 帮助文案警示。**根治待设计**：指针加锁 / 会话级项目绑定（env？）——涉及所有 CLI 入口与 state.json 语义，单独立项<br>✅ **v0.7 alpha.5 根治**（C-1，PR #74）：`state.json.lock` 文件锁 + 四档解析 + `project use` 会话绑定。**残余**：CLI 无持久会话 id，需 env `SPARK_RESEARCH_SESSION`，否则退化为全局指针（有提示） |
 | V65 | AMiner 检索疑似「近似短语匹配」而非关键词 AND——**V8 中文召回极差的机制级证据** | R1-T3 实测：复合查询（约 >4 词/6 字）普遍 0 命中，中文术语天然复合词无法绕开；中文基准召回 0/3。修法方向：connector 侧检索词拆分/多次查询合并。**R2 前评估修**，否则中文轮次继续全军覆没<br>✅ **v0.6 R2 前已修（机制修复+边界如实）**：searchOne 对 aminer 加拆词兜底——原查询 0 命中且多词时逐词查（深池 ≥20）、按命中词数合并、status.note 如实标注「这是拆词合并不是原查询命中」。真 API 实测：R1 扑空的查询 0→8 条相关结果；T3 冻结基准 top-20 单词池 3/3 可达。**残余限制（不隐瞒）**：复合单词（如「运动意图解码」连写）仍按词序列匹配 0 命中——没有中文分词器无法再拆，用户侧对策=概念间用空格（帮助文案已提示）；合并后 top-10 排序仍受 V67 制约<br>**R2 实证**：T4 中文查询 1 召回 **3/3（R1 是 0/3）**；查询 2 兜底触发但逐词结果偏题（钙钛矿泛化结果压过封装/降解特定结果）——兜底的相关性上限受 V67 同款排序制约，如实records<br>✅ **v0.7 alpha.5 残余已做**（B-2b）：jieba 可选依赖分词器，连写复合词 0 命中时先分词；缺 jieba 退回空格拆词并如实标注 |
@@ -2578,15 +2579,17 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V127 | **V21 的「启动即报错」承诺在 doctor 上不成立**（A7 High-3） | `resolveSetting` 只在该设置**被读到**时才抛；`doctor` 不碰超时设置 → 四个旧名下全部静默 exit 0，与 `docs/INSTALL.md` 的承诺矛盾。<br>✅ **v0.8 A7 窗口已修**：`legacyEnvViolations()` 在 `main()` 启动期扫描全部已移除旧名，命中即 exit 1（实测 `SPARK_HTTP_TIMEOUT_MS=1000 doctor` → rc=1） |
 | V128 | **子命令级 `--help` 会真的执行有副作用的命令**（A7 Medium，验收中造成真实副作用） | V39 给 lit 做了子命令级 help，但 `data`/`auth` 漏了：`data export --help` 直接跑真实导出（A7 因此对无关项目 r5-t2 产生一次真实导出，已清理），`auth --help` 直接进交互录入。<br>✅ **v0.8 A7 窗口已修**：`data` 任意子命令见 `--help/-h` 先打帮助再返回；`auth --help` 同理（新增 AUTH_HELP）。**残余**：其余模块未逐个排查，留 V131 |
 | V129 | A7 High-1「`/api/tasks/:id` 返回非法 JSON」**复核不成立** | 主会话验：`JSON.stringify` 对换行/制表符正常转义；起真 server 建含换行正文的 record 后 `GET /api/records` 经 Python `json.load` 严格解析通过、正文往返完整。A7 的 jq 报错是其取样/管道方式所致，非产品缺陷。登记防再登 |
-| V130 | `/api/usage` 不带 project 时返回当前项目而非全局汇总；无价模型拒绝时 CLI exit code 仍为 0；`config get` 来源归因把 config.json 标成 env（A7 Medium/Low 三条） | 均可复现但不阻塞发布。去向：v0.9 |
+| V130 | `/api/usage` 不带 project 时返回当前项目而非全局汇总；无价模型拒绝时 CLI exit code 仍为 0；`config get` 来源归因把 config.json 标成 env（A7 Medium/Low 三条） | 均可复现但不阻塞发布。去向：v0.9<br>✅ **v0.9.0-alpha.2 已关**（lane γ-6：`/api/usage` 不带 project 返全局汇总（含归档项目）；无价模型拒绝 exit≠0；`config get` 来源归因修正） |
 | V131 | 其余模块的子命令级 `--help` 未逐个排查（V128 残余） | `data`/`auth` 已修；`exp`/`lab`/`compute`/`protein`/`chem`/`report`/`conclusion`/`review`/`ext`/`new` 未逐条验证「子命令 --help 无副作用」。去向：v0.9（或加一条结构性门禁：所有 runXCommand 见 --help 必须先返回） |
 | V132 | **契约漏声明 `budgetUsd`/`allowUnpriced`（A7 High-2，A7 判断正确）** | 路由接受这两个字段（V119），但 `server/types.ts` 的 `ChatRequest` 没声明；契约 HTTP schema 从 TS 接口生成 → `contract --json` 与 SDK 都看不见，契约以遗漏的方式说谎。<br>✅ **v0.8 A7 窗口已修**：`ChatRequest` 补两字段并重新生成 schemas。**残余**：契约门禁只对撞路由集合，不对撞「路由实际读了哪些 body 字段」→ V133 |
 | V133 | 契约门禁不对撞「路由实际读取的 body 字段」（V132 残余） | 加路由参数时若忘了同步 `server/types.ts`，现有门禁察觉不到。修：从路由源码提取 `optionalString(body,"x")`/`requireString(body,"x")` 调用，与对应请求类型的属性集合对撞。去向：v0.9 |
 | V142 | **CI 在 v0.8.0 起就是红的：`v118_openmm_probe.test.ts` 假设 `.venv/bin/python` 存在** | 2026-09-14 合 PR #109 时发现 CI `test-and-smoke` 红，追到 main@644cccd（v0.8.0）与 ddad14e 两次 run 同样 `failure`——**v0.8.0 是在 CI 红的状态下发布的**，此前无人看 CI 结论。根因：测试第 22 行 `Bun.spawnSync(".venv/bin/python")`，runner 上没有 venv → ENOENT 先于「没装 openmm 则 skip」抛出，skip 分支不可达（与 F-5「守卫存在但不可达」同形状）。修：spawn 前 `existsSync` 守卫，缺 venv 与缺 openmm 同档跳过并说明。**教训**：发布前 DONE 里要有「CI 结论 = success」这一条，本地六套件绿不算。 |
-| V143 | **`ProviderCapabilities` 的 toolCalling / streaming / usageReported 声明了无人消费**（闸门 I 形状③ 首跑抓到） | `router.ts:123` 构造这三个布尔并返回，backend/src 里零读取点——能力声明了，没有任何逻辑据此改变行为。去向：**v0.9 lane α** 接线 `streaming`（看门狗只对流式生效）与 `usageReported`（α-4 区分「上游没返 usage」与「无单价」）；`toolCalling` 归收口在 `sub_agent.ts` 提供工具前核一次。三者在 `gate_i_switch_readers` ALLOWLIST 里带原因登记，alpha.2 前移除（陈旧检查会逼）。 |
-| V144 | **`WetLabLoop.execute(options)` 的 `note` 声明了从未读**（闸门 I 形状② 首跑抓到） | 参数类型里有 `note?: string`，函数体一处不读——调用方传了备注，静默丢弃。去向：**v0.9 lane δ** 把 note 落进 execute 产生的 observation record。ALLOWLIST 登记，δ 合入时移除。 |
-| V145 | **`OrchestratorAgent.chat(req)` 的 `model` 只在 coexplore 分支转发时被读，主路径静默丢弃**（= USAGE_LOG **U10** 转入） | HTTP `/chat` 与 `/stream` 都传了 `body.model`，`chat()` 自己读了 sessionId/message/mode/onDelta/budgetUsd/allowUnpriced 六个属性唯独不读 model；只有 `if (mode==="coexplore")` 里 `this.coexplore(req)` 才读到。决定性实验：指定 `qwen-max`（无 key）照常回答，台账记成默认模型。去向：**v0.9 lane β-1**（存 `sessionModel`、`llmFor` 读它、门禁「无 key provider 必失败」）。ALLOWLIST 登记，β 合入时移除。**与 V40 / V137 同族第三例，闸门 I（AD-17）因此建立。** |
+| V143 | **`ProviderCapabilities` 的 toolCalling / streaming / usageReported 声明了无人消费**（闸门 I 形状③ 首跑抓到） | `router.ts:123` 构造这三个布尔并返回，backend/src 里零读取点——能力声明了，没有任何逻辑据此改变行为。去向：**v0.9 lane α** 接线 `streaming`（看门狗只对流式生效）与 `usageReported`（α-4 区分「上游没返 usage」与「无单价」）；`toolCalling` 归收口在 `sub_agent.ts` 提供工具前核一次。三者在 `gate_i_switch_readers` ALLOWLIST 里带原因登记，alpha.2 前移除（陈旧检查会逼）。<br>✅ **v0.9.0-alpha.2 已关**（α 接 `streaming`/`usageReported`，收口接 `toolCalling`；`gate_i_switch_readers` ALLOWLIST 已移除） |
+| V144 | **`WetLabLoop.execute(options)` 的 `note` 声明了从未读**（闸门 I 形状② 首跑抓到） | 参数类型里有 `note?: string`，函数体一处不读——调用方传了备注，静默丢弃。去向：**v0.9 lane δ** 把 note 落进 execute 产生的 observation record。ALLOWLIST 登记，δ 合入时移除。<br>✅ **v0.9.0-alpha.2 已关**（δ：note 落进 observation record；ALLOWLIST 已移除） |
+| V145 | **`OrchestratorAgent.chat(req)` 的 `model` 只在 coexplore 分支转发时被读，主路径静默丢弃**（= USAGE_LOG **U10** 转入） | HTTP `/chat` 与 `/stream` 都传了 `body.model`，`chat()` 自己读了 sessionId/message/mode/onDelta/budgetUsd/allowUnpriced 六个属性唯独不读 model；只有 `if (mode==="coexplore")` 里 `this.coexplore(req)` 才读到。决定性实验：指定 `qwen-max`（无 key）照常回答，台账记成默认模型。去向：**v0.9 lane β-1**（存 `sessionModel`、`llmFor` 读它、门禁「无 key provider 必失败」）。ALLOWLIST 登记，β 合入时移除。**与 V40 / V137 同族第三例，闸门 I（AD-17）因此建立。**<br>✅ **v0.9.0-alpha.2 已关**（β-1 `sessionModel` + 收口 `llmFor` 读它；`gate_model_override` 钉住「覆盖必须真的换模型」） |
 | V146 | 闸门 I 形状② 的扫描面边界：跨文件 / 同文件具名 `type` 的参数不在扫描面 | 首版只解析**内联对象类型字面量**参数；`chat(req: ChatRequest)` 这种具名类型要走 TypeChecker 解析属性，未做。登记为门禁能力边界待办；同时形状③ 会把同名字段的解构算成读者（`retryable` 在 v0.8.0 上因此漏报）。 |
+| V154 | **`LLMRouter.resolve()` 的隐式 provider 兜底已删（收口裁定，与 U5 同族）** | U5 修了 `return "kimi"` 之后，`resolve()` 里还有第二层：请求的模型所属 provider 没配 key 时，静默换成**任一**已配置 provider 的 adapter 去调——`qwen-max` 无 QWEN_API_KEY 时实际打到 openrouter，记账也记错。v0.9.0-alpha.2 收口改为 **fail-closed**：显式指名的模型所属 provider 无 key → 返回 `kind:"auth"` 错误并点名缺哪个环境变量（`gate_model_override` 第 4 条钉住零出站）。**行为变化对外可见**：以前「能跑但跑错模型」的配置现在会直接报错，CHANGELOG 已记 |
+| V155 | 设置面契约残余（ε → γ 四条，lane 期间未及） | ① `GET /api/settings` 总索引路由（前端搜索只覆盖打开过的面板，未开面板搜不到只能标 `?`）；② 各面板 `extra` 键写进 `server/types.ts` 注释成契约（ε 曾因 `extra.subAgent`→`subAgentType`、`category:"mcp"`→`"extension"` 差点静默空面板，现两代名字都认）；③ `PUT /models/subagent/:kind` 与 extensions 写路由的路径参数统一为裸名（前端现剥 `ext:` 前缀）；④ `POST /storage/export` 的 `project` 语义写明。去向：v0.9 W9-2 或 v0.9.1 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2608,6 +2611,57 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.9.0-alpha.2] — 2026-09-15
+
+**v0.9 W9-1：五条 lane 全部合入，USAGE_LOG U1–U10 关九条半。** 对应 `docs/DEVELOPMENT_PLAN_v0.9.md` §三，
+每条 lane 的过程与阴性对照见 `docs/devlog/W9-{alpha,beta,gamma,delta,epsilon}.md`。
+
+### 新增
+
+- **网页端设置面（U6，AD-18）**：左栏「运维 → 设置」（数字键 `6`），12 个面板：general / models /
+  credentials / sources / connectors(extensions) / scientific-tools / compute / network / storage /
+  permissions / local / catalog。后端 `GET/PUT /api/settings/*`。**凭据只写不读、只认 loopback**：
+  值写盘后任何响应都不回显；取不到远端地址时 403（fail-closed）；写入的值即时登记进日志脱敏集合，
+  进程启动时把盘上已有 connector 凭据一并登记。
+- **`spark-research auth --connector <id> [--field <name>]`**：CLI 录入 connector 凭据，与 HTTP 写路径共用同一个存储。
+- **`spark-research chat` 有参数了（U9）**：`--model` `--budget-usd` `--allow-unpriced` `--project` `--help`；
+  `--help` 不再被当消息发给模型。
+- **LLM 看门狗与分级重试（U1 同族）**：流式调用有静默超时（上游长时间不给增量即断）与总时长上限；
+  重试延迟按错误类别分级并读上游 `Retry-After`；台账 `usage.jsonl` 每条失败带 `errorKind`
+  （auth / rate_limit / timeout / network / upstream / unsupported …），`usage --json` 出 `byErrorKind`。
+- **聊天进度按阶段推送（U4）**：`/api/session/stream` 的 `progress` 事件从「一句占位」变成
+  planStarted → planned → taskCompleted(×n) → summarizing → reviewed / repairing。
+- **`doctor` 探运行实例（U2）**：报告 4321 端口上正在监听的 server 及其版本；ε 顶栏显示 server 版本徽标。
+- **`/api/usage` 不带 `project` 返全局汇总（V130）**，含归档项目；`GET /api/projects?includeArchived=1`。
+- **门禁**：`model_registry_parity`（单价表 ⇔ 路由清单一一对应）· `gate_model_override`（覆盖必须真的换模型，
+  无 key 的 provider 零出站）· `gate_help_no_llm`（任何 `--help` 不打模型）· `check-integration-skip`
+  （集成套件 skip>0 即红，U7）· 设置面 loopback / write-only / 脱敏三条阴性对照。
+
+### 变更
+
+- **模型名判据只有一份（U5）**：`llm/providers/registry.ts` 的单价表即模型清单，`assertKnownModel` 被
+  router / `config set` / 设置面三处共用；`return "kimi"` 静默兜底已删，未登记的模型名在**写入时**就 422。
+- **⚠️ 显式指名的模型所属 provider 没配 key → 直接报错（V154）**。以前会静默换到任一已配置 provider
+  去调（跑了、但跑错模型、记账也记错）。现在返回 `auth` 类错误并点名缺哪个环境变量。
+  如果你的配置一直「能跑」但其实靠的是这个兜底，升级后会立刻看到错误——这是刻意的。
+- **`chat()` / `/api/session/*` 的 `model` 覆盖真的生效了（U10 / V145）**：之前声明了但从不读。
+- 集成套件默认真跑（U7）：`bun run test:integration` 缺前置条件是红而不是「8 skip」。
+- `spark-research lit search` 未显式 `--sources` 时用设置面勾选的源。
+- server 启动日志只打一份（U8）。`tests/e2e` 纳入 `typecheck`（V62）。
+- Python SDK：生成器修两处（布尔字面量出 `True/False`；路径段 `-` 转 `_`），新增 `settings_*` 方法。
+- 仓库根新增 `NOTICE`：设置面注册表形状与壳结构参考 OpenScience（Apache-2.0），实现为原创。
+
+### 修复
+
+- SSE `progress` 多帧后 `server_session` 序断言收紧为「首帧 start、末 result/done、中间全是 progress」。
+- `auth --connector --help` 不再把 `--help` 当 connector id。
+
+### 内部
+
+- 版本号：`v0.9.0-alpha.1` 打 tag 时 `package.json` 仍是 0.8.0（漏改）；本版起同步 `0.9.0-alpha.2` / `0.9.0a2`。
+- BACKLOG：新登记 V154 V155；关 V62 V130 V143 V144 V145；V147–V153 号段已被未合分支占用，从 V154 续编。
+- 残余去向：ε 对 γ 的四条契约请求 → V155；W9-2（T5 冻结、R6 基线测量）与 A8 验收未开始。
 
 ## [0.9.0-alpha.1] — 2026-09-15
 
