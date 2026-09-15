@@ -28,7 +28,7 @@
     "test": "bun test tests/unit",
     "test:concurrency": "bun test tests/concurrency",
     "test:timeout": "bun test tests/timeout",
-    "test:integration": "bun test tests/integration",
+    "test:integration": "bun scripts/check-integration-skip.ts",
     "test:lab": "./.venv/bin/python -m pytest tests/lab || python3 -m pytest tests/lab",
     "test:py": "./.venv/bin/python -m pytest tests/ || python3 -m pytest tests/",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
