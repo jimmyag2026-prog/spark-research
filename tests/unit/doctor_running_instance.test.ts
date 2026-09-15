@@ -36,7 +36,8 @@ function startFakeHealth(payload: unknown, path = "/api/health"): number {
     },
   });
   servers.push({ stop: () => server.stop(true) });
-  return server.port;
+  // Bun.serve 的 port 类型是 number | undefined；port:0 起成功后必然有值。
+  return server.port!;
 }
 
 afterEach(() => {
@@ -142,7 +143,7 @@ describe("doctor 运行实例 · 探端口", () => {
       fetch: () => new Response("<html>nginx</html>", { headers: { "content-type": "text/html" } }),
     });
     servers.push({ stop: () => server.stop(true) });
-    const scan = await probeRunningInstances({ currentVersion: "0.8.0", ports: [server.port] });
+    const scan = await probeRunningInstances({ currentVersion: "0.8.0", ports: [server.port!] });
     expect(scan.instances[0]!.verdict).toBe("foreign");
     expect(scan.instances[0]!.service).toBeNull();
   });
