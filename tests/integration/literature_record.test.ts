@@ -23,27 +23,32 @@ import {
 // 真实网络验证 + fixture 录制（DEVELOPMENT_PLAN 三、「e2e 真实：本地验证 + 录制 fixture」）。
 //
 //   本地录制：FIXTURE_MODE=record bun test tests/integration/literature_record.test.ts
-//   平时（含 CI）：默认 replay 模式 → 整个套件跳过（回放版在 tests/unit/literature_e2e.test.ts）
+//   平时（含 CI）：默认 replay 模式 → **照常执行**，回放 tests/fixtures/literature/*.json，零网络
+//                  （另有一套独立的回放用例在 tests/unit/literature_e2e.test.ts，覆盖面不同，不是本文件的替代）
 //
-// 这个文件**不在** `bun test tests/unit` 的范围内，不影响单测基线。
+// 这个文件**不在** `bun test tests/unit` 的范围内（跑它用 `bun run test:integration`），不影响单测基线。
 
 const MODE = fixtureModeFromEnv();
 const RECORDING = MODE === "record" || MODE === "live";
 
-// δ-1（U7）：这个 beforeAll 在模块顶层注册（不在被 skipIf 掉的 describe 里面），
-// 所以全跳过时它照样会跑，把「全 skip」在输出里打成显著提示，别让 `0 fail` 看着像过了。
+// δ-1（USAGE_LOG U7）：这套用例**默认（replay）就跑**。
+// 三个文件里每一个 HTTP 客户端都由 `fixtureHttp(cassette, MODE)` 构造，replay 下零网络，
+// 所以「不要打网络」不等于「不要执行」——此前整个 describe 被 `skipIf(!RECORDING)` 关掉，
+// `bun run test:integration` 恒定 `0 pass / 8 skip / 0 fail`，读起来像绿的却什么都没验。
+// 现在只有 `FIXTURE_MODE` 决定打不打网络，不再决定跑不跑。
 beforeAll(() => {
-  if (!RECORDING) {
+  if (RECORDING) {
+    console.warn(`\n🌐 集成套件 FIXTURE_MODE=${MODE}——正在打真实网络${MODE === "record" ? "并重录 fixture" : "（不落盘）"}。`);
+  } else {
     console.warn(
-      `\n⚠️ 集成套件已整体跳过（FIXTURE_MODE=${MODE}）——` +
-        "跨源检索 / DOI 取单篇 / PDF 下载 / AMiner 连通性四条链路本轮未打真实网络验证。\n" +
-        "   replay 覆盖见 tests/unit/literature_e2e.test.ts（同一批 fixture，CI 主流水线跑）；" +
-        "要真验证这四条链路本身：FIXTURE_MODE=record 或 FIXTURE_MODE=live bun run test:integration",
+      `\n▶️ 集成套件 FIXTURE_MODE=${MODE}（回放录制好的响应，零网络）——` +
+        "验的是本地管线逻辑，**不校验上游接口是否漂移**。\n" +
+        "   要验上游：FIXTURE_MODE=live bun run test:integration（CI 里由每周的 integration-live job 跑）。",
     );
   }
 });
 
-describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
+describe("文献链路 · 跨源检索 / DOI 取单篇 / PDF 下载 / AMiner 降级（FIXTURE_MODE 决定回放还是打网络）", () => {
   test(
     "跨源检索四个免 key 源",
     async () => {
@@ -51,7 +56,7 @@ describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
         sources: SEARCH_SOURCES,
         perSource: PER_SOURCE,
       });
-      console.log(`\n[record] 检索 "${SEARCH_QUERY}"`);
+      console.log(`\n[${MODE}] 检索 "${SEARCH_QUERY}"`);
       for (const status of result.sources) {
         console.log(
           `  ${status.source.padEnd(16)} ${status.outcome.padEnd(8)} ${status.count} 条 ` +
@@ -71,7 +76,7 @@ describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
       const result = await searcherWith(CASSETTES.fetchById, MODE).fetchById(ADD_DOI, {
         sources: SEARCH_SOURCES,
       });
-      console.log(`\n[record] fetchById ${ADD_DOI}`);
+      console.log(`\n[${MODE}] fetchById ${ADD_DOI}`);
       for (const status of result.sources) {
         console.log(`  ${status.source.padEnd(16)} ${status.outcome.padEnd(8)} ${status.count} 条 ${status.error ?? status.note ?? ""}`);
       }
@@ -111,7 +116,7 @@ describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
           library,
         });
         const results = await downloader.downloadMany([arxiv.id, pmc.id]);
-        console.log("\n[record] PDF 下载");
+        console.log(`\n[${MODE}] PDF 下载`);
         for (const r of results) {
           console.log(
             `  ${r.ok ? "✅" : "❌"} ${r.ok ? `${r.origin} ${r.bytes} 字节 ${r.checksum}` : `${r.reason}: ${r.message}`}`,
@@ -138,12 +143,12 @@ describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => {
         http: fixtureHttp(CASSETTES.aminer, MODE),
       });
       if (!connector.isConfigured()) {
-        console.log("\n[record] AMiner: 未配置凭据 → 验证降级路径");
+        console.log(`\n[${MODE}] AMiner: 未配置凭据 → 验证降级路径`);
         const result = await connector.search({ query: SEARCH_QUERY });
         expect((result as { reason?: string }).reason).toBe("credentials_missing");
         return;
       }
-      console.log("\n[record] AMiner: 凭据已配置，发起真实请求");
+      console.log(`\n[${MODE}] AMiner: 凭据已配置，发起真实请求`);
       try {
         const payload = await connector.search({ query: "AlphaFold", size: 3 });
         const code = (payload as { code?: unknown })?.code;
