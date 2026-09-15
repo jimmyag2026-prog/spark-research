@@ -14,9 +14,18 @@ import type { SettingsPanelProps } from "./registry_table";
 // 台账会出现空成本。前端不复制这条校验，只把后端的 422 原样弹出来——**同一件事两份
 // 校验会分家**，而分家的那天前端会放行一个后端拒绝的值。
 
-/** 这一条是哪一类子代理的覆盖；不是子代理覆盖就返回 null。 */
+/**
+ * 这一条是哪一类子代理的覆盖；不是子代理覆盖就返回 null。
+ *
+ * 三级回退，不在前端维护第二份「哪五类子代理」的清单（真源是后端的
+ * `SUB_AGENT_MODEL_CONFIG_TYPES`）：
+ *   ① `extra.subAgentType` —— γ 实装用的名字；
+ *   ② `extra.subAgent` —— 契约骨架 commit 里的名字，留着兼容；
+ *   ③ 键名前缀 `subAgentModel_` —— 两个 extra 都没有时的兜底，这个前缀由
+ *      `config/index.ts` 的 `subAgentModelSettingKey()` 生成，不会变。
+ */
 function subAgentKind(item: SettingsItem): string | null {
-  const explicit = extraString(item, "subAgent");
+  const explicit = extraString(item, "subAgentType") ?? extraString(item, "subAgent");
   if (explicit) return explicit;
   const prefix = "subAgentModel_";
   return item.key.startsWith(prefix) ? item.key.slice(prefix.length) : null;

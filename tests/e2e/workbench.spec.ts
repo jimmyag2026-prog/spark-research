@@ -977,10 +977,14 @@ function makeSettingsFixture() {
   ]);
   let sources = ["openalex", "crossref"];
   const allSources = ["openalex", "crossref", "arxiv", "pubmed"];
+  // **形状对齐 γ 的实装**（不是它的骨架 fixture）：已装扩展一律 `category: "extension"`
+  // 且 key 带 `ext:` 前缀，技能是 `category: "skill"` 且 key 带 `skill:` 前缀，
+  // 发现到的工具叫 `mcpTools`。前端对两代名字都兼容，但假件按**新的**来，
+  // 这样 e2e 验的是收口后真正会发生的那条路径。
   const extensions: Array<{ name: string; category: string }> = [
     { name: "literature-triage", category: "skill" },
     { name: "novelty-check", category: "skill" },
-    { name: "example-mcp", category: "mcp" },
+    { name: "example-mcp", category: "extension" },
   ];
   let computeTarget = "local";
   let probed = false;
@@ -1136,7 +1140,7 @@ function makeSettingsFixture() {
           panel: "models",
           items: [
             item({ key: "defaultModel", label: "默认模型", kind: "enum", value: "moonshotai/kimi-k2.6", source: "default", allowed: ["moonshotai/kimi-k2.6", "openai/gpt-5"], summary: "假件：默认模型" }),
-            item({ key: "subAgentModel_review", label: "子代理 review 的模型覆盖", kind: "enum", value: null, source: "unset", allowed: ["moonshotai/kimi-k2.6"], summary: "假件：review 子代理", extra: { subAgent: "review" } }),
+            item({ key: "subAgentModel_review", label: "子代理 review 的模型覆盖", kind: "enum", value: null, source: "unset", allowed: ["moonshotai/kimi-k2.6"], summary: "假件：review 子代理", extra: { subAgentType: "review" } }),
           ],
           meta: meta("full", "假件模型面板", []),
         };
@@ -1161,29 +1165,40 @@ function makeSettingsFixture() {
           panel: "extensions",
           items: extensions.map((ext) =>
             item({
-              key: ext.name,
+              key: `${ext.category === "skill" ? "skill" : "ext"}:${ext.name}`,
               label: ext.name,
               kind: "info",
-              value: null,
+              value: ext.category === "skill" ? null : "available",
               editable: false,
               summary: `假件：${ext.category} ${ext.name}`,
-              extra: { category: ext.category, triggers: ext.category === "skill" ? ["分诊", "triage"] : [], tools: ext.category === "mcp" ? ["echo"] : [] },
+              extra: {
+                category: ext.category,
+                status: ext.category === "skill" ? undefined : "available",
+                triggers: ext.category === "skill" ? ["分诊", "triage"] : [],
+                mcpTools: ext.category === "skill" ? [] : ["echo"],
+              },
             }),
           ),
           meta: meta("reduced", "假件扩展面板", ["装载一律不带 --trust"]),
         };
       }
       if (seg === "/extensions/mcp" && method === "POST") {
-        extensions.push({ name: String(body.name), category: "mcp" });
-        return { panel: "extensions", item: item({ key: String(body.name), label: String(body.name), kind: "info", value: null, editable: false, summary: "假件", extra: { category: "mcp" } }), meta: meta("reduced", "假件扩展面板", []) };
+        extensions.push({ name: String(body.name), category: "extension" });
+        return { panel: "extensions", item: item({ key: `ext:${String(body.name)}`, label: String(body.name), kind: "info", value: "available", editable: false, summary: "假件", extra: { category: "extension" } }), meta: meta("reduced", "假件扩展面板", []) };
       }
       if (seg.startsWith("/extensions/") && (method === "POST" || method === "DELETE")) {
+        // 路径参数是**裸名字**（不带 `ext:` 前缀）——前端把前缀剥掉之后才调过来。
+        // 假件在这里认真核一遍：前端要是直接把 `ext:foo` 当名字发过来，这里就找不到，
+        // DELETE 会变成空操作，㉘ 的断言会红。
         const name = decodeURIComponent(seg.split("/")[2]!);
+        if (name.includes(":")) {
+          return { error: `扩展名不该带前缀：${name}`, nextStep: "前端应传裸名字" };
+        }
         if (method === "DELETE") {
           const index = extensions.findIndex((e) => e.name === name);
           if (index >= 0) extensions.splice(index, 1);
         }
-        return { panel: "extensions", item: item({ key: name, label: name, kind: "info", value: null, editable: false, summary: "假件", extra: { category: "mcp" } }), meta: meta("reduced", "假件扩展面板", []) };
+        return { panel: "extensions", item: item({ key: `ext:${name}`, label: name, kind: "info", value: "available", editable: false, summary: "假件", extra: { category: "extension" } }), meta: meta("reduced", "假件扩展面板", []) };
       }
 
       if (seg === "/compute" && method === "GET") {
@@ -1529,7 +1544,7 @@ const PANEL_ROW_EXPECTATIONS: Array<{
     rows: (i) =>
       i.filter((x) => {
         const category = (x.extra as Record<string, unknown> | undefined)?.category;
-        return category === "mcp" || category === "connector";
+        return category === "extension" || category === "mcp" || category === "connector";
       }).length,
   },
   {

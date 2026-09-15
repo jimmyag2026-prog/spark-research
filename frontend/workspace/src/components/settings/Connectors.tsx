@@ -13,6 +13,12 @@ import type { SettingsPanelProps } from "./registry_table";
 // `revoke` 三个是授权动作，不暴露成 HTTP 写路由（AD-6，与算力的派发/审批同一口径）。
 // 所以面板里没有「授予权限」按钮——每条的 `nextStep` 会给出该在终端跑的命令。
 
+/** 发现到的 MCP 工具名。γ 实装叫 `mcpTools`，骨架里叫 `tools`，两个都认。 */
+function mcpTools(item: SettingsItem): string[] {
+  const discovered = extraList(item, "mcpTools");
+  return discovered.length > 0 ? discovered : extraList(item, "tools");
+}
+
 function AddMcpForm(props: { onAdded: () => void }): JSX.Element {
   const ws = useWorkspace();
   const [name, setName] = createSignal("");
@@ -83,11 +89,20 @@ export default function Connectors(props: SettingsPanelProps): JSX.Element {
   const ws = useWorkspace();
   const panel = usePanelData(props, () => settingsApi.extensions.list());
 
+  // γ 实装把已装扩展统一标成 `category: "extension"`（骨架 commit 里曾是
+  // `"mcp"` / `"connector"`，两个名字都认，免得契约一动前端就空一片）；
+  // 技能是另一段（`"skill"`），归「技能」面板。
   const connectors = (items: SettingsItem[]) =>
     panel.visible(items).filter((i) => {
       const category = extraString(i, "category");
-      return category === "mcp" || category === "connector";
+      return category === "extension" || category === "mcp" || category === "connector";
     });
+
+  // 条目 key 是 `ext:<name>`（与 skill 段区分用的前缀），而
+  // `POST /extensions/:name/verify` 与 `DELETE /extensions/:name` 要的是**裸名字**。
+  // `label` 就是裸名字，但这里从 key 剥前缀更稳——label 是给人看的，随时可能改成
+  // 「带版本号的展示名」之类。
+  const extName = (item: SettingsItem) => item.key.replace(/^ext:/, "");
 
   const act = async (label: string, run: () => Promise<unknown>) => {
     const done = await withBusy(ws, label, run);
@@ -112,8 +127,10 @@ export default function Connectors(props: SettingsPanelProps): JSX.Element {
                     badge={
                       <>
                         <span class="chip">{extraString(item, "category")}</span>
-                        <Show when={extraString(item, "trusted") === "true" || item.extra?.trusted === true}>
-                          <Badge tone="observed">已授信</Badge>
+                        <Show when={extraString(item, "status")}>
+                          {(status) => (
+                            <Badge tone={status() === "available" ? "observed" : "inferred"}>{status()}</Badge>
+                          )}
                         </Show>
                       </>
                     }
@@ -122,14 +139,14 @@ export default function Connectors(props: SettingsPanelProps): JSX.Element {
                         <button
                           class="btn btn-sm"
                           disabled={ws.busy() !== null}
-                          onClick={() => void act(`验证 ${item.key}`, () => settingsApi.extensions.verify(item.key))}
+                          onClick={() => void act(`验证 ${extName(item)}`, () => settingsApi.extensions.verify(extName(item)))}
                         >
                           验证
                         </button>
                         <button
                           class="btn btn-sm btn-danger"
                           disabled={ws.busy() !== null}
-                          onClick={() => void act(`卸载 ${item.key}`, () => settingsApi.extensions.remove(item.key))}
+                          onClick={() => void act(`卸载 ${extName(item)}`, () => settingsApi.extensions.remove(extName(item)))}
                         >
                           卸载
                         </button>
@@ -137,9 +154,9 @@ export default function Connectors(props: SettingsPanelProps): JSX.Element {
                     }
                     footer={
                       <div class="col" style={{ gap: "4px" }}>
-                        <Show when={extraList(item, "tools").length > 0}>
+                        <Show when={mcpTools(item).length > 0}>
                           <div class="row wrap" style={{ gap: "4px" }}>
-                            <For each={extraList(item, "tools")}>
+                            <For each={mcpTools(item)}>
                               {(tool) => <span class="chip mono">{tool}</span>}
                             </For>
                           </div>
