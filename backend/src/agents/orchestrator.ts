@@ -1,3 +1,4 @@
+import { searchPayloadProblem } from "../connectors/base";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
@@ -899,7 +900,12 @@ export class OrchestratorAgent {
             // 以前这里无条件 `ok: true`，于是「PubMed 超时」「arXiv 429」全都成了**成功的任务**——
             // 2026-09-15 的 mRNA 检索里三次连接器失败在执行摘要里写着 ok，只有模型自己去读 JSON 正文才看出不对。
             // ExecutionOutcome.ok 是证据图、review 层与 repairing 判定的输入，不能由「没抛异常」代劳。
-            const failure = connectorFailureOf(res);
+            const failure =
+              connectorFailureOf(res) ??
+              // U40：只对 search 查「有没有结果或计数」。getPaper / getAbstract 这类单条取回不适用。
+              (String(task.params?.tool ?? "search") === "search"
+                ? searchPayloadProblem(String(task.params?.server ?? "pubmed"), (res as { result?: unknown } | null)?.result ?? res)
+                : null);
             this.record(sessionId, "connector", failure ? "error" : "call", JSON.stringify(res).slice(0, 200));
             if (failure) {
               return { taskId: task.id, kind: task.kind, ok: false, output: JSON.stringify(res) };

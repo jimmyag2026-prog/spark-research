@@ -301,3 +301,44 @@ export class HttpConnector {
     return this.config.tools.map((tool) => ({ ...tool }));
   }
 }
+
+/**
+ * U40（v0.9.1）：一次 **search** 调用至少要能看出「查到了多少」。
+ *
+ * 现场：模型手写的 Europe PMC 查询语法不被上游接受，EPMC 用 HTTP 200 回了 `{"version":"6.9"}`
+ * ——既没有 `hitCount` 也没有 `errCode`，更没有结果数组。于是「查询写错了」「查到 0 篇」
+ * 「查成功了」三件事长得一模一样，编排层照样把它交给模型当结果（U38 是另一半）。
+ *
+ * 两条刻意的边界：
+ *  · 只查**计数或结果容器在不在**，不查是不是 0 条——0 条是合法结果，语法错不是；
+ *  · 判据放在**编排层调用 search 之后**，不放在各 connector 的 `search()` 里——连接器层的单测与
+ *    并发回归大量使用 `{}` / echo 式桩响应来断言**请求构造**，在那里拦会把它们全打成假红。
+ */
+const SEARCH_RESULT_KEYS = [
+  "hitCount",
+  "esearchresult",
+  "resultList",
+  "results",
+  "result",
+  "message",
+  "meta",
+  "data",
+  "entries",
+  "items",
+  "total",
+  "totalResults",
+] as const;
+
+export function searchPayloadProblem(connector: string, payload: unknown): string | null {
+  if (payload === null || typeof payload !== "object") {
+    return `连接器 "${connector}" 的 search 返回了非对象响应。下一步：检查查询语法，或换一个源重试。`;
+  }
+  const p = payload as Record<string, unknown>;
+  if (SEARCH_RESULT_KEYS.some((k) => p[k] !== undefined)) return null;
+  const keys = Object.keys(p);
+  return (
+    `连接器 "${connector}" 的 search 返回里既没有结果也没有计数字段（只有 ${keys.join(", ") || "空对象"}）——` +
+    `多半是查询语法不被上游接受（它用 HTTP 200 回了一个空壳）。` +
+    `下一步：简化查询（先去掉字段限定与排序参数）再试，或换一个源。`
+  );
+}

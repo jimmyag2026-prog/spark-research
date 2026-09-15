@@ -9,7 +9,7 @@ import {
   normalizeSubAgentType,
 } from "../../backend/src/agents/orchestrator";
 import { buildSubAgentSpec, SUB_AGENT_TYPES } from "../../backend/src/agents/sub_agent";
-import { assertSearchPayload } from "../../backend/src/connectors/literature";
+import { searchPayloadProblem } from "../../backend/src/connectors/base";
 import type { ChatMessage, LlmResponse } from "../../backend/src/llm/types";
 
 /** 只按顺序吐预设内容、并把收到的 prompt 存下来的假 LLM。 */
@@ -28,11 +28,15 @@ class RecordingLlm {
 }
 
 /** 跑一轮 chat，返回 summarize 那一次收到的 prompt（执行摘要就在里面）。 */
-async function runWithConnector(sessionId: string, envelope: unknown) {
+async function runWithConnector(
+  sessionId: string,
+  envelope: unknown,
+  params: Record<string, unknown> = { server: "pubmed", tool: "search", args: { query: "x" } },
+) {
   const daemon = new SparkResearchDaemon();
   (daemon as unknown as { dispatch: (t: string, p: unknown) => Promise<unknown> }).dispatch = async () => envelope;
   const llm = new RecordingLlm([
-    JSON.stringify([{ id: "t1", kind: "connector", description: "查 PubMed", params: { server: "pubmed", tool: "search", args: { query: "x" } } }]),
+    JSON.stringify([{ id: "t1", kind: "connector", description: "查文献", params }]),
     "汇总",
   ]);
   const orch = new OrchestratorAgent(daemon, { llm: llm as never });
@@ -104,17 +108,29 @@ describe("U39 · 子代理类型是不可信输入", () => {
   });
 });
 
-describe("U40 · 检索响应里至少要有计数或结果容器", () => {
-  test("只有 version 的空壳 → 抛错并点名「空壳」与下一步", () => {
-    expect(() => assertSearchPayload("europepmc", { version: "6.9" })).toThrow(/空壳/);
-    expect(() => assertSearchPayload("europepmc", { version: "6.9" })).toThrow(/下一步/);
+describe("U40 · search 的响应里至少要有计数或结果容器", () => {
+  test("只有 version 的空壳 → 点名「空壳」与下一步", () => {
+    const msg = searchPayloadProblem("europepmc", { version: "6.9" });
+    expect(msg).toContain("空壳");
+    expect(msg).toContain("下一步");
   });
   test("有计数或结果容器就放行；0 条也放行（0 条是合法结果，语法错不是）", () => {
-    expect(() => assertSearchPayload("europepmc", { version: "6.9", hitCount: 0, resultList: { result: [] } })).not.toThrow();
-    expect(() => assertSearchPayload("pubmed", { esearchresult: { idlist: [] } })).not.toThrow();
-    expect(() => assertSearchPayload("crossref", { message: { items: [] } })).not.toThrow();
+    expect(searchPayloadProblem("europepmc", { version: "6.9", hitCount: 0, resultList: { result: [] } })).toBeNull();
+    expect(searchPayloadProblem("pubmed", { esearchresult: { idlist: [] } })).toBeNull();
+    expect(searchPayloadProblem("crossref", { message: { items: [] } })).toBeNull();
+    expect(searchPayloadProblem("openalex", { results: [] })).toBeNull();
   });
   test("非对象响应也拒", () => {
-    expect(() => assertSearchPayload("arxiv", "<xml/>")).toThrow(/非对象/);
+    expect(searchPayloadProblem("arxiv", "<xml/>")).toContain("非对象");
+  });
+
+  test("编排层：search 拿到空壳 → 任务 failed；getPaper 拿到同样的壳 → 不拦（单条取回不适用）", async () => {
+    const shell = { ok: true, server: "europepmc", tool: "search", result: { version: "6.9" } };
+    const searched = await runWithConnector("s-u40", shell, { server: "europepmc", tool: "search", args: { query: "x" } });
+    expect(searched.result.execution.find((e) => e.taskId === "t1")?.ok).toBe(false);
+    expect(searched.prompts.join("\n")).toContain("[connector] t1: failed");
+
+    const fetched = await runWithConnector("s-u40b", { ...shell, tool: "getPaper" }, { server: "europepmc", tool: "getPaper", args: { id: "PMC1" } });
+    expect(fetched.result.execution.find((e) => e.taskId === "t1")?.ok).toBe(true);
   });
 });
