@@ -5,7 +5,7 @@ import { failure, type ProviderAdapter } from "./providers/types";
 import type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities } from "./types";
 import { guardLlmCall } from "./watchdog";
 import { retryDelayMs } from "./provider_error";
-import { MODELS_BY_PROVIDER, UnknownModelError, assertKnownModel } from "./providers/registry";
+import { MODELS_BY_PROVIDER, UnknownModelError, assertKnownModel, isReasoningModel } from "./providers/registry";
 
 export type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, ToolSpec, Usage } from "./types";
 
@@ -195,9 +195,13 @@ export class LLMRouter {
    * 9 个生产消费方与 12 个测试文件都用 `call(messages, model?)`，不改它们。
    */
   async call(messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> {
-    const options: CallOptions =
+    const rawOptions: CallOptions =
       typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
-    const model = options.model ?? DEFAULT_MODEL;
+    const model = rawOptions.model ?? DEFAULT_MODEL;
+    // α-3（v0.10 实测）：思考型模型会把输出预算花在推理 token 上——maxTokens 设小换来的是
+    // **空输出**（outputTokens 打满上限、content 为空），不是短输出。名单真源在 providers/registry.ts。
+    const options: CallOptions =
+      rawOptions.maxTokens !== undefined && isReasoningModel(model) ? { ...rawOptions, maxTokens: undefined } : rawOptions;
 
     let entry: ReturnType<LLMRouter["resolve"]>;
     try {

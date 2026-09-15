@@ -110,6 +110,9 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     return sseResponse(
       (sender) => {
         sender.send("start", { sessionId, mode, at: new Date().toISOString() });
+        // β-4：客户端一断开就取消整条管线（V156 ③）。
+        const cancel = new AbortController();
+        c.req.raw.signal.addEventListener("abort", () => cancel.abort(), { once: true });
         void (async () => {
           try {
             sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" }); // 首帧占位；α-3 之后各阶段由 onProgress 续发
@@ -126,8 +129,12 @@ export function sessionRoutes(ctx: ServerContext): Hono {
               // α-3（v0.9）：结构化进度按阶段续发；前端 onProgress 只读 message，多出的字段被忽略。
               onProgress: (event) => { if (!sender.closed) sender.send("progress", event); },
               onDelta: (chunk: string) => {
-                if (!sender.closed) sender.send("delta", { chunk });
+                // β-3：老 delta 补 target/revision（只增字段，读 chunk 的旧消费端不受影响）。
+                if (!sender.closed) sender.send("delta", { chunk, target: "summary", revision: 1 });
               },
+              onPartial: (event) => { if (!sender.closed) sender.send("partial", event); },
+              onDeltaEvent: (event) => { if (!sender.closed) sender.send("delta", event); },
+              signal: cancel.signal,
             });
             sender.send("result", {
               sessionId,

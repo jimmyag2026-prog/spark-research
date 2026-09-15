@@ -129,6 +129,8 @@ export class ServerContext {
         return new OrchestratorAgent(daemon, {
           projects: this.projects,
           ...(deps.llm ? { llm: withListModels(deps.llm) } : {}),
+          // 收口（v0.10）：HTTP 侧注入的 searcher 同样给 chat 的文献流程用（测试注入假件；生产不给 = 按凭据构造）。
+          ...(deps.searcher ? { literatureSearcher: deps.searcher } : {}),
           // V45：HTTP 侧的外部 MCP 接线。构造是零 I/O 的——发现/连接只发生在
           // `/session` 真的驱动一次 agent 运行的时候（`processRequest()`），
           // `/lit/search` 之类的只读端点走不到这里。

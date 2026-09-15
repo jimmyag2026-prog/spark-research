@@ -298,7 +298,12 @@ export async function runLiteraturePipeline(
         artifacts: project.artifacts(),
         workDir: project.paths.artifactsDir,
       });
-      const draft = await reviewer.generateQuick(entries, { topic: options.topic, sessionId: deps.sessionId });
+      // 收口（β-3 × α-1）：quick 档综述同样逐块流出（target = review），与 deep 档一致。
+      const draft = await reviewer.generateQuick(entries, {
+        topic: options.topic,
+        sessionId: deps.sessionId,
+        ...(deps.onDelta ? { onDelta: deps.onDelta } : {}),
+      });
       const knownKeys = libraryKeyIndex(library.list()).keys;
       // 引用核验走的是**同一个** citationIntegrity，只是基准从精读卡换成摘要。
       const check = await citationIntegrity({

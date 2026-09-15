@@ -2,6 +2,8 @@ import { searchPayloadProblem } from "../connectors/base";
 import { renderConnectorInventory } from "../connectors/registry";
 import { configuredSubAgentModel } from "../config";
 import { runLiteraturePipeline, type LiteraturePipelineMode } from "./literature_pipeline";
+import { runSkill } from "./skill_runners";
+import { STAGE_MAX_TOKENS } from "../literature/limits";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
@@ -81,7 +83,7 @@ import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 import { AgentRunLedger } from "./ledger";
-import { createProgressEmitter, type ProgressEmitter, type ProgressListener } from "./progress";
+import { createProgressEmitter, type ProgressEmitter, type ProgressListener, type StreamHooks } from "./progress";
 
 // export：F-a 新增的 planner-prompt/TASK_KINDS 同源测试要从外部读这张表，
 // 与 plan() 里手写的逐 kind 说明文字做双向比对（防止未来再出现「表里删了，
@@ -562,13 +564,16 @@ export class OrchestratorAgent {
   private readonly sessionBudget = new Map<string, { budgetUsd?: number; allowUnpriced?: boolean }>();
   // V145（= USAGE_LOG U10，v0.9 β-1）：chat(req.model) 按会话记住，llmFor 用它覆盖各调用点的默认模型。
   private readonly sessionModel = new Map<string, string>();
+  // β-4（v0.10）：chat(req.signal) 按会话记住，llmFor 把它带进每次模型调用（客户端断开 = 整条管线取消）。
+  private readonly sessionSignal = new Map<string, AbortSignal>();
 
   private llmFor(sessionId: string | null): Pick<LLMRouter, "call"> {
     const project = sessionId ? this.projectForSession(sessionId) : null;
     const model = sessionId ? this.sessionModel.get(sessionId) : undefined;
     const withModel = (o: string | CallOptions = {}): CallOptions => {
       const c: CallOptions = typeof o === "string" ? { model: o } : o;
-      return model ? { ...c, model } : c;
+      const signal = sessionId ? this.sessionSignal.get(sessionId) : undefined; // β-4
+      return { ...c, ...(model ? { model } : {}), ...(signal ? { signal } : {}) };
     };
     if (!project) return { call: (msgs, o) => this.llm.call(msgs, withModel(o)) };
     const budget = sessionId ? this.sessionBudget.get(sessionId) : undefined;
@@ -653,7 +658,7 @@ export class OrchestratorAgent {
   async processRequest(
     userMessage: string,
     sessionId: string,
-    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } = {},
+    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } & StreamHooks = {},
   ): Promise<OrchestrationResult> {
     this.record(sessionId, "orchestrator", "start", `request received: ${userMessage.slice(0, 80)}`);
     mkdirSync(join(this.workspaceRoot, sessionId), { recursive: true });
@@ -687,7 +692,7 @@ export class OrchestratorAgent {
     sessionId: string,
     project: Project | null,
     external: ExternalMcpAttachment,
-    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } = {},
+    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } & StreamHooks = {},
   ): Promise<OrchestrationResult> {
     const progress = createProgressEmitter(options.onProgress);
     const skills = this.identifySkills(userMessage);
@@ -721,7 +726,7 @@ export class OrchestratorAgent {
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
-      execution.push(await this.executeTask(sessionId, task, external, progress));
+      execution.push(await this.executeTask(sessionId, task, external, progress, options));
       progress.taskCompleted(task);
     }
 
@@ -744,7 +749,7 @@ export class OrchestratorAgent {
       const fixes = this.planCorrections(review);
       progress.repairing(fixes.length);
       for (const fix of fixes) {
-        execution.push(await this.executeTask(sessionId, fix, external, progress));
+        execution.push(await this.executeTask(sessionId, fix, external, progress, options));
         progress.taskCompleted(fix);
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
@@ -865,7 +870,8 @@ export class OrchestratorAgent {
           `Request: ${userMessage}`,
       },
     ];
-    const res = await this.llmFor(sessionId).call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
+    // α-3（v0.10）：规划是紧凑 JSON，上限走 STAGE_MAX_TOKENS 单一真源（推理模型由 router 跳过上限）。
+    const res = await this.llmFor(sessionId).call(messages, { model: configuredModel(LLMRouter.DEFAULT_MODEL), maxTokens: STAGE_MAX_TOKENS.plan });
     // D-4（战术版）：规划这一步的 LLM 调用失败时，`res.content` 是路由层拼出的错误
     // 文本（例如 "[error] No API key configured..."），不是模型产出的 JSON 计划——
     // 不检查 res.ok 就直接喂给 parsePlan 虽然「碰巧」解析不出方括号数组从而落到
@@ -915,6 +921,7 @@ export class OrchestratorAgent {
     task: PlannedTask,
     external: ExternalMcpAttachment,
     progress?: ProgressEmitter,
+    hooks?: StreamHooks,
   ): Promise<ExecutionOutcome> {
     try {
       switch (task.kind) {
@@ -1104,6 +1111,10 @@ export class OrchestratorAgent {
                 model: this.sessionModel.get(sessionId) ?? configuredSubAgentModel("literature", configuredModel(LLMRouter.DEFAULT_MODEL)),
                 searcher: this.literatureSearcher,
                 downloadPdf: this.literatureDownloadPdf,
+                // β-2 / β-3：中间产物与带 target 的正文增量透到 SSE 出口。
+                emitPartial: hooks?.onPartial,
+                onDelta: hooks?.onDeltaEvent,
+                taskId: task.id,
               },
               {
                 mode: litMode,
@@ -1119,6 +1130,20 @@ export class OrchestratorAgent {
               ? [{ id: pipeline.review.artifactId, label: `综述草稿${task.params?.topic ? `：${String(task.params.topic)}` : ""}` }]
               : [];
             return { taskId: task.id, kind: task.kind, ok: pipeline.ok, output: `${pipeline.digest}\n(full result: ${savedTo})`, ...(artifacts.length ? { artifacts } : {}) };
+          }
+          // V172 后半（γ-4）：注册表里的技能真执行；表里没有的照旧只加载上下文。
+          const skillProject = project ?? this.projectForSession(sessionId);
+          if (skillProject) {
+            const ran = await runSkill(name, {
+              llm: this.llmFor(sessionId),
+              model: this.sessionModel.get(sessionId) ?? configuredSubAgentModel("literature", configuredModel(LLMRouter.DEFAULT_MODEL)),
+              project: skillProject,
+              sessionId,
+              note: (m) => { this.record(sessionId, "skill", name, m); progress?.taskNote(m); },
+            }, (task.params ?? {}) as Record<string, unknown>);
+            if (ran.handled) {
+              return { taskId: task.id, kind: task.kind, ok: ran.ok ?? false, output: ran.digest ?? "", ...(ran.artifacts?.length ? { artifacts: ran.artifacts } : {}) };
+            }
           }
           this.record(sessionId, "skill", name, "context loaded");
           return { taskId: task.id, kind: task.kind, ok: true, output: this.skillContextFor(name) };
@@ -1181,7 +1206,7 @@ export class OrchestratorAgent {
     // W3-a：这是唯一产出「用户最终会看到的正文」的 LLM 调用点，所以 onDelta 接在这里
     // ——根治 W2-d 留下的设计问题（session.ts 曾经不得不为"预览流"单独发一次裸调用，
     // 因为 processRequest 没有 onDelta 的口子；见 docs/devlog/W3-a.md）。
-    const options: CallOptions = { model: configuredModel(LLMRouter.DEFAULT_MODEL), ...(onDelta ? { onDelta } : {}) };
+    const options: CallOptions = { model: configuredModel(LLMRouter.DEFAULT_MODEL), maxTokens: STAGE_MAX_TOKENS.summarize, ...(onDelta ? { onDelta } : {}) };
     const res = await this.llmFor(sessionId).call(messages, options);
     // D-4（战术版）：这是三处委托里最要紧的一处——summarize() 的返回值**就是**
     // 用户最终看到的 `OrchestrationResult.summary`，也是 reviewer 读的正文。
@@ -1344,6 +1369,12 @@ export class OrchestratorAgent {
     onDelta?: (chunk: string) => void;
     /** α-3（v0.9）：三段结构化进度（plan / execute / summarize / review），事件形状见 agents/progress.ts。 */
     onProgress?: ProgressListener;
+    /** β-2（v0.10）：中间产物（papers / search_source / card）。 */
+    onPartial?: StreamHooks["onPartial"];
+    /** β-3（v0.10）：带 target / revision 的正文增量。 */
+    onDeltaEvent?: StreamHooks["onDeltaEvent"];
+    /** β-4（v0.10）：客户端断开 → 取消整条管线（在飞模型调用一起 abort）。 */
+    signal?: AbortSignal;
     /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
     budgetUsd?: number;
     allowUnpriced?: boolean;
@@ -1363,7 +1394,16 @@ export class OrchestratorAgent {
         ideaRecordId: result.stored?.recordId ?? null,
       };
     }
-    const result = await this.processRequest(req.message, req.sessionId, { onDelta: req.onDelta, onProgress: req.onProgress });
+    if (req.signal) this.sessionSignal.set(req.sessionId, req.signal);
+    else this.sessionSignal.delete(req.sessionId);
+    let result: Awaited<ReturnType<typeof this.processRequest>>;
+    try {
+      result = await this.processRequest(req.message, req.sessionId, {
+        onDelta: req.onDelta, onProgress: req.onProgress, onPartial: req.onPartial, onDeltaEvent: req.onDeltaEvent,
+      });
+    } finally {
+      this.sessionSignal.delete(req.sessionId);
+    }
     return {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,
@@ -1606,7 +1646,8 @@ export class OrchestratorAgent {
           `拿到证据的动作。No markdown, no prose, only JSON.`,
       },
     ];
-    const res = await this.llmFor(sessionId).call(messages, configuredModel(LLMRouter.DEFAULT_MODEL));
+    // α-3（v0.10）：规划是紧凑 JSON，上限走 STAGE_MAX_TOKENS 单一真源（推理模型由 router 跳过上限）。
+    const res = await this.llmFor(sessionId).call(messages, { model: configuredModel(LLMRouter.DEFAULT_MODEL), maxTokens: STAGE_MAX_TOKENS.plan });
     if (!res.ok) {
       this.record(sessionId, "research", "plan-llm-failed", `第 ${round + 1} 轮 planner 调用失败：${res.error.message}`);
       return this.defaultResearchPlan(report.incomplete, round);

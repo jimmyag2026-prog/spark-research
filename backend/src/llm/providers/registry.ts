@@ -47,6 +47,20 @@ export interface ModelPricing {
 //     SKU——DashScope 把它拆成 qwen3-235b-a22b / qwen3-32b / qwen3-30b-a3b / ... 一堆
 //     不同尺寸型号，且部分还分 thinking/non-thinking 两档输出价。没有单一「qwen3」价格
 //     可查，本表对 "qwen3" 不收录（同样如实返回 null，不用任何一个子型号的价格去顶替）。
+/**
+ * α-3（v0.10）：**思考型**模型名单——这些模型的 `max_tokens` 同时约束推理 token 与正文，
+ * 设小了拿到的是空正文（kimi-k2.6 在 300/2500 上限下 outputTokens 正好打满、content 为空，
+ * 2026-09-16 r6-probe 实测）。router 对名单内的模型不发 `max_tokens`。
+ * 长期应给 ProviderCapabilities 加一位 `reasoningTokens`；短期按名单，与下面的单价表放在一起维护。
+ * 匹配按去掉 provider 前缀后的模型名（`moonshotai/kimi-k2.6` 与 `kimi-k2.6` 同一条）。
+ */
+export const REASONING_MODELS: ReadonlySet<string> = new Set(["kimi-k2.6", "kimi-k3", "deepseek-reasoner", "deepseek-v4-pro"]);
+
+export function isReasoningModel(model: string): boolean {
+  const bare = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
+  return REASONING_MODELS.has(model) || REASONING_MODELS.has(bare);
+}
+
 export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPricing>>>> = {
   openai: {
     "gpt-4o": {
