@@ -162,3 +162,27 @@ server 0.9.0-alpha.2 · 消息「用三句话说明什么是蛋白质的二级�
 {"ts":"2026-09-15T08:23:32.926Z","command":"chat","provider":"openrouter","model":"z-ai/glm-5.3-flash","ok":true,"inputTokens":624,"outputTokens":1118,"costUsd":0.0003442868}
 {"ts":"2026-09-15T08:23:41.906Z","command":"chat","provider":"openrouter","model":"z-ai/glm-5.3-flash","ok":true,"inputTokens":466,"outputTokens":430,"costUsd":0.0001502946}
 ```
+
+## 机制解释（v0.9.0 DONE 第 2 条「或给出机制解释并附实测数字」）
+
+alpha.3 上用 `/api/session/stream` 的 α-3 进度事件给一轮 chat 打点（项目 `r6-probe`，消息同基线，2026-09-15 10:01Z，网络前提达标）：
+
+| 阶段 | 起止 | 耗时 | 模型调用 | 输出 token |
+|---|---|---|---|---|
+| plan | +0.0 → +17.4s | 17.4s | 1 | 1586（一个「三句话」问题被拆成 **4 个任务**，含 PDB 连接器查询） |
+| execute 1/4（analysis） | +17.4 → +41.9s | 24.5s | 1 | 1486 |
+| execute 2–3/4（skill / connector） | +41.9s | ~0s | 0 | — |
+| execute 4/4（analysis） | +41.9 → +81.3s | 39.4s | 1 | 2999 |
+| summarize | +81.3 → +109.6s | 28.3s | 1 | 2519 |
+| review | +109.6s | ~0s | 0 | 规则层 |
+| **合计** | | **109.6s** | **4** | **8590 → 用户看到 1157 字** |
+
+结论：墙钟几乎全部是**输出 token 的生成时间**（glm-5.3-flash 实测约 100 tok/s；4 次调用共 8590 输出 token ≈ 86s，占 78%），
+不是网络、不是排队、不是 review。三个结构性原因：
+① chat 模式对任何问题都走完整的 plan → execute → summarize 编排，一句话问题也拆 4 个任务；
+② 每个阶段的提示词都在诱导长输出（plan 输出完整 research_contract，execute 的 analysis 任务写整段分析，summarize 再把它们重写一遍）；
+③ 各阶段没有 `maxTokens` 上限（`gate_i_switch_readers` 盘点过：`maxTokens` 有读者但 chat 路径没设值）。
+
+**本版没有压这个数**（v0.9 的目标是让它可量、可归因、可控——U1/U4/U10/U12/U13 都在这条链上）。
+压它的杠杆已登记：V156（255s 天花板）之外，下一版立项「chat 直答路径」：简单问题不进编排（一次调用直答 + 规则 review），
+复杂问题才 plan；各阶段设 `maxTokens`；plan 输出改紧凑 JSON。预期一句话问题从 ~110s 降到 ~15s（一次调用、~1000 输出 token）。

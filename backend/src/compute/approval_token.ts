@@ -213,6 +213,15 @@ export function issue(projectRoot: string, jobId: string): IssuedApprovalToken {
  * 任何一条不满足都抛 `ApprovalTokenError`（HTTP 层映射到 403）。全程持锁：并发
  * consume 同一枚令牌，保证恰好一次成功。
  */
+/**
+ * A8 U30（v0.9.0）：UI / CLI 到处印的是 record 的短 id（前 8 位），令牌却按全 UUID 绑定——
+ * 照着屏幕上的 id 去批准 100% 撞「令牌无效」。这里接受**唯一前缀**：≥ 8 位且只可能匹配一条。
+ */
+function idMatches(bound: string, given: string): boolean {
+  if (bound === given) return true;
+  return given.length >= 8 && bound.startsWith(given);
+}
+
 export function consume(projectRoot: string, jobId: string, token: string): void {
   if (typeof token !== "string" || token.trim() === "") {
     throw new ApprovalTokenError("approvalToken 缺失——在终端跑 `spark-research compute token <jobId>` 获取一次性令牌。");
@@ -223,7 +232,7 @@ export function consume(projectRoot: string, jobId: string, token: string): void
     const tokenHash = sha256(token);
     const now = Date.now();
 
-    const boundToThisJob = data.tokens.filter((t) => t.jobId === jobId && hashesEqual(t.tokenHash, tokenHash));
+    const boundToThisJob = data.tokens.filter((t) => idMatches(t.jobId, jobId) && hashesEqual(t.tokenHash, tokenHash));
     if (boundToThisJob.length === 0) {
       throw new ApprovalTokenError(`令牌无效——在终端跑 \`spark-research compute token ${jobId}\` 获取一次性令牌。`);
     }
