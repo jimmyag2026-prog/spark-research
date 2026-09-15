@@ -132,15 +132,23 @@ describe("α-2 · classifyProviderError：判据顺序就是判据", () => {
     });
   });
 
-  test("≥500 / server_error → upstream 可重试；529 overloaded 归 rate_limit（措辞优先）", () => {
+  test("≥500 / server_error → upstream 可重试；**显式 5xx 不被限流措辞改判**", () => {
     expect(classify({ statusCode: 500, body: "{}" })).toEqual({ kind: "upstream", retryable: true });
     expect(classify({ body: JSON.stringify({ error: { type: "server_error", message: "boom" } }) })).toEqual({
       kind: "upstream",
       retryable: true,
     });
-    // 与 anthropic.ts 原 classifyHttpError 的差异，如实记在 devlog：529/overloaded_error
-    // 以前判 upstream，现在按判据顺序归 rate_limit。两者都可重试，差别只在 errorKind 的归类。
+    // Anthropic 的 529 `overloaded_error`：文案里带 "overloaded"，纯按措辞会落进
+    // rate_limit。但 5xx 按定义是服务端故障，upstream 才是准确的 kind——
+    // `llm_anthropic.test.ts`「529 overloaded_error → upstream」这条基线断言也这么钉的，
+    // 本 lane 不许把它改绿（测试只增不减）。两者 retryable 都是 true，行为一致，
+    // 差别只在 errorKind 这个标签，而标签正是 α-4 要落台账的东西。
     expect(classify({ statusCode: 529, body: JSON.stringify({ error: { type: "overloaded_error" } }) })).toEqual({
+      kind: "upstream",
+      retryable: true,
+    });
+    // 但**没有状态码**时（流内错误帧），"overloaded" 仍按限流判——那是唯一的线索。
+    expect(classify({ body: JSON.stringify({ error: { type: "overloaded_error" } }) })).toEqual({
       kind: "rate_limit",
       retryable: true,
     });

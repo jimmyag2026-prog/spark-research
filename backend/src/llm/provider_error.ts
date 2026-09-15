@@ -223,7 +223,18 @@ export function classifyProviderError(normalized: NormalizedProviderError): { ki
   const text = `${code} ${type} ${normalized.message}`.toLowerCase();
 
   // 1. 限流最优先——必须排在溢出前面（见文件头）。
-  if (status === 429 || RATELIMIT_CODES.has(code) || RATELIMIT_CODES.has(type) || RATELIMIT_PATTERNS.some((p) => text.includes(p))) {
+  //
+  // **例外：显式 5xx 不在这条里判。** Anthropic 的 529 `overloaded_error` 文案里带
+  // "overloaded"，按纯文本判会落进 rate_limit；但一个 5xx 按定义是**服务端故障**，
+  // upstream 才是准确的 kind（`llm_anthropic.test.ts`「529 overloaded_error → upstream」
+  // 这条基线断言也这么钉的）。两者 `retryable` 都是 true，**行为完全一致，差别只在
+  // errorKind 这个标签**——而标签正是 α-4 要落台账的东西，混了就等于台账在说谎。
+  // 这不动摇「429 优先于溢出」那条：429 不是 5xx，判据顺序对溢出的优先级原样保留。
+  const explicitServerFault = status !== undefined && status >= 500;
+  if (
+    !explicitServerFault &&
+    (status === 429 || RATELIMIT_CODES.has(code) || RATELIMIT_CODES.has(type) || RATELIMIT_PATTERNS.some((p) => text.includes(p)))
+  ) {
     return { kind: "rate_limit", retryable: true };
   }
   // 2. 鉴权。
