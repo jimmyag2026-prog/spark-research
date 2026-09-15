@@ -15,6 +15,7 @@ import { ReadingCardGenerator } from "../../backend/src/literature/reading";
 import { DEFAULT_READ_CONCURRENCY, STAGE_MAX_TOKENS, normalizeConcurrency } from "../../backend/src/literature/limits";
 import { parsePrescreenScores, prescreenCandidates } from "../../backend/src/literature/prescreen";
 import type { LiteratureSearchResult } from "../../backend/src/literature/search";
+import { UsageStore, usageTrackingLlm } from "../../backend/src/usage/ledger";
 import type { ChatMessage, LlmResponse } from "../../backend/src/llm/types";
 
 // ── 真实会话样本（T1 recursive self-improvement，workspaces/web_1789480157513）──
@@ -307,6 +308,40 @@ describe("α-2 · S3 精读并行", () => {
     const out = await gen.generateMany(ids, { concurrency: 3, onProgress: (p) => seen.push(p.done) });
     expect(out.cards.length + out.failures.length).toBe(5);
     expect(seen).toEqual([1, 2, 3, 4, 5]);
+    lib.close();
+    project.close();
+  });
+
+  test("A7 口径：并发 3 走 usageTrackingLlm，实际花费 ≤ 上限 × 1.2（预算闸不被并发打穿）", async () => {
+    const project = pm.create("a2-budget", { name: "x" });
+    const lib = new LibraryStore(project.paths.libraryDb, { records: project.records() });
+    const ids = manyPapers(10).map((p) => lib.add(p as never, { tags: ["t"] }).paper.id);
+    const COST = 0.01;
+    const CAP = 0.05;
+    let calls = 0;
+    const inner = {
+      async call(): Promise<LlmResponse> {
+        calls++;
+        await new Promise((r) => setTimeout(r, 15)); // 让并发者都先过闸，再有人结算
+        return {
+          ok: true, provider: "openrouter", model: "moonshotai/kimi-k2.6", content: CARD, toolCalls: [],
+          usage: { inputTokens: 100, outputTokens: 10, costUsd: COST, usageUnavailable: false },
+        } as unknown as LlmResponse;
+      },
+    };
+    const wrapped = usageTrackingLlm({
+      llm: inner,
+      store: new UsageStore(join(root, "usage.jsonl")),
+      command: "test",
+      budgetUsd: CAP,
+      estimateUsd: () => COST,
+    });
+    const gen = new ReadingCardGenerator({ llm: wrapped, library: lib, records: project.records() });
+    await gen.generateMany(ids, { concurrency: 3 });
+    const spent = wrapped.ledger.snapshot().knownCostUsd;
+    expect(calls * COST).toBeLessThanOrEqual(CAP * 1.2);
+    expect(spent).toBeLessThanOrEqual(CAP * 1.2);
+    expect(wrapped.ledger.snapshot().inFlightUsd).toBe(0); // 无残留预留
     lib.close();
     project.close();
   });
