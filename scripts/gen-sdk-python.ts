@@ -152,7 +152,12 @@ from typing import Any, Literal, TypedDict
 
 `;
   const names = Object.keys(defs).sort();
-  const blocks = names.map((name) => {
+  // 类型别名（`X = A | B`）是**运行时表达式**，`from __future__ import annotations` 救不了它——
+  // 引用了字母序靠后的 TypedDict 就 NameError（v0.10 β 的 PartialPayload 撞上）。
+  // 所以先出全部 TypedDict（class 体内注解是惰性的），别名一律排在最后。
+  const isAlias = (schema: JsonSchema) => isPlainEnum(schema) || schema.type !== "object";
+  const ordered = [...names.filter((n) => !isAlias(defs[n]!)), ...names.filter((n) => isAlias(defs[n]!))];
+  const blocks = ordered.map((name) => {
     const schema = defs[name]!;
     if (isPlainEnum(schema)) return `${name} = ${pyType(schema)}`;
     if (schema.type === "object") return renderTypedDict(name, schema);
