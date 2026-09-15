@@ -1159,7 +1159,12 @@ export class OrchestratorAgent {
         role: "system",
         content:
           `${this.corePrompt}\n\n` +
-          "Synthesize the observable execution records into a result summary with evidence labels.",
+          // U54（v0.9.1，用户要求）：先结论、再附件、最后才是过程校对——读者先要答案。
+          "Synthesize the observable execution records into a result summary with evidence labels. " +
+            "STRUCTURE THE ANSWER IN THIS ORDER: (1) '## 结论' — the direct answer to the request in plain language, first; " +
+            "(2) '## 附件' — every produced artifact / file / library entry with its id or path (say '无' if none); " +
+            "(3) '## 过程校对' — the step-by-step execution check with evidence labels (observed / sourced / computed / inferred / unknown), failures and gaps. " +
+            "Never put process before conclusion. If nothing could be concluded, say so in one line under 结论 and explain why under 过程校对.",
       },
       {
         role: "user",

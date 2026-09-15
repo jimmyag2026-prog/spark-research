@@ -185,6 +185,24 @@ export function literatureRoutes(ctx: ServerContext): Hono {
     });
   });
 
+  // U56（v0.9.1）：把下载好的 PDF 直接给浏览器打开。只服务库内 `pdfPath` 指向的文件（路径来自库，不来自请求）。
+  app.get("/papers/:id/pdf/file", async (c) => {
+    return ctx.withProject(projectSlug(c), async (scope) => {
+      const library = scope.library();
+      const paper = resolvePaper(library.list(), c.req.param("id"));
+      if (!paper.pdfPath) throw new HttpError(404, `论文 '${paper.title}' 尚未下载 PDF。下一步：POST /api/lit/papers/${paper.id}/pdf 或 \`spark-research lit pdf ${paper.id}\``);
+      const file = Bun.file(paper.pdfPath);
+      if (!(await file.exists())) throw new HttpError(404, `库里记录的 PDF 文件不存在：${paper.pdfPath}（可能被移动或删除）。下一步：重新下载`);
+      return new Response(file, {
+        headers: {
+          "content-type": "application/pdf",
+          "content-disposition": `inline; filename="${encodeURIComponent(paper.title.slice(0, 80))}.pdf"`,
+          "cache-control": "private, max-age=0",
+        },
+      });
+    });
+  });
+
   app.patch("/papers/:id", async (c) => {
     const body = await jsonBody(c);
     return ctx.withProject(projectSlug(c), (scope) => {

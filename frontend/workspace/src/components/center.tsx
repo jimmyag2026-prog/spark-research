@@ -117,10 +117,9 @@ function SessionStream(): JSX.Element {
                     <Spinner label={message.text ? "预览生成中…" : "思考中…"} />
                   </Show>
                   <Show when={message.text}>
-                    <Markdown source={message.text} knownKeys={ws.knownKeys()} />
                     {/* U53：本轮落库的产物直接给链接，不用去右栏/产物页翻。 */}
                     <Show when={message.artifacts?.length}>
-                      <div class="row wrap" style={{ gap: "6px", "margin-top": "6px" }}>
+                      <div class="row wrap" style={{ gap: "6px", "margin-bottom": "6px" }}>
                         <For each={message.artifacts}>
                           {(a) => (
                             <button
@@ -139,6 +138,8 @@ function SessionStream(): JSX.Element {
                         </For>
                       </div>
                     </Show>
+                    <Markdown source={message.text} knownKeys={ws.knownKeys()} />
+
                   </Show>
                 </div>
               </div>
@@ -287,6 +288,8 @@ function PapersView(): JSX.Element {
                 <tr>
                   <th>标题</th>
                   <th>年份</th>
+                  <th>作者</th>
+                  <th>关键词</th>
                   <th>key</th>
                   <th>阅读</th>
                   <th>PDF</th>
@@ -298,9 +301,21 @@ function PapersView(): JSX.Element {
                     <tr>
                       <td>{paper.title}</td>
                       <td>{paper.year ?? "—"}</td>
+                      {/* U56：作者只列前 3 位；关键词用库内 tags（检索入库时打的标签），没有就 —。 */}
+                      <td class="faint" style={{ "font-size": "11.5px" }}>
+                        {(paper.authors ?? []).slice(0, 3).map((a) => a.name).join("、") || "—"}
+                        {(paper.authors ?? []).length > 3 ? " 等" : ""}
+                      </td>
+                      <td class="faint" style={{ "font-size": "11.5px" }}>{(paper.tags ?? []).join(" · ") || "—"}</td>
                       <td class="mono">{paper.bibtexKey ?? "—"}</td>
                       <td>{paper.readingStatus}</td>
-                      <td>{paper.pdfStatus === "downloaded" ? "✓" : paper.pdfStatus === "unavailable" ? "✗" : "—"}</td>
+                      <td>
+                        <Show when={paper.pdfStatus === "downloaded"} fallback={paper.pdfStatus === "unavailable" ? "✗" : "—"}>
+                          <a class="btn btn-sm" href={api.lit.pdfFileUrl(paper.id, ws.slug())} target="_blank" rel="noopener" title="在浏览器里打开下载好的 PDF" data-testid={`paper-pdf-open-${paper.id}`}>
+                            打开
+                          </a>
+                        </Show>
+                      </td>
                     </tr>
                   )}
                 </For>
