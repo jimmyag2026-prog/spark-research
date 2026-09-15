@@ -226,6 +226,10 @@ class GeneratedClient:
         """POST /api/lit/papers/:id/pdf"""
         return self.request("POST", f"/api/lit/papers/{quote(str(id), safe='')}/pdf", body=body)
 
+    def lit_get_lit_papers_by_id_pdf_file(self, id: str, **params: Any) -> dict[str, Any]:
+        """GET /api/lit/papers/:id/pdf/file"""
+        return self.request("GET", f"/api/lit/papers/{quote(str(id), safe='')}/pdf/file", params=params)
+
     def lit_post_lit_read(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """POST /api/lit/read"""
         return self.request("POST", f"/api/lit/read", body=body)

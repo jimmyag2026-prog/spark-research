@@ -165,6 +165,16 @@ export class HttpConnector {
 
   async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.assertKnownTool(toolName);
+    // U46（v0.9.1）：`status: "placeholder"` 的连接器**自己就知道调用会失败**（caveat 原文写着），
+    // 却仍然真发一次网络请求，把 TLS 证书错 / 404 这类上游噪声丢给 agent，白费一个计划步骤。
+    // 现在早失败、说人话、给下一步；不发请求 = 不浪费时间也不给上游添无意义流量。
+    const meta = this.config.metadata;
+    if (meta?.status === "placeholder") {
+      throw new Error(
+        `连接器 "${this.name}" 是占位实现，没有可用的调用渠道${meta.caveat ? `：${meta.caveat}` : ""}。` +
+          `下一步：换用已可用的源（\`spark-research lit sources\` 看哪些免 key / 已配凭据），不要把它排进计划。`,
+      );
+    }
 
     const handler = this.handlers.get(toolName);
     if (handler) {
@@ -300,4 +310,70 @@ export class HttpConnector {
   listTools(): HttpTool[] {
     return this.config.tools.map((tool) => ({ ...tool }));
   }
+}
+
+/**
+ * U40（v0.9.1）：一次 **search** 调用至少要能看出「查到了多少」。
+ *
+ * 现场：模型手写的 Europe PMC 查询语法不被上游接受，EPMC 用 HTTP 200 回了 `{"version":"6.9"}`
+ * ——既没有 `hitCount` 也没有 `errCode`，更没有结果数组。于是「查询写错了」「查到 0 篇」
+ * 「查成功了」三件事长得一模一样，编排层照样把它交给模型当结果（U38 是另一半）。
+ *
+ * 两条刻意的边界：
+ *  · 只查**计数或结果容器在不在**，不查是不是 0 条——0 条是合法结果，语法错不是；
+ *  · 判据放在**编排层调用 search 之后**，不放在各 connector 的 `search()` 里——连接器层的单测与
+ *    并发回归大量使用 `{}` / echo 式桩响应来断言**请求构造**，在那里拦会把它们全打成假红。
+ */
+const SEARCH_RESULT_KEYS = [
+  "hitCount",
+  "esearchresult",
+  "resultList",
+  "results",
+  "result",
+  "message",
+  "meta",
+  "data",
+  "entries",
+  "items",
+  "total",
+  "totalResults",
+] as const;
+
+/** 上游用 200 回的业务错误（NCBI `esearchresult.ERROR`、REST 源的顶层 `errCode`/`error`）。没有则 null。 */
+function upstreamErrorOf(p: Record<string, unknown>): string | null {
+  const esearch = p.esearchresult;
+  if (esearch !== null && typeof esearch === "object") {
+    const e = (esearch as Record<string, unknown>).ERROR;
+    if (typeof e === "string" && e !== "") return e;
+  }
+  for (const key of ["errCode", "errMsg", "error"] as const) {
+    const v = p[key];
+    if (typeof v === "string" && v !== "") return v;
+    if (typeof v === "number") return `${key}=${v}`;
+  }
+  return null;
+}
+
+export function searchPayloadProblem(connector: string, payload: unknown): string | null {
+  if (payload === null || typeof payload !== "object") {
+    return `连接器 "${connector}" 的 search 返回了非对象响应。下一步：检查查询语法，或换一个源重试。`;
+  }
+  const p = payload as Record<string, unknown>;
+  // U45（v0.9.1）：上游用 HTTP 200 回业务错误——NCBI 是 `esearchresult.ERROR`，多数 REST 源是
+  // 顶层 `errCode`/`error`。键在（`esearchresult` 就在 SEARCH_RESULT_KEYS 里）不代表查询成功，
+  // 这一条必须排在「有没有结果容器」之前，否则一个错误信封会被当成合法空结果放行。
+  const upstream = upstreamErrorOf(p);
+  if (upstream !== null) {
+    return (
+      `连接器 "${connector}" 的 search 被上游拒绝（HTTP 200，但响应体里是错误）：${upstream}。` +
+      `下一步：检查检索词与字段限定语法；确认必填参数都传了。`
+    );
+  }
+  if (SEARCH_RESULT_KEYS.some((k) => p[k] !== undefined)) return null;
+  const keys = Object.keys(p);
+  return (
+    `连接器 "${connector}" 的 search 返回里既没有结果也没有计数字段（只有 ${keys.join(", ") || "空对象"}）——` +
+    `多半是查询语法不被上游接受（它用 HTTP 200 回了一个空壳）。` +
+    `下一步：简化查询（先去掉字段限定与排序参数）再试，或换一个源。`
+  );
 }

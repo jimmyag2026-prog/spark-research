@@ -1,4 +1,8 @@
-import { mkdirSync } from "node:fs";
+import { searchPayloadProblem } from "../connectors/base";
+import { renderConnectorInventory } from "../connectors/registry";
+import { configuredSubAgentModel } from "../config";
+import { runLiteraturePipeline, type LiteraturePipelineMode } from "./literature_pipeline";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import type { ArtifactStore } from "../artifacts/store";
@@ -13,6 +17,7 @@ import {
   runSubAgentOfType,
   SubAgentFactory,
   type SubAgentDeps,
+  SUB_AGENT_TYPES,
   type SubAgentType,
 } from "./sub_agent";
 // 值导入（不是 `import type`）：getToolRunner() 要在运行期真的 `new` 它。这与
@@ -76,7 +81,7 @@ import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 import { AgentRunLedger } from "./ledger";
-import { createProgressEmitter, type ProgressListener } from "./progress";
+import { createProgressEmitter, type ProgressEmitter, type ProgressListener } from "./progress";
 
 // export：F-a 新增的 planner-prompt/TASK_KINDS 同源测试要从外部读这张表，
 // 与 plan() 里手写的逐 kind 说明文字做双向比对（防止未来再出现「表里删了，
@@ -113,6 +118,13 @@ export interface ExecutionOutcome {
   kind: string;
   ok: boolean;
   output: string;
+  /** U53（v0.9.1）：这一步落库的产物，给聊天框渲染成可点的链接。 */
+  artifacts?: ChatArtifactLink[];
+}
+
+export interface ChatArtifactLink {
+  id: string;
+  label: string;
 }
 
 export interface OrchestrationResult {
@@ -131,6 +143,8 @@ export interface OrchestrationResult {
    * 不用去 grep 「预算闸」三个字。有它时 `review.approved` 必为 false。
    */
   failure?: OrchestrationFailure;
+  /** U53：本轮产出的产物链接（综述草稿等），聊天框直接渲染。 */
+  artifacts?: ChatArtifactLink[];
 }
 
 export interface OrchestrationFailure {
@@ -164,6 +178,10 @@ export interface OrchestratorDeps {
   reviewer?: ReviewerAdapter;
   maxReviewRounds?: number;
   workspaceRoot?: string;
+  /** V172 测试注入：文献流程用的 searcher（不给则按凭据 + 内置连接器构造，走真网络）。 */
+  literatureSearcher?: Pick<import("../literature/search").LiteratureSearcher, "search">;
+  /** V172 测试注入：PDF 下载（不给则用真 PdfDownloader）。 */
+  literatureDownloadPdf?: import("./literature_pipeline").LiteraturePipelineDeps["downloadPdf"];
   // 注入后 session 会归属到真实 project（找不到绑定时落到默认项目）。
   projects?: ProjectManager;
   /** V138：测试钩子——覆盖 `projectForSession()` 缓存上限，不给就用生产默认值 200。 */
@@ -288,9 +306,66 @@ function normalizeTask(raw: unknown, index: number): PlannedTask | null {
   return { id: typeof obj.id === "string" ? obj.id : `t_${index + 1}`, kind, description, params };
 }
 
+/**
+ * U38（v0.9.1）：连接器信封里的失败判据。只有一份，供 `executeTask` 的 connector 分支用。
+ *
+ * `mcp_call` 成功返回 ≠ 连接器调用成功：失败时它回 `{ok:false, server, tool, error}`。
+ * 判据刻意只看 `ok === false`——不去猜「结果是不是空的」，那是连接器层自己的事（U40）。
+ */
+export function connectorFailureOf(res: unknown): string | null {
+  if (res === null || typeof res !== "object") return null;
+  const env = res as { ok?: unknown; error?: unknown };
+  if (env.ok !== false) return null;
+  return typeof env.error === "string" && env.error !== "" ? env.error : "连接器调用失败（信封里没有 error 文本）";
+}
+
+/** U39（v0.9.1）：模型写的子代理类型 → 合法枚举值；认不出返回 null（大小写与首尾空白不敏感）。 */
+export function normalizeSubAgentType(raw: unknown): SubAgentType | null {
+  const name = String(raw ?? "execute").trim().toLowerCase();
+  return (SUB_AGENT_TYPES as readonly string[]).includes(name) ? (name as SubAgentType) : null;
+}
+
+/**
+ * V171 / U48（v0.9.1）：给 summarize 看的连接器结果摘要。
+ *
+ * 现场：summarize 原来对每步输出只取前 200 字符——connector 的结果是一整份 JSON，200 字符刚好
+ * 只够看见 `meta.count`，模型于是如实汇报「四次检索成功，但只留下了命中计数」。
+ * 这里按各源的形状抽「条数 + 前几条标题」，认不出形状就退回原始截断（更长一些）。
+ */
+export function connectorSearchDigest(output: string, limit = 5): string | null {
+  let env: { ok?: unknown; server?: unknown; result?: unknown };
+  try { env = JSON.parse(output); } catch { return null; }
+  if (env === null || typeof env !== "object" || env.ok !== true) return null;
+  const r = env.result as Record<string, unknown> | null | undefined;
+  if (!r || typeof r !== "object") return null;
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
+  const msg = r.message as Record<string, unknown> | undefined;
+  const count =
+    num((r.meta as Record<string, unknown> | undefined)?.count) ??
+    num(msg?.["total-results"]) ??
+    num(r.hitCount) ??
+    num((r.esearchresult as Record<string, unknown> | undefined)?.count) ??
+    null;
+  let items: unknown[] = [];
+  if (Array.isArray(r.results)) items = r.results;
+  else if (Array.isArray(msg?.items)) items = msg!.items as unknown[];
+  else if (Array.isArray((r.resultList as Record<string, unknown> | undefined)?.result)) items = (r.resultList as { result: unknown[] }).result;
+  else if (Array.isArray(r.entries)) items = r.entries;
+  else if (r.result && typeof r.result === "object") items = Object.values(r.result as Record<string, unknown>).filter((x) => x && typeof x === "object" && "title" in (x as object));
+  const titles = items.slice(0, limit).map((x) => {
+    const o = x as Record<string, unknown>;
+    const t = o.display_name ?? o.title;
+    return Array.isArray(t) ? String(t[0] ?? "") : String(t ?? "");
+  }).filter(Boolean);
+  if (count === null && items.length === 0) return null;
+  return JSON.stringify({ server: env.server, count, returned: items.length, sampleTitles: titles });
+}
+
 export class OrchestratorAgent {
   readonly daemon: SparkResearchDaemon;
   readonly workspaceRoot: string;
+  private readonly literatureSearcher?: OrchestratorDeps["literatureSearcher"];
+  private readonly literatureDownloadPdf?: OrchestratorDeps["literatureDownloadPdf"];
 
   private llm: Pick<LLMRouter, "call" | "listModels">;
   private subAgents: SubAgentFactory;
@@ -353,6 +428,8 @@ export class OrchestratorAgent {
     // 会话工作区静默建在 `/workspaces`。改成挂在数据目录下（与 projects/config.json 同一个根），
     // 二进制/源码/npm 三条安装路径下都指向同一个用户可写、可预期的位置。
     this.workspaceRoot = deps.workspaceRoot ?? join(dataDir(), "workspaces");
+    this.literatureSearcher = deps.literatureSearcher;
+    this.literatureDownloadPdf = deps.literatureDownloadPdf;
     mkdirSync(this.workspaceRoot, { recursive: true });
     this.corePrompt = loadPrompt("core.txt");
     this.researchPrompt = loadPrompt("research.txt");
@@ -644,7 +721,7 @@ export class OrchestratorAgent {
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
-      execution.push(await this.executeTask(sessionId, task, external));
+      execution.push(await this.executeTask(sessionId, task, external, progress));
       progress.taskCompleted(task);
     }
 
@@ -667,7 +744,7 @@ export class OrchestratorAgent {
       const fixes = this.planCorrections(review);
       progress.repairing(fixes.length);
       for (const fix of fixes) {
-        execution.push(await this.executeTask(sessionId, fix, external));
+        execution.push(await this.executeTask(sessionId, fix, external, progress));
         progress.taskCompleted(fix);
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
@@ -697,6 +774,7 @@ export class OrchestratorAgent {
       review,
       reviewRounds,
       ...(summarized.failure ? { failure: summarized.failure } : {}),
+      ...(execution.some((e) => e.artifacts?.length) ? { artifacts: execution.flatMap((e) => e.artifacts ?? []) } : {}),
     };
   }
 
@@ -763,13 +841,25 @@ export class OrchestratorAgent {
         role: "user",
         content:
           `Available skills for this request:\n${context}\n\n` +
+          // U47：真实能力清单。没有它，规划器只能照着连接器描述里的字眼猜工具名
+          // （真实现场：猜出 `pubmed.esearch`），并把 placeholder 死源排进计划。
+          `${renderConnectorInventory()}\n\n` +
           `Define a research_contract and reply with ONLY a JSON array of tasks. ` +
           `Each task: {"id","kind","description","params"}. ` +
           `"kind" MUST be one of: ${TASK_KINDS.join(",")}. ` +
           `"analysis"=reasoning, "code"=run python (params.code), ` +
           `"connector"=query a database (params.server, params.tool, params.args), ` +
           `"subagent"=delegate (params.subagent), ` +
-          `"skill"=load skill context (params.skill). No markdown, no prose, only JSON. ` +
+          `"skill"=run a skill (params.skill). ` +
+          // V172：文献类需求走真流程，别再手搓 connector。关键词拆解（①）在这里发生。
+          `FOR ANY LITERATURE NEED (find papers / survey / review / recent progress / compare countries), emit ONE skill task instead of connector tasks: ` +
+          `{"kind":"skill","params":{"skill":"literature-review","queries":["<3-6 decomposed keyword queries in English>"],"topic":"<one line>","limit":15,"maxRead":8}} ` +
+          `("literature-search" if the user only wants a candidate list). It runs search → library → PDF → reading cards → review with citation checks. ` +
+          `Use "connector" only for non-literature databases (proteins, genes, compounds). No markdown, no prose, only JSON. ` +
+          // V171：步骤间的落盘约定。没有这句，模型只能按常识去 /workspace 找上一步的产物。
+          `Every connector task's full JSON result is saved to ${join(this.workspaceRoot, sessionId)}/<taskId>.json ` +
+          `(absolute path). A "code" task that consumes earlier connector results MUST open exactly those files by absolute path; ` +
+          `the Python working directory is unrelated to this session and must not be globbed. ` +
           `Request: ${userMessage}`,
       },
     ];
@@ -822,6 +912,7 @@ export class OrchestratorAgent {
     sessionId: string,
     task: PlannedTask,
     external: ExternalMcpAttachment,
+    progress?: ProgressEmitter,
   ): Promise<ExecutionOutcome> {
     try {
       switch (task.kind) {
@@ -875,7 +966,25 @@ export class OrchestratorAgent {
               tool: String(task.params?.tool ?? "search"),
               args: task.params?.args ?? {},
             });
-            this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
+            // U38（v0.9.1）：`mcp_call` 对连接器失败**不抛异常**，而是返回 `{ok:false, error}` 信封。
+            // 以前这里无条件 `ok: true`，于是「PubMed 超时」「arXiv 429」全都成了**成功的任务**——
+            // 2026-09-15 的 mRNA 检索里三次连接器失败在执行摘要里写着 ok，只有模型自己去读 JSON 正文才看出不对。
+            // ExecutionOutcome.ok 是证据图、review 层与 repairing 判定的输入，不能由「没抛异常」代劳。
+            // V171：每个 connector 任务的完整结果落到会话工作区 <workspace>/<sessionId>/<taskId>.json。
+            // 以前它只以字符串回到 ExecutionOutcome.output，后续 code 任务照常识去 /workspace 找文件，
+            // 找不到就归并出 0 条——三次真实会话都死在这一步。规划器同时被告知这个绝对路径（见 plan()）。
+            const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);
+            try { writeFileSync(savedTo, JSON.stringify(res, null, 2)); } catch { /* 落盘失败不影响本次返回 */ }
+            const failure =
+              connectorFailureOf(res) ??
+              // U40：只对 search 查「有没有结果或计数」。getPaper / getAbstract 这类单条取回不适用。
+              (String(task.params?.tool ?? "search") === "search"
+                ? searchPayloadProblem(String(task.params?.server ?? "pubmed"), (res as { result?: unknown } | null)?.result ?? res)
+                : null);
+            this.record(sessionId, "connector", failure ? "error" : "call", JSON.stringify(res).slice(0, 200));
+            if (failure) {
+              return { taskId: task.id, kind: task.kind, ok: false, output: JSON.stringify(res) };
+            }
             return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -884,7 +993,18 @@ export class OrchestratorAgent {
           }
         }
         case "subagent": {
-          const type = (task.params?.subagent ?? "execute") as SubAgentType;
+          // U39（v0.9.1）：计划是模型写的，**计划本身就是不可信输入**。以前这里只有一个 `as SubAgentType`
+          // 类型断言——模型写 `"Review"`（大写）就让 `SUB_AGENT_DEFAULTS[type]` 成了 undefined，
+          // 用户看到的是 `undefined is not an object (evaluating 'defaults.grants')` 这句 JS 内部错误。
+          const type = normalizeSubAgentType(task.params?.subagent);
+          if (type === null) {
+            const given = String(task.params?.subagent);
+            const msg =
+              `未知子代理类型 '${given}'（可用：${SUB_AGENT_TYPES.join(" / ")}）。` +
+              `下一步：把 params.subagent 改成其中之一；大小写不敏感。`;
+            this.record(sessionId, "orchestrator", "subagent-unknown-type", msg);
+            return { taskId: task.id, kind: task.kind, ok: false, output: `[subagent error: ${msg}]` };
+          }
           // V45 ③：连上了外部扩展就拿到带外部工具路由的 runner，否则原样走既有缓存。
           const runner = await this.runnerFor(external);
           if (runner) {
@@ -959,6 +1079,45 @@ export class OrchestratorAgent {
         }
         case "skill": {
           const name = String(task.params?.skill ?? "");
+          // V172（用户定义的五步流程）：文献类技能**真执行**——检索 → 入库 → 下载 → 精读 → 综述。
+          // 其余技能暂仍只加载上下文（各自执行入口不同，先盘点再接，见 BACKLOG V172）。
+          const litMode: LiteraturePipelineMode | null =
+            name === "literature-review" ? "review" : name === "literature-search" ? "search" : null;
+          const project = litMode ? this.projectForSession(sessionId) : null;
+          if (litMode && project) {
+            const rawQueries = task.params?.queries;
+            const queries = Array.isArray(rawQueries) ? rawQueries.map(String) : [task.description];
+            this.record(sessionId, "skill", name, `run pipeline (${litMode}) · ${queries.length} queries`);
+            const pipeline = await runLiteraturePipeline(
+              {
+                llm: this.llmFor(sessionId),
+                project,
+                sessionId,
+                // U49：流程内阶段既进执行日志也推到界面（以前精读 8 篇期间界面像卡死）。
+                note: (m) => {
+                  this.record(sessionId, "skill", name, m);
+                  progress?.taskNote(m);
+                },
+                // U50：精读/综述优先用会话覆盖，其次 subAgentModel_literature，最后默认模型。
+                model: this.sessionModel.get(sessionId) ?? configuredSubAgentModel("literature", configuredModel(LLMRouter.DEFAULT_MODEL)),
+                searcher: this.literatureSearcher,
+                downloadPdf: this.literatureDownloadPdf,
+              },
+              {
+                mode: litMode,
+                queries,
+                topic: typeof task.params?.topic === "string" ? task.params.topic : undefined,
+                limit: typeof task.params?.limit === "number" ? task.params.limit : undefined,
+                maxRead: typeof task.params?.maxRead === "number" ? task.params.maxRead : undefined,
+              },
+            );
+            const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);
+            try { writeFileSync(savedTo, JSON.stringify(pipeline, null, 2)); } catch { /* 落盘失败不影响返回 */ }
+            const artifacts: ChatArtifactLink[] = pipeline.review?.artifactId
+              ? [{ id: pipeline.review.artifactId, label: `综述草稿${task.params?.topic ? `：${String(task.params.topic)}` : ""}` }]
+              : [];
+            return { taskId: task.id, kind: task.kind, ok: pipeline.ok, output: `${pipeline.digest}\n(full result: ${savedTo})`, ...(artifacts.length ? { artifacts } : {}) };
+          }
           this.record(sessionId, "skill", name, "context loaded");
           return { taskId: task.id, kind: task.kind, ok: true, output: this.skillContextFor(name) };
         }
@@ -986,14 +1145,26 @@ export class OrchestratorAgent {
     onDelta?: (chunk: string) => void,
   ): Promise<{ text: string; failure?: OrchestrationFailure }> {
     const exec = execution
-      .map((e) => `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${e.output.slice(0, 200)}`)
+      .map((e) => {
+        // U48：connector 的成功结果按形状摘要（条数 + 前几条标题 + 落盘路径），其余截 600 字符。
+        const digest = e.kind === "connector" && e.ok ? connectorSearchDigest(e.output) : null;
+        const body = digest
+          ? `${digest} (full result: ${join(this.workspaceRoot, sessionId, `${e.taskId}.json`)})`
+          : e.output.slice(0, 600);
+        return `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${body}`;
+      })
       .join("\n");
     const messages: ChatMessage[] = [
       {
         role: "system",
         content:
           `${this.corePrompt}\n\n` +
-          "Synthesize the observable execution records into a result summary with evidence labels.",
+          // U54（v0.9.1，用户要求）：先结论、再附件、最后才是过程校对——读者先要答案。
+          "Synthesize the observable execution records into a result summary with evidence labels. " +
+            "STRUCTURE THE ANSWER IN THIS ORDER: (1) '## 结论' — the direct answer to the request in plain language, first; " +
+            "(2) '## 附件' — every produced artifact / file / library entry with its id or path (say '无' if none); " +
+            "(3) '## 过程校对' — the step-by-step execution check with evidence labels (observed / sourced / computed / inferred / unknown), failures and gaps. " +
+            "Never put process before conclusion. If nothing could be concluded, say so in one line under 结论 and explain why under 过程校对.",
       },
       {
         role: "user",
@@ -1171,7 +1342,7 @@ export class OrchestratorAgent {
     /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
     budgetUsd?: number;
     allowUnpriced?: boolean;
-  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null; failure?: OrchestrationFailure }> {
+  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null; failure?: OrchestrationFailure; artifacts?: ChatArtifactLink[] }> {
     // V145 / U10：本次会话的模型覆盖；不传 = 回到默认（不粘连）。
     if (req.model) this.sessionModel.set(req.sessionId, req.model);
     else this.sessionModel.delete(req.sessionId);
@@ -1192,6 +1363,7 @@ export class OrchestratorAgent {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,
       ...(result.failure ? { failure: result.failure } : {}),
+      ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
     };
   }
 
@@ -1486,7 +1658,9 @@ export class OrchestratorAgent {
 
 // 与 sub_agent.ts 的 `SubAgentType` 联合类型手工保持同步（5 个值，联合类型改动会在
 // buildSubAgentSpec()/runSubAgentOfType() 的调用点触发编译错误，属于低风险手工表）。
-const SUB_AGENT_TYPES: readonly SubAgentType[] = ["explore", "execute", "review", "lab", "literature"];
+// U39（v0.9.1）：这里原本有一份**同名同内容的副本**——`runReplanLoop()` 的契约校验（下方 `SUB_AGENT_TYPES.includes`）
+// 一直在用它，而 `executeTask()` 的 subagent 分支只有一个 `as SubAgentType` 断言。两份清单、一处校验，
+// 于是研究循环挡得住的东西 chat 路径挡不住。副本已删，统一用 sub_agent.ts 导出的那一份（判据只有一份）。
 
 // 安全阀，独立于 contract 的三条停机条件之外——与 sub_agent.ts 的 DEFAULT_MAX_ROUNDS
 // 同一类考量，命中时 runReplanLoop() 报 "budget"。

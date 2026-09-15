@@ -221,6 +221,23 @@ function errorSummary(error: unknown): string {
   return String(error).slice(0, 200);
 }
 
+/** S4 默认每源 deadline。 */
+export const DEFAULT_SOURCE_TIMEOUT_MS = 8_000;
+/** U55：一个源被 429 之后的冷却期。 */
+export const SOURCE_429_COOLDOWN_MS = 10 * 60_000;
+const SOURCE_COOLDOWN_UNTIL = new Map<LiteratureSource, number>();
+/** 测试用：清空冷却表。 */
+export function clearSourceCooldowns(): void {
+  SOURCE_COOLDOWN_UNTIL.clear();
+}
+function withDeadline<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timeout: ${message}`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 export class LiteratureSearcher {
   private registry: ConnectorRegistry;
   // V65 残余：真实分词器默认 `segmentQuery`（jieba，见 segment.ts）；测试注入假实现
@@ -228,10 +245,21 @@ export class LiteratureSearcher {
   private segmenter: Segmenter;
   private readonly deepPool: number;
 
+  /** S4：每源独立 deadline（ms）。默认 8s——六个正常源 1–3s 就回，慢的那个不该拖住整条查询。 */
+  private readonly sourceTimeoutMs: number;
+  /**
+   * U55：429 冷却是**进程级**状态（同一个 IP 被限流，换个 searcher 实例也一样）。
+   * 但正因为是进程级，单测里一个假 429 会污染同进程后面的所有用例——所以默认关，
+   * 只在生产入口（literature_pipeline / CLI）显式打开。
+   */
+  private readonly cooldownOn429: boolean;
+
   constructor(
     registryOrOptions: ConnectorRegistry | ConnectorOptions = {},
-    options: { segmenter?: Segmenter; deepPool?: number } = {},
+    options: { segmenter?: Segmenter; deepPool?: number; sourceTimeoutMs?: number; cooldownOn429?: boolean } = {},
   ) {
+    this.sourceTimeoutMs = options.sourceTimeoutMs ?? DEFAULT_SOURCE_TIMEOUT_MS;
+    this.cooldownOn429 = options.cooldownOn429 ?? false;
     this.registry =
       registryOrOptions instanceof ConnectorRegistry
         ? registryOrOptions
@@ -468,8 +496,18 @@ export class LiteratureSearcher {
     fn: () => Promise<unknown>,
   ): Promise<{ status: SourceStatus; papers: Paper[] }> {
     const started = Date.now();
+    // U55（v0.9.1）：某个源刚被上游 429 过就先歇一会——实测 arXiv 对本机 IP 级限流，礼貌 UA + 3s 间隔
+    // 第二次仍 429；一条查询里连打它 6–7 次只会把冷却期越拉越长，还让整条查询等满 30s 超时。
+    const cooling = this.cooldownOn429 ? SOURCE_COOLDOWN_UNTIL.get(source) : undefined;
+    if (cooling !== undefined && cooling > started) {
+      return {
+        status: { source, outcome: "skipped", count: 0, note: `上游限流冷却中（还剩 ${Math.ceil((cooling - started) / 1000)}s），本轮跳过`, elapsedMs: 0 },
+        papers: [],
+      };
+    }
     try {
-      const payload = await fn();
+      // S4（v0.10 提前落地）：每源独立 deadline，不再让整条查询等最慢的那个源。
+      const payload = await withDeadline(fn(), this.sourceTimeoutMs, `${source} 在 ${this.sourceTimeoutMs}ms 内未返回（已按 timeout 记，其它源照常返回）`);
       const elapsedMs = Date.now() - started;
       // 带凭据的源在无 key 时返回结构化降级体，这里识别成 skipped。
       if (isCredentialMissing(payload)) {
@@ -481,12 +519,14 @@ export class LiteratureSearcher {
       const papers = normalizeResponse(source, payload);
       return { status: { source, outcome: "ok", count: papers.length, elapsedMs }, papers };
     } catch (error) {
+      const summary = errorSummary(error);
+      if (this.cooldownOn429 && /\b429\b/.test(summary)) SOURCE_COOLDOWN_UNTIL.set(source, Date.now() + SOURCE_429_COOLDOWN_MS);
       return {
         status: {
           source,
           outcome: "failed",
           count: 0,
-          error: errorSummary(error),
+          error: summary,
           elapsedMs: Date.now() - started,
         },
         papers: [],

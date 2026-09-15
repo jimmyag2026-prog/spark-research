@@ -108,7 +108,11 @@ function RecordDetail(props: { id: string }): JSX.Element {
       <Async state={{ loading: detail.loading, error: detail.error, data: detail() }}>
         {(data) => (
           <div class="col">
-            <div class="row wrap">
+            <div class="row wrap" style={{ "justify-content": "space-between" }}>
+              {/* U52：打开一条记录后必须有路回总览——以前只能去时间线里再点一次同一条。 */}
+              <button class="btn btn-sm btn-ghost" data-testid="record-detail-close" onClick={() => ws.selectRecord(null)} title="关闭详情，回到总览">
+                ← 返回总览
+              </button>
               <Badge tone={data.record.type}>{TYPE_LABEL[data.record.type]}</Badge>
               {/* 证据成色是这个产品的核心，永远显示，不折叠。 */}
               <Badge tone={data.record.evidence}>{data.record.evidence}</Badge>

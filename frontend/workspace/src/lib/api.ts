@@ -149,7 +149,7 @@ export interface StreamHandlers {
   // 假设它一定会来。
   onDelta?: (data: { chunk: string }) => void;
   onProgress?: (data: { message: string }) => void;
-  onResult?: (data: { response: string; review?: unknown; ideaRecordId?: string | null }) => void;
+  onResult?: (data: { response: string; review?: unknown; ideaRecordId?: string | null; artifacts?: Array<{ id: string; label: string }> }) => void;
   onError?: (data: { message: string }) => void;
 }
 
@@ -223,6 +223,8 @@ export const api = {
   },
 
   lit: {
+    /** U56：下载好的 PDF 在浏览器里直接打开（新标签）。 */
+    pdfFileUrl: (paperId: string, project?: string) => withProject(`/api/lit/papers/${paperId}/pdf/file`, project),
     sources: () =>
       request<{
         sources: Array<{

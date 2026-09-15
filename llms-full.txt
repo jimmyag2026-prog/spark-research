@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.9.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.9.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2359,7 +2359,7 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 > 逐条实证核验后新登记 V83–V94；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
 > P2-12 大部=#74、N2=#63、P1-4=V78 先前已登记）；review 失准两处如实记（state「无锁」不成立
 > ——锁在审查版本已存在；N2 在当前 main 3 连跑不复现，系 #63 已修）。
-> 最后更新：2026-09-15 深夜（**v0.9.0**：A8 一 Blocker 三 High——U28 U29 U30 修、U32 复核不成立；新登记 V167–V170）；2026-09-15 晚（v0.9.0-alpha.3 = R6 修复窗口：新登记 V156–V166（R6 发现 U13 U14 U16–U20 U24–U27 的去向）；alpha.2 收口：去向总表加 v0.9 行；新登记 V154 V155；关 V62 V130 V143 V144 V145；**V147–V153 已被未合分支 `docs/v0.8.1-plan-and-english-i18n` 的 `DEVELOPMENT_PLAN_v0.8.1.md` 占用**（δ 复原该文档时由 V142–V148 重编号），本表从 V154 续编）；2026-09-11 晚（v0.8 方案入库：去向总表加 v0.8 行，补标 R1/R3/S12/V57/V83；合入 v0.6.0 外部 review 归账并改号 V92–V103；v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
+> 最后更新：2026-09-16（v0.10 方案定稿 v1：去向总表 v0.10 行；V174 补标已关）；2026-09-16（**v0.9.1 本地使用窗口第二轮**：又修 U47 U48 U49 U50 U52 U53，做掉 V171 路线①与 V172 前半，新发现 U51 归 v0.10 S10/S9；`DEVELOPMENT_PLAN_v0.10.md` 草案入库（S1–S10）；去向总表 v0.9.1 行与门禁数字按第二轮更新；留档续写 `docs/devlog/UX-window-timeline.md` §八–§十四）；2026-09-16（**v0.9.1 本地使用窗口收口**：第二次会话又带出 U44 U45 U46 并一并修掉；本窗口共修 U38 U39 U40 U44 U45 U46，登记 U41 U42 U43 → V171–V173，残余新登记 V174 V175 V176；去向总表加 v0.9.1 行；留档 `docs/devlog/UX-window-timeline.md`）；2026-09-16（**本地使用窗口**：U38 U39 U40 已修，新登记 V171–V173）；2026-09-15 深夜（**v0.9.0**：A8 一 Blocker 三 High——U28 U29 U30 修、U32 复核不成立；新登记 V167–V170）；2026-09-15 晚（v0.9.0-alpha.3 = R6 修复窗口：新登记 V156–V166（R6 发现 U13 U14 U16–U20 U24–U27 的去向）；alpha.2 收口：去向总表加 v0.9 行；新登记 V154 V155；关 V62 V130 V143 V144 V145；**V147–V153 已被未合分支 `docs/v0.8.1-plan-and-english-i18n` 的 `DEVELOPMENT_PLAN_v0.8.1.md` 占用**（δ 复原该文档时由 V142–V148 重编号），本表从 V154 续编）；2026-09-11 晚（v0.8 方案入库：去向总表加 v0.8 行，补标 R1/R3/S12/V57/V83；合入 v0.6.0 外部 review 归账并改号 V92–V103；v0.7 alpha.7：A6 通过，新登记 V88–V91，V91 修；alpha.6 R4 修复窗口：新登记 V83–V87，V80 真因修完，V74 系统性修法；alpha.5：V64/V65 残余/V71/V72 关，V67 深池做完等 R4 出 T2/T4 数；W7-D2：data export/import/verify 落地，V82 接线关闭；W7-D1：V24/V30 关，V82 去向定 D2；alpha.2 收口：V69/V60/V70/V3/V41/V48 关（各带残余），V21 废弃周期启动，V67 排序做完深度待拍板，V50 裁定 rev +4；W7-D0 收口：新登记 V82；V80 关；V62 裁定豁免；V78 主体修、残余登记；基线闸：新登记 V81 并修；v0.7 方案入库：去向总表加 v0.7 行；补标 7 条早已完成但表上未标的 V1/V7/V11/V15/V17/V18/V19；V16 裁定关闭；V12 补 GLM 0% 测量数）；
 > 同日早：（补登记 V76：v0.5 规划目录 staged 的 154 skill / 29 connector 存量，此前仓库内无任何指针；
 > 同日：v0.6 W6-1 收口归账：V9/V28/V29/V43①/V53/V54/V56 关闭、V16/V50 部分处理并归档、R3/A5 收尾新增 V77–V80；新增 V61–V63；R1 发现归账：修 V64 最小防线+S1 补全，新增 V64–V74；
 > 上一轮：2026-09-10（v0.5 规划启动：V4 启动条件触发、V2 有设计稿、新增 V26；
@@ -2374,6 +2374,8 @@ v0.3 方案（`DEVELOPMENT_PLAN_v0.3.md` §八·补）已对全部条目归口�
 | **v0.3 会做** | V1 V3 V7(删除) V8 V9 V11 V12 V13 V14 V15 V16 V17 V18 V19 · D2 |
 | **v0.3 之后**（下方 §post-v0.3） | V2 V4 V5 V6 V10 · D1 D3 |
 | **已消化** | G1–G7（P8）· 三个 MCP 摩擦点（v0.2.1） |
+| **v0.9.1 本地使用窗口**（owner 首次以普通用户身份用 v0.9.0；真源 `docs/devlog/UX-window-timeline.md`） · **状态（第二轮收口）**：U38 U39 U40 U44 U45 U46 U47 U48 U49 U50 U52 U53 U54 U55 U56（S4 提前落地） 已修 ✅ **+ V171 路线①（已做）+ V172 前半（已做）**；门禁 `tests/unit/ux_window.test.ts` **8 describe / 29 条** 与 `tests/unit/v172_literature_pipeline.test.ts` **3 describe / 8 条**，两轮共 **20 条阴性对照**全部实跑变红（其中一条反过来抓出门禁自身只钉内容不钉接线） | 已修：U38 U39 U40 U44 U45 U46 U47 U48 U49 U50 U52 U53 · 已做：V171(U41) 路线① · V172(U42) 前半 · 登记：V173(U43) · U51 → **v0.10 S10/S9** · 残余：V174(U44) V175(U45) V176(U46) |
+| **v0.10 归口**（`DEVELOPMENT_PLAN_v0.10.md` 定稿 v1，2026-09-16；主题=回复速度 + 流式可见 + 文献流程补完；今晚实测问题优先） | S1 直答路径 · S2 各阶段 maxTokens · S3 精读并行 · S4 检索不等最慢源 · S5 模型分工默认 · S6 复用精读卡 · S7 流式正文 · S8 取消/断连（V156）· 事件协议 `partial`/`delta.target` · 前端阶段条+日志+正文 · 先测再改 W10-0 |
 | **v0.9 归口**（`DEVELOPMENT_PLAN_v0.9.md` §十）· **v0.9.0 状态**：闸门 I 两条 ✅ · α β γ δ ε 全部合入 ✅ · 枢纽接线完成 · W9-2 ✅ · R6 完成（基线已建；T1 5/8 T2 3/8 T3 0/8 T4 4/8；T5 P0 六条：五过一不过→已修）· R6 窗口修 U11 U12 U15 U21 U22 U23 · A8 完成（过 6 不过 3 跑不了 0；Blocker U28 修，High U29 U30 修，U32 复核不成立，U33=V160）· DONE 八条见方案 §八 | 闸门 I：V143 V144 V145 V146(边界) · α：U1 U4 V143 · β：U5 U9 U10/V145 V154 · γ：U6(后端) V130 · δ：U2 U7 U8 V62 V144 · ε：U6(前端) U3(半) · 收口：V154 · R6 窗口：U11 U12 U15 U21 U22 U23 · A8 窗口：U28 U29 U30 · 新登记：V155 V156–V170 |
 | **v0.8 归口**（`DEVELOPMENT_PLAN_v0.8.md` §十，用户 2026-09-11：全部可动手的都进）· **alpha.2 状态**：闸门 G 六条 ✅ · α β γ δ ε ζ 全部合入 ✅ · V102 拆为 V104–V117 · 残余 V118 V119 V120 | 闸门 G：V100 V101 V93 V94 V96 V21 · α：V67 V86 V87 V73 · β：V85 V78 V63 V97 V99 V98 · γ：V88 V89 V90 V79 · δ：V92 V13 V14 V51 · ε：V95(软件) V55 V59(软件) · ζ：V2 · 裁定：V12 V102 V42 · 等外部：V4 V5 V6 V10 V52 D1 D2 D3 V76 |
 | **v0.7.0 发布时仍开**（进 v0.8 首批） | V67/V86 召回复测（需 contactEmail）· V85 仿真不在 raw · V83 真实目录污染处置（等用户）· V88 V89 V90 A6 体验项 · V87 引用判定计数差额 · V78 残余 subAgentLlm · V60/V70 残余 |
@@ -2606,6 +2608,12 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V168 | 权限面板「有效审批令牌」计数不随签发/消费变化（A8 U34） | 只读展示错误，不影响门本身。修：计数从 token 文件实时读（未过期且未 used）。去向：v0.9.x（ε/γ） |
 | V169 | `data import` 拒绝文案说「只重建到空项目」，实际要求「项目不存在」（A8 U35） | 文案与判据对不上；顺带核一下「空项目」是不是本该允许。去向：v0.9.x |
 | V170 | T5 任务书第 13 步引用的 `/api/config/*` 端点已不存在，应为 `/api/settings/general/*`（A8 U37） | T5 已冻结（v0.9.0），下版任务书修订时改；同类漂移用 `narrative_parity` 的「文档里出现的 /api/ 路径必须存在」断言兜住。去向：v0.9.x |
+| V171 | chat 多步计划的步骤之间没有落盘约定，`code` 任务读不到 `connector` 产出（U41） | 模型写的 t4 去读 `/workspace/artifacts/t2_pubmed.json`，而 connector 产出只以字符串回到 `ExecutionOutcome.output`，session workspace 实测是空目录 → 多步计划必然断链。二选一须裁定：① 每个任务产出按 `<workspace>/<taskId>.json` 落盘并把路径写进任务描述；② plan 提示词明说「步骤间不共享文件系统」。倾向 ①。去向：v0.9.x<br>✅ **v0.9.1 本地使用窗口已做路线①**（`ef2ecd9`：落盘 + plan 提示词绝对路径 + summarize 摘要，门禁 `ux_window` V171/U48 ×4，三条阴性对照红） |
+| V172 | **chat 里的 `skill` 任务只加载提示词，从不执行——13 个成熟技能在对话里等于不存在**（U42；**用户 2026-09-16 明确要求：chat 要能调用技能完成任何任务**） | 现状：`executeTask` 的 `case "skill"` 只 `return skillContextFor(name)`，落一条 `context loaded` 就完事；模型想干活只能退回 `kind:"connector"` 手搓参数。实测对照：chat 7 步手搓 = 0 篇 0 PDF + 1 次崩溃，`lit search` 一条命令 26s 出 5 篇全带 OA PDF。**可用技能 13 个**：literature-search / paper-download / literature-review / library-curation / novelty-check / idea-coexplore / protein-analysis / dry-experiment / wet-protocol / scanpy / pydeseq2 / cobrapy / research-report。<br>**两条候选路线（须裁定）**：**甲·子代理路线**——`skill` 任务改成「用该技能的 prompt + 对应 grants 起一个子代理跑真 tool loop」。地基已有（`buildSubAgentSpec` / `runSubAgent` / `AgentToolBus`），改动主要是「技能名 → grants 映射表」与一张技能可执行性清单；好处是 13 个技能一次性全通、与 AD-14（子代理永不自批准）天然兼容；代价是每个技能多一轮 LLM 开销。**乙·直调路线**——给 plan 增加若干高层任务类型（`literature` / `download` / `report` …），各自直连已有实现（`LiteratureSearcher` / `PdfDownloader` / 报告导出），零额外 LLM。快且便宜，但只覆盖有程序入口的那几个技能，其余（wet-protocol、novelty-check 这类本质是「带判断的流程」）仍落不了地。<br>**倾向：甲为主 + 乙为快路**——有程序入口的技能走乙（零 LLM、可预期），其余走甲；`connector` 降级为「没有现成技能时的低层出口」并在 plan 提示词里明说。**前置**：先出一张「13 个技能各自的执行入口 / 所需 grants / 是否已有程序化实现」的盘点表，没有这张表就开工等于又一次凭想象接线（P1 的形状）。<br>**同族待查**：还有哪些成熟 CLI 能力没进 plan 的任务类型表。去向：**v0.10 首批**<br>**用户 2026-09-15 补充的流程定义（V172 的验收口径）**：① 把核心问题与概念做**关键词拆解**；② 在 AMiner 与其它平台检索，拿到 DOI / 其它索引；③ 按索引调 connector 到对应库**下载**；④ **读取**文献确认哪些有用；⑤ 再做综述与总结。这五步在 CLI 里已各有对应：`lit search`（②，多源+AMiner 词拆分）→ `lit add`（②→③ 入库）→ `lit pdf`（③）→ `lit read`（④ 精读卡）→ `lit review`（⑤ 综述+引用核验）；技能 `literature-review` 的描述就是这条链。缺的只有①（关键词拆解目前只在 AMiner 路径里做词拆分）和**把整条链接进 chat**。实现口径：chat 的 `skill` 任务对 `literature-search` / `literature-review` 真执行上述链（路线乙直调），①由规划器在 plan 阶段产出关键词集并写进 `params.queries[]`。<br>◐ **v0.9.1 本地使用窗口已做前半（`d4b4349`）**：`literature-search` / `literature-review` 两个技能在 chat 的 skill 任务里真执行（新文件 `agents/literature_pipeline.ts`，复用 searcher / library / pdf / reading / review / citationIntegrity；plan 提示词要求文献需求走 skill 并在 plan 阶段拆关键词进 `params.queries[]`）。门禁 `v172_literature_pipeline.test.ts` 5 条，三条阴性对照红（含验证 citation-integrity 真在链上）。**残余（三条）**：① **④「读取确认哪些有用」目前只产卡不筛卡**——精读卡有 `relationToProject` 字段但没有任何一步拿它剔除无关论文，真冒烟里两篇心血管指南混进「prevention」命中后综述照引；② **其余 11 个技能仍只加载上下文**，等执行入口 / grants 盘点表；③ **精读并行未做**——`generateMany` 逐篇串行，会话五实测 8 张卡 1001s（占总墙钟 1363s 的七成），去向 v0.10 S3，筛卡本身归 v0.10 S9 |
+| V173 | 凭据与检索源勾选两件事不关联：aminer 配了 key 不在 `searchSources`，semanticscholar 在清单里却没 key（U43） | 两边都「没报错」。修：检索源面板每行显示凭据状态与「本次会不会真被查」；凭据写入成功后若该源未勾选，回一句可执行的下一步。AMiner 的检索质量问题归 V161。去向：v0.9.x |
+| V174 | **工具返回不摘要，整份 JSON 进对话历史：一次子代理调用 13 万输入 token / $0.058**（U44） | 三次 `lit_search` 在 tool loop 里塞进 384 KB 原始 JSON；tool loop 每轮重发历史，成本按轮复利。`McpToolRunner` 已有 `tool.present()` 钩子未被使用。修：① `lit_search` 写 `present()`（每源 outcome+命中数+前 N 条标题/DOI/年份/OA，完整结果留 artifact 并给 id）；② tool loop 统一出口加返回体上限（如 8 KB）+ 截断注明；③ 单次输入 token 超阈值在台账打标。**与 V172（chat 调技能）同批做**——技能一旦可执行，返回体量问题只会更严重。去向：**v0.10 首批**<br>✅ **v0.9.1 本地窗口已关**（U44：`toolResultContent` 瘦身 + 截断明示；实测单次输入 129,865 → 2,266 tok） |
+| V175 | `upstreamErrorOf` 的「200 带业务错误」错误码清单只覆盖 NCBI 一家（U45 残余） | v0.9.1 本地窗口加的 `searchPayloadProblem` → `upstreamErrorOf()` 只认 NCBI `esearchresult.ERROR` 与通用三个键 `errCode`/`errMsg`/`error`；其余源（openalex / crossref / europepmc / aminer / biorxiv / semanticscholar…）用 HTTP 200 回业务错误时是什么形状，**没有盘过**。修：按源实测一遍 200-带错的响应体，把形状收进清单或给出显式的 per-connector 钩子；判据仍须排在「有没有结果容器」之前。去向：v0.9.x |
+| V176 | CNKI / 万方真实可用渠道未接通（U46 残余，= D3） | v0.9.1 本地窗口只把 `status: "placeholder"` 的连接器改成「调用即失败、不发请求」，诚实了但仍然不可用。真渠道要么走官方 API（`https://open.cnki.net` 需申请）、要么走机构订阅，**不在我们手里**（老 D3）。⚠️ **接通时必须同时把 `china.ts` 里的 `status` 从 `placeholder` 改掉**，否则新渠道会被 U46 这道闸原封不动挡住。去向：等外部输入（用户是否有 API 渠道） |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2627,6 +2635,30 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.9.1] — 2026-09-16
+
+**本地使用窗口的修复批**：owner 首次以普通用户身份用 v0.9.0，两天六次真实会话撞出 U38–U56 十九条，全部有现场证据、独立复现、门禁与阴性对照（`docs/devlog/UX-window-fixes.md`、`UX-window-timeline.md`）。
+
+### 如实交代
+- 一句话 chat 仍 ~110s；文献流程 5.5 min（U50 后）——本版让它可量、可见、少犯错，压时间是 v0.10（方案已定稿 `docs/DEVELOPMENT_PLAN_v0.10.md`）。
+- arXiv 对本机 IP 级限流（U55）：本版只做每源 deadline + 冷却，根治靠 v0.10 α-5。
+- V172 只做了前半：chat 能真执行 literature-search / literature-review 两个技能，其余 11 个仍只加载上下文。
+- OA 全文命中率 2/8（U51）本版未改。
+
+### 修复（按发现顺序）
+- U38 连接器失败不再记成成功的任务；U39 子代理类型运行期校验（删 `SUB_AGENT_TYPES` 副本）；U40 检索空壳响应判失败。
+- U44 工具返回进对话前瘦身 + 截断明示（单次输入 129,865 → 2,266 tok）；U45 PubMed 认 NCBI 原名 `term`、空检索词当场拒、上游 200-带错判失败；U46 placeholder 连接器早失败不发请求。
+- U47 规划器拿到真实连接器清单（精确工具名 + 死源黑名单）；U48 summarize 看形状摘要而非前 200 字符；V171 连接器产出落盘到会话工作区并告知规划器绝对路径。
+- U49 文献流程各阶段推 progress；U50 精读/综述用 `subAgentModel_literature`（会话覆盖优先）。
+- U52 记录详情「返回总览」；U53 chat 结果携带产物链接（`ChatResponse.artifacts` 收成真类型）。
+- U54 回复固定结构「结论 → 附件 → 过程校对」；U55 每源 8s deadline + 429 冷却（S4 提前落地）；U56 文献列表加作者/关键词 + PDF 直开路由。
+- V172 前半：`agents/literature_pipeline.ts`——检索 → 入库 → 下载 → 精读 → 综述 + 引用核验，规划阶段拆关键词。
+
+### 新增
+- `GET /api/lit/papers/:id/pdf/file`；`connectorPlanningInventory()`；`searchPayloadProblem()`；`ProgressEmitter.taskNote()`；`OrchestrationResult.failure/artifacts`。
+- 门禁三份共 42 条；阴性对照累计 20 条实跑变红（其中两条反过来抓出门禁自身只钉内容不钉接线：U40、U47）。
+- 文档：`docs/UX_TEST_v0.9.0.md`、`devlog/UX-window-*.md`、`DEVELOPMENT_PLAN_v0.10.md`；USAGE_LOG 到 U56；BACKLOG 到 V176。
 
 ## [0.9.0] — 2026-09-15
 
@@ -4807,6 +4839,30 @@ allowed-tools: [Bash, Read]
 
 前两条是**由标识符推导**的，不依赖源 API 返回的链接字段，所以最稳。
 
+## 下载前必须满足什么（否则根本不会发请求）
+
+下载器**只对手上已有的候选链接动手**：`ids.arxiv`、`ids.pmcid`、`pdfUrl` 三样至少有一样，否则直接返回
+`no_oa_link`，一次 HTTP 都不发。所以正确顺序永远是：**先检索拿到 DOI / arXiv id / PMCID 与 OA 标记（`lit search` / `lit add`），
+再下载**——不存在「没找到链接就开始下」这条路。库内每篇的 `pdf_reason` 字段记着上次为什么没拿到，看它，别重试。
+
+## 一次真实批次的命中率（2026-09-15，8 篇全部标 OA、全部有 DOI 与 pdfUrl）
+
+| 结果 | 篇数 | 真因 |
+|------|-----|------|
+| ✅ 拿到 | 2 | Europe PMC 渲染链接、Springer `content/pdf` 直链 |
+| `not_a_pdf` | 3 | `pdfUrl` 指向**落地页**（handle.net / AOM / IOP 文章页），真 PDF 在一跳之后 |
+| `http_403` | 2 | BMJ、ScienceDirect——元数据标 OA，出版社仍拒绝程序化下载 |
+| `network_error` | 1 | arXiv 对本机限流（与检索侧的 429 同源） |
+
+两个教训：① **「标了 OA」≠「能下到」**，OpenAlex 的 OA 标记偏乐观；② `not_a_pdf` 多半不是付费墙，是**链接给错了一层**。
+
+## 目前刻意不做的两跳（已登记 USAGE_LOG U51，归 v0.10）
+
+- 落地页不再解析一跳（多数出版社页面有 `citation_pdf_url` 元标签，顺着走一步能拿到真 PDF）。
+- `pdfUrl` 失败后没有按 DOI 的兜底（Unpaywall 查真正的 OA 副本）。
+
+在这两跳落地之前，遇到 `not_a_pdf` 的正确做法是把 `attempts` 里的落地页 URL 交给用户手动打开，不要自己猜 URL 拼接。
+
 ## 用法
 
 ```bash
@@ -4856,6 +4912,7 @@ const result = await downloader.downloadMany(ids);   // 串行，不并发打同
 - ❌ 下载失败后凭摘要编造全文内容——没有全文就只用摘要，并标注证据类型为 `sourced`（摘要级）
 - ❌ 把 PDF 提交进 git（`papers/` 已在 .gitignore 里）
 - ❌ 并发下载几十篇——串行，慢一点没关系
+- ❌ 没有 DOI / arXiv id / PMCID 就试图下载——先检索入库，再下载
 
 ## 验证方式
 

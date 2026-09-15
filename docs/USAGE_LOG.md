@@ -15,7 +15,7 @@
 > **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
 > 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
 >
-> 最后更新：2026-09-14
+> 最后更新：2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
 
 ---
 
@@ -60,6 +60,25 @@
 | [U35](devlog/A8.md#u35) | `data import` 文案说「空项目」，实际要求「项目不存在」 | 低 | 文案 | → V169 |
 | [U36](devlog/A8.md#u36) | 工作台默认视图躺着约 40 个历史验收产物（= U14） | 低 | 数据卫生 | → V157 |
 | [U37](devlog/A8.md#u37) | T5 第 13 步引用的 `/api/config/*` 端点已不存在（文档漂移） | 低 | 文档 | → V170（T5 已冻结，下版修） |
+| [U38](#u38) | `connector` 任务失败被记成 `ok: true`——三次连接器失败（超时/429/空壳）在执行摘要里全是「ok」 | **高** | 正确性 | ✅ 本地已修（`connectorFailureOf` 解包信封；`ok:false` → 任务 failed） |
+| [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | ✅ 本地已修（`normalizeSubAgentType` 运行期校验 + `buildSubAgentSpec` 入口拦；并删掉 `SUB_AGENT_TYPES` 副本） |
+| [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | ✅ 本地已修（`searchPayloadProblem` 在编排层、只对 search：无计数也无结果容器 → 任务 failed 并给下一步） |
+| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | ✅ 本地已修（V171 路线①：connector 产出落盘 `<workspace>/<sessionId>/<taskId>.json`，plan 提示词写明绝对路径，code 任务不再 glob cwd） |
+| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | ◐ V172 前半已做（`case "skill"` 对 literature-search/review 真执行五步流程，不是新增任务类型；其余 11 技能待盘点） |
+| [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
+| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 40 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
+| [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
+| [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
+| [U47](#u47) | 规划器没有能力清单：猜出不存在的 `pubmed.esearch`、把 placeholder 的 cnki/wanfang 排进计划（三次会话同一根因） | **高** | 设计 | ✅ 本地已修（plan 注入 906 字符真实清单：精确工具名 + 需凭据标注 + 死源黑名单；门禁钉住「清单真进了 prompt」） |
+| [U48](#u48) | summarize 只看每步输出前 200 字符——连接器成功了，模型只见到 `meta.count`，如实汇报「只留下命中计数」 | **高** | 正确性 | ✅ 本地已修（形状摘要：条数 + 前 5 条标题 + 落盘路径；其余截 600） |
+| [U49](#u49) | 文献流程精读 8 篇期间界面无任何进度（阶段只进执行日志，没推 SSE），用户以为卡死 | 中 | 体验 | ✅ 本地已修（`progress.taskNote`，每阶段推「执行中 i/n：检索/下载/精读/综述」） |
+| [U50](#u50) | 精读卡/综述没读 `subAgentModel_literature`，跟着聊天选择器的模型走（选了 kimi 就 8 篇全 kimi，每篇 ~50s） | 中 | 配置 | ✅ 本地已修（顺序：会话覆盖 > `subAgentModel_literature` > 默认） |
+| [U51](#u51) | OA 全文命中率低（8 篇标 OA 只拿到 2）：`pdfUrl` 常是落地页而下载器不再解析一跳；`pdfUrl` 失败后没有按 DOI 的 Unpaywall 兜底 | 中 | 功能缺口 | → v0.10 **S10**（与 S9 同批；技能文档已如实写明目前不做） |
+| [U52](#u52) | 右侧打开一条记录/文献后没有关闭按钮回总览（只能回时间线再点一次同一条） | 中 | 体验 | ✅ 本地已修（详情头部「← 返回总览」） |
+| [U53](#u53) | 生成的产物（综述草稿）只以纯文字 id 出现在回复里，聊天框没有可点链接 | 中 | 体验 | ✅ 本地已修（结果带 `artifacts[]`，聊天框渲染成按钮切到产物视图；`ChatResponse.artifacts` 此前是无人填写的 `unknown[]`） |
+| [U54](#u54) | 回复把过程校对放在最前，结论与产物在最后，读者得翻到底 | 中 | 体验 | ✅ 本地已修（summarize 约束「结论 → 附件 → 过程校对」；产物按钮移到正文之上） |
+| [U55](#u55) | arXiv 对本机 IP 级限流：礼貌 UA + 3s 间隔第二次仍 429；一条查询连打 6–7 次，每次等满 30s 超时拖住整条检索 | **高** | 稳定性 | ✅ 本地已修（每源独立 8s deadline；被 429 的源冷却 10min 内 skipped）；根因在上游，登记 V165 同族 |
+| [U56](#u56) | 文献库列表没有作者/关键词，下载好的 PDF 无法从界面打开 | 中 | 体验 | ✅ 本地已修（列表加作者/关键词列；`GET /api/lit/papers/:id/pdf/file` 直开） |
 
 ### 方法缺陷
 
@@ -775,6 +794,353 @@ backend/src/server/server.ts: export const SERVER_IDLE_TIMEOUT_S = 255;     // B
 基线里 20 轮有 3 轮墙钟 >170s，逼近这个天花板；网络稍差就会撞上。
 
 **修改方向**：① 同步 `/api/session/chat` 超过阈值（如 200s）时改回 202 + 任务句柄（任务路由已有这套）；或 ② 把 UI 与脚本一律推到 `/stream`（SSE 有心跳，不受 idleTimeout 影响——需核实 Bun 对 SSE 的 idle 判定是否按帧刷新）；③ 无论哪条，server 端在客户端断开时应取消编排（`AbortSignal` 透传到 LLM 调用），别把钱花在没人要的结果上。
+
+<a id="u38"></a>
+## U38 · `connector` 任务失败被记成 `ok: true`
+
+**现场**：2026-09-15 11:31，网页端 chat 问「帮我下载关于 mRNA 最新的研究综述论文，和 AI 主题相关的更好」（项目 `spark`，session `web_1789471590880`）。
+
+**证据**（summarize 收到的执行摘要原文，取自 `raw/llm/2026-09-15.jsonl`）：
+
+```
+- [connector] t2: ok — {"ok":false,"server":"pubmed","tool":"search","error":"HTTP request timed out after 30000ms: ..."}
+- [connector] t3: ok — {"ok":false,"server":"arxiv","tool":"search","error":"Connector \"arxiv\" tool \"search\" failed: HTTP 429"}
+- [connector] t5: ok — {"ok":true,"server":"europepmc","tool":"search","result":{"version":"6.9"}}
+```
+
+`backend/src/agents/orchestrator.ts:879`：
+
+```ts
+const res = await this.daemon.dispatch("mcp_call", {...});
+this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
+return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };   // ← 无条件 true
+```
+
+**问题**：`mcp_call` 对连接器失败**不抛异常**，而是返回 `{ok:false, error}` 信封。编排层只有 `catch` 分支才置 `ok:false`，于是**每一次连接器失败都是一次「成功的任务」**。这次是模型自己去读 JSON 正文才发现不对；换一个不那么谨慎的模型，摘要就会写成「已检索 PubMed」。下游全部受影响：`ExecutionOutcome.ok` 是证据图、review 层、`repairing` 判定的输入。
+
+**修改方向**：`executeTask` 的 connector 分支解包信封——`res.ok === false` → `ok:false` 且 `output` 带 `error`。同族检查：其它 `dispatch` 调用点（code / lab / compute）是不是也把信封当成功。门禁：一条「连接器返回 ok:false → ExecutionOutcome.ok 必须 false」的单测，阴性对照恢复 `ok: true` 即红。
+
+<a id="u39"></a>
+## U39 · `subagent` 任务的 type 不校验，TypeError 冒给用户
+
+**证据**：
+
+```
+- [subagent] t7: failed — undefined is not an object (evaluating 'defaults.grants')
+```
+
+模型规划的是 `params: {"subagent": "Review"}`（大写 R）。`orchestrator.ts:887`：
+
+```ts
+const type = (task.params?.subagent ?? "execute") as SubAgentType;   // ← 只是类型断言，没有运行时校验
+```
+
+`sub_agent.ts:262` `const defaults = SUB_AGENT_DEFAULTS[type];` → `undefined` → `defaults.grants` 崩。实测：
+
+```
+subagent 'Review' → TypeError: undefined is not an object (evaluating 'defaults.grants')
+subagent 'review' → review
+```
+
+**问题**：`SubAgentType` 是编译期联合类型，模型给的是运行期字符串——`as` 断言把校验的责任凭空抹掉了。这是 AD-17「声明即须有读者」的近亲：**声明的类型不等于运行时的约束**。用户看到的是一句 JS 内部错误，没有下一步。
+
+**修改方向**：`buildSubAgentSpec` 入口校验 type ∈ `SUB_AGENT_TYPES`，不认识就抛带下一步的错误（列出可用类型）；`executeTask` 先做大小写归一（`"Review"` → `"review"`）再校验，认不出就让这个任务 `ok:false` 并说明，而不是崩。顺带：`normalizeTask()`（parsePlan 里）就该把 kind/params 的枚举值一起校验掉——计划是模型写的，**计划本身就是不可信输入**。
+
+<a id="u40"></a>
+## U40 · Europe PMC 查询语法不合法 → `{"version":"6.9"}` 空壳 + HTTP 200 + `ok: true`
+
+**证据**（模型原样 args 复现，`ConnectorRegistry.registerBuiltins()` 直调）：
+
+```
+EPMC 模型原样（query 含 "(SRC:MED OR SRC:PPR)"，sort="DATE_PUBLICATION desc"） → {"version":"6.9"}
+EPMC 去掉 sort                                                                  → {"version":"6.9"}
+query+limit / query+pageSize / query+format+pageSize / query+OPEN_ACCESS        → 均返回 hitCount 41514 / 35814 与结果
+```
+
+**问题**：EPMC 对这条查询返回的是一个**只有 `version` 的空壳**（既没有 `hitCount` 也没有 `errCode`），HTTP 200。连接器与编排层都没有「一次检索至少要有 hitCount 或结果数组」这条判据，于是「查询写错了」和「查到 0 篇」和「查成功了」三件事在平台里长得一模一样。
+
+**修改方向**：literature 连接器的 `search` 统一加一条出口断言——响应里既无结果数组也无计数字段 → 视为失败并回一条带下一步的错误（「查询语法可能不合法，检查 EPMC 语法」）。这条判据对 pubmed/openalex/crossref 同样适用，写在 `base.ts` 一处。
+
+<a id="u41"></a>
+## U41 · chat 多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，而 `connector` 产出从不落盘
+
+**证据**：模型的 t4 代码原文 `open('/workspace/artifacts/t2_pubmed.json')`；t2 的产出只以字符串形式回到 `ExecutionOutcome.output`，交给 summarize，**从不写盘**。session workspace `~/.spark-research/workspaces/web_1789471590880/` 实测是空目录。t4、t6 因此 `failed`，空输出。
+
+**问题**：编排器让模型规划「多步骤、后一步读前一步产物」的计划，却没有给步骤间任何落盘约定。模型（任何模型）都会按常识假设产物在 workspace 里。**这不是模型的错，是契约缺口**：要么给约定，要么别让它规划这种计划。
+
+**修改方向**：二选一须裁定——① 每个任务的产出按 `<workspace>/<taskId>.json` 落盘，并把路径写进给模型的任务描述里（`code` 任务的 prompt 里明确「上一步的产物在这些路径」）；② plan 的提示词明说「步骤之间不共享文件系统，需要串联就写成一个任务」。倾向 ①——② 等于放弃多步计划。
+
+<a id="u42"></a>
+## U42 · chat 绕开成熟的 `lit search` 管线，让模型手搓 connector 调用
+
+**现场**：同一需求，两条路径的实测对照。
+
+chat 路径（7 步计划，2 次 LLM 调用，约 46s）：0 篇论文、0 个 PDF、1 次崩溃。
+
+CLI 路径（`lit search`，零 LLM 调用，约 26s）：
+
+```
+$ bun backend/src/index.ts lit search "mRNA vaccine machine learning review" --project spark --limit 5
+  ✅ pubmed: 30 条（深池 30/源）
+  ❌ biorxiv: 上游返回空响应（HTTP 200、0 字节）
+ 1. Therapeutic cancer vaccines: advancements, challenges and prospects … doi:10.1038/s41392-023-01674-3 · 有 OA PDF
+ 4. Algorithm for optimized mRNA design improves stability and immunogenicity … doi:10.1038/s41586-023-06127-z · 有 OA PDF
+ …（5 篇，均有 OA PDF）
+```
+
+**问题**：`lit search` 是被六轮验收打磨过的管线——多源并行、按 DOI/标题去重、blended 排序、OA 判定、失败源如实标注、入库、可接 PDF 下载与 SHA256 血缘。chat 模式的 plan 提示词却只告诉模型有 `connector` 这种原始任务类型（`params.server/tool/args`），**没有告诉它平台已经有一条文献检索管线**。于是模型每次都从零手搓 esearch 参数、手写去重代码、手写 PDF 下载代码——把一条测过的路重新发明一遍，还发明错了。
+
+**修改方向**：给 plan 增加一种任务类型（如 `kind: "literature"`，params 只有 `query/limit/sources`），直接调 `LiteratureSearcher`；并在 plan 提示词里把它排在 `connector` 之前，`connector` 的描述改成「只在没有现成管线时用的低层出口」。同族问题值得盘一遍：**还有哪些成熟 CLI 能力没有出现在 plan 的任务类型表里**（精读、综述、novelty check、data export…）——这正是 P1「对比看能力不看接线」的形状，只是这次缺口在「模型知不知道我们有什么」。
+
+
+<a id="u43"></a>
+## U43 · AMiner 凭据配了却从不参与检索；勾了的 semanticscholar 反而没凭据
+
+**现场**：2026-09-15 晚，用户问「请求查找论文时，现在会使用到 AMiner 么」。
+
+**证据**：
+
+```
+$ spark-research config get searchSources
+  当前值: openalex,crossref,europepmc,semanticscholar,arxiv,pubmed,biorxiv      ← 没有 aminer
+
+$ spark-research lit sources
+  semanticscholar  凭据未配置   ⚠️ 匿名调用持续 429……未配置时统一检索把它标为 skipped
+  aminer           凭据已配置   ⚠️ 未配置时统一检索把它标为 skipped，其余源照常返回
+```
+
+也就是说：**配了凭据的源不在检索清单里，在检索清单里的源没有凭据。** 两件事各自都「没报错」。
+
+显式指定时 AMiner 确实能用，但结果与查询主题基本无关（U26 / V161 的复现）：
+
+```
+$ spark-research lit search "mRNA vaccine artificial intelligence" --sources aminer --limit 3
+  ✅ aminer: 9 条（原查询 0 命中（AMiner 按词序列匹配）；已按 4 词拆分查询、按命中词数合并；只取 ≥2 词同时命中）
+ 1. Artificial Intelligence and Games …
+ 2. Artificial Intelligence in Services …
+ 3. Explainable Artificial Intelligence (XAI) …        ← 没有一篇与 mRNA 有关
+```
+
+**问题**：两层。① **配置面没有把「凭据」与「检索源勾选」这两件事关联起来**——用户配了一个源的 key，合理预期是「以后会用它」，实际要再去另一个面板勾上；反过来，勾了但没 key 的源每次都被 skip，用户也看不出来。② 设置面板的检索源列表没有显示「这个源有没有凭据、这次会不会真被查」。
+
+**修改方向**：① 检索源面板每行显示凭据状态与「本次会不会参与」（已勾 + 有凭据 = 参与；已勾 + 缺凭据 = 跳过并给 `auth --connector <id>`；未勾 + 有凭据 = 提示「已配置但未启用，要不要勾上」）。② 凭据写入成功后，如果该源不在 `searchSources` 里，回一句可执行的下一步。③ AMiner 本身的检索质量问题归 V161，本条只管「会不会被用到」。
+
+
+<a id="u44"></a>
+## U44 · `lit_search` 的工具返回不摘要，整份 JSON 进对话历史 → 单次调用 13 万输入 token
+
+**现场**：2026-09-15 20:32 +0800（台账原文 UTC `2026-09-15T12:32:11.706Z`；本文档其余处出现的「2026-09-16」是笔误，以台账为准）用户自测（项目 `spark0915`，课题「中美 RSI 领域 2020–2025 进展对比」）。监控报出一次 `COST` 事件。
+
+**证据**：台账那一行——
+
+```json
+{"ts":"2026-09-15T12:32:11.706Z","command":"chat:subagent","provider":"deepseek",
+ "model":"deepseek-v4-flash","ok":true,
+ "inputTokens":129865,"outputTokens":783,"costUsd":0.05817416}
+```
+
+单价没问题（0.44 USD/M 输入 × 129865 ≈ $0.057，表是对的）。问题在输入量。raw 层那次调用的 prompt 落成了 blob（428,696 字节），拆开看 9 条消息：
+
+```
+[system   ]     2397 字符   Explore Sub-Agent 提示词
+[user     ]      216 字符   任务描述
+[assistant]      137 字符   模型的开场白
+[tool     ]       71 字符   library 查询（空库）
+[tool     ]      101 字符   records 查询（空）
+[tool     ]       65 字符   {"ok":false,...,"error":"工具 'lit_search' 调用超时（>30000ms）"}
+[tool     ]    81707 字符   lit_search 返回（wearable sensor …）
+[tool     ]   105448 字符   lit_search 返回（tele-rehabilitation …）
+[tool     ]   197383 字符   lit_search 返回（clinical practice guideline …）
+                 ─────
+                387525 字符（≈ 384 KB），其中 384,538 字符是三次检索的原始 JSON
+```
+
+**问题**：`lit_search` 在子代理 tool loop 里把**完整检索结果 JSON**（7 个源 × 每源 30 条，每条含全部字段）原样塞回对话历史。三次检索就把上下文顶到 13 万 token。两层后果：
+① **成本**——这一次 $0.058，是同轮其它调用（$0.0014 上下）的 40 倍；子代理多搜几轮就是几毛钱一次对话。
+② **复利**——tool loop 每轮都重发整段历史，第四次检索会把前三次再付一遍。
+③ 顺带暴露：同一轮里有一次 `lit_search` **30 秒超时**（MCP 工具超时），而超时那条只回了 65 字符，说明成功路径与失败路径的返回体量差了三个数量级，没有任何一层对此设限。
+
+`McpToolRunner` 其实**已经有** `tool.present(result, args)` 这个表现层钩子（`mcp/server.ts:150`），只是 `lit_search` 没用它。
+
+**修改方向**：① 给 `lit_search` 写 `present()`：只回「每源 outcome + 命中数 + 前 N 条的标题/DOI/年份/OA 标记」，完整结果留在 artifact 里并把 artifact id 告诉模型（要细节就去取）。② 给工具返回定一条**通用上限**（如 8 KB），超了自动截断并注明「已截断，完整结果见 artifact <id>」——这条要放在 tool loop 的统一出口，不是每个工具各写一份。③ 台账加一条可观测：单次调用输入 token 超阈值时在 `usage --json` 里打标，便于事后归因（本次是靠监控脚本的 COST 分支才看见的）。
+
+**已修（v0.9.1 本地窗口，`c099342` + `6979f1f`）**：修的是上面的 ②——`sub_agent.ts` 的 `toolResultContent()` 在工具返回进消息历史之前先瘦身：认得出「检索结果」形状（`{query, sources[], papers[]}`）的按字段瘦身（保留每源 outcome/计数与前 10 篇的 title/year/venue/doi/isOpenAccess/citedByCount/sources，摘要截到 200 字，砍掉 authors/ids/url/pdfUrl/references，并在 `_compacted.droppedFields`/`note` 里写明砍了什么、怎么取回完整字段）；认不出形状的按 `TOOL_RESULT_MAX_CHARS = 8000` 截断，并在 `_truncated`/`_note` 里**明说被截断**——静默截断会让模型以为自己看到了全部，比截断本身更危险。门禁 `ux_window` U44 ×3。
+
+**残余** → **V174**：① `lit_search` 自己的 `present()` 钩子仍未写（现在是在 tool loop 统一出口瘦身，不是在工具侧）；③ 台账「单次输入 token 超阈值打标」未做。另：本次瘦身**只认得检索结果这一种形状**，其余工具一律走通用截断。
+
+
+<a id="u45"></a>
+## U45 · PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被静默覆盖成空串
+
+**现场**：2026-09-16，网页端 chat 问「rsi 领域最近中国和美国有怎样的进展」（项目 `spark0915`，session `web_1789475371793`）。计划里 t2、t3 两次 PubMed 检索全部空转，模型拿不到任何一条结果。
+
+**证据**（执行摘要原文）：
+
+```
+{"ok":true,...,"result":{"esearchresult":{"ERROR":"Empty term and query_key - nothing todo"}}}
+```
+
+修前 `backend/src/connectors/literature.ts` `PubMedConnector.search`：
+
+```ts
+const term = typeof params.query === "string" ? params.query : "";   // 只认 query
+const rest = { ...params };                                          // rest 里还留着调用方的 term
+await this.requestRaw("search", { ...rest, term, db: "pubmed", ... });  // 空串覆盖掉它
+```
+
+对照：同一个文件里 arXiv 的写法有守卫 `!("search_query" in params)`（`literature.ts:518`），**只有 PubMed 漏了**。
+
+实测（经 `daemon.dispatch("mcp_call")` 同一条路）：
+
+```
+修前  {term}  → ERROR=Empty term and query_key - nothing todo
+修前  {query} → 2 条
+修后  {term}  → 2 条
+修后  {query} → 2 条
+```
+
+**问题**：两层。
+
+① **参数名**：NCBI 自己的参数名就是 `term`，平台的统一名是 `query`。模型用的是官方文档上的名字，怪不到它头上。更糟的是调用方明明写了 `term`，它先被 `...rest` 带进去、又被算出来的空串覆盖——不是「不认识」，是**认识了还被抹掉**。
+
+② **判据**：上游用 HTTP 200 回业务错误（NCBI 是 `esearchresult.ERROR`）。U40 那条原判据只看「`esearchresult` 这个键在不在」，而 `esearchresult` 正好在 `SEARCH_RESULT_KEYS` 里——一个错误信封因此被当成合法空结果放行。
+
+**已修（v0.9.1 本地窗口，`d1f8a23`）**：① `term` 与 `query` 两个名字都认，`query` 优先（平台口径），`rest` 里两个都删掉；② 检索词为空当场抛带下一步的错误，**不向上游发空检索词**；③ `base.ts` 新增 `upstreamErrorOf()`（认 NCBI `esearchresult.ERROR` 与 REST 源的 `errCode`/`errMsg`/`error`），在 `searchPayloadProblem()` 里**排在「有没有结果容器」之前**。门禁 `ux_window` U45 ×4。
+
+**残余** → **V175**：`upstreamErrorOf` 的错误码清单只覆盖 NCBI 一家加通用三个键（`errCode`/`errMsg`/`error`），其余源的「200 带错」形状没有盘过。
+
+<a id="u46"></a>
+## U46 · `status: "placeholder"` 的连接器仍会真发网络请求，把上游噪声丢给 agent
+
+**现场**：同一 session（`web_1789475371793`）的 t4、t5。
+
+**证据**：
+
+```
+t4  cnki    → ERR_TLS_CERT_ALTNAME_INVALID（https://kns.cnki.net/kns8s/brief/grid）
+t5  wanfang → HTTP 404
+```
+
+而这两个连接器在 `backend/src/connectors/china.ts` 里**自己就标着**：
+
+```ts
+status: "placeholder",
+caveat: "占位实现：无公开 API 渠道，调用会失败。中文文献主路径请用 aminer",          // cnki
+caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中文文献主路径请用 aminer",   // wanfang
+```
+
+**问题**：`HttpConnector.call()` 从不读 `metadata.status`，照发请求。平台明明知道这条路不通，却让计划白花两个步骤，再把 TLS 证书错、404 这类上游噪声原样丢给模型——模型还得自己猜是网络问题还是参数写错了。声明写了没有读者，是 AD-17 的又一例。
+
+**已修（v0.9.1 本地窗口，`c099342`）**：`base.ts` 的 `call()` 开头判 `metadata.status === "placeholder"` → 抛「占位实现 + caveat 原文 + 下一步（换用已可用的源，`spark-research lit sources` 看哪些免 key / 已配凭据）」，**一次 HTTP 都不发**。门禁 `ux_window` U46 ×2（含一条非 placeholder 源不受影响的回归防护）。
+
+**残余** → **V176**：CNKI / 万方的真实可用渠道（官方 API 或机构订阅）仍未接通——这是老 D3，本条只把「调用即失败」变得诚实。**注意**：将来真接通了渠道，记得同时把 `status` 从 `placeholder` 改掉，否则新渠道会被这道闸挡在门外。
+
+<a id="u48"></a>
+## U48 · summarize 只看每步输出的前 200 字符
+
+**现场**：2026-09-15 用户自测第三次（session `web_1789477865031`，「RSI 中美进展」）。U47 生效后 OpenAlex / Crossref / EuropePMC 四次检索**真的成功了**，模型却汇报「只留下了命中计数（条目级数据未进入可读记录）」。
+
+**证据**：summarize 收到的执行摘要，每行都是 223 字符：
+
+```
+- [connector] t5: ok — {"ok":true,"server":"openalex","tool":"search","result":{"meta":{"count":56768,"db_response_time_ms":216,"page":1,"per_page":25,"groups_count":null
+```
+
+`orchestrator.ts`（修前）：`e.output.slice(0, 200)`。一份 OpenAlex 结果的前 200 字符恰好只够到 `meta`，`results[]` 在后面。模型说的是实话。
+
+同一会话的 t10 聚合代码 `glob('**/*.json', recursive=True)` 扫到 **496 个文件、0 条记录**——内核 cwd 是 server 的检出目录（仓库），连接器产出从未落盘（U41）。t12 于是把 `rsi_cn_us_report.md` 写进了仓库工作区（已移出留存）。
+
+**问题**：编排器让模型「基于执行记录汇总」，却只给它看每条记录的开头。对 analysis/code 输出 200 字符勉强够，对 connector 的 JSON 等于什么都没给。
+
+**修改方向（已做）**：connector 成功结果按形状摘要（openalex `results[]` / crossref `message.items[]` / europepmc `resultList.result[]` / pubmed esummary map → 条数 + 前 5 条标题）并附落盘路径；其余输出截 600。与 V171 路线①同一提交。
+
+
+<a id="u49"></a>
+## U49 · 文献流程跑精读时界面没有进度
+
+**现场**：2026-09-15 21:49 用户在 chat 问 RSI 中美进展，V172 流程跑到精读阶段（`moonshotai/kimi-k2.6` 每篇约 50s，默认最多 8 篇），用户问「现在我的任务在跑着吗？为什么这么慢还没有给我回复」。
+
+**证据**：台账 21:54:49 / 21:55:37 / 21:56:30 / 21:57:27 每隔约 50s 一次调用（精读卡）；`literature_pipeline.ts` 的 `note()` 只调 `this.record(...)`（执行日志），`createProgressEmitter` 没有「任务内阶段」的方法，SSE 上从「执行中 1/N」到任务结束之间零事件。
+
+**修改方向（已做）**：`ProgressEmitter.taskNote(message)`——计数不变、只换文案；skill 分支的 `note` 同时进执行日志与 progress。
+
+<a id="u50"></a>
+## U50 · 精读/综述的模型跟着聊天选择器走，没读 `subAgentModel_literature`
+
+**现场**：同上。用户问「通篇精读卡为什么要用 moonshotai/kimi-k2.6？在哪设置的？」
+
+**证据**：`config get defaultModel` = `z-ai/glm-5.3-flash`、`subAgentModel_literature` = `deepseek-v4-flash`，本会话精读却全是 kimi——来自网页端聊天框旁的模型选择器（请求 `model` 字段 → `sessionModel`），而 `runLiteraturePipeline` 未给 `ReadingCardGenerator` / `ReviewDraftGenerator` 传 `model`，全部走 `llmFor(sessionId)` 的会话覆盖。配置里专门给文献子代理留的模型项从未被这条路读到（AD-17 形状）。
+
+**修改方向（已做）**：pipeline 接受 `model`；编排层按「会话覆盖 > `subAgentModel_literature` > 默认模型」选。选择器仍能整体覆盖——用户明确选了就尊重。
+
+
+<a id="u51"></a>
+## U51 · OA 全文命中率低：落地页不再解析一跳，`pdfUrl` 失败后无 DOI 兜底
+
+**现场**：2026-09-15 用户问「这次任务下载了多少 pdf 全文」「是没有找到 doi 或 oa 链接就开始下载了吗」。
+
+**证据**（`workspaces/web_1789480157513/t1-lit-review-rsi.json` 的 `downloads`，与 `library.db` 对照）：8 篇全部 `is_open_access=1`、全部有 DOI 与 `pdf_url`；成功 2；`not_a_pdf` 3（handle.net / journals.aom.org / iopscience 的文章页）；`http_403` 2（BMJ、ScienceDirect）；`network_error` 1（arxiv.org/pdf，限流）。精读卡 8 张中仅 2 张基于全文。
+
+**问题**：下载器只吃三类候选（arXiv id、PMCID、`pdfUrl`），拿到 HTML 就判 `not_a_pdf` 放弃；而 `not_a_pdf` 的三篇至少两篇真有 OA 全文，只是链接停在落地页。精读档的价值完全取决于全文命中率。
+
+**修改方向**：① 落地页解析一跳：响应是 HTML 时找 `citation_pdf_url` / `<link rel="alternate" type="application/pdf">`；② `pdfUrl` 失败后按 DOI 查 Unpaywall（免 key，需 email）取 `best_oa_location`；③ OA 标记来自 OpenAlex 时在结果里标「乐观」。技能文档 `paper-download/SKILL.md` 已补「下载前必须满足什么」「真实批次命中率」「目前不做的两跳」三节。
+
+
+<a id="u52"></a>
+## U52 · 右侧详情打开后没有路回总览
+
+**现场**：2026-09-15 用户原话「选择一篇文献打开后，就没办法关掉回到总览界面」。
+
+**证据**：`right.tsx` 时间线条目 `onClick={() => ws.selectRecord(ws.selectedRecord() === record.id ? null : record.id)}`（再点同一条才取消），`RecordDetail` 头部没有任何关闭控件；列表滚走后详情区就成了单行道。
+
+**修改方向（已做）**：`RecordDetail` 头部加 `← 返回总览`（`ws.selectRecord(null)`），`data-testid="record-detail-close"`。
+
+<a id="u53"></a>
+## U53 · 产物链接不在聊天框里
+
+**现场**：同上，「生成的结果的链接也要放到 chat 对话框里有显示」。
+
+**证据**：`result` 事件只有 `response` 文本；`server/types.ts` 的 `ChatResponse.artifacts?: unknown[]` 声明了但**没有任何代码填它**（AD-17 形状）；文献流程的综述 `artifactId` 只在 digest 里当纯文字。
+
+**修改方向（已做）**：`ExecutionOutcome.artifacts[]` → `OrchestrationResult.artifacts[]` → `chat()` → SSE `result.artifacts[]`；前端消息渲染成「📄 综述草稿」按钮，点了切到产物视图。类型收成 `Array<{id,label}>` 并重生成契约。
+
+
+<a id="u47"></a>
+## U47 · 规划器没有能力清单，只能猜工具名、排死源
+
+**现场**：三次真实会话（`web_1789471590880` / `web_1789475371793` / `web_1789476710763`）同一根因。第三次最典型：T5 写成 `pubmed.esearch`（真名 `search`；连接器描述里「esearch 取 id 列表」把它带偏），T3/T4 再次排进 `cnki`/`wanfang`（`status:"placeholder"`，模型看不见这个字段）。
+
+**证据**：`plan()` 的提示词只有 `Available skills for this request:` + 技能描述，没有任何 server/tool 清单；执行摘要原文 `{"ok":false,"server":"pubmed","tool":"esearch","error":"Unknown tool \"esearch\" for connector \"pubmed\". Available: search, getPaper, getAbstract"}`。
+
+**修改方向（已做）**：`connectors/registry.ts` 新增 `connectorPlanningInventory()` / `renderConnectorInventory()`（纯数据、零网络、906 字符）：20 个连接器的精确工具名、需凭据标注、`placeholder` 黑名单，注入 plan 提示词。门禁 `ux_window` U47 ×5；第一版只钉清单内容、把清单从 prompt 删掉仍全绿（AD-17 形状），补钉「规划器真的看见了它」后红。
+
+<a id="u54"></a>
+## U54 · 回复顺序：过程在前、结论在后
+
+**现场**：用户原话「回复时，先把研究结论和附件放到最前面，然后是后面的研究过程和已执行步骤等部分的校对」。
+
+**证据**：summarize 的 system 提示词只有一句 `Synthesize the observable execution records into a result summary with evidence labels.`，模型按执行日志顺序写，先逐步校对再给结论；聊天框里产物按钮渲染在正文之下。
+
+**修改方向（已做）**：提示词约束固定结构 `## 结论` → `## 附件` → `## 过程校对`，并明写 never put process before conclusion；前端产物按钮移到正文之上。
+
+<a id="u55"></a>
+## U55 · arXiv 对本机 IP 级限流，一条查询被它拖住 30s × N
+
+**现场**：第五、六次会话 arXiv 13 次调用 0 次成功（429 ×9、timeout ×4）。
+
+**证据**：直连探针，礼貌 UA `spark-research/0.9 (mailto:…)`、间隔 3s：第一次 HTTP/2 200，第二次 HTTP/2 429——**IP 级限流**，不是参数问题。`LiteratureSearcher.search` 用 `Promise.all` 等全部源，arXiv 每次等满 `httpTimeoutMs=30000` 才失败，整条查询跟着等；一条会话 6 条查询 = arXiv 6 次 429/超时 = 检索阶段 137–151s。
+
+**修改方向（已做）**：① 每源独立 deadline（默认 8s，`sourceTimeoutMs` 可配）——S4 提前落地；② 被 429 的源进入 10 分钟冷却，期间 `skipped` 并写明剩余秒数，不再发请求。**未做**：按 host 的 3s 令牌桶与 Retry-After 尊重（`http/ratelimit.ts` 已有桶，arXiv 策略待核）；arXiv PDF 直链下载走同一 IP 限流，S10 一起看。
+
+<a id="u56"></a>
+## U56 · 文献库列表缺作者/关键词，PDF 无法从界面打开
+
+**现场**：用户原话「文献库前端打开的列表里，加上一个跳转链接一键用浏览器打开下载好的 pdf，列表里的内容也保留标题 年份 作者 关键词」。
+
+**证据**：`PapersView` 表头只有 标题/年份/key/阅读/PDF，PDF 列是 ✓/✗ 文本；后端只有 `POST /papers/:id/pdf`（触发下载），没有读文件的 GET。
+
+**修改方向（已做）**：`GET /api/lit/papers/:id/pdf/file`（只服务库内 `pdfPath`，`application/pdf` inline；未下载 404 带下一步）；列表加「作者」（前 3 位）「关键词」（库内 tags）两列，PDF 列变「打开」链接（新标签）。**如实交代**：库里没有独立的 keywords 字段，「关键词」列显示的是检索入库时打的 tags；要真关键词需在精读卡里抽。
+
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合

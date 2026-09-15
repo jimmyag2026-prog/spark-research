@@ -51,6 +51,8 @@ export interface StreamMessage {
   // 富渲染附件：综述 / novelty 报告 / idea 卡。
   attachment?: { kind: "review" | "novelty" | "idea" | "reading"; payload: unknown };
   pending?: boolean;
+  /** U53：本轮落库的产物，渲染成可点链接（打开产物视图）。 */
+  artifacts?: Array<{ id: string; label: string }>;
 }
 
 export interface Toast {

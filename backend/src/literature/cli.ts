@@ -432,6 +432,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
     }
     return new LiteratureSearcher(
       new ConnectorRegistry({ http: deps.http, credentials, rawSink, command }).registerBuiltins(),
+      { cooldownOn429: deps.http === undefined }, // U55：只有走真网络时才开冷却（注入 http 的测试/回放不开）
     );
   };
 

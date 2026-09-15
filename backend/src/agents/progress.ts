@@ -54,6 +54,8 @@ export interface ProgressEmitter {
   /** 一个任务执行完毕：`complete++`，并发一次 execute 事件。 */
   taskCompleted(task?: { kind?: string; description?: string }): void;
   /** 开始汇总。 */
+  /** U49（v0.9.1）：某个任务**内部**的阶段（如文献流程的「检索 / 下载 / 精读 3 篇 / 综述」）。计数不变，只换文案。 */
+  taskNote(message: string): void;
   summarizing(): void;
   /** review 返回。`approved` 决定 decision 是 `ready` 还是 `repair`。 */
   reviewed(input: { approved: boolean; hardFindings: number }): void;
@@ -107,6 +109,10 @@ export function createProgressEmitter(onProgress?: ProgressListener): ProgressEm
       complete += 1;
       const label = task?.description ? `：${clampMessage(task.description)}` : task?.kind ? `：${task.kind}` : "";
       emit("execute", `执行中 ${complete}/${Math.max(total, complete)}${label}`, "continue");
+    },
+    taskNote(message) {
+      const shown = Math.min(complete + 1, Math.max(total, complete + 1));
+      emit("execute", `执行中 ${shown}/${Math.max(total, shown)}：${clampMessage(message)}`, "continue");
     },
     summarizing() {
       emit("summarize", "汇总中：正在生成结果摘要", "continue");
