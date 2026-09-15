@@ -439,6 +439,25 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "注册表的 literature 域里，未知 id 直接拒绝（422）而不是运行时静默跳过。" +
       "留空 = 退回内置默认集。",
   },
+  // v0.10 lane γ-2（U58）：语言过滤开关。
+  //
+  // 现场：中文查询在 OpenAlex 上做的是松散匹配，"预防" 这种通用词会把任何中文
+  // 医学文献捞上来。想只看中文期刊（或只看英文）时，此前没有任何旋钮。
+  //
+  // 刻意只认 ISO 639-1 两字母码，且**只对 OpenAlex 生效**——三个中文可用源里
+  // 只有它在 API 上真有 `filter=language:<code>`。给别的源编一个等价物，就等于
+  // 让「已按语言过滤」这句话在那些源上是假的（AD-12）。
+  {
+    key: "searchLanguage",
+    type: "string",
+    envVar: "SPARK_RESEARCH_SEARCH_LANGUAGE",
+    defaultValue: "",
+    summary: "检索时按语言过滤（ISO 639-1 两字母码，如 zh / en）；留空 = 不过滤",
+    effect:
+      "只对 OpenAlex 生效（唯一提供 language 过滤的源）：设成 zh 时 OpenAlex 只回中文文献，" +
+      "设成 en 时只回英文。其余源不受影响——它们没有等价的过滤维度，" +
+      "所以开着这个开关也**不能**说「这次结果全是该语言的」。留空 = 行为与 v0.9 一致。",
+  },
 ];
 
 export function settingSpec(key: string): SettingSpec | undefined {
@@ -760,6 +779,20 @@ export function configuredSearchSources(options: ConfigOptions = {}): string[] |
   if (raw.trim() === "") return null;
   const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
   return ids.length > 0 ? ids : null;
+}
+
+/**
+ * v0.10 lane γ-2（U58）：语言过滤码。留空或形状不对时返回 null（= 不过滤）。
+ *
+ * 形状校验放在**读侧**而不是只放写侧：这个值也可以从环境变量来
+ * （`SPARK_RESEARCH_SEARCH_LANGUAGE`），env 那条路不经 `writeSetting`。
+ * 一个乱码拼进 `filter=language:???` 只会让 OpenAlex 回 400，而那时候
+ * 用户看到的是「openalex 失败」，根本对不回这个配置项上。
+ */
+export function configuredSearchLanguage(options: ConfigOptions = {}): string | null {
+  const raw = stringOr("searchLanguage", "", options).trim().toLowerCase();
+  if (raw === "") return null;
+  return /^[a-z]{2}$/.test(raw) ? raw : null;
 }
 
 // ── v0.9 lane γ（U6·A）：写入前校验 ─────────────────────────────────────────

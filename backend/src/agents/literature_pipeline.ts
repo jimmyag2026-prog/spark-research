@@ -9,6 +9,7 @@
 import { extractPdfText } from "../literature/pdf_text";
 import { LibraryStore, type LibraryPaper } from "../literature/library";
 import { LiteratureSearcher, type LiteratureSearchResult, type SourceStatus } from "../literature/search";
+import { llmQueryTranslator } from "../literature/prepare_query";
 import { PdfDownloader } from "../literature/pdf";
 import { ReadingCardGenerator, listReadingCards, type StoredReadingCard } from "../literature/reading";
 import { ReviewDraftGenerator, baselinesFrom } from "../literature/review";
@@ -114,7 +115,12 @@ export async function runLiteraturePipeline(
       deps.searcher ??
       new LiteratureSearcher(
         new ConnectorRegistry({ credentials: new CredentialStore(), rawSink: project.raw(), command: "chat" }).registerBuiltins(),
-        { cooldownOn429: true }, // U55：生产入口打开 429 冷却
+        {
+          cooldownOn429: true, // U55：生产入口打开 429 冷却
+          // γ-2（U58）：中文查询的英译器。这是生产入口，显式注入——
+          // LiteratureSearcher 自己不 new LLMRouter（见它构造函数里的说明）。
+          translate: llmQueryTranslator(deps.llm, deps.model),
+        },
       );
     const collected: LibraryPaper[] = [];
     for (const query of queries) {
@@ -180,10 +186,24 @@ export async function runLiteraturePipeline(
       projectContext: project.meta.description || undefined,
       fullTextFor: async (p) => (p.pdfPath ? extractPdfText(p.pdfPath) : { ok: false, reason: "库内无 PDF（未下载或不可得）" }),
     });
-    note(`精读 ${targets.length} 篇`);
-    const gen = await generator.generateMany(targets.map((p) => p.id), { sessionId: deps.sessionId });
+    // γ-2（U58 ③）：**零摘要且没拿到 PDF 的论文不精读**。
+    //
+    // AMiner 的 search 接口对相当一部分条目不回 abstract（归一化后就是 `abstract: null`）。
+    // 这种论文送进 ReadingCardGenerator，模型手上只有一个标题——产出的「精读卡」是
+    // 纯粹的凭标题编造，而它**一旦入库就带着 record 身份**，后面综述会引它。
+    // 这比少一张卡糟得多，所以宁可少读：跳过的如实进 failures，用户看得见为什么。
+    const readable = targets.filter((p) => {
+      if (p.abstract && p.abstract.trim() !== "") return true;
+      return result.downloads.some((d) => d.paperId === p.id && d.ok);
+    });
+    for (const p of targets) {
+      if (readable.some((r) => r.id === p.id)) continue;
+      failures.push(`跳过精读（库内无摘要、也没拿到 PDF，只凭标题生成的卡不可信）：${p.title.slice(0, 60)}`);
+    }
+    note(`精读 ${readable.length} 篇${readable.length < targets.length ? `（跳过 ${targets.length - readable.length} 篇零摘要且无全文）` : ""}`);
+    const gen = await generator.generateMany(readable.map((p) => p.id), { sessionId: deps.sessionId });
     result.cardFailures = gen.failures;
-    const cards: StoredReadingCard[] = listReadingCards(records, library).filter((c) => targets.some((t) => t.id === c.paperId));
+    const cards: StoredReadingCard[] = listReadingCards(records, library).filter((c) => readable.some((t) => t.id === c.paperId));
     result.cards = cards.map((c) => ({ paperId: c.paperId, title: library.get(c.paperId)?.title ?? "", year: library.get(c.paperId)?.year ?? null, basis: (c as { basis?: string }).basis ?? null }));
     for (const f of gen.failures) failures.push(`精读失败 ${f.paperId.slice(0, 8)}：${f.error.slice(0, 120)}`);
     mark("read", tRead);
