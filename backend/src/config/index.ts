@@ -261,6 +261,15 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "**与 `mcpTimeoutMs` 是两回事，且必须一起调**：后者是 MCP 等待多久改走句柄，这里是任务本身多久被判超时失败。只调 mcpTimeoutMs 的话，任务仍会在这里被掐掉（v0.2.1 × P10 的语义漂移就是这么来的）。",
   },
   {
+    key: "chatSyncMaxMs",
+    type: "number",
+    envVar: "SPARK_RESEARCH_CHAT_SYNC_MAX_MS",
+    defaultValue: 200_000,
+    summary: "同步 POST /api/session/chat 最多等多久（毫秒），超过就改回 202 + 任务句柄",
+    effect:
+      "**上限是 Bun.serve 的 255s**（A5 定）：等过了头，连接被 server 自己掐断，编排还在后台跑完、结果没人接收，钱照花（V156 / R6 U13 的现场）。默认 200s 留 55s 余量。调大到 255s 以上等于关掉这条兜底。想要全程可见就别用同步路由，走 POST /api/session/stream。",
+  },
+  {
     key: "mcpTimeoutMs",
     type: "number",
     envVar: "SPARK_RESEARCH_MCP_TIMEOUT_MS",
@@ -678,6 +687,13 @@ export function configuredKernelTimeoutMs(fallback: number, options: ConfigOptio
 
 export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions = {}): number {
   const resolved = resolveSetting("taskTimeoutMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+// δ-4（V156 ①）：同步 chat 的等待上限。口径与上面两个一致（非正数/非数字 → fallback）。
+export function configuredChatSyncMaxMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("chatSyncMaxMs", options);
   const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }

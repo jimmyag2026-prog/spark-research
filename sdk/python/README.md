@@ -18,6 +18,13 @@ spark-research server 4321
 
 ## 三段示例
 
+> **长对话用 `/stream`，不要用同步 chat（δ-4 / V156）**
+> `session_post_session_chat()` 打的是同步路由，最多等 `chatSyncMaxMs`（默认 200s，
+> 上限是 Bun.serve 的 255s）；超过就回 **202 + `taskId`**，任务在后台继续跑，
+> 用 `client.wait_task(resp["taskId"])` 接回。要全程可见（阶段进度 + 正文逐字）就用
+> `session_post_session_stream()`（SSE）。**别只判 HTTP 成功**——202 也是成功，但那一份
+> 返回体里没有 `summary`，只有句柄。
+
 ### 1. 建项目
 
 ```python
