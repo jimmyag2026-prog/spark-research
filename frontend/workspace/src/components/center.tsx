@@ -384,10 +384,53 @@ function SessionStream(): JSX.Element {
   );
 }
 
+/**
+ * ε-4：一句话关键词。取精读卡 `keyFindings` 的**首句**。
+ *
+ * 为什么是 keyFindings 而不是一个专门的 `keywords` 字段：与 lane γ 对过——
+ * γ 这一轮没有给精读卡加 `keywords`（`feat/W10-gamma` 的 diff 里没有这个字段），
+ * 所以这里不写一段永远走不到的分支，按任务书的退路走：卡里首句 → 没有卡就退回 tags。
+ */
+function firstSentence(text: string, max = 48): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  // 句号的坑：`GDT_TS 推到 92.4。` 里那个 ASCII 点是小数点，不是句末。
+  // 所以全角终止符直接算，ASCII 的 `.` / `!` / `?` / `;` 只在**后面是空白或结尾**时才算。
+  const head = (flat.match(/^.*?(?:[。！？；．]|[.!?;](?=\s|$))/)?.[0] ?? flat).trim();
+  return head.length > max ? `${head.slice(0, max - 1)}…` : head;
+}
+
 function PapersView(): JSX.Element {
   const ws = useWorkspace();
   const [query, setQuery] = createSignal("");
   const [progress, setProgress] = createSignal("");
+  // ε-4：正在下载 PDF 的那一篇（按钮变忙态，避免连点提交两个任务）。
+  const [pdfBusy, setPdfBusy] = createSignal<string | null>(null);
+
+  // paperId → 精读卡抽出来的一句话。卡是另一个资源，这里只做映射不重算任何内容。
+  const cardKeyword = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const card of ws.cards()?.cards ?? []) {
+      const first = card.keyFindings.find((f) => f.trim().length > 0);
+      if (first) map.set(card.paperId, firstSentence(first));
+    }
+    return map;
+  });
+
+  const downloadPdf = async (paperId: string) => {
+    setPdfBusy(paperId);
+    const task = await withBusy(ws, "下载 PDF", () => api.lit.pdf(paperId, ws.slug(), setProgress));
+    setPdfBusy(null);
+    setProgress("");
+    if (!task) return;
+    if (task.state === "failed") {
+      ws.notify(task.error?.message ?? "PDF 下载失败", "error");
+      return;
+    }
+    // 「不可得」是已知结果不是异常（后端照实记 pdf_reason），所以照实说，不弹错误。
+    const result = (task.result as { result?: { ok?: boolean; reason?: string } } | null)?.result;
+    ws.notify(result?.ok ? "PDF 已下载" : `PDF 不可得：${result?.reason ?? "未知原因"}`);
+    ws.refreshDomain("papers");
+  };
   // V79③：精读卡生成花模型钱，UI 此前没有预算入口——填了就按 --budget-usd 同一条闸走，
   // 不填（空字符串 → undefined）就是老行为（只计量、不设闸）。
   const [readBudget, setReadBudget] = createSignal("");
@@ -485,11 +528,46 @@ function PapersView(): JSX.Element {
                         {(paper.authors ?? []).slice(0, 3).map((a) => a.name).join("、") || "—"}
                         {(paper.authors ?? []).length > 3 ? " 等" : ""}
                       </td>
-                      <td class="faint" style={{ "font-size": "11.5px" }}>{(paper.tags ?? []).join(" · ") || "—"}</td>
+                      {/* ε-4：关键词优先用精读卡抽出的一句话（有卡 = 真读过这篇），
+                          没有卡才退回入库时打的 tags。`data-source` 把「这一格是哪来的」
+                          写在 DOM 上——同一列两种来源，不标出来就分不清。 */}
+                      <td
+                        class="faint"
+                        style={{ "font-size": "11.5px" }}
+                        data-testid={`paper-keywords-${paper.id}`}
+                        data-source={
+                          cardKeyword().has(paper.id) ? "card" : (paper.tags ?? []).length ? "tags" : "none"
+                        }
+                        title={cardKeyword().has(paper.id) ? "来自精读卡的关键发现首句" : "来自入库时打的标签"}
+                      >
+                        {cardKeyword().get(paper.id) ?? ((paper.tags ?? []).join(" · ") || "—")}
+                      </td>
                       <td class="mono">{paper.bibtexKey ?? "—"}</td>
                       <td>{paper.readingStatus}</td>
                       <td>
-                        <Show when={paper.pdfStatus === "downloaded"} fallback={paper.pdfStatus === "unavailable" ? "✗" : "—"}>
+                        {/* ε-4：没下载就给一个真能按的「下载」（POST /papers/:id/pdf，
+                            与 CLI `lit pdf` 同一个落地点）。此前这一格只是一个 — 或 ✗：
+                            界面告诉你「没有 PDF」，却不给任何把它弄来的手段。
+                            `unavailable` 仍然标 ✗（库里记着不可得），但按钮照给——
+                            源换了、网络好了，再试一次是合理动作。 */}
+                        <Show
+                          when={paper.pdfStatus === "downloaded"}
+                          fallback={
+                            <span class="row" style={{ gap: "4px", "align-items": "center" }}>
+                              <Show when={paper.pdfStatus === "unavailable"}>
+                                <span title="库里记着这篇不可得">✗</span>
+                              </Show>
+                              <button
+                                class="btn btn-sm"
+                                data-testid={`paper-pdf-download-${paper.id}`}
+                                disabled={ws.busy() !== null}
+                                onClick={() => void downloadPdf(paper.id)}
+                              >
+                                {pdfBusy() === paper.id ? "下载中…" : "下载"}
+                              </button>
+                            </span>
+                          }
+                        >
                           <a class="btn btn-sm" href={api.lit.pdfFileUrl(paper.id, ws.slug())} target="_blank" rel="noopener" title="在浏览器里打开下载好的 PDF" data-testid={`paper-pdf-open-${paper.id}`}>
                             打开
                           </a>

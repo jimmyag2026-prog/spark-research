@@ -244,6 +244,16 @@ export const api = {
   },
 
   lit: {
+    /**
+     * ε-4（v0.10）：行内下载一篇的 PDF。路由早就有（`POST /api/lit/papers/:id/pdf`，
+     * 与 CLI `lit pdf` 同一个落地点），此前只有 CLI 走得到——界面上看得见「未下载」
+     * 却没有任何手段下载它。长任务口径与检索/精读一致（提交拿句柄 → 订阅 → 落定）。
+     *
+     * 「不可得」是**已知结果不是异常**：任务照样 succeeded，库里记 pdf_reason，
+     * 调用方读 `result.result.ok` 定文案（见 routes/literature.ts 里那条注释）。
+     */
+    pdf: (paperId: string, project?: string, onProgress?: (m: string) => void) =>
+      runTask(withProject(`/api/lit/papers/${paperId}/pdf`, project), {}, onProgress),
     /** U56：下载好的 PDF 在浏览器里直接打开（新标签）。 */
     pdfFileUrl: (paperId: string, project?: string) => withProject(`/api/lit/papers/${paperId}/pdf/file`, project),
     sources: () =>
