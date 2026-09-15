@@ -36,7 +36,10 @@ export default defineConfig({
     cwd: repo,
     // alpha.6：fixture 服务器进程的 dataDir 也指到工作区——否则 connector/kernel 的全局兜底 raw
     // 会写进用户真实 ~/.spark-research（R4 抓到的 324MB 事故的 e2e 半边）。
-    env: { ...process.env, SPARK_RESEARCH_DATA_DIR: join(WORKSPACE, "datadir") },
+    // v0.10 α-2 之后精读默认 3 路并行；⑰ V88 钉的是面板能看到 1/3、2/3 中间态——并行下三张
+    // 假 LLM 的卡几乎同刻完成，2s 轮询看不到中间态。e2e 固定串行（配置项 readConcurrency=1），
+    // 并行度本身由 tests/unit/w10_alpha_speed.test.ts 钉。
+    env: { ...process.env, SPARK_RESEARCH_DATA_DIR: join(WORKSPACE, "datadir"), SPARK_RESEARCH_READ_CONCURRENCY: "1" },
     url: `http://127.0.0.1:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,

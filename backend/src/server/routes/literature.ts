@@ -1,3 +1,5 @@
+import { configuredReadConcurrency } from "../../config";
+import { DEFAULT_READ_CONCURRENCY } from "../../literature/limits";
 import { Hono } from "hono";
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../../agents/contract";
 import { explainCitationGap, LlmCitationJudge } from "../../reviewer/citation_judge";
@@ -320,6 +322,8 @@ export function literatureRoutes(ctx: ServerContext): Hono {
           // 见 literature/cli.ts），HTTP 路由这里此前漏接。接上后每篇完成即回传一次
           // done/total/当前标题，与 CLI 同一条数据源、同一套 TaskRegistry 事件。
           const { cards, failures } = await generator.generateMany(targets.map((p) => p.id), {
+            // v0.10 α-2（收口）：并行度与 chat / CLI 同一配置项 readConcurrency（默认 3）。
+            concurrency: configuredReadConcurrency(DEFAULT_READ_CONCURRENCY, { root: ctx.deps.root }),
             onProgress: ({ done, total, ok, title, paperId }) =>
               task.progress(done, total, `${ok ? "✅" : "❌"} ${title ?? paperId}`),
           });
