@@ -484,3 +484,43 @@ $ bun test tests/unit/w10_delta_approval_wording.test.ts
 | δ-4 | `w10_delta_chat_sync.test.ts` | 7 | ⑤超时不走句柄 → 1 red；⑥config 不接线 → 1 red |
 | δ-5 | `w10_delta_approval_wording.test.ts` | 5 | （行为未改；措辞侧断言被证伪的那句话不再出现） |
 | | **合计** | **31** | **6 组，全部实跑变红** |
+
+---
+
+## 全套（只跑一次，纪律要求）
+
+第一次跑出 3 条红，全是本 lane 引起的，逐条修在 `67ce088`：
+
+| 红 | 原因 | 处置 |
+|---|---|---|
+| `config_reader_parity` | 新增 `chatSyncMaxMs` 没登记读者 | 登记 `configuredChatSyncMaxMs` |
+| `narrative_parity` 孤儿模块 | `chat_sync.ts` 在本分支上零生产调用方（接线那一行在收口专属的 `session.ts` 里） | 按「等接线」登记，写明**收口打上 diff 后必须删除本条**；`health.ts` 不登记——`doctor/index.ts` 已 import 它，它不是孤儿（登记反而被反向检查咬住） |
+| `llms.txt` 幂等 | 新增配置项要重新生成 | `bun scripts/gen-llms-txt.ts` |
+
+修完复跑：
+
+```
+$ bun test tests/unit
+ 2728 pass
+ 0 fail
+ 14453 expect() calls
+Ran 2728 tests across 221 files. [158.17s]
+```
+
+## 收口清单（两条，都在收口专属文件里）
+
+1. `backend/src/server/app.ts` — `/api/health` 加 `frontendBuilt`（diff 见上，3+/1-）。
+   打上之后 δ-2 才真正闭合；`doctor` 这一侧已经全接好了，实例不报就显示「不知道」，不会坏。
+2. `backend/src/server/routes/session.ts` — `POST /chat` 走 `runChatWithSyncDeadline()`（diff 见上，7+/2-）。
+   打上之后**要删掉** `tests/unit/narrative_parity.test.ts` 里 `backend/src/server/chat_sync.ts`
+   那条 `ALLOWED_ORPHANS` 登记（那条测试有反向检查，不删会红——这是故意的）。
+
+## 没做 / 拿不准
+
+- **分支未推上远端**（https 连接全程被 reset，每步重试 3 次）。
+- **足迹越界两处，都如实记在上面 δ-3 那段**：`backend/src/config/cli.ts` 与
+  `backend/src/config/index.ts` 归 γ，本 lane 因为 δ-3（V163）与 δ-4（chatSyncMaxMs 注册）
+  动了它们；改动都是加法，收口时若冲突以 γ 为准。
+- **V156 方向③（断连即取消）没做**：需要客户端断开信号透传进 orchestrator，是收口专属文件的口子。
+- **δ-1 的判据有个前提**：「归档后工作台默认打开的不是验收项目」只有把验收产物归档**干净**
+  才成立，自动跳转本身保证不了——它只保证跳到一个还活着的项目。任务书的「跑完归档」一步就是补这个。
