@@ -54,6 +54,7 @@ class _ChatResponseRequired(TypedDict):
 class ChatResponse(_ChatResponseRequired, total=False):
     artifacts: list[Any]
     reviewResult: Any
+    failure: dict[str, Any]
 
 
 class CredentialDeleteResponse(TypedDict):

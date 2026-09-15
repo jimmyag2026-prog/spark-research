@@ -520,7 +520,7 @@ export function saveConfig(config: UserConfig, options: ConfigOptions = {}): str
   // 要显式 chmod 才会真的被收紧——这是 D-6 里最容易漏的一条路径。
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", { mode: CONFIG_FILE_MODE });
   chmodSync(path, CONFIG_FILE_MODE);
-  if ((options.env ?? process.env) === process.env) refreshBridgedEnv(config); // U15
+  if ((options.env ?? process.env) === process.env) refreshBridgedEnv(config, options); // U15
   return path;
 }
 
@@ -544,7 +544,8 @@ export function resolveSetting(key: string, options: ConfigOptions = {}): Resolv
   const warn = options.warn ?? ((m: string) => console.warn(m));
 
   // U15：我们自己从 config.json 桥进 process.env 的值不算「用户设了环境变量」——按文件实时读。
-  const bridged = env === process.env && spec.envVar !== undefined && bridgedEnvVars.has(spec.envVar);
+  const bridged =
+    env === process.env && spec.envVar != null && bridgedEnvVars.has(spec.envVar) && bridgedRoot !== null && dataDir(options) === bridgedRoot;
   const envRaw = spec.envVar && !bridged ? env[spec.envVar] : undefined;
   // V21（v0.8 起）：旧名读到即报错——不看新名设没设（设了新名还留着旧名，多半是复制粘贴的陈旧配置，
   // 同样该清掉）。错误消息点名旧名与新名，给下一步。
@@ -693,6 +694,8 @@ export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions
 // 「文件写对了、进程不认」（T5 第 6 步，与 U10 同构）。修法：记住哪些 env 是我们自己桥的，
 // resolveSetting 对这些键仍按 config.json 实时读；config.json 一落盘就把桥接值刷新。
 const bridgedEnvVars = new Set<string>();
+// 桥接只对**进程自己的** dataDir 生效：测试与工具用 `{ root }` 指向临时目录时，既不按桥接读、也不去刷新 process.env。
+let bridgedRoot: string | null = null;
 
 export function applyConfigEnvDefaults(options: ConfigOptions = {}): string[] {
   const env = options.env ?? process.env;
@@ -706,7 +709,10 @@ export function applyConfigEnvDefaults(options: ConfigOptions = {}): string[] {
     const value = config[spec.key];
     if (value === undefined || value === "") continue;
     env[spec.envVar] = String(value);
-    if (env === process.env) bridgedEnvVars.add(spec.envVar);
+    if (env === process.env) {
+      bridgedEnvVars.add(spec.envVar);
+      bridgedRoot = dataDir(options);
+    }
     applied.push(spec.envVar);
   }
   return applied;
@@ -721,8 +727,8 @@ export function isBridgedEnvVar(envVar: string): boolean {
  * config.json 落盘后刷新桥接值：桥过去的键按新文件重设（文件里删了就 delete），
  * 用户自己设的环境变量一个不碰。saveConfig 调用，进程内所有只读 env 的读者立刻看到新值。
  */
-function refreshBridgedEnv(config: UserConfig): void {
-  if (bridgedEnvVars.size === 0) return;
+function refreshBridgedEnv(config: UserConfig, options: ConfigOptions): void {
+  if (bridgedEnvVars.size === 0 || bridgedRoot === null || dataDir(options) !== bridgedRoot) return;
   for (const spec of CONFIG_SETTINGS) {
     if (!spec.envVar || !bridgedEnvVars.has(spec.envVar)) continue;
     const value = config[spec.key];
