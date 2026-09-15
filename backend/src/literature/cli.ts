@@ -32,6 +32,7 @@ import { ReadingCardGenerator, listReadingCards, renderReadingCard, retractOrpha
 import { ReviewDraftGenerator, baselinesFrom } from "./review";
 import { LiteratureSearcher, configuredDefaultSources } from "./search";
 import { llmQueryTranslator } from "./prepare_query";
+import { describeSourceState } from "./source_state";
 
 // `spark-research lit ...` 子命令。风格与 project/cli.ts 一致：
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
@@ -1041,12 +1042,23 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       case "sources": {
         const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
         const registry = new ConnectorRegistry({ http: deps.http, credentials }).registerBuiltins();
+        // γ-1（V173 / U43）：本次会不会真查，取决于「勾没勾」× 「有没有凭据」。
+        // 这一行此前不存在——于是「配了 AMiner 的 key 却从来没参与过检索」在 CLI 上
+        // 也一样看不出来（U43 的两条输出各说各的，合起来的那件事没人算）。
+        const selectedSources = new Set<string>(configuredDefaultSources());
         out("文献域连接器:");
         for (const entry of registry.listAll().filter((c) => c.domain === "literature")) {
           const needsKey = entry.metadata?.apiKeyRequired ?? false;
           // 只显示「是否已配置」，绝不显示凭据值本身（AD-2）。
           const keyMark = needsKey ? (credentials.has(entry.name) ? "凭据已配置" : "凭据未配置") : "免 key";
+          const state = describeSourceState(entry.name, {
+            selected: selectedSources.has(entry.name),
+            apiKeyRequired: needsKey,
+            credentialConfigured: credentials.has(entry.name),
+          });
           out(`  ${entry.name.padEnd(16)} ${keyMark.padEnd(12)} ${entry.description}`);
+          out(`  ${" ".repeat(16)} ${state.participation === "will_search" ? "✅" : "⏭️ "} ${state.participationLabel}`);
+          if (state.participationNextStep) out(`  ${" ".repeat(16)} 下一步: ${state.participationNextStep}`);
           out(`  ${" ".repeat(16)} 工具: ${entry.tools.map((t) => t.name).join(", ")}`);
           // V54：免 key/✅ 不等于「毫无保留」——bioRxiv 的 search 是模拟出来的复合工具，
           // 这条 caveat 之前只在 capabilities --json 里看得到，人类入口（这里）反而看不到。
