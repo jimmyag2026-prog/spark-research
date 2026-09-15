@@ -169,7 +169,9 @@ describe("α-2 · Retry-After 解析与退避时间表", () => {
     expect(parseRetryAfterMs(new Headers({ "retry-after-ms": "1500" }))).toBe(1_500);
     expect(parseRetryAfterMs({ "Retry-After": "3" })).toBe(3_000);
     expect(parseRetryAfterMs(undefined)).toBeUndefined();
-    expect(parseRetryAfterMs(new Headers({ "retry-after": "不是数字也不是日期" }))).toBeUndefined();
+    // 值得用 ASCII 垃圾串：`Headers` 只接受 ISO-8859-1，塞中文会在构造时就抛，
+    // 测的就不再是 parseRetryAfterMs 而是 Headers 自己了。
+    expect(parseRetryAfterMs(new Headers({ "retry-after": "neither-number-nor-date" }))).toBeUndefined();
   });
 
   test("规范化结果把 retryAfterMs 带进 LlmError", () => {

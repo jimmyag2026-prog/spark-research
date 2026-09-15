@@ -506,13 +506,18 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
     if (!streamError && buffer.trim()) processLine(buffer);
 
-    if (streamError) {
+    // `streamError` 只在 processLine 这个闭包里赋值，TS 的控制流分析看不见，出了
+    // 循环会把它窄化成 never（基线代码在这里用的是 `as` 断言）。搬进一个显式标注的
+    // const 上的类型标注救不了它（CFA 仍按初始值的 never 窄化），所以沿用基线的断言，
+    // 只是把它提到一处，读取点就不用各自再断言一次。
+    const framed = streamError as { message: string; type?: string } | null;
+    if (framed) {
       return providerFailure(
         this.id,
         model,
         normalizeProviderError({
-          body: JSON.stringify({ error: { type: streamError.type, message: streamError.message } }),
-          message: streamError.message,
+          body: JSON.stringify({ error: { type: framed.type, message: framed.message } }),
+          message: framed.message,
         }),
       );
     }

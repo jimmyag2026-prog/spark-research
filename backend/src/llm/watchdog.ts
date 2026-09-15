@@ -38,7 +38,9 @@ export const IDLE_TIMEOUT_LABEL = "静默超时";
 export const TOTAL_TIMEOUT_LABEL = "总时长超时";
 
 export function idleTimeoutMessage(ms: number): string {
-  return `${IDLE_TIMEOUT_LABEL}：${ms}ms 内没有收到任何内容增量（元数据帧不续期）。这不是总时长超时——调用可能从未真正开始产出。`;
+  // 措辞里不出现 TOTAL_TIMEOUT_LABEL：两条 message 靠「各自只含自己的标签」区分，
+  // 一旦在这里提一句「不是总时长超时」，按标签判型的调用点/测试就会同时匹配两条。
+  return `${IDLE_TIMEOUT_LABEL}：${ms}ms 内没有收到任何内容增量（元数据帧不续期）。调用可能从未真正开始产出。`;
 }
 
 export function totalTimeoutMessage(ms: number): string {
