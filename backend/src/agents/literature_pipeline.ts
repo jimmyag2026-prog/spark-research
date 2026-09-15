@@ -63,6 +63,8 @@ export interface LiteraturePipelineResult {
   cardFailures: Array<{ paperId: string; error: string }>;
   /** ⑤ 综述 */
   review: null | { artifactId: string | null; path: string | null; citedKeys: number; unknownKeys: number; gap: Record<string, number>; markdownHead: string };
+  /** W10-0：各阶段耗时（ms），v0.10 提速的基线与复测都读它。 */
+  timings: { search: number; download: number; read: number; review: number; total: number };
   /** 给 summarize 看的人话摘要（≤ 1500 字符）。 */
   digest: string;
   failures: string[];
@@ -91,9 +93,12 @@ export async function runLiteraturePipeline(
     cards: [],
     cardFailures: [],
     review: null,
+    timings: { search: 0, download: 0, read: 0, review: 0, total: 0 },
     digest: "",
     failures,
   };
+  const T0 = Date.now();
+  const mark = (k: keyof LiteraturePipelineResult["timings"], from: number) => { result.timings[k] = Date.now() - from; result.timings.total = Date.now() - T0; };
   if (queries.length === 0) {
     failures.push("没有检索词：规划器应在 params.queries 里给出拆解后的关键词（3–6 条）");
     result.digest = failures[0]!;
@@ -104,6 +109,7 @@ export async function runLiteraturePipeline(
   const library = new LibraryStore(project.paths.libraryDb, { records: project.records() });
   try {
     // ② 多源检索
+    const tSearch = Date.now();
     const searcher =
       deps.searcher ??
       new LiteratureSearcher(
@@ -133,6 +139,7 @@ export async function runLiteraturePipeline(
     }
     library.rebuildCitations();
     result.library = library.list().length;
+    mark("search", tSearch);
 
     if (options.mode === "search" || collected.length === 0) {
       result.ok = collected.length > 0;
@@ -142,6 +149,7 @@ export async function runLiteraturePipeline(
     }
 
     // ③ 下载（尽力而为；没有 OA 就按摘要精读）
+    const tDl = Date.now();
     const targets = pick(collected, options.maxRead ?? 8);
     const downloadPdf =
       deps.downloadPdf ??
@@ -160,7 +168,9 @@ export async function runLiteraturePipeline(
       }
     }
 
+    mark("download", tDl);
     // ④ 精读卡（每篇一次 LLM 调用，走会话的预算闸）
+    const tRead = Date.now();
     const records = project.records();
     const generator = new ReadingCardGenerator({
       llm: deps.llm,
@@ -176,6 +186,7 @@ export async function runLiteraturePipeline(
     const cards: StoredReadingCard[] = listReadingCards(records, library).filter((c) => targets.some((t) => t.id === c.paperId));
     result.cards = cards.map((c) => ({ paperId: c.paperId, title: library.get(c.paperId)?.title ?? "", year: library.get(c.paperId)?.year ?? null, basis: (c as { basis?: string }).basis ?? null }));
     for (const f of gen.failures) failures.push(`精读失败 ${f.paperId.slice(0, 8)}：${f.error.slice(0, 120)}`);
+    mark("read", tRead);
     if (cards.length === 0) {
       failures.push("没有生成任何精读卡，无法综述");
       result.digest = renderDigest(result, collected);
@@ -183,6 +194,7 @@ export async function runLiteraturePipeline(
     }
 
     // ⑤ 综述 + 引用核验（机械核对：库外 key 直接标出）
+    const tRev = Date.now();
     note(`综述（${cards.length} 张精读卡）`);
     const reviewer = new ReviewDraftGenerator({
       llm: deps.llm,
@@ -211,6 +223,7 @@ export async function runLiteraturePipeline(
       gap: { total: gap.total, judged: gap.judged, unresolved: gap.unresolved, duplicate: gap.duplicate, selfReference: gap.selfReference },
       markdownHead: draft.markdown.slice(0, 1200),
     };
+    mark("review", tRev);
     result.ok = true;
     result.digest = renderDigest(result, collected);
     return result;

@@ -28,6 +28,29 @@ for (let i = 2; i < process.argv.length; i++) {
   if (a.startsWith("--")) args.set(a.slice(2), process.argv[i + 1]?.startsWith("--") || process.argv[i + 1] === undefined ? "1" : process.argv[++i]!);
 }
 const base = args.get("base") ?? "http://127.0.0.1:4321";
+
+// W10-0：`--pipeline <projectSlug>` 直接在进程内跑一次文献流程（review 档，固定 1 查询 / 6 篇 / 精读 3），
+// 按阶段打点 → v0.10 提速的基线与复测（网络前提同上）。费用约 4 次模型调用。
+if (args.has("pipeline")) {
+  const { runLiteraturePipeline } = await import("../backend/src/agents/literature_pipeline");
+  const { ProjectManager } = await import("../backend/src/project/manager");
+  const { LLMRouter } = await import("../backend/src/llm/router");
+  const { usageTrackingLlm, UsageStore } = await import("../backend/src/usage/ledger");
+  const { join: pjoin } = await import("node:path");
+  const slug = args.get("pipeline")!;
+  const pm = new ProjectManager(); const project = pm.open(slug);
+  const llm = usageTrackingLlm({ llm: new LLMRouter(), store: new UsageStore(pjoin(project.paths.root, "usage.jsonl")), command: "chat", budgetUsd: (Number(args.get("budget")) || 0.3) + 5, project: slug, sessionId: `measure-pipeline-${Date.now()}` });
+  const t0 = Date.now();
+  const r = await runLiteraturePipeline({ llm, project, sessionId: `measure-pipeline-${Date.now()}`, note: (m) => console.log("  ·", m) },
+    { mode: "review", queries: ["repetitive strain injury office workers prevention"], topic: "RSI 预防", limit: 6, maxRead: 3 });
+  const t = r.timings;
+  const lines = [`# 文献流程基线 · ${new Date().toISOString()}`, "", `server 无关（进程内）· 1 查询 · limit 6 · maxRead 3 · ok=${r.ok}`, "",
+    "| 阶段 | 耗时 |", "|---|---:|", `| search | ${(t.search/1000).toFixed(1)}s |`, `| download | ${(t.download/1000).toFixed(1)}s |`, `| read（${r.cards.length} 卡）| ${(t.read/1000).toFixed(1)}s |`, `| review | ${(t.review/1000).toFixed(1)}s |`, `| **total** | **${((Date.now()-t0)/1000).toFixed(1)}s** |`, "",
+    `PDF ${r.downloads.filter((d) => d.ok).length}/${r.downloads.length} · 失败/缺口 ${r.failures.length}`, ...r.failures.slice(0,4).map((f) => `- ${f}`)];
+  console.log(lines.join("\n"));
+  const outPath = args.get("out"); if (outPath) { appendFileSync(outPath, lines.join("\n") + "\n\n"); console.log("已追加", outPath); }
+  project.close(); process.exit(0);
+}
 const projects = (args.get("projects") ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 const rounds = Number(args.get("rounds") ?? 5);
 const budgetUsd = Number(args.get("budget") ?? 0.3);
