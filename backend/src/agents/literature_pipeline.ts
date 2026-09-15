@@ -108,6 +108,7 @@ export async function runLiteraturePipeline(
       deps.searcher ??
       new LiteratureSearcher(
         new ConnectorRegistry({ credentials: new CredentialStore(), rawSink: project.raw(), command: "chat" }).registerBuiltins(),
+        { cooldownOn429: true }, // U55：生产入口打开 429 冷却
       );
     const collected: LibraryPaper[] = [];
     for (const query of queries) {

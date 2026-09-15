@@ -68,7 +68,7 @@ describe("U55 / S4 · 每源独立 deadline；被 429 的源进入冷却", () =>
       if (source === "arxiv") { arxivCalls++; return Promise.reject(new Error('Connector "arxiv" tool "search" failed: HTTP 429')); }
       return Promise.resolve({ results: [{ display_name: "P", doi: "10.1/p" }] });
     });
-    const searcher = new LiteratureSearcher(Object.assign(Object.create(ConnectorRegistry.prototype), reg) as ConnectorRegistry, { sourceTimeoutMs: 1000 });
+    const searcher = new LiteratureSearcher(Object.assign(Object.create(ConnectorRegistry.prototype), reg) as ConnectorRegistry, { sourceTimeoutMs: 1000, cooldownOn429: true });
     const r1 = await searcher.search("q1", { sources: ["openalex", "arxiv"] });
     expect(r1.sources.find((s) => s.source === "arxiv")!.outcome).toBe("failed");
     const r2 = await searcher.search("q2", { sources: ["openalex", "arxiv"] });
