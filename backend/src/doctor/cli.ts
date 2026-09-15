@@ -1,14 +1,16 @@
 import { buildDoctorReport, type DoctorOptions, type DoctorReport } from "./index";
 
 export const DOCTOR_HELP = `用法:
-  spark-research doctor [--json]
+  spark-research doctor [--json] [--port <n>]...
 
   报告环境状态：bun 版本 / Python 解释器 / 三档 Python 依赖（core/science/lab）各自是否
   可用 / 配置了哪些 LLM provider key（只报已配置/未配置，值永不打印）/ 前端产物是否已构建 /
   本机有没有正在跑的 server 实例（版本对不对得上、工作目录还在不在）。
   缺什么就给出可直接复制的修复命令。
 
-  --json    输出机器可读报告（给 agent 脚本化判断）
+  --json         输出机器可读报告（给 agent 脚本化判断）
+  --port <n>     额外探这个端口（可重复）。默认探 4321 + config 里的 serverPort；
+                 \`spark-research server --port 4399\` 起的实例得在这里说一声才看得见
 `;
 
 function mark(ok: boolean): string {
@@ -109,24 +111,71 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
       if (inst.pid !== null) out(`      pid ${inst.pid}${inst.startedAt ? ` · 启动于 ${inst.startedAt}` : ""}`);
       if (inst.command) out(`      ${inst.command}`);
       if (inst.cwd) out(`      cwd ${inst.cwd}${inst.cwdExists === false ? "（已不存在）" : ""}`);
+      // δ-2（V162）：前端产物按**实例**报。null = 那个实例没报这个字段（v0.10 之前的
+      // 旧构建）——说「不知道」，不说「没构建」。
+      if (inst.verdict !== "foreign") {
+        if (inst.frontendBuilt === true) out(`      前端产物：已构建（浏览器打开 :${inst.port} 能看到工作台）`);
+        else if (inst.frontendBuilt === false) {
+          out(`      ❌ 前端产物：这个实例没有（浏览器打开 :${inst.port} 只会看到构建指引页）`);
+          out(`         修复：到这个实例的 checkout 里 bun run build:web，然后重起它`);
+        } else out(`      前端产物：这个实例没报（v0.10 之前的构建不带 frontendBuilt 字段）——只能自己打开 :${inst.port} 看`);
+      }
       if (inst.degraded) out(`      ${inst.degraded}`);
       if (inst.nextStep) out(`      下一步：${inst.nextStep}`);
     }
     out("");
   }
 
-  out("▎前端");
+  // δ-2（V162）：这一段回答的是「**当前 checkout** 构建过没有」，不是「浏览器打开
+  // 4321 会看到什么」。V162 的现场就是把这两个问题当成了一个：doctor 判 cwd 说「未构建」，
+  // 而 4321 上跑的是另一个 checkout 的实例、那边早构建过了。两句都没说谎，回答的却是
+  // 两个问题。标题里把口径写死，实例那一档在「运行实例」段里按实例各报各的。
+  out("▎前端（当前 checkout）");
   if (report.frontendBuilt) {
     out(`  ✅ 已构建  ${report.frontendDir}`);
   } else {
     out(`  ❌ 未构建  ${report.frontendDir}`);
     out(`      修复：bun run build:web`);
+    const others = report.runningInstances?.instances.filter((i) => i.frontendBuilt === true) ?? [];
+    if (others.length > 0) {
+      out(
+        `      注意：:${others.map((i) => i.port).join(" / :")} 上跑着的实例**自己**是有前端产物的——` +
+          `浏览器打开那个端口照样有工作台。这一行说的只是当前 checkout。`,
+      );
+    }
   }
 }
 
 export interface DoctorCliDeps extends DoctorOptions {
   out?: (line: string) => void;
   err?: (line: string) => void;
+}
+
+/**
+ * δ-2（V160）：`--port <n>`（可重复）。`--port=4399` 也认——两种写法都有人敲，
+ * 拒一种只会换来一次「未知参数」然后重敲。端口非法（非整数 / 越界）直接报错，
+ * **不静默忽略**：用户敲 `--port abc` 却得到一份「没有实例」的报告，是诊断工具最坏的失败。
+ */
+export function parseDoctorArgs(args: string[]): { ports: number[]; json: boolean; error: string | null } {
+  const ports: number[] = [];
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    let raw: string | undefined;
+    if (arg === "--port") raw = args[++i];
+    else if (arg.startsWith("--port=")) raw = arg.slice("--port=".length);
+    else return { ports, json, error: `未知参数: ${arg}` };
+    const n = Number(raw);
+    if (raw === undefined || !Number.isInteger(n) || n <= 0 || n >= 65536) {
+      return { ports, json, error: `--port 需要一个 1-65535 的整数（收到 '${raw ?? "(缺)"}'）` };
+    }
+    ports.push(n);
+  }
+  return { ports, json, error: null };
 }
 
 export async function runDoctorCommand(args: string[], deps: DoctorCliDeps = {}): Promise<number> {
@@ -136,13 +185,14 @@ export async function runDoctorCommand(args: string[], deps: DoctorCliDeps = {})
     out(DOCTOR_HELP);
     return 0;
   }
-  const unknown = args.filter((a) => a !== "--json");
-  if (unknown.length > 0) {
-    err(`未知参数: ${unknown.join(", ")}`);
+  const parsed = parseDoctorArgs(args);
+  if (parsed.error) {
+    err(parsed.error);
     err(DOCTOR_HELP);
     return 1;
   }
-  const report = await buildDoctorReport(deps);
+  // δ-2（V160）：`--port` 追加进探测清单；已在 deps 里给了 ports（测试注入）就合并。
+  const report = await buildDoctorReport({ ...deps, ports: [...(deps.ports ?? []), ...parsed.ports] });
   if (args.includes("--json")) {
     out(JSON.stringify(report, null, 2));
     return 0;
