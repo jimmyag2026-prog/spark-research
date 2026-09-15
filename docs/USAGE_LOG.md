@@ -70,6 +70,8 @@
 | [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
 | [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
 | [U48](#u48) | summarize 只看每步输出前 200 字符——连接器成功了，模型只见到 `meta.count`，如实汇报「只留下命中计数」 | **高** | 正确性 | ✅ 本地已修（形状摘要：条数 + 前 5 条标题 + 落盘路径；其余截 600） |
+| [U49](#u49) | 文献流程精读 8 篇期间界面无任何进度（阶段只进执行日志，没推 SSE），用户以为卡死 | 中 | 体验 | ✅ 本地已修（`progress.taskNote`，每阶段推「执行中 i/n：检索/下载/精读/综述」） |
+| [U50](#u50) | 精读卡/综述没读 `subAgentModel_literature`，跟着聊天选择器的模型走（选了 kimi 就 8 篇全 kimi，每篇 ~50s） | 中 | 配置 | ✅ 本地已修（顺序：会话覆盖 > `subAgentModel_literature` > 默认） |
 
 ### 方法缺陷
 
@@ -1044,6 +1046,25 @@ caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中�
 **问题**：编排器让模型「基于执行记录汇总」，却只给它看每条记录的开头。对 analysis/code 输出 200 字符勉强够，对 connector 的 JSON 等于什么都没给。
 
 **修改方向（已做）**：connector 成功结果按形状摘要（openalex `results[]` / crossref `message.items[]` / europepmc `resultList.result[]` / pubmed esummary map → 条数 + 前 5 条标题）并附落盘路径；其余输出截 600。与 V171 路线①同一提交。
+
+
+<a id="u49"></a>
+## U49 · 文献流程跑精读时界面没有进度
+
+**现场**：2026-09-15 21:49 用户在 chat 问 RSI 中美进展，V172 流程跑到精读阶段（`moonshotai/kimi-k2.6` 每篇约 50s，默认最多 8 篇），用户问「现在我的任务在跑着吗？为什么这么慢还没有给我回复」。
+
+**证据**：台账 21:54:49 / 21:55:37 / 21:56:30 / 21:57:27 每隔约 50s 一次调用（精读卡）；`literature_pipeline.ts` 的 `note()` 只调 `this.record(...)`（执行日志），`createProgressEmitter` 没有「任务内阶段」的方法，SSE 上从「执行中 1/N」到任务结束之间零事件。
+
+**修改方向（已做）**：`ProgressEmitter.taskNote(message)`——计数不变、只换文案；skill 分支的 `note` 同时进执行日志与 progress。
+
+<a id="u50"></a>
+## U50 · 精读/综述的模型跟着聊天选择器走，没读 `subAgentModel_literature`
+
+**现场**：同上。用户问「通篇精读卡为什么要用 moonshotai/kimi-k2.6？在哪设置的？」
+
+**证据**：`config get defaultModel` = `z-ai/glm-5.3-flash`、`subAgentModel_literature` = `deepseek-v4-flash`，本会话精读却全是 kimi——来自网页端聊天框旁的模型选择器（请求 `model` 字段 → `sessionModel`），而 `runLiteraturePipeline` 未给 `ReadingCardGenerator` / `ReviewDraftGenerator` 传 `model`，全部走 `llmFor(sessionId)` 的会话覆盖。配置里专门给文献子代理留的模型项从未被这条路读到（AD-17 形状）。
+
+**修改方向（已做）**：pipeline 接受 `model`；编排层按「会话覆盖 > `subAgentModel_literature` > 默认模型」选。选择器仍能整体覆盖——用户明确选了就尊重。
 
 
 <a id="p1"></a>
