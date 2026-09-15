@@ -342,17 +342,34 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
       const estimated = estimateUsd(messages, callOptions, { provider, model: requestedModel });
       const unpriced = estimated === null;
       const estimate = estimated ?? 0;
+      // U12 ③（v0.9 R6）：被闸拒绝也落一行——ok:false / errorKind:"budget" / costUsd:0（可证明的 $0：请求根本没发）。
+      // 之前拒绝不留痕，`usage` 里查不到「这个项目今天被闸拒了 20 次」，byErrorKind 对闸是盲的。
+      const recordGate = (message: string) => {
+        store.append({
+          ts: new Date().toISOString(),
+          command,
+          provider,
+          model: requestedModel,
+          ok: false,
+          inputTokens: 0,
+          outputTokens: 0,
+          costUsd: 0,
+          zeroCostReason: "预算闸拒绝：请求未发出，可证明 $0",
+          errorKind: "budget",
+          errorMessage: message.slice(0, 200),
+        });
+      };
 
       // V94：预算闸开着、模型无单价 → 默认拒绝。"未知成本"在闸里等价于"免费"，那闸就是假的。
       if (budgetUsd !== undefined && unpriced && options.allowUnpriced !== true) {
-        return failure("budget-gate", requestedModel, {
-          kind: "budget",
-          message:
+        {
+          const gateMessage =
             `预算闸：模型 '${requestedModel}'（provider ${provider}）在单价表里没有价格，--budget-usd 无法对它计价，默认不放行。` +
             `这次调用没有发出、没有新花费。下一步：加 --allow-unpriced 显式放行（这些调用在 usage 里标 unpriced，不计入预算判定），` +
-            `或用 SPARK_LLM_PRICING_JSON 补上 "${provider}:${requestedModel}" 的单价。`,
-          retryable: false,
-        });
+            `或用 SPARK_LLM_PRICING_JSON 补上 "${provider}:${requestedModel}" 的单价。`;
+          recordGate(gateMessage);
+          return failure("budget-gate", requestedModel, { kind: "budget", message: gateMessage, retryable: false });
+        }
       }
 
       // V93 闸：**实时重读** usage.jsonl（跨进程：别的进程刚花的钱这里立刻看得见，不再只在
@@ -366,26 +383,27 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         const inFlight = Math.max(ledger.snapshot().inFlightUsd, sharedInFlight(budgetKey));
         const committed = live + inFlight;
         if (committed >= budgetUsd || committed + estimate > budgetUsd) {
-          return failure("budget-gate", requestedModel, {
-            kind: "budget",
-            message:
+          {
+            const gateMessage =
               `预算闸：本项目已知花费 $${live.toFixed(4)} + 在飞预留 $${inFlight.toFixed(4)} + 本次估价 $${estimate.toFixed(4)}` +
               ` 将超过上限 $${budgetUsd.toFixed(2)}（已知下界口径，未知成本调用另见 usage 输出）。` +
               `这次调用没有发出、没有新花费；已完成的产出都已保存。` +
-              `下一步：提高 --budget-usd，或用 spark-research usage 查各命令花费后缩小范围重跑。`,
-            retryable: false,
-          });
+              `下一步：提高 --budget-usd，或用 spark-research usage 查各命令花费后缩小范围重跑。`;
+            recordGate(gateMessage);
+            return failure("budget-gate", requestedModel, { kind: "budget", message: gateMessage, retryable: false });
+          }
         }
       }
       const reservation = ledger.tryReserve(estimate);
       if (reservation) addSharedInFlight(budgetKey, estimate);
       if (!reservation) {
         // 本进程账本自己的上限（budget − 构造时历史）也越了——与上面同语义，不同路径都拦。
-        return failure("budget-gate", requestedModel, {
-          kind: "budget",
-          message: `预算闸：本进程在飞预留已达上限 $${(budgetUsd ?? 0).toFixed(2)}。这次调用没有发出、没有新花费。`,
-          retryable: false,
-        });
+        {
+          const gateMessage =
+            `预算闸：本进程在飞预留已达上限 $${(budgetUsd ?? 0).toFixed(2)}。这次调用没有发出、没有新花费。`;
+          recordGate(gateMessage);
+          return failure("budget-gate", requestedModel, { kind: "budget", message: gateMessage, retryable: false });
+        }
       }
       let res: LlmResponse;
       try {

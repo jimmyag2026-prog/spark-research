@@ -8,6 +8,8 @@ import {
   saveConfig,
   settingSpec,
   type ConfigOptions,
+  validateSetting,
+  SettingValidationError,
 } from "./index";
 
 export const CONFIG_HELP = `用法:
@@ -136,17 +138,27 @@ export function runConfigCommand(args: string[], deps: ConfigCliDeps = {}): numb
         err(`未知配置项 '${key}'（可用：${CONFIG_SETTINGS.map((s) => s.key).join(", ")}）`);
         return 1;
       }
+      // U23（v0.9 R6 P0 / 安全）：凭据不走 config set——命令行参数会进 shell 历史与 ps，
+      // 这正是「凭据永不进命令行」要防的。HTTP 那一侧早就 403 了，CLI 这一侧此前却照单全收。
+      if (spec.secret) {
+        err(`'${key}' 是凭据，不能用 config set 写入（命令行参数会留在 shell 历史与 ps 输出里）。`);
+        err(`下一步：spark-research auth（交互录入，不回显），或在 shell 里 export ${spec.envVar}=…（只对当前 shell 生效）。`);
+        return 1;
+      }
       if (spec.key === "dataDir") {
         err("dataDir 只能用环境变量 SPARK_RESEARCH_DATA_DIR 设置——它决定 config.json 自己在哪里。");
         return 1;
       }
-      if (spec.allowed && !spec.allowed.includes(value)) {
-        err(`'${value}' 不是 ${key} 的合法取值（可用：${spec.allowed.join(" / ")}）`);
-        return 1;
-      }
-      if (spec.type === "number" && !Number.isFinite(Number(value))) {
-        err(`${key} 必须是数字，收到 '${value}'`);
-        return 1;
+      // 值的校验只有一份（validateSetting）：类型、枚举、正整数、下限（U22）——与设置面 HTTP 写路径同一判据。
+      let validated: string | number;
+      try {
+        validated = validateSetting(key, value);
+      } catch (error) {
+        if (error instanceof SettingValidationError) {
+          err(`${error.message}。下一步：${error.nextStep}`);
+          return 1;
+        }
+        throw error;
       }
       // β-3（U5「顺带」那条）：模型名写入时就校验，而不是等真正调用时才炸。
       // 判据只有一份——`registry.ts` 的 `assertKnownModel()`（router 的 providerForModel
@@ -168,10 +180,9 @@ export function runConfigCommand(args: string[], deps: ConfigCliDeps = {}): numb
         }
       }
       const config = loadConfig(options);
-      config[key] = spec.type === "number" ? Number(value) : value;
+      config[key] = validated;
       const path = saveConfig(config, options);
-      // 凭据值不回显（就算用户是自己敲的，回显也会进 shell history 与日志）。
-      out(`✅ ${key} 已写入 ${path}${spec.secret ? "" : `（= ${value}）`}`);
+      out(`✅ ${key} 已写入 ${path}（= ${validated}）`);
       out(`   影响：${spec.effect}`);
       const resolved = resolveSetting(key, options);
       if (resolved.source === "env") {

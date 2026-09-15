@@ -125,6 +125,25 @@ export interface OrchestrationResult {
   summary: string;
   review: ReviewResult;
   reviewRounds: number;
+  /**
+   * U12 / U21（v0.9 R6）：这一轮**没有产出**时的结构化原因。`summary` 里那段人话是给人看的，
+   * 这个字段是给程序看的——脚本、SDK、CLI 退出码、HTTP 调用方靠它分辨「拒绝/失败」与「成功」，
+   * 不用去 grep 「预算闸」三个字。有它时 `review.approved` 必为 false。
+   */
+  failure?: OrchestrationFailure;
+}
+
+export interface OrchestrationFailure {
+  kind: "budget" | "llm";
+  message: string;
+}
+
+/** plan() 被预算闸拒绝时抛出：不能再退到 defaultPlan() 去跑连接器任务（U12：花 49s 网络 I/O 然后再被拒一次）。 */
+class BudgetGateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BudgetGateError";
+  }
 }
 
 export interface ReviewerAdapter {
@@ -592,7 +611,27 @@ export class OrchestratorAgent {
     const skills = this.identifySkills(userMessage);
     const skillContext = this.loadSkillContext(skills);
     progress.planStarted();
-    const plan = await this.plan(sessionId, userMessage, skills, skillContext);
+    let plan: PlannedTask[];
+    try {
+      plan = await this.plan(sessionId, userMessage, skills, skillContext);
+    } catch (error) {
+      if (!(error instanceof BudgetGateError)) throw error;
+      // U12：规划就被闸拒了——整轮到此为止。不跑默认计划、不再调 summarize（那只会再被拒一次），
+      // 直接给结构化失败；review 不能 approved（没有任何产出可批）。
+      this.record(sessionId, "orchestrator", "done", "budget gate rejected the plan call; nothing executed");
+      const message = `[orchestrator] 本次调用被预算闸拒绝，未执行任何任务。${error.message}`;
+      return {
+        sessionId,
+        projectSlug: project?.slug ?? null,
+        skills,
+        plan: [],
+        execution: [],
+        summary: message,
+        review: { approved: false, findings: [] } as ReviewResult,
+        reviewRounds: 0,
+        failure: { kind: "budget", message: error.message },
+      };
+    }
     progress.planned(plan.length);
 
     const execution: ExecutionOutcome[] = [];
@@ -606,8 +645,11 @@ export class OrchestratorAgent {
     // 把它的增量当"预览文本"流给用户只会看到破碎的 JSON 片段，那不是根治 W2-d 的问题，
     // 是换一种方式制造同一个问题——见 docs/devlog/W3-a.md「onDelta 怎么接」一节。
     progress.summarizing();
-    let summary = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
+    let summarized = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
+    let summary = summarized.text;
     let review = await this.reviewSession(sessionId);
+    // U12 ②：summarize 失败（闸拒 / 上游失败）时没有产出，review 不许 approved。
+    if (summarized.failure) review = { ...review, approved: false };
     progress.reviewed({ approved: review.approved, hardFindings: review.findings.filter((f) => f.severity === "hard").length });
     let reviewRounds = 1;
 
@@ -623,8 +665,10 @@ export class OrchestratorAgent {
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
       // 已知的、如实记录的简化，见 devlog（根治需要一个「本轮作废，重新开始」的边界信号，
       // 那属于 SSE 传输层的事，不在本文件所有权内）。
-      summary = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
+      summarized = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
+      summary = summarized.text;
       review = await this.reviewSession(sessionId);
+      if (summarized.failure) review = { ...review, approved: false };
       reviewRounds++;
     }
 
@@ -644,6 +688,7 @@ export class OrchestratorAgent {
       summary,
       review,
       reviewRounds,
+      ...(summarized.failure ? { failure: summarized.failure } : {}),
     };
   }
 
@@ -739,6 +784,8 @@ export class OrchestratorAgent {
     // 空串的）`res.content` 当成计划文本喂给 parsePlan()。
     if (!res.ok) {
       this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.error.message}`);
+      // U12：预算闸拒绝不是「模型没答好」，退到默认计划只会白跑连接器任务再被拒一次。
+      if (res.error.kind === "budget") throw new BudgetGateError(res.error.message);
       return this.defaultPlan();
     }
     return this.parsePlan(res.content) ?? this.defaultPlan();
@@ -929,7 +976,7 @@ export class OrchestratorAgent {
     plan: PlannedTask[],
     execution: ExecutionOutcome[],
     onDelta?: (chunk: string) => void,
-  ): Promise<string> {
+  ): Promise<{ text: string; failure?: OrchestrationFailure }> {
     const exec = execution
       .map((e) => `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${e.output.slice(0, 200)}`)
       .join("\n");
@@ -966,11 +1013,17 @@ export class OrchestratorAgent {
       this.record(sessionId, "orchestrator", "summarize-llm-failed", res.error.message);
       // V119：预算闸拒绝不是"配置/网络"问题——把闸消息（含下一步）原样带给用户，别让人去查 key。
       if (res.error.kind === "budget") {
-        return `[orchestrator] 本次调用被预算闸拒绝，未生成结果摘要。${res.error.message}`;
+        return {
+          text: `[orchestrator] 本次调用被预算闸拒绝，未生成结果摘要。${res.error.message}`,
+          failure: { kind: "budget", message: res.error.message },
+        };
       }
-      return "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。";
+      return {
+        text: "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。",
+        failure: { kind: "llm", message: res.error.message },
+      };
     }
-    return res.content;
+    return { text: res.content };
   }
 
   private async reviewSession(sessionId: string): Promise<ReviewResult> {
@@ -1110,7 +1163,7 @@ export class OrchestratorAgent {
     /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
     budgetUsd?: number;
     allowUnpriced?: boolean;
-  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null }> {
+  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null; failure?: OrchestrationFailure }> {
     // V145 / U10：本次会话的模型覆盖；不传 = 回到默认（不粘连）。
     if (req.model) this.sessionModel.set(req.sessionId, req.model);
     else this.sessionModel.delete(req.sessionId);
@@ -1130,6 +1183,7 @@ export class OrchestratorAgent {
     return {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,
+      ...(result.failure ? { failure: result.failure } : {}),
     };
   }
 

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { SESSION_MODES, type SessionMode } from "../../agents/orchestrator";
 import { CoExploreError } from "../../ideation/coexplore";
 import { HttpError, type ServerContext } from "../context";
+import { ProjectError } from "../../project/manager";
 import { sseResponse } from "../sse";
 import type { TaskEvent } from "../tasks";
 import { jsonBody, optionalBool, optionalNumber, optionalString, queryNumber, queryString, requireString } from "./shared";
@@ -29,6 +30,23 @@ function parseMode(raw: string | undefined): SessionMode | undefined {
   return raw as SessionMode;
 }
 
+
+/**
+ * U11（v0.9 R6）：聊天路由与其它域路由同一惯例——`?project=<slug>`（或 body.project）指定会话归属。
+ * 之前这两条路由一个字不读它：脚本按惯例传了、拿到 200、台账落进「当前项目」，没有任何一处报错。
+ * 只在给了的时候绑；不给仍按当前项目指针（网页端就是这条路）。项目不存在 → 404。
+ */
+function bindRequestedProject(ctx: ServerContext, c: Parameters<typeof queryString>[0], body: Record<string, unknown>, sessionId: string): void {
+  const slug = queryString(c, "project") ?? optionalString(body, "project");
+  if (!slug) return;
+  try {
+    ctx.projects.bindSession(sessionId, slug);
+  } catch (error) {
+    if (error instanceof ProjectError) throw new HttpError(404, error.message);
+    throw error;
+  }
+}
+
 export function sessionRoutes(ctx: ServerContext): Hono {
   const app = new Hono();
 
@@ -38,6 +56,7 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     const body = await jsonBody(c);
     const sessionId = requireString(body, "sessionId");
     const message = requireString(body, "message");
+    bindRequestedProject(ctx, c, body, sessionId);
     const mode = parseMode(optionalString(body, "mode"));
     let result: Awaited<ReturnType<typeof ctx.agent.chat>>;
     try {
@@ -67,6 +86,7 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     const body = await jsonBody(c);
     const sessionId = requireString(body, "sessionId");
     const message = requireString(body, "message");
+    bindRequestedProject(ctx, c, body, sessionId);
     const mode = parseMode(optionalString(body, "mode")) ?? "chat";
     const model = optionalString(body, "model");
     // 预览流默认开；调用方可显式 `{"preview": false}` 关掉（省一次模型调用——见上面

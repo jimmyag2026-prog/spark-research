@@ -24,6 +24,8 @@ export interface ChatResponse {
   response: string;
   artifacts?: unknown[];
   reviewResult?: unknown;
+  /** U12（v0.9）：本轮没有产出时的结构化原因（budget = 预算闸拒绝；llm = 上游调用失败）。成功时不出现。 */
+  failure?: { kind: "budget" | "llm"; message: string };
 }
 
 export interface ArtifactListResponse {

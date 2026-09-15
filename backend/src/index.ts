@@ -451,6 +451,11 @@ async function chatOnce(args: ChatArgs) {
     if (result.review && !result.review.approved) {
       console.log(`\n⚠️  Reviewer vetoed: ${result.review.findings.length} finding(s)`);
     }
+    // U21（v0.9 R6）：没有产出（预算闸拒绝 / 上游全失败）就不是 0——脚本里 `chat … && next` 不能把失败当成功。
+    if (result.failure) {
+      console.error(`❌ chat 未产出（${result.failure.kind}）：${result.failure.message.slice(0, 200)}`);
+      process.exitCode = 1;
+    }
   } finally {
     daemon.kernelManager.dispose();
   }
