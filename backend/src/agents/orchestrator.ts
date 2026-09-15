@@ -1,4 +1,5 @@
 import { searchPayloadProblem } from "../connectors/base";
+import { renderConnectorInventory } from "../connectors/registry";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
@@ -784,6 +785,9 @@ export class OrchestratorAgent {
         role: "user",
         content:
           `Available skills for this request:\n${context}\n\n` +
+          // U47：真实能力清单。没有它，规划器只能照着连接器描述里的字眼猜工具名
+          // （真实现场：猜出 `pubmed.esearch`），并把 placeholder 死源排进计划。
+          `${renderConnectorInventory()}\n\n` +
           `Define a research_contract and reply with ONLY a JSON array of tasks. ` +
           `Each task: {"id","kind","description","params"}. ` +
           `"kind" MUST be one of: ${TASK_KINDS.join(",")}. ` +

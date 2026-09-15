@@ -16,7 +16,11 @@ import {
 } from "../../backend/src/agents/sub_agent";
 import { searchPayloadProblem } from "../../backend/src/connectors/base";
 import { PubMedConnector } from "../../backend/src/connectors/literature";
-import { ConnectorRegistry } from "../../backend/src/connectors/registry";
+import {
+  ConnectorRegistry,
+  connectorPlanningInventory,
+  renderConnectorInventory,
+} from "../../backend/src/connectors/registry";
 import { StubHttp, BufferedResponse } from "../../backend/src/http/client";
 import type { ChatMessage, LlmResponse } from "../../backend/src/llm/types";
 
@@ -274,5 +278,44 @@ describe("U44 · 工具返回进对话历史前先瘦身", () => {
     const outcome = { ok: true, payload: { project: "p", papers: [], sources: [] } };
     const parsed = JSON.parse(toolResultContentForTest(outcome)) as { _truncated?: boolean };
     expect(parsed._truncated).toBeUndefined();
+  });
+});
+
+describe("U47 · 规划器拿到真实连接器清单，不再猜工具名 / 不再排死源", () => {
+  test("清单里的工具名与 registry 实际暴露的逐字一致（猜出来的 esearch 不在其中）", () => {
+    const reg = new ConnectorRegistry().registerBuiltins();
+    for (const entry of connectorPlanningInventory()) {
+      if (!entry.usable) continue;
+      const real = reg.listTools(entry.name).map((t) => t.name);
+      expect(entry.tools).toEqual(real);
+    }
+    const pubmed = connectorPlanningInventory().find((e) => e.name === "pubmed")!;
+    expect(pubmed.tools).toEqual(["search", "getPaper", "getAbstract"]);
+    expect(pubmed.tools).not.toContain("esearch"); // 三次真实会话里模型猜的那个名字
+  });
+
+  test("placeholder 源被标不可用并进黑名单；渲染文本点名 cnki / wanfang", () => {
+    const inv = connectorPlanningInventory();
+    for (const id of ["cnki", "wanfang"]) {
+      const e = inv.find((x) => x.name === id)!;
+      expect(e.usable).toBe(false);
+      expect(e.note).toContain("不要排进计划");
+    }
+    const text = renderConnectorInventory();
+    expect(text).toContain("Do NOT plan connector tasks for these");
+    expect(text).toContain("cnki");
+    expect(text).toContain("wanfang");
+    expect(text).toContain("pubmed: search, getPaper, getAbstract");
+  });
+
+  test("渲染出的清单足够小（plan 的 prompt 不能被它顶大——U44 的教训）", () => {
+    expect(renderConnectorInventory().length).toBeLessThan(2000);
+  });
+
+  test("需凭据的源仍列出来但标注会被跳过（不是黑名单）", () => {
+    const s2 = connectorPlanningInventory().find((e) => e.name === "semanticscholar")!;
+    expect(s2.usable).toBe(true);
+    expect(s2.note).toContain("需凭据");
+    expect(renderConnectorInventory()).toContain("semanticscholar:");
   });
 });
