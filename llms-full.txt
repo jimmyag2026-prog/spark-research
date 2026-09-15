@@ -2608,6 +2608,50 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ---
 
+## [0.9.0-alpha.1] — 2026-09-15
+
+**v0.9 的地基：闸门 I「声明即须有读者」（AD-17）。** 这一版不加功能，只加一双眼睛。
+
+### 为什么先做这个
+
+一天真实使用撞出十条问题（`docs/USAGE_LOG.md` U1–U10），复盘发现同一个病反复出现在三个部位：
+可写入的配置项没有读者（V40）、类型上的行为开关字段没有读者（V137：整个代码库零重试）、
+公开函数的对象参数属性没有读者（U10：`chat()` 的 `model` 传什么都静默无效）。
+三次都是在使用中撞出来的，不是被门禁抓到的。先修单个实例等于承认还会有第四第五个——
+所以先建门禁，让它把这一类的全体人口找出来。
+
+### 两条新门禁
+
+- `tests/unit/gate_i_switch_readers.test.ts`：`llm/types.ts` 全部 boolean/number 字段自动入网，
+  在 `backend/src` 找读取点。剥注释；同名转发（`retryable: x.retryable`）不算读，异名映射
+  （`max_tokens: o.maxTokens`）算读——第一版把所有转发都排除，误杀了 `maxTokens`，已收紧。
+- `tests/unit/gate_i_param_readers.test.ts`：TypeScript 编译器 API 解析函数体，不靠 grep。
+  同类内 `this.m(param)` 转发一跳可追、按条件位置分桶；**本函数自己读了 ≥3 个属性却只在某个
+  分支的转发里读到某属性 → 「主路径必须读」单独断言**。这正是 U10 的精确形状。
+- 两条都有 allowlist 两向检查：未登记的孤儿红、已有读者的陈旧登记也红。
+
+### 首跑抓到的（main@644cccd，全部真跑）
+
+| 发现 | 去向 |
+|---|---|
+| `maxRetries`（V137 本尊） | 闸门 H（#109）合入后已转绿——门禁的历史对照被活体验证 |
+| `ProviderCapabilities` 的 `toolCalling` / `streaming` / `usageReported`：构造了无人消费 | **V143**，lane α / 收口接线 |
+| `WetLabLoop.execute` 的 `note` 声明了从未读 | **V144**，lane δ |
+| `chat()` 的 `model` 只在 coexplore 分支转发时被读 | **V145**（= U10），lane β-1 |
+| 门禁能力边界：具名 `type` 参数不在扫描面；同名解构会被算成读者（`retryable` 因此漏报） | **V146** |
+
+### 如实交代
+
+- 四条新发现在 allowlist 里带原因登记，**alpha.1 的绿是登记出来的绿**；对应 lane 接线后陈旧检查会逼着删登记。
+- 形状 ③ 是文本级启发式，`anthropic.ts` 里 `const { kind, retryable } = classifyHttpError(...)` 被算成读者，
+  所以 `retryable` 在 v0.8.0 上不进红名单；V137 的历史对照由 `maxRetries` 承担。
+- 本版同时收入 V142：**CI 自 v0.8.0 起就是红的**（`v118_openmm_probe.test.ts` 假设 `.venv/bin/python` 存在），
+  v0.8.0 是在 CI 红的状态下发布的。教训进方案：发布 DONE 须含「CI 结论 = success」。
+
+### 数字
+
+unit 2484 · concurrency 33 · timeout 4 · e2e 25 · lab 26 · 闸门 I 8/8 · CI = success。
+
 ## [0.8.0] — 2026-09-12
 
 **v0.7 把数据留下了；v0.8 把钱和权限的硬伤补上、把三轮验收与外部 review 挖出来的存量清完、
