@@ -1,3 +1,4 @@
+import { assertKnownModel } from "../llm/providers/registry";
 import {
   CONFIG_SETTINGS,
   configPath,
@@ -146,6 +147,25 @@ export function runConfigCommand(args: string[], deps: ConfigCliDeps = {}): numb
       if (spec.type === "number" && !Number.isFinite(Number(value))) {
         err(`${key} 必须是数字，收到 '${value}'`);
         return 1;
+      }
+      // β-3（U5「顺带」那条）：模型名写入时就校验，而不是等真正调用时才炸。
+      // 判据只有一份——`registry.ts` 的 `assertKnownModel()`（router 的 providerForModel
+      // 与 lane γ 的设置面 HTTP 路由调的是同一个函数），这里不另写规则。
+      // `embeddingModel` 不在此列：它查的是另一张表（EMBEDDING_PRICING），模型名空间不同。
+      if (spec.key === "defaultModel" || spec.key.startsWith("subAgentModel_")) {
+        let known;
+        try {
+          known = assertKnownModel(value);
+        } catch (error) {
+          err(error instanceof Error ? error.message : String(error));
+          return 1;
+        }
+        // 关键词兜底命中不拒绝（与 providerForModel 同口径，否则 CLI 比运行期还严，
+        // 会出现「配不进去、但直接调用能跑」的怪事），但必须当着用户的面说出来：
+        // 路由与计价都可能不对，这正是 U5 证据四那个坑（kimi-k2.6 / moonshotai/kimi-k2.6）。
+        if (known.kind === "keyword") {
+          out(`⚠️  '${value}' 未显式登记，按关键词判给 provider ${known.provider}——路由与计价都可能不对。`);
+        }
       }
       const config = loadConfig(options);
       config[key] = spec.type === "number" ? Number(value) : value;
