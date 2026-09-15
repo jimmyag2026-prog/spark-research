@@ -1,4 +1,4 @@
-// v0.7 W7-D2 · `spark-research data import <dir> --project <slug>`：只做「重建到空项目」，
+// v0.7 W7-D2 · `spark-research data import <dir> --project <slug>`：只做「重建到一个**尚不存在**的项目」（δ-3/V169：老文案说的是「空项目」，与判据不符），
 // 用途是验收对账（G5：export → import → report diff 为空）与迁移。链式 manifest 按顺序逐份喂。
 //
 // 原样导入：records 行（project 列改写成目标 slug）、edges、journal（seq/hash 不重算）、raw 行
@@ -65,10 +65,20 @@ export function verifyExportDir(dir: string): { ok: boolean; reason?: string; ma
 }
 
 export function importExport(manager: ProjectManager, dir: string, slug: string): ImportResult {
+  // δ-3（V169 / A8 U35）：文案与判据对齐。判据从来是 `manager.exists(slug)`——**目标项目
+  // 必须不存在**，import 自己 create 它。老文案说的「只重建到空项目」把人往「先 project new
+  // 一个空的再 import」那条路上引，而那条路恰恰是被这行拒掉的。顺带回答「空项目本该允许吗」：
+  // 不允许是对的——import 原样插入 journal（seq 与 hash 不重算，见文件头），一个已经 create
+  // 过的项目其 records.db 已有 backfill 痕迹，链的起点对不上，「空」在这里不是一个可核验的状态。
+  if (manager.exists(slug)) {
+    throw new ImportError(
+      `项目 '${slug}' 已存在——import 的目标项目须不存在（由 import 自己创建）。` +
+        `换一个 slug，或先 \`spark-research project archive ${slug}\` 再换名导入。`,
+    );
+  }
   const v = verifyExportDir(dir);
   if (!v.ok) throw new ImportError(`导出目录校验失败：${v.reason}`);
   const manifest = v.manifest;
-  if (manager.exists(slug)) throw new ImportError(`项目 '${slug}' 已存在——import 只重建到空项目`);
   const project = manager.create(slug, { name: manifest.dcat.title, description: manifest.dcat.description });
 
   // records / edges / journal

@@ -29,7 +29,7 @@ for i in 1 2 3 4 5; do curl -s -o /dev/null -m 20 -w "%{time_connect}\n" https:/
 | 10 | **人为断网**（关 Wi-Fi），网页端发一条 chat | 界面在合理时间内（< 30s）报错，不是转圈两分钟；`usage --json` 里这条 `ok:false` 带 `errorKind`（期望 `upstream` 或 `timeout`）与脱敏后的摘要 | **U1 · α-1/α-4** |
 | 11 | 恢复网络，再发一条 | 成功；观察是否有自动重试痕迹（server 日志） | V137 |
 | 12 | 设置里把 `llmTimeoutMs` 改成 `500` | 拒绝（< 1000）；改成 `abc` 拒绝；改成 `30000` 成功 | γ-3 |
-| 13 | 终端 `spark-research config set OPENROUTER_API_KEY xxx` 与 HTTP `PUT /api/config/OPENROUTER_API_KEY` | CLI 走 `auth` 流程（不回显）；HTTP **403** 且消息指向终端 | AD-2 · U6·B 指引 |
+| 13 | 终端 `spark-research config set OPENROUTER_API_KEY xxx` 与 HTTP `PUT /api/settings/general/OPENROUTER_API_KEY` | CLI 走 `auth` 流程（不回显）；HTTP **403** 且消息指向终端 | AD-2 · U6·B 指引 |
 | 14 | 用旧二进制（若有）或另一端口再起一个 server，然后 `doctor` | 报两个实例、版本是否一致 | U2 |
 | 15 | 关掉所有 server，`doctor` | 报「无运行实例」 | U2 |
 | 16 | `spark-research project archive t5-<日期>`，刷新工作台 | 下拉框默认不见它，「显示已归档」能切出来 | U3 |
@@ -53,3 +53,12 @@ for i in 1 2 3 4 5; do curl -s -o /dev/null -m 20 -w "%{time_connect}\n" https:/
 - 发现的新问题按 `docs/USAGE_LOG.md` 模板写 U 条目（从 **U11** 起），证据先于判断；不确定的标「待核实」。
 - **不要修任何东西**。你是验收者。
 - 最后一段：「如果我是第一次用这个工具的人，卡住我的第一件事是什么」——一句话。
+
+## 收尾（δ-1 / V157，v0.10 补）
+
+- **跑完把本次验收产出的项目全部归档**，一条命令：
+  `spark-research project archive --pattern "<本次的 slug 前缀>-*"`（先 `--dry-run` 看命中谁）。
+  归档是可逆的（`project unarchive <slug>`），**不删任何数据**；不归档的后果是下一个人打开
+  工作台，默认停在你的探针项目上（R6 U14 的现场：默认打开 `speed-probe`）。
+- 当前项目指针正好落在被归档的项目上时，CLI 会自动把它切到**最近活动的未归档项目**并把这件事
+  打印出来——看到那句话就核一眼切过去的是不是你想要的那个。

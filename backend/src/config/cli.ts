@@ -28,11 +28,30 @@ export interface ConfigCliDeps extends ConfigOptions {
   err?: (line: string) => void;
 }
 
-function pad(text: string, width: number): string {
-  // 中文按两列宽计：表格不对齐会让「来源」那一列看起来像随机缩进。
+// 中文按两列宽计：表格不对齐会让「来源」那一列看起来像随机缩进。
+function width(text: string): number {
   let visible = 0;
   for (const ch of text) visible += ch.codePointAt(0)! > 0x2e80 ? 2 : 1;
-  return text + " ".repeat(Math.max(1, width - visible));
+  return visible;
+}
+
+function pad(text: string, target: number): string {
+  return text + " ".repeat(Math.max(1, target - width(text)));
+}
+
+// δ-3（V163）：按**显示宽度**截断（CJK 算 2），超长时以 `…` 收尾。`…` 自身占 1 列，
+// 所以留给正文的预算是 max-1。宽度口径与 `width()` 同一份，不另写一套。
+export function ellipsize(text: string, max: number): string {
+  if (width(text) <= max) return text;
+  let out = "";
+  let w = 0;
+  for (const ch of text) {
+    const cw = ch.codePointAt(0)! > 0x2e80 ? 2 : 1;
+    if (w + cw > max - 1) break;
+    out += ch;
+    w += cw;
+  }
+  return `${out}…`;
 }
 
 export function runConfigCommand(args: string[], deps: ConfigCliDeps = {}): number {
@@ -83,7 +102,10 @@ export function runConfigCommand(args: string[], deps: ConfigCliDeps = {}): numb
           : r.value === null
             ? "—"
             : String(r.value);
-        out(`${pad(r.key, 22)}${pad(shown.slice(0, 32), 34)}${pad(r.source, 10)}${r.spec.summary}`);
+        // δ-3（V163）：截断要**看得出来被截断了**。原来是裸 slice(0,32)，一个 60 字符的
+        // originAllowlist 被砍成 32 字符照样打印成一个完整的值，用户据此以为配置就是这样——
+        // 诊断输出撒的谎比不输出更贵。超长时留 31 字符 + `…`，总宽仍是 32。
+        out(`${pad(r.key, 22)}${pad(ellipsize(shown, 32), 34)}${pad(r.source, 10)}${r.spec.summary}`);
       }
       out("");
       out("改了影响什么：spark-research config get <key>，或见 docs/EXTENDING.md 第六节。");
