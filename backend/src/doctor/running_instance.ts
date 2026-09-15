@@ -34,6 +34,12 @@ export interface RunningInstance {
   version: string | null;
   /** 与本 checkout 的 PACKAGE_VERSION 是否一致。 */
   versionMatches: boolean;
+  /**
+   * δ-2（V162）：**这个实例**托管的前端产物在不在——由实例自己经 `/api/health` 报。
+   * `null` = 实例没报这个字段（v0.10 之前的旧构建，或 foreign 服务）：那是「不知道」，
+   * 不是「没构建」，渲染层要把这两者分开说。
+   */
+  frontendBuilt: boolean | null;
   pid: number | null;
   command: string | null;
   startedAt: string | null;
@@ -59,6 +65,8 @@ export interface HealthPayload {
   status?: unknown;
   service?: unknown;
   version?: unknown;
+  /** δ-2（V162）：v0.10 起实例自己报；旧构建没有这个字段 → undefined。 */
+  frontendBuilt?: unknown;
 }
 
 export interface RunningInstanceProbeOptions {
@@ -85,12 +93,24 @@ export interface ProcessInfo {
   degraded: string | null;
 }
 
-/** 把 config 里可能存在的端口并进默认端口，去重且保持顺序。 */
-export function probePorts(configuredPort?: unknown): number[] {
+function normalizePort(raw: unknown): number | null {
+  const n = typeof raw === "string" ? Number(raw.trim()) : raw;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 && n < 65536 ? n : null;
+}
+
+/**
+ * 探测端口清单：默认 4321 + config 的 `serverPort` + 命令行 `--port`，去重且保持顺序。
+ *
+ * δ-2（V160 / A8 U33）：`--port` 这一档是新的。A8 的现场是验收者用
+ * `spark-research server --port 4399` 起了第二个实例，doctor 只探 4321，报「没有实例」——
+ * 而用户刚刚**亲手**告诉过工具那个端口号。探端口方案的盲区（见文件头）是「探不到没人说过的
+ * 端口」，不该连说过的那个也探不到。
+ */
+export function probePorts(configuredPort?: unknown, cliPorts: readonly unknown[] = []): number[] {
   const ports = [DEFAULT_PROBE_PORT];
-  const n = typeof configuredPort === "string" ? Number(configuredPort) : configuredPort;
-  if (typeof n === "number" && Number.isInteger(n) && n > 0 && n < 65536 && !ports.includes(n)) {
-    ports.push(n);
+  for (const raw of [configuredPort, ...cliPorts]) {
+    const n = normalizePort(raw);
+    if (n !== null && !ports.includes(n)) ports.push(n);
   }
   return ports;
 }
@@ -282,6 +302,7 @@ export async function probeRunningInstances(options: RunningInstanceProbeOptions
     const service = typeof health.service === "string" ? health.service : null;
     const version = typeof health.version === "string" ? health.version : null;
     const versionMatches = version === options.currentVersion;
+    const frontendBuilt = typeof health.frontendBuilt === "boolean" ? health.frontendBuilt : null;
 
     // 端口被别人占着时不去 lsof：既没必要，也不该对不属于我们的进程打探 cwd。
     const proc: ProcessInfo =
@@ -296,6 +317,7 @@ export async function probeRunningInstances(options: RunningInstanceProbeOptions
       service,
       version,
       versionMatches,
+      frontendBuilt,
       pid: proc.pid,
       command: proc.command,
       startedAt: proc.startedAt,
