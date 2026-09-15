@@ -1,5 +1,6 @@
 import { searchPayloadProblem } from "../connectors/base";
 import { renderConnectorInventory } from "../connectors/registry";
+import { runLiteraturePipeline, type LiteraturePipelineMode } from "./literature_pipeline";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
@@ -167,6 +168,10 @@ export interface OrchestratorDeps {
   reviewer?: ReviewerAdapter;
   maxReviewRounds?: number;
   workspaceRoot?: string;
+  /** V172 测试注入：文献流程用的 searcher（不给则按凭据 + 内置连接器构造，走真网络）。 */
+  literatureSearcher?: Pick<import("../literature/search").LiteratureSearcher, "search">;
+  /** V172 测试注入：PDF 下载（不给则用真 PdfDownloader）。 */
+  literatureDownloadPdf?: import("./literature_pipeline").LiteraturePipelineDeps["downloadPdf"];
   // 注入后 session 会归属到真实 project（找不到绑定时落到默认项目）。
   projects?: ProjectManager;
   /** V138：测试钩子——覆盖 `projectForSession()` 缓存上限，不给就用生产默认值 200。 */
@@ -349,6 +354,8 @@ export function connectorSearchDigest(output: string, limit = 5): string | null 
 export class OrchestratorAgent {
   readonly daemon: SparkResearchDaemon;
   readonly workspaceRoot: string;
+  private readonly literatureSearcher?: OrchestratorDeps["literatureSearcher"];
+  private readonly literatureDownloadPdf?: OrchestratorDeps["literatureDownloadPdf"];
 
   private llm: Pick<LLMRouter, "call" | "listModels">;
   private subAgents: SubAgentFactory;
@@ -411,6 +418,8 @@ export class OrchestratorAgent {
     // 会话工作区静默建在 `/workspaces`。改成挂在数据目录下（与 projects/config.json 同一个根），
     // 二进制/源码/npm 三条安装路径下都指向同一个用户可写、可预期的位置。
     this.workspaceRoot = deps.workspaceRoot ?? join(dataDir(), "workspaces");
+    this.literatureSearcher = deps.literatureSearcher;
+    this.literatureDownloadPdf = deps.literatureDownloadPdf;
     mkdirSync(this.workspaceRoot, { recursive: true });
     this.corePrompt = loadPrompt("core.txt");
     this.researchPrompt = loadPrompt("research.txt");
@@ -830,7 +839,12 @@ export class OrchestratorAgent {
           `"analysis"=reasoning, "code"=run python (params.code), ` +
           `"connector"=query a database (params.server, params.tool, params.args), ` +
           `"subagent"=delegate (params.subagent), ` +
-          `"skill"=load skill context (params.skill). No markdown, no prose, only JSON. ` +
+          `"skill"=run a skill (params.skill). ` +
+          // V172：文献类需求走真流程，别再手搓 connector。关键词拆解（①）在这里发生。
+          `FOR ANY LITERATURE NEED (find papers / survey / review / recent progress / compare countries), emit ONE skill task instead of connector tasks: ` +
+          `{"kind":"skill","params":{"skill":"literature-review","queries":["<3-6 decomposed keyword queries in English>"],"topic":"<one line>","limit":15,"maxRead":8}} ` +
+          `("literature-search" if the user only wants a candidate list). It runs search → library → PDF → reading cards → review with citation checks. ` +
+          `Use "connector" only for non-literature databases (proteins, genes, compounds). No markdown, no prose, only JSON. ` +
           // V171：步骤间的落盘约定。没有这句，模型只能按常识去 /workspace 找上一步的产物。
           `Every connector task's full JSON result is saved to ${join(this.workspaceRoot, sessionId)}/<taskId>.json ` +
           `(absolute path). A "code" task that consumes earlier connector results MUST open exactly those files by absolute path; ` +
@@ -1053,6 +1067,36 @@ export class OrchestratorAgent {
         }
         case "skill": {
           const name = String(task.params?.skill ?? "");
+          // V172（用户定义的五步流程）：文献类技能**真执行**——检索 → 入库 → 下载 → 精读 → 综述。
+          // 其余技能暂仍只加载上下文（各自执行入口不同，先盘点再接，见 BACKLOG V172）。
+          const litMode: LiteraturePipelineMode | null =
+            name === "literature-review" ? "review" : name === "literature-search" ? "search" : null;
+          const project = litMode ? this.projectForSession(sessionId) : null;
+          if (litMode && project) {
+            const rawQueries = task.params?.queries;
+            const queries = Array.isArray(rawQueries) ? rawQueries.map(String) : [task.description];
+            this.record(sessionId, "skill", name, `run pipeline (${litMode}) · ${queries.length} queries`);
+            const pipeline = await runLiteraturePipeline(
+              {
+                llm: this.llmFor(sessionId),
+                project,
+                sessionId,
+                note: (m) => this.record(sessionId, "skill", name, m),
+                searcher: this.literatureSearcher,
+                downloadPdf: this.literatureDownloadPdf,
+              },
+              {
+                mode: litMode,
+                queries,
+                topic: typeof task.params?.topic === "string" ? task.params.topic : undefined,
+                limit: typeof task.params?.limit === "number" ? task.params.limit : undefined,
+                maxRead: typeof task.params?.maxRead === "number" ? task.params.maxRead : undefined,
+              },
+            );
+            const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);
+            try { writeFileSync(savedTo, JSON.stringify(pipeline, null, 2)); } catch { /* 落盘失败不影响返回 */ }
+            return { taskId: task.id, kind: task.kind, ok: pipeline.ok, output: `${pipeline.digest}\n(full result: ${savedTo})` };
+          }
           this.record(sessionId, "skill", name, "context loaded");
           return { taskId: task.id, kind: task.kind, ok: true, output: this.skillContextFor(name) };
         }
