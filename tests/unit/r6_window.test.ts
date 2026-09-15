@@ -73,6 +73,7 @@ describe("U23 · config set 拒收凭据", () => {
     expect(loadConfig({ root: tmp }).OPENROUTER_API_KEY).toBeUndefined();
     const text = lines.join("\n");
     expect(text).toContain("凭据");
+    expect(text).toContain("shell 历史"); // CLI 专属措辞：validateSetting 的 403 兜底不带这句，阴性对照靠它变红
     expect(text).toContain("spark-research auth");
     expect(text).not.toContain("T5-FAKE-KEY-r6");
   });
