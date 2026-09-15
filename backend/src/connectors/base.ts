@@ -355,22 +355,150 @@ const SEARCH_RESULT_KEYS = [
   "totalResults",
 ] as const;
 
-/** 上游用 200 回的业务错误（NCBI `esearchresult.ERROR`、REST 源的顶层 `errCode`/`error`）。没有则 null。 */
-function upstreamErrorOf(p: Record<string, unknown>): string | null {
+// ── V175（v0.10 lane γ-3）：上游 200-带错的**显式表** ──────────────────────
+//
+// U45 修出来的 `upstreamErrorOf` 只认 NCBI 的 `esearchresult.ERROR` 加通用三个键
+// （`errCode` / `errMsg` / `error`）。U45 的残余问题就是：其余源的「200 带错」形状
+// 一条都没盘过。γ-3 逐源实探了一遍（2026-09-16，真实请求，原文见
+// docs/devlog/W10-gamma.md §γ-3），结论比预想的糟——
+//
+//   | 源 | 错误响应实测形状 | 通用三键认得出吗 |
+//   |---|---|---|
+//   | pubmed | `{"esearchresult":{"ERROR":"Empty term and query_key - nothing todo"}}` | 认得（U45 修的就是它） |
+//   | openalex | `{"error":"Invalid query parameters error.","message":"... is not a valid field ..."}` | 认得（`error`） |
+//   | crossref | `{"status":"failed","message-type":"validation-failure","message":[...]}` | **认不出** |
+//   | semanticscholar | `{"message":"Too Many Requests. ...","code":"429"}` | **认不出** |
+//   | aminer | `{"code":40308,"success":false,"msg":"Get Authorization Error","data":null}` | **认不出** |
+//   | europepmc | 语法错仍回合法结果；U40 的形状是 `{"version":"6.9"}`（无容器） | 归下面的「有没有结果容器」那条 |
+//   | arxiv | Atom feed，单条 entry 的 id 指向 `arxiv.org/api/errors`（本次 IP 被封，未能实探） | **认不出** |
+//
+// 最要命的是 crossref 与 semanticscholar：它们的错误体里都有 `message` 这个键，
+// 而 `message` 正在 `SEARCH_RESULT_KEYS` 里——和 U45 里 `esearchresult` 被当成
+// 合法空结果放行**一模一样的形状**，只是换了个源。aminer 更是我们唯一持有凭据的源，
+// 它的错误键（`code`/`success`/`msg`）与通用三键一个都不重合。
+//
+// 所以这里改成**按 connector 的显式表**：每个源一条规则，认不出的源退回通用三键
+// （= v0.9.1 的行为，不给没盘过的源凭空加判据）。
+
+type UpstreamErrorRule = (p: Record<string, unknown>) => string | null;
+
+function nonEmptyString(v: unknown): string | null {
+  return typeof v === "string" && v.trim() !== "" ? v : null;
+}
+
+/** NCBI：`esearchresult.ERROR`（U45 现场原文）。 */
+const ncbiRule: UpstreamErrorRule = (p) => {
   const esearch = p.esearchresult;
-  if (esearch !== null && typeof esearch === "object") {
-    const e = (esearch as Record<string, unknown>).ERROR;
-    if (typeof e === "string" && e !== "") return e;
-  }
+  if (esearch === null || typeof esearch !== "object") return null;
+  return nonEmptyString((esearch as Record<string, unknown>).ERROR);
+};
+
+/**
+ * CrossRef：`status` 不是 "ok" 就是失败，错误细节在 `message` **数组**里。
+ * 判据刻意钉在 `status` 上而不是 `message` 的形状上——成功响应的 `message` 是对象、
+ * 失败是数组，靠类型分辨太脆；`status` 是 CrossRef 自己的信封字段，语义明确。
+ */
+const crossrefRule: UpstreamErrorRule = (p) => {
+  const status = nonEmptyString(p.status);
+  if (status === null || status === "ok") return null;
+  const detail = Array.isArray(p.message)
+    ? (p.message as Array<Record<string, unknown>>)
+        .map((m) => nonEmptyString(m?.message) ?? nonEmptyString(m?.type))
+        .filter((x): x is string => x !== null)
+        .join("；")
+    : nonEmptyString(p["message-type"]);
+  return `status=${status}${detail ? `：${detail}` : ""}`;
+};
+
+/**
+ * Semantic Scholar：`{"message": "...", "code": "429"}`。
+ * **只有 `message` 是字符串时**才算错误信封——成功响应里没有顶层 `message`，
+ * 而别的源（CrossRef 成功体）的 `message` 是对象，不会被这条误伤。
+ */
+const semanticScholarRule: UpstreamErrorRule = (p) => {
+  const message = nonEmptyString(p.message);
+  if (message === null) return null;
+  const code = nonEmptyString(p.code) ?? (typeof p.code === "number" ? String(p.code) : null);
+  return code ? `${code}: ${message}` : message;
+};
+
+/** AMiner：`{"code":40308,"success":false,"msg":"Get Authorization Error"}`。**凭据值不在错误体里，也不许被拼进来。** */
+const aminerRule: UpstreamErrorRule = (p) => {
+  const failed = p.success === false || (typeof p.code === "number" && p.code !== 0 && p.code !== 200);
+  if (!failed) return null;
+  const msg = nonEmptyString(p.msg) ?? nonEmptyString(p.message) ?? "上游未给错误描述";
+  return typeof p.code === "number" ? `code=${p.code}：${msg}` : msg;
+};
+
+/** OpenAlex：`{"error":"...","message":"..."}`——两条都带上，`message` 里才是真正指出哪个字段不对的那句。 */
+const openalexRule: UpstreamErrorRule = (p) => {
+  const error = nonEmptyString(p.error);
+  if (error === null) return null;
+  const detail = nonEmptyString(p.message);
+  return detail ? `${error} ${detail}` : error;
+};
+
+/**
+ * 通用三键（v0.9.1 的行为）。表里没有的源**只走这一条**——
+ * 不给没实探过的源凭空加判据，那只会把「我们猜的」写成「我们核过的」。
+ */
+const genericRule: UpstreamErrorRule = (p) => {
   for (const key of ["errCode", "errMsg", "error"] as const) {
     const v = p[key];
-    if (typeof v === "string" && v !== "") return v;
+    const s = nonEmptyString(v);
+    if (s !== null) return s;
     if (typeof v === "number") return `${key}=${v}`;
+  }
+  return null;
+};
+
+export const UPSTREAM_ERROR_RULES: Record<string, UpstreamErrorRule[]> = {
+  pubmed: [ncbiRule, genericRule],
+  crossref: [crossrefRule, genericRule],
+  semanticscholar: [semanticScholarRule, genericRule],
+  aminer: [aminerRule, genericRule],
+  openalex: [openalexRule, genericRule],
+  // Europe PMC 的错误形状是「没有结果容器」（U40），不是带错键；官方在部分端点上
+  // 用 errCode/errMsg，所以留通用条。
+  europepmc: [genericRule],
+  biorxiv: [genericRule],
+};
+
+/**
+ * arXiv 是 Atom XML（**字符串**，不是对象），所以它的判据不能放在上面那张按对象查的表里。
+ * 官方错误响应是一条 entry，`<id>` 指向 `http://arxiv.org/api/errors#...`、`<title>Error</title>`。
+ *
+ * 如实交代：γ-3 实探时本机 IP 仍被 arXiv 封着（W10-0 基线同一现象），
+ * 这条规则是按 arXiv API 手册的错误信封写的，**没有当场抓到的真实响应**。
+ */
+export function arxivErrorOf(raw: string): string | null {
+  if (!/arxiv\.org\/api\/errors/i.test(raw)) return null;
+  const summary = /<summary[^>]*>([\s\S]*?)<\/summary>/i.exec(raw)?.[1]?.trim();
+  return summary && summary !== "" ? summary : "arXiv 回了错误信封（entry id 指向 api/errors）";
+}
+
+/** 上游用 200 回的业务错误。按 connector 查显式表；没有则 null。 */
+export function upstreamErrorOf(connector: string, p: Record<string, unknown>): string | null {
+  const rules = UPSTREAM_ERROR_RULES[connector] ?? [genericRule];
+  for (const rule of rules) {
+    const hit = rule(p);
+    if (hit !== null) return hit;
   }
   return null;
 }
 
 export function searchPayloadProblem(connector: string, payload: unknown): string | null {
+  // γ-3：arXiv 是 Atom XML 字符串，它的错误信封在非对象分支之前先认一次——
+  // 认不出来的字符串照旧落到下面那条「非对象响应」（既有判据逐字未改）。
+  if (typeof payload === "string") {
+    const arxiv = arxivErrorOf(payload);
+    if (arxiv !== null) {
+      return (
+        `连接器 "${connector}" 的 search 被上游拒绝（HTTP 200，但响应体里是错误）：${arxiv}。` +
+        `下一步：检查检索词与字段限定语法；确认必填参数都传了。`
+      );
+    }
+  }
   if (payload === null || typeof payload !== "object") {
     return `连接器 "${connector}" 的 search 返回了非对象响应。下一步：检查查询语法，或换一个源重试。`;
   }
@@ -378,7 +506,7 @@ export function searchPayloadProblem(connector: string, payload: unknown): strin
   // U45（v0.9.1）：上游用 HTTP 200 回业务错误——NCBI 是 `esearchresult.ERROR`，多数 REST 源是
   // 顶层 `errCode`/`error`。键在（`esearchresult` 就在 SEARCH_RESULT_KEYS 里）不代表查询成功，
   // 这一条必须排在「有没有结果容器」之前，否则一个错误信封会被当成合法空结果放行。
-  const upstream = upstreamErrorOf(p);
+  const upstream = upstreamErrorOf(connector, p);
   if (upstream !== null) {
     return (
       `连接器 "${connector}" 的 search 被上游拒绝（HTTP 200，但响应体里是错误）：${upstream}。` +

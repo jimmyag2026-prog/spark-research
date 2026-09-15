@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { buildCapabilities } from "../../../capabilities";
 import { SettingValidationError, configuredSearchSources, resolveSetting, writeSetting } from "../../../config";
 import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES } from "../../../literature/models";
+import { describeSourceState } from "../../../literature/source_state";
 import type { ServerContext } from "../../context";
 import { configOptions, toItem } from "./general";
 import { BAD_BODY, fail, panel, queryFlag, settingsBody, written, type SettingsRouteOptions } from "./shared";
@@ -71,14 +72,28 @@ async function buildItems(ctx: ServerContext, probe: boolean): Promise<SettingsI
       // 直接显示下一步，而不是勾上之后才发现每次检索都 skipped。
       options: manifest.connectors
         .filter((connector) => literatureIds.has(connector.id))
-        .map((connector) => ({
-          id: connector.id,
-          availability: connector.availability,
-          apiKeyRequired: connector.apiKeyRequired,
-          credentialConfigured: connector.credentialConfigured,
-          caveat: connector.caveat,
-          nextStep: nextStepFor(connector.availability, connector.id, connector.reason),
-        })),
+        .map((connector) => {
+          // γ-1（V173 / U43）：三态在这里算齐——「勾没勾」「有没有凭据」「本次会不会真查」。
+          // 第三件事是前两件的合取，此前没有任何地方算过，于是「配了 key 的源从不参与检索」
+          // 这件事在界面上完全看不出来。合取只有 literature/source_state.ts 一份。
+          const state = describeSourceState(connector.id, {
+            selected: selected.includes(connector.id),
+            apiKeyRequired: connector.apiKeyRequired,
+            // capabilities 的 credentialConfigured 对免 key 的源是 null（「不适用」）。
+            // 三态只问「有没有」，null 与 false 在这里同义——但**不许**把 null 悄悄
+            // 当成 false 传下去，那会让 source_state 的入参类型说谎。
+            credentialConfigured: connector.credentialConfigured === true,
+          });
+          return {
+            ...state,
+            availability: connector.availability,
+            caveat: connector.caveat,
+            // 凭据缺失时优先给三态自己的下一步（它点名的是这个源），
+            // 其余情况退回可用性那条（可能说的是「上游挂了」这类与勾选无关的原因）。
+            nextStep:
+              state.participationNextStep ?? nextStepFor(connector.availability, connector.id, connector.reason),
+          };
+        }),
     },
   };
 
