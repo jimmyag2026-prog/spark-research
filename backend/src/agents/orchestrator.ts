@@ -141,6 +141,8 @@ export interface OrchestratorDeps {
   workspaceRoot?: string;
   // 注入后 session 会归属到真实 project（找不到绑定时落到默认项目）。
   projects?: ProjectManager;
+  /** V138：测试钩子——覆盖 `projectForSession()` 缓存上限，不给就用生产默认值 200。 */
+  projectCacheMaxEntries?: number;
   /**
    * P9 的进程内工具运行器（W2-a 的 runSubAgent() 要求调用方传入）。不给就在第一次需要
    * 真子代理工具面时惰性构造一个、复用同一实例（见 `getToolRunner()`）——惰性构造要求
@@ -275,6 +277,17 @@ export class OrchestratorAgent {
   private corePrompt: string;
   private researchPrompt: string;
   private projects?: ProjectManager;
+  // V138：this was a pure `.get()`/`.set()` `Map` with no eviction anywhere in the
+  // file — a long-running server accumulates one entry per distinct sessionId
+  // forever. There is no session-end hook anywhere in daemon.ts to piggyback on
+  // (sessions are just opaque ids handed in per call, with no explicit close),
+  // so this caps the cache size instead and evicts least-recently-used on
+  // overflow, closing the evicted Project's store handles (each cache entry is
+  // its own `Project` instance from a fresh `manager.open()`/`defaultProject()`
+  // call — see project/manager.ts — so closing one never affects another
+  // session's cached instance, even for the same underlying project slug).
+  private static readonly PROJECT_CACHE_MAX_ENTRIES = 200;
+  private projectCacheMaxEntries: number;
   private projectCache = new Map<string, Project>();
   private seq = 0;
   // 惰性构造、跨调用复用的真实工具面（见 getToolRunner()）；测试可以直接注入一个假的。
@@ -301,6 +314,7 @@ export class OrchestratorAgent {
     this.reviewer = deps.reviewer;
     this.maxReviewRounds = deps.maxReviewRounds ?? 3;
     this.projects = deps.projects;
+    this.projectCacheMaxEntries = deps.projectCacheMaxEntries ?? OrchestratorAgent.PROJECT_CACHE_MAX_ENTRIES;
     this.toolRunner = deps.toolRunner;
     this.toolRunnerInjected = deps.toolRunner !== undefined;
     this.externalTools = deps.externalTools;
@@ -624,9 +638,23 @@ export class OrchestratorAgent {
   projectForSession(sessionId: string): Project | null {
     if (!this.projects) return null;
     const cached = this.projectCache.get(sessionId);
-    if (cached) return cached;
+    if (cached) {
+      // V138：命中时把这条挪到 Map 的末尾（重新 delete+set）——Map 按插入顺序
+      // 迭代，这样下面淘汰时拿到的 `.keys().next()` 才是真正最久未用的那条，
+      // 不是最早创建的那条（长驻热会话不该因为先创建就被优先淘汰）。
+      this.projectCache.delete(sessionId);
+      this.projectCache.set(sessionId, cached);
+      return cached;
+    }
     const project = this.projects.projectForSession(sessionId);
     this.projectCache.set(sessionId, project);
+    while (this.projectCache.size > this.projectCacheMaxEntries) {
+      const oldestKey = this.projectCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      const evicted = this.projectCache.get(oldestKey);
+      this.projectCache.delete(oldestKey);
+      evicted?.close();
+    }
     return project;
   }
 

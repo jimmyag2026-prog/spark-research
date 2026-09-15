@@ -1,5 +1,9 @@
 import { Hono } from "hono";
 import { ApprovalRequiredError } from "../../compute/approval";
+// V135：approve/reject 是「触发执行/记账动作的审批记录」，与 lab 侧同类端点
+// （V95/V136）一样，现在也要求一次性令牌——`spark-research compute token <jobId>`
+// 走与 `compute approve` 相同的交互终端门签发，这里只负责校验+单次消费。
+import { ApprovalTokenError, consume as consumeApprovalToken } from "../../compute/approval_token";
 import { ComputeAdmissionError, ComputeDispatchConflictError, UnknownTargetError } from "../../compute/broker";
 import { UnknownComputeJobError, type ComputeJobView } from "../../compute/job_store";
 import {
@@ -67,6 +71,32 @@ function requireActor(body: Record<string, unknown>): { actor: string; actorSour
     throw new HttpError(400, "approve/reject 必须记名：请求体缺少 actor（HTTP 层不从环境变量猜审批人）");
   }
   return { actor: actor.trim(), actorSource: "http:explicit" };
+}
+
+// V135：body.approvalToken 或 `X-Spark-Approval-Token` 请求头任选其一——与 lab 侧
+// `requireApprovalTokenValue` 完全同构（见 `server/routes/lab.ts`）。
+function requireApprovalTokenValue(body: Record<string, unknown>, header: string | null | undefined): string {
+  const fromBody = body.approvalToken;
+  const token = typeof fromBody === "string" && fromBody.trim() !== "" ? fromBody.trim() : header?.trim();
+  if (!token) {
+    throw new HttpError(
+      403,
+      "approve/reject 需要一次性审批令牌：请求缺少 approvalToken——" +
+        "在终端跑 `spark-research compute token <jobId>` 获取一次性令牌。",
+    );
+  }
+  return token;
+}
+
+// 校验 + 消费令牌；`ApprovalTokenError` 一律映射成 403。**必须在真正落审批记录之前
+// 调用**——与 lab 侧同一条纪律：令牌层面的失败不能被状态机层面的错误盖住。
+function consumeApprovalTokenOrThrow(projectRoot: string, jobId: string, token: string): void {
+  try {
+    consumeApprovalToken(projectRoot, jobId, token);
+  } catch (error) {
+    if (error instanceof ApprovalTokenError) throw new HttpError(403, error.message);
+    throw error;
+  }
 }
 
 function mapComputeError(error: unknown): never {
@@ -235,10 +265,15 @@ export function computeRoutes(ctx: ServerContext): Hono {
   app.post("/jobs/:id/approve", async (c) => {
     const body = await jsonBody(c);
     const signer = requireActor(body);
+    const approvalToken = requireApprovalTokenValue(body, c.req.header("x-spark-approval-token"));
+    const jobId = c.req.param("id");
     return ctx.withProject(projectSlug(c), (scope) => {
+      // V135：先 consume 令牌，再谈 approve——令牌校验失败必须 403，不能先跑进
+      // approval.approve() 才发现（与 lab 侧同一条纪律，见 server/routes/lab.ts）。
+      consumeApprovalTokenOrThrow(scope.project.paths.root, jobId, approvalToken);
       const compute = openComputeScope(scope.project, { root: ctx.deps.root, credentials: ctx.credentials() });
       try {
-        const { job, decisionId } = compute.approval.approve(c.req.param("id"), {
+        const { job, decisionId } = compute.approval.approve(jobId, {
           actor: signer.actor,
           actorSource: signer.actorSource,
           note: optionalString(body, "note"),
@@ -262,10 +297,13 @@ export function computeRoutes(ctx: ServerContext): Hono {
     const body = await jsonBody(c);
     const signer = requireActor(body);
     const reason = requireString(body, "reason");
+    const approvalToken = requireApprovalTokenValue(body, c.req.header("x-spark-approval-token"));
+    const jobId = c.req.param("id");
     return ctx.withProject(projectSlug(c), (scope) => {
+      consumeApprovalTokenOrThrow(scope.project.paths.root, jobId, approvalToken);
       const compute = openComputeScope(scope.project, { root: ctx.deps.root, credentials: ctx.credentials() });
       try {
-        const { job, decisionId } = compute.approval.reject(c.req.param("id"), {
+        const { job, decisionId } = compute.approval.reject(jobId, {
           actor: signer.actor,
           actorSource: signer.actorSource,
           reason,

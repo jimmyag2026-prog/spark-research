@@ -246,14 +246,47 @@ describe("HTTP · approve gate（AD-6）", () => {
       const { experiment } = await compile(fx);
       const missing = await fx.post(`/api/lab/experiments/${experiment.id}/reject`, { actor: "王五" });
       expect(missing.status).toBe(400);
+      const token = mintToken(fx, experiment.id);
       const res = await fx.post<{ experiment: WetView; decision: ResearchRecord }>(
         `/api/lab/experiments/${experiment.id}/reject`,
-        { actor: "王五", reason: "试剂浓度需要复核" },
+        { actor: "王五", reason: "试剂浓度需要复核", approvalToken: token },
       );
       expect(res.status).toBe(200);
       expect(res.body.experiment.state).toBe("rejected");
       expect(res.body.experiment.rejection?.reason).toBe("试剂浓度需要复核");
       expect(res.body.decision.metadata.decision).toBe("reject");
+    } finally {
+      await fx.stop();
+    }
+  });
+
+  // V136：`/reject` 此前是唯一没有一次性令牌门的触发执行动作，与 `/approve` 不对称——
+  // 本机任意进程 curl 一下就能伪造一条「已拒绝」的审批记录。
+  test("V136：reject 没有 approvalToken → 403；令牌被消费一次后不能重复用", async () => {
+    const fx = makeServer();
+    try {
+      const { experiment } = await compile(fx);
+      const noToken = await fx.post(`/api/lab/experiments/${experiment.id}/reject`, {
+        actor: "王五",
+        reason: "试剂浓度需要复核",
+      });
+      expect(noToken.status).toBe(403);
+
+      const token = mintToken(fx, experiment.id);
+      const ok = await fx.post(`/api/lab/experiments/${experiment.id}/reject`, {
+        actor: "王五",
+        reason: "试剂浓度需要复核",
+        approvalToken: token,
+      });
+      expect(ok.status).toBe(200);
+
+      // 同一枚令牌不能再用（这次实验已经是终态 rejected，但令牌层面的 403 应该先命中）。
+      const reused = await fx.post(`/api/lab/experiments/${experiment.id}/reject`, {
+        actor: "王五",
+        reason: "再拒一次",
+        approvalToken: token,
+      });
+      expect(reused.status).toBe(403);
     } finally {
       await fx.stop();
     }

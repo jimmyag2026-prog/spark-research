@@ -247,9 +247,16 @@ export function labRoutes(ctx: ServerContext): Hono {
     const body = await jsonBody(c);
     const signer = requireActor(body);
     const reason = requireString(body, "reason");
+    // V136：`/reject` sat at the same door as `/approve` but never required the
+    // one-time token `/approve` has required since V95 — any local process could
+    // curl a fabricated rejection record. Same gate, same order (consume before
+    // touching the state machine, so a token failure isn't masked by a state error).
+    const approvalToken = requireApprovalTokenValue(body, c.req.header("x-spark-approval-token"));
+    const experimentId = c.req.param("id");
     return ctx.withProject(projectSlug(c), (scope) => {
+      consumeApprovalTokenOrThrow(scope.project.paths.root, experimentId, approvalToken);
       try {
-        const { view, decisionId } = scope.wetLoop().reject(c.req.param("id"), {
+        const { view, decisionId } = scope.wetLoop().reject(experimentId, {
           actor: signer.actor,
           actorSource: signer.actorSource,
           reason,

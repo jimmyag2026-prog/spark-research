@@ -44,3 +44,43 @@ export function failure(
 ): LlmResponse {
   return llmFailure({ provider, model, ...error });
 }
+
+/**
+ * V134：`fetchImpl()` resolving (headers received, HTTP 200) does **not** mean the
+ * body is done — a stream or JSON body can hang indefinitely after that point, and
+ * `AbortController.abort()` firing later doesn't retroactively reject a promise that
+ * was created before the signal aborted (`response.json()`, `reader.read()`) unless
+ * something is actually racing it against the signal. Both providers used to
+ * `clearTimeout()` the moment `fetch()` resolved, so a 200-OK response that then
+ * wedged mid-stream/mid-body left the caller hung forever — the single most
+ * dangerous gap the v0.8.1 external review found.
+ *
+ * This races `promise` against `signal` firing, rejecting with an `Error` whose
+ * `.name` is `"AbortError"` (matching what callers already check for from the
+ * initial `fetch()` rejection) so the same `timedOut` branch handles both.
+ */
+export function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    const err = new Error("aborted");
+    err.name = "AbortError";
+    return Promise.reject(err);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      const err = new Error("aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}

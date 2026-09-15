@@ -244,6 +244,50 @@ describe("compute CLI · 审批链（approve / reject / run）", () => {
   });
 });
 
+// V135（Gate H-2）：`spark-research compute token <jobId>`，与 lab 侧 V95
+// （`tests/unit/w8_epsilon_cli_token.test.ts`）同构——TTY 门与 `compute approve`
+// 字面上调用同一个 `requireApprovalGate`。
+describe("V135 · spark-research compute token <jobId>", () => {
+  test("交互终端确认 → 签发一枚令牌，打印一次；这枚令牌能被真正的 HTTP consume() 消费", async () => {
+    const c = cli(); // 默认：模拟真实交互终端 + 'yes'
+    const { job } = await planned(c);
+    c.reset();
+    expect(await c.run(["token", job.jobId])).toBe(0);
+    expect(c.text()).toContain("一次性审批令牌");
+    const tokenLine = c.out.find((l) => /^\s*[0-9a-f]{64}\s*$/.test(l));
+    expect(tokenLine).toBeDefined();
+    const token = tokenLine!.trim();
+
+    // 跨模块验证：CLI 签的令牌与 HTTP 层要 consume() 的是同一份账本。
+    const { consume } = await import("../../backend/src/compute/approval_token");
+    const project = c.manager.open("compute-proj");
+    expect(() => consume(project.paths.root, job.jobId, token)).not.toThrow();
+    project.close();
+  });
+
+  test("--json 输出含 jobId/token/issuedAt/expiresAt", async () => {
+    const c = cli();
+    const { job } = await planned(c);
+    c.reset();
+    expect(await c.run(["token", job.jobId, "--json"])).toBe(0);
+    const parsed = c.json<{ jobId: string; token: string; issuedAt: string; expiresAt: string }>();
+    expect(parsed.jobId).toBe(job.jobId);
+    expect(parsed.token).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test("非交互环境 + 未配置旁路 token → 拒绝（与 approve 同一道门）", async () => {
+    const c = cli({ approvalIsInteractiveTty: () => false });
+    const { job } = await planned(c);
+    c.reset();
+    expect(await c.run(["token", job.jobId])).toBe(1);
+  });
+
+  test("不存在的 jobId → 非 0（不会静默签发一枚永远兑不掉的令牌）", async () => {
+    const c = cli();
+    expect(await c.run(["token", "cj-does-not-exist"])).toBe(1);
+  });
+});
+
 describe("compute CLI · V19 终端门（piping 必拒）", () => {
   const TOKEN_ENV = "SPARK_RESEARCH_COMPUTE_CI_BYPASS_TOKEN";
 

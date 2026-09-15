@@ -1,6 +1,6 @@
 import type { ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, Usage } from "../types";
 import { redactSecrets } from "../types";
-import { failure, type ProviderAdapter, type ProviderRequest } from "./types";
+import { failure, raceWithAbort, type ProviderAdapter, type ProviderRequest } from "./types";
 
 // OpenAI 兼容基座。
 //
@@ -177,83 +177,107 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
     const streaming = Boolean(options.onDelta);
     const body = buildRequestBody(model, messages, options, streaming);
 
+    // V134：the timer/controller must stay alive across the *entire* call, not just
+    // the initial `fetch()` — a 200-OK response can still hang mid-stream or
+    // mid-body. `effectiveSignal` is whatever signal actually governs the request
+    // (caller-supplied, or our own timeout controller) and is reused below for
+    // every subsequent body read via `raceWithAbort`, all inside one `finally` that
+    // clears the timer exactly once, after everything (success or failure) settles.
     const controller = new AbortController();
     const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    let response: Response;
+    const effectiveSignal = options.signal ?? controller.signal;
     try {
-      response = await fetchImpl(`${this.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // 本地端点的 key 允许为空（很多本地服务不校验）——不发一个空 Bearer 头，
-          // 免得个别服务器把「Authorization: Bearer 」当成格式错误的凭据来拒绝。
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-          ...this.extraHeaders,
-        },
-        body: JSON.stringify(body),
-        signal: options.signal ?? controller.signal,
-      });
-    } catch (error) {
-      // 超时与其它网络失败在这里分岔：AbortController 触发的一律是 AbortError。
-      const timedOut = error instanceof Error && error.name === "AbortError";
-      const message = error instanceof Error ? error.message : String(error);
-      return failure(this.id, model, {
-        kind: timedOut ? "timeout" : "upstream",
-        message: timedOut
-          ? `请求超过 ${timeoutMs}ms 未返回`
-          : `网络层失败：${redactSecrets(message)}`,
-        retryable: true,
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(`${this.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // 本地端点的 key 允许为空（很多本地服务不校验）——不发一个空 Bearer 头，
+            // 免得个别服务器把「Authorization: Bearer 」当成格式错误的凭据来拒绝。
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+            ...this.extraHeaders,
+          },
+          body: JSON.stringify(body),
+          signal: effectiveSignal,
+        });
+      } catch (error) {
+        // 超时与其它网络失败在这里分岔：AbortController 触发的一律是 AbortError。
+        const timedOut = error instanceof Error && error.name === "AbortError";
+        const message = error instanceof Error ? error.message : String(error);
+        return failure(this.id, model, {
+          kind: timedOut ? "timeout" : "upstream",
+          message: timedOut
+            ? `请求超过 ${timeoutMs}ms 未返回`
+            : `网络层失败：${redactSecrets(message)}`,
+          retryable: true,
+        });
+      }
+
+      if (!response.ok) {
+        let body2: string;
+        try {
+          // 响应体可能回显请求内容（含鉴权头），过一遍脱敏再截断。
+          body2 = redactSecrets((await raceWithAbort(response.text(), effectiveSignal)).slice(0, 200));
+        } catch (error) {
+          const timedOut = error instanceof Error && error.name === "AbortError";
+          return failure(this.id, model, {
+            kind: timedOut ? "timeout" : "upstream",
+            message: timedOut
+              ? `HTTP ${response.status} 的响应体在 ${timeoutMs}ms 内未读完`
+              : `读取错误响应体失败：${error instanceof Error ? redactSecrets(error.message) : String(error)}`,
+            retryable: true,
+          });
+        }
+        const kind = response.status === 401 || response.status === 403 ? "auth" : response.status === 429 ? "rate_limit" : "upstream";
+        return failure(this.id, model, {
+          kind,
+          message: `HTTP ${response.status}${body2 ? `: ${body2}` : ""}`,
+          retryable: response.status === 429 || response.status >= 500,
+        });
+      }
+
+      if (streaming) {
+        return await this.consumeStream(response, model, options.onDelta!, effectiveSignal, timeoutMs);
+      }
+
+      let data: ChatCompletionResponse;
+      try {
+        data = (await raceWithAbort(response.json(), effectiveSignal)) as ChatCompletionResponse;
+      } catch (error) {
+        const timedOut = error instanceof Error && error.name === "AbortError";
+        return failure(this.id, model, {
+          kind: timedOut ? "timeout" : "parse",
+          message: timedOut
+            ? `响应体在 ${timeoutMs}ms 内未读完（上游 200 OK 后挂起）`
+            : `上游返回的不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
+          retryable: true,
+        });
+      }
+
+      const choice = data.choices?.[0];
+      const rawToolCalls = choice?.message?.tool_calls;
+      let toolCalls: ToolCall[] = [];
+      if (rawToolCalls?.length) {
+        const parsed = parseToolCalls(rawToolCalls);
+        if (!parsed.ok) {
+          return failure(this.id, model, { kind: "parse", message: parsed.message, retryable: false });
+        }
+        toolCalls = parsed.calls;
+      }
+
+      return {
+        ok: true,
+        provider: this.id,
+        model,
+        content: String(choice?.message?.content ?? ""),
+        toolCalls,
+        usage: usageOf(data),
+        ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
+      };
     } finally {
       if (timer) clearTimeout(timer);
     }
-
-    if (!response.ok) {
-      // 响应体可能回显请求内容（含鉴权头），过一遍脱敏再截断。
-      const body2 = redactSecrets((await response.text()).slice(0, 200));
-      const kind = response.status === 401 || response.status === 403 ? "auth" : response.status === 429 ? "rate_limit" : "upstream";
-      return failure(this.id, model, {
-        kind,
-        message: `HTTP ${response.status}${body2 ? `: ${body2}` : ""}`,
-        retryable: response.status === 429 || response.status >= 500,
-      });
-    }
-
-    if (streaming) {
-      return this.consumeStream(response, model, options.onDelta!);
-    }
-
-    let data: ChatCompletionResponse;
-    try {
-      data = (await response.json()) as ChatCompletionResponse;
-    } catch (error) {
-      return failure(this.id, model, {
-        kind: "parse",
-        message: `上游返回的不是合法 JSON：${error instanceof Error ? error.message : String(error)}`,
-        retryable: true,
-      });
-    }
-
-    const choice = data.choices?.[0];
-    const rawToolCalls = choice?.message?.tool_calls;
-    let toolCalls: ToolCall[] = [];
-    if (rawToolCalls?.length) {
-      const parsed = parseToolCalls(rawToolCalls);
-      if (!parsed.ok) {
-        return failure(this.id, model, { kind: "parse", message: parsed.message, retryable: false });
-      }
-      toolCalls = parsed.calls;
-    }
-
-    return {
-      ok: true,
-      provider: this.id,
-      model,
-      content: String(choice?.message?.content ?? ""),
-      toolCalls,
-      usage: usageOf(data),
-      ...(choice?.finish_reason ? { finishReason: choice.finish_reason } : {}),
-    };
   }
 
   /**
@@ -266,6 +290,8 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
     response: Response,
     model: string,
     onDelta: (chunk: string) => void,
+    signal: AbortSignal,
+    timeoutMs: number,
   ): Promise<LlmResponse> {
     const reader = response.body?.getReader();
     if (!reader) {
@@ -325,8 +351,30 @@ export class OpenAiCompatAdapter implements ProviderAdapter {
       }
     };
 
+    // V134：each `reader.read()` races the abort signal — a `fetch()` that already
+    // resolved with 200 OK carries no more implicit timeout protection on its own,
+    // so a body that stops sending bytes (upstream wedge, dead connection kept
+    // alive) would otherwise hang this loop forever.
     while (true) {
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await raceWithAbort(reader.read(), signal));
+      } catch (error) {
+        const timedOut = error instanceof Error && error.name === "AbortError";
+        try {
+          await reader.cancel();
+        } catch {
+          // 已经在异常路径上，取消失败不影响我们要返回的错误。
+        }
+        return failure(this.id, model, {
+          kind: timedOut ? "timeout" : "upstream",
+          message: timedOut
+            ? `流式响应体在 ${timeoutMs}ms 内未读完（上游 200 OK 后挂起）`
+            : `读取流失败：${error instanceof Error ? redactSecrets(error.message) : String(error)}`,
+          retryable: true,
+        });
+      }
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
