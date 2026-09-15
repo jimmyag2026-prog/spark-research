@@ -168,7 +168,14 @@ describe("HTTP · SSE", () => {
         body: JSON.stringify({ sessionId: "s-sse", message: "你好" }),
       });
       expect(status).toBe(200);
-      expect(events.map((e) => e.event)).toEqual(["start", "progress", "result", "done"]);
+      // α-3 之后 progress 不止一帧（首帧占位 + planStarted/planned/... 各阶段），只钉住序：
+      // 首帧 start，末两帧 result/done，中间全是 progress 且至少一帧。
+      const kinds = events.map((e) => e.event);
+      expect(kinds[0]).toBe("start");
+      expect(kinds.slice(-2)).toEqual(["result", "done"]);
+      const middle = kinds.slice(1, -2);
+      expect(middle.length).toBeGreaterThanOrEqual(1);
+      expect(new Set(middle)).toEqual(new Set(["progress"]));
       const result = events.find((e) => e.event === "result")!.data as { response: string };
       expect(result.response).toContain("s-sse");
     } finally {
