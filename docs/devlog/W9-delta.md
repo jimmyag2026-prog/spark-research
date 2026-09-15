@@ -370,12 +370,12 @@ c8eda4d docs: translate planning/backlog to English; add v0.8.1 remediation plan
 | 套件 | 命令 | 结果 |
 |---|---|---|
 | typecheck | `bun run typecheck` | ✅ 0 错误（**含新接入的 `tests/e2e/tsconfig.json`**） |
-| 单测 | `bun test tests/unit` | **2504 pass / 0 fail**，12689 expect，199 文件，169.46s |
+| 单测 | `bun test tests/unit` | **2510 pass / 0 fail**，12698 expect，199 文件，166.74s（门禁收紧后 +6 条，见「追加」） |
 | 并发 | `bun run test:concurrency` | **33 pass / 0 fail**，1658 expect，10 文件，5.82s |
 | 超时 | `bun run test:timeout` | **4 pass / 0 fail**，23 expect，4 文件，1.31s |
 | 实验室 | `bun run test:lab` | **26 passed**，3.43s |
 | e2e | `bun run test:e2e` | **25 passed**，21.0s |
-| （加跑）集成 | `bun run test:integration` | **8 pass / 0 fail**，85ms，退出码 0 —— δ-1 之前这里是 `0 pass / 8 skip` |
+| （加跑）集成 | `bun run test:integration` | **8 pass / 0 fail**，103ms，退出码 0 —— δ-1 之前这里是 `0 pass / 8 skip` |
 
 无 skip、无并行超时重跑。
 
