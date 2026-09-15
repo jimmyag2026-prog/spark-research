@@ -1,104 +1,95 @@
-# v0.10 开发方案（草案）· 回复速度 + 中间过程流式可见
+# v0.10 开发方案（定稿 v1，2026-09-16）· 回复速度 + 中间过程流式可见 + 文献流程补完
 
-> 状态：**草案（2026-09-15 深夜，本地使用窗口期间起草）**。用户原话：「设计一下怎样提升回复速度，并且要把中间过程流式输出在屏幕上」。
-> 真源数字来自 `docs/devlog/R6-baseline.md`（§机制解释）、`A8-baseline.md`、`UX_TEST_v0.9.0.md`（第五次会话）。所有杠杆都带「预期收益」，**发布前必须用 `scripts/measure-chat.ts` 复测**，没有数字的收益不算收益。
+> 前身：2026-09-15 深夜草案（同名文件），用户 2026-09-16 拍板「制订 v0.10 的开发方案，把今晚测的问题优先解决，如果容量可以的话再加上 backlog 里其他的」。
+> 真源数字：`docs/devlog/R6-baseline.md` §机制解释、`A8-baseline.md`、`UX_TEST_v0.9.0.md`、`devlog/UX-window-timeline.md`。
+> 纪律沿用 v0.9：lane 各自 worktree、枢纽文件收口专属、lane 自报数字不采信、**先 commit 再做阴性对照**、删 worktree 前查后台进程。
 
-## 一、时间花在哪（实测，不是猜）
+## 〇、决定（不再重议）
 
-### 1.1 普通 chat（一句话问题，alpha.3 打点）
+1. **主题**：一句话问题 P50 从 ~110s 压到 ≤ 20s；文献流程从 5.5 min（U50 后）压到 ≤ 3 min；全程中间产物上屏。
+2. **优先级 = 今晚（2026-09-15 本地使用窗口）实测撞到的先做**：它们每条都有现场证据与数字，不是推测。
+3. **S4 已在 v0.9.1 落地**（每源 8s deadline + 429 冷却，`a59d138`/`db28d7f`），v0.10 不重做，只补按 host 的令牌桶与 Retry-After。
+4. **两档综述（S9）是本版第一个功能点**：第五/六次会话证明精读默认走了「全文级成本做摘要级的事」。
+5. **流式协议只增不改**：`start/progress/delta/result/done/error` 六种保留，新增 `partial`，`progress` 补 `ts/elapsedMs/etaMs`，`delta` 补 `target/revision`。
+6. 直答路径（S1）的分类判据**规则优先、模型兜底**（AD-8：模型判断之外要有规则层），误判可由用户在选择器强制「研究模式」。
+7. 发布 DONE 仍含「CI 结论 = success」与「R7 基线复测」两条硬门。
 
-| 阶段 | 耗时 | 模型调用 | 输出 token | 备注 |
-|---|---:|---:|---:|---|
-| plan | 17.4s | 1 | 1586 | 「三句话」问题被拆成 4 个任务，输出整份 research_contract |
-| execute（analysis ×2） | 63.9s | 2 | 1486 + 2999 | 每个 analysis 任务写整段分析 |
-| summarize | 28.3s | 1 | 2519 | 把上面全部重写一遍 |
-| review | ~0 | 0 | — | 规则层 |
-| **合计** | **109.6s** | **4** | **8590** | 用户看到 1157 字 |
+## 一、时间花在哪（实测，定稿沿用）
 
-结论：**78% 的墙钟是模型在生成输出**（glm-5.3-flash ≈ 100 tok/s）；网络与排队不是主因。
+| 场景 | 总墙钟 | 主导 | 证据 |
+|---|---:|---|---|
+| 一句话 chat | 109.6s / 4 调用 / 8590 输出 tok | 78% 是模型生成输出 | R6-baseline §机制解释 |
+| 文献流程（kimi 精读） | 1363s | 精读 ×8 串行 1001s（73%） | 会话五 `web_1789480157513` |
+| 文献流程（deepseek 精读，U50 后） | 330s | 检索 137s（arXiv 429/超时拖住）· 精读 48s · 综述 20s · 汇总 59s | 会话六 `web_1789482658926` |
+| 感知 | — | `delta` 只接汇总；前端一个 spinner；U49 后才有阶段文案 | UX_TEST 第五次会话 |
 
-### 1.2 文献流程（V172，第五次会话 + 冒烟）
+## 二、W10-0 · 先测再改（主会话，1 天）
 
-| 阶段 | 耗时 | 为什么 |
-|---|---:|---|
-| ② 多源检索 | 45s | `Promise.all` **等最慢的源**：arXiv 持续 429/30s 超时，其它六源 1–3s 就回了 |
-| ③ PDF 下载 | 5–15s | 每篇串行试 2–3 个候选链接 |
-| ④ 精读卡 | **50s × N** | `generateMany` **逐篇串行**；kimi-k2.6 每张 ~50s，deepseek-v4-flash 明显更快；默认 N=8 |
-| ⑤ 综述 | 60–120s | 一次长输出（2000+ token）+ 可能重试一次 |
-| **合计** | **8–12 min** | 界面上只有一个 spinner，U49 之前连阶段都看不到 |
+- `scripts/measure-chat.ts --pipeline`：对文献流程按阶段打点（search / download / read / review / summarize），输出与 §一 同形状的表 → **v0.10 基线**。
+- 并发安全实测：3 路并发打 deepseek-v4-flash / openrouter 各 20 次，记 429 次数 → 定 S3 的 `concurrency` 默认值。
+- arXiv 限流复测：冷却 10 min 后 1 req/3s 连打 10 次，记 429 出现位置 → 定按 host 令牌桶参数。
+- 没有这三个数不开 W10-1。
 
-### 1.3 感知层
+## 三、五条 lane（W10-1，并行，各自 worktree）
 
-- SSE 只有 `start / progress / delta / result / done / error` 六种；`delta` 只接在最后的 summarize 上——前面 80% 的时间用户什么正文都看不到。
-- 前端把 `progress.message` 渲染成**一个 spinner 标签**，没有阶段、没有耗时、没有已产出的中间物（检索到的论文、写好的精读卡）。
-- 同步 `/api/session/chat` 超过 255s 被 server 掐断（V156），长任务只能走 `/stream`。
+### α · 速度工程（后端 `literature/`、`agents/literature_pipeline.ts`、`llm/`）
+| 项 | 内容 | 来源 | DONE |
+|---|---|---|---|
+| α-1 **S9 两档综述 + 批量预筛** | `depth: "quick"\|"deep"`；quick = 全部摘要一次调用出综述（引用库内 key，走同一个 citationIntegrity）；两档前先一次便宜调用给候选打相关性、留 top-K | 用户追问「为什么精读要这么久」；V172 残余「④只产卡不筛卡」 | 摘要级任务 ≤ 2 次调用；预筛把明显无关（如「prevention」混进的心血管指南）剔除，门禁用真实会话样本 |
+| α-2 **S3 精读并行** | `generateMany` 加 `concurrency`（W10-0 定值，预期 3） | 会话五精读 1001s | 8 篇 deep 精读 ≤ 150s；预算闸并发下不被打穿（A7 口径复测） |
+| α-3 **S2 各阶段 maxTokens** | plan ≤ 600（紧凑 JSON，解析失败重试一次更小提示，**不退默认计划**）、analysis ≤ 900、summarize ≤ 1200、卡 ≤ 700、综述 ≤ 2500 | 全链路无一处 maxTokens | 输出 token 总量下降 ≥ 40%（基线对比） |
+| α-4 **S10 全文命中率** | `not_a_pdf` 时解析落地页一跳（`citation_pdf_url` / `<link rel=alternate type=pdf>`）；`pdfUrl` 失败后按 DOI 查 Unpaywall；OpenAlex OA 标记标「乐观」 | U51：8 篇标 OA 只拿到 2 | 同一批 8 篇 ≥ 5 篇；技能文档「目前不做的两跳」段删掉 |
+| α-5 按 host 令牌桶 + Retry-After | `http/ratelimit.ts` 给 arxiv 3s 间隔、尊重 `Retry-After`；PDF 直链与检索共用一桶 | U55 探针：3s 间隔第二次仍 429 | W10-0 复测下 10 次 ≥ 8 次 200 |
 
-## 二、提速杠杆（按「收益 / 改动」排序）
-
-| # | 杠杆 | 改哪里 | 预期 | 风险 |
-|---|---|---|---|---|
-| S1 | **直答路径**：规划阶段先判「这是问答还是研究任务」；问答 = 一次调用直答 + 规则 review，不进 plan→execute→summarize | `plan()` 前加一个轻量分类（规则优先：无检索/计算意图、长度短 → 直答；拿不准才问模型一次 ≤50 token） | 一句话问题 110s → **~15s** | 误判把研究题当问答 → 答得浅。缓解：直答里明写「如需检索证据请说明」，且用户可在选择器强制「研究模式」 |
-| S2 | **各阶段 `maxTokens`** | plan ≤ 600（紧凑 JSON）、analysis ≤ 900、summarize ≤ 1200、精读卡 ≤ 700、综述 ≤ 2500 | 输出 token 减 40–60% → 墙钟同比例下降 | 截断风险：plan JSON 被截断会解析失败退默认计划——**plan 必须设「reply with compact JSON, no prose」并在解析失败时重试一次更小的提示**，不能退默认计划（U29 教训） |
-| S3 | **精读并行** | `generateMany` 加 `concurrency`（默认 3）；`usageTrackingLlm` 已有在飞预留，预算闸不会被并发打穿（A7 验证过） | 8 篇 400s → **~140s** | 上游限速；deepseek/openrouter 3 并发实测安全，超过再议 |
-| S4 | **检索不等最慢的源** | `LiteratureSearcher.search` 改 `Promise.allSettled` + 每源独立 deadline（默认 8s，可配 `searchSourceTimeoutMs`）；超时的源标 `failed: timeout` 照常返回其它源 | 45s → **~5s**；arXiv 429 不再拖整条 | 慢源永远被标失败 → 用户看不到它的结果。缓解：进度里明说「arxiv 8s 未回，已跳过」 |
-| S5 | **模型分工默认值** | `subAgentModel_literature` 默认 deepseek-v4-flash（U50 已接线，改默认值即可）；plan 也可用快模型 | 精读单张 50s → ~20s | 质量差异需 R7 复测精读卡合格率 |
-| S6 | **复用已有精读卡** | 精读前查 `listReadingCards`，已有卡的论文跳过 | 第二次问同题接近零成本 | 卡过期（论文更新）——卡带生成时间，>30 天重生成 |
-| S7 | **流式正文** | 综述、精读卡的 LLM 调用也接 `onDelta`（分段：卡是 JSON，流「一句 keyFindings」；综述流 markdown） | 感知等待从「最后一刻」变成「持续有字出来」 | 综述重试时前一版正文作废——需要 `delta` 带 `revision` 号让前端清空重画 |
-| S8 | **取消与断连** | `/stream` 客户端断开 → `AbortSignal` 透传到 LLM 与连接器，停止花钱（V156 ③） | 不省时间，省钱 | — |
-
-| S10 | **全文命中率**（U51）：`not_a_pdf` 时解析落地页一跳（`citation_pdf_url`）；`pdfUrl` 失败后按 DOI 查 Unpaywall；OpenAlex 的 OA 标记标「乐观」 | `literature/pdf.ts` `pdfCandidates` + `PdfDownloader.download` | 实测批次 2/8 → 预计 5/8；精读档才有全文可读 | 多一跳多一次请求；Unpaywall 需 contactEmail（已有配置项） |
-| S9 | **两档综述 + 批量预筛**（用户 2026-09-15 追问「为什么精读要这么久？直接喂给子代理汇总不可以吗」引出）：快速档 = 全部摘要一次调用出综述（引用库内 key，走同一个 citationIntegrity）；精读档 = 有 PDF 或用户点名「深读」时才逐篇建卡；两档之前都先做一次**批量相关性预筛**（一次便宜调用给候选打分，留 top-K） | `literature_pipeline.ts` 加 `depth: "quick" \| "deep"`；plan 提示词默认 quick；预筛复用精读卡的 `relationToProject` 语义但一次判全部 | 摘要级任务 8×50s → **1–2 次调用（1–2 min）**；同时解决 V172 残余「④只产卡不筛卡」 | 快速档没有每篇的证据层——综述里「为什么这篇有用」不可查；用户要追溯时切精读档。第五次会话实证：PDF 0/3，精读全按摘要做，即「用全文级成本做摘要级的事」 |
-
-**优先级**：~~S4~~（已于 v0.9.1 本地窗口提前落地：每源 8s deadline + 429 冷却，`a59d138`）→ S9 → S10 → S3 → S2 → S1 → S7 → S5 → S6 → S8（S9 提到 S3 之前：先把不必要的调用砍掉，再谈并行）。前三条是纯工程、零产品判断、收益最大（文献流程 8–12 min → **3–4 min**）；S1 需要一条分类判据（AD-8：模型判断之外要有规则层）。
-
-## 三、流式可见（中间过程上屏）设计
-
-### 3.1 事件协议（在现有六种之上**只增不改**）
-
-```
-progress  { stage, complete, total, message, ts, elapsedMs, etaMs? }   // 已有，补 ts/elapsed/eta
-partial   { kind: "papers" | "card" | "search_source", taskId, payload }   // 新：中间产物
-delta     { chunk, revision, target: "summary" | "review" | "card:<paperId>" }   // 已有，补 revision/target
-```
-
-- `partial.papers`：检索一回来就推候选清单（标题/年份/DOI/来源），用户在 5s 内看到论文，而不是 8 分钟后。
-- `partial.search_source`：每个源单独回报 ok/failed/timeout + 条数，坏源不再隐身。
-- `partial.card`：每张精读卡完成即推「标题 + 一句 keyFindings + 是否相关」。
-- `delta.target`：让前端把综述正文和摘要正文分开渲染；`revision` 解决重试作废。
-- `etaMs`：按本会话已测阶段均值估（第一张卡 50s → 剩 5 张 ≈ 250s），宁可不给也不乱给。
-
-### 3.2 前端
-
-- 把 spinner 换成**阶段条 + 实时日志 + 正文区**三段：
-  - 阶段条：plan → search → download → read → review → summarize，当前阶段高亮，每段显示耗时。
-  - 实时日志：`progress` 与 `partial` 逐行追加（可折叠），检索到的论文可点开。
-  - 正文区：`delta` 流式 markdown，按 `target` 分区。
-- 「停止」按钮 → 关闭 SSE（S8 让后端真的停）。
-- 长任务一律走 `/stream`；`chat` 同步接口只留给脚本。
-
-### 3.3 后端接线点（全部在现有结构内）
-
-| 事件 | 接线点 |
-|---|---|
-| `progress.elapsed/eta` | `createProgressEmitter` 内部记 `startedAt` 与各阶段均值 |
-| `partial.papers` / `search_source` | `literature_pipeline.ts` ② 每条查询返回后经 `note`-同级的新回调 `emitPartial` |
-| `partial.card` | `generateMany` 的 `onCard` 回调（现在只有 `failures` 汇总） |
-| `delta.target=review` | `ReviewDraftGenerator.generate` 接 `onDelta`（`LLMRouter.call` 已支持流式） |
-| 取消 | `chat()` 收 `signal`，透传到 `llmFor` 与 `ConnectorRegistry`（`HttpClient` 已有 timeout 机制，加 signal） |
-
-## 四、分批与 DONE
-
-| 批 | 内容 | DONE 判据 |
+### β · 流式可见（`agents/progress.ts`、`routes/session.ts`、`agents/literature_pipeline.ts` 回调）
+| 项 | 内容 | DONE |
 |---|---|---|
-| W10-1 | S4 S9 S3 S2 + 3.1 的 `progress.elapsed` | `measure-chat` 基线：一句话 chat P50 **≤ 60s**；文献流程冒烟（1 查询 / 6 篇 / 精读 3）**≤ 4 min**；两条阴性对照（去掉 allSettled → 回到等最慢；concurrency=1 → 时间回去） |
-| W10-2 | 3.1 `partial` + `delta.target/revision` + 3.2 前端三段 | e2e：检索完成后 **≤ 10s** 页面出现论文标题；精读每完成一张页面多一行；综述正文逐字出现 |
-| W10-3 | S1 直答路径 + S5 默认值 + S6 复用 | 一句话 chat P50 **≤ 20s**；T5 第 5 步复验「带计数的分段进度」过；R7 精读卡合格率不低于 R6 |
-| W10-4 | S8 取消/断连 | 断开 SSE 后 5s 内台账不再新增行（V156 ③） |
+| β-1 `progress` 补 `ts/elapsedMs/etaMs` | emitter 记 startedAt 与阶段均值；eta 拿不准不给 | 事件 schema 门禁 + 前端能显示耗时 |
+| β-2 `partial` 事件 | `papers`（检索一回来就推候选清单）、`search_source`（每源 ok/failed/timeout/skipped + 条数）、`card`（每张卡完成推标题 + 一句 keyFindings + 是否相关） | e2e：检索完成 ≤ 10s 页面出现论文标题 |
+| β-3 `delta.target/revision` | 综述、精读卡也流式；重试时 revision +1 前端清空重画 | e2e：综述正文逐字出现 |
+| β-4 取消 | `/stream` 断开 → `AbortSignal` 透传 LLM 与连接器（V156 ③） | 断开后 5s 内台账不再新增行 |
 
-**明确不做**：换 message loop 架构；把所有 13 个技能一次接完（V172 后半按盘点表逐个来）；前端引入新 UI 框架。
+### γ · 文献质量与配置面（`literature/`、`connectors/`、`routes/settings/`）
+| 项 | 内容 | 来源 | DONE |
+|---|---|---|---|
+| γ-1 V173 凭据 ↔ 检索源关联 | 检索源面板每行显示凭据状态与「本次会不会真查」；凭据写入后若未勾选给可执行下一步 | U43（aminer 配了 key 不在清单） | e2e |
+| γ-2 V161 AMiner 检索质量 | 中文主题词先抽/英译再查；零摘要结果标 `abstract: null` 精读跳过 | T3 0/8 | T3 复跑 ≥ 2/8 |
+| γ-3 V175 上游 200-带错形状盘点 | 逐源核 `errCode`/`error` 形状，`upstreamErrorOf` 改显式表 | U45 残余 | 每源一条门禁 |
+| γ-4 V172 后半：技能执行入口盘点表 | 13 个技能各自「执行入口 / 所需 grants / 是否有程序化实现」，产出表后按乙（直调）/甲（子代理）逐个接 | 用户「chat 要能调用 skill 做任何任务」 | 表入库 + 至少再接 3 个技能（paper-download、research-report、novelty-check） |
 
-## 五、先测再改（W10-0）
+### δ · 运维与卫生（`doctor/`、`config/`、CLI、任务书）
+| 项 | 内容 | 来源 |
+|---|---|---|
+| δ-1 V157 验收产物归档 | `project archive` 批量 + 指针落在归档项目时跳到最近活动项目；任务书加「跑完归档」 | U14/U36，工作台默认停在 speed-probe |
+| δ-2 V160 + V162 doctor | 探 4321 + 配置端口 + `--port`；「前端未构建」问实例不问 cwd | U24/U33、U16 |
+| δ-3 V163 / V169 / V170 文案与文档 | `config list` 省略号；`data import` 文案；T5 第 13 步端点 | 低成本合并做 |
+| δ-4 V156 ①② 裁定落地 | 同步 `/api/session/chat` 超阈值改 202+任务句柄；脚本与 UI 一律 `/stream` | U13 |
+| δ-5 V167 TTY 门核实 | pty 包装下 `lab approve` 全流程实测，据结果改文档措辞 | A8 U31 |
 
-1. `scripts/measure-chat.ts` 加 `--pipeline` 模式：对文献流程按阶段打点（search / download / read / review），输出与 §1.2 同形状的表，作为 v0.10 基线。
-2. 精读并行安全性：3 并发打 deepseek-v4-flash / openrouter 各 20 次，记 429 次数——S3 的 `concurrency` 默认值由这个数定。
-3. 这两项做完才开 W10-1；没有基线的提速是 U10 那种「快 2.7 倍」的假数（USAGE_LOG U10 教训）。
+### ε · 前端（`frontend/**`）
+| 项 | 内容 | 来源 |
+|---|---|---|
+| ε-1 阶段条 + 实时日志 + 流式正文三段 | 消费 β 的全部事件；「停止」按钮 | 本版主题 |
+| ε-2 V158 / V159 / V166 | 执行段计数进度（已由 U49 部分覆盖，补 `taskStarted`）；设置项 422 行内显示 `message + nextStep`；BudgetInput 说明「本项目累计上限」 | R6 |
+| ε-3 V168 令牌计数实时读 | 权限面板 | A8 |
+| ε-4 文献列表二期 | 精读卡里抽真关键词进列表（U56 现在显示的是 tags）；PDF 未下载时行内一键下载 | U56 残余 |
+
+## 四、容量外（本版明确不做，登记留着）
+V120（偶发 locked，不销号）· V124 / V129（复核不成立，存档）· V131 / V133 / V146 / V155（门禁与契约小项，等下个门禁批次）· V164（请求级日志，等有第二个需要它的场景）· V165 的 biorxiv 半边（上游）· V176（CNKI/万方真渠道，等外部输入）· V174 已由 U44 关闭（BACKLOG 状态本版补标）。
+
+## 五、收口顺序
+W10-0 → 五 lane 并行（α 先出 S9 让 β 有东西可流）→ 收口 `integration/v0.10-w1` → alpha.1 → **R7**（T1–T5 复跑 + `--pipeline` 基线复测，零上下文）→ 修复窗口 → alpha.2 → **A9** → v0.10.0。
+
+## 六、DONE（全满足）
+- [ ] 一句话 chat P50 ≤ 20s（S1+S2），文献流程 quick 档 ≤ 90s、deep 档（8 篇）≤ 3 min——`measure-chat --pipeline` 复测，网络前提达标
+- [ ] 检索完成 ≤ 10s 页面出现论文标题；精读每完成一张页面多一行；综述正文逐字出现（e2e）
+- [ ] 同一批 8 篇 OA 论文 PDF ≥ 5 篇（S10）
+- [ ] 断开 SSE 后 5s 内台账不再新增行（V156 ③）
+- [ ] AMiner 参与与否在检索源面板一眼可见；T3 复跑 ≥ 2/8
+- [ ] V172：技能盘点表入库，chat 可执行技能 ≥ 5 个
+- [ ] 验收产物归档，工作台默认不再打开验收项目
+- [ ] R7 与 A9 的 P0/Blocker 全部关闭，且每条经主会话独立复现
+- [ ] CI 对 v0.10.0 tag 的结论 = success
+
+## 七、不做
+换 message loop 架构 · 一次接完 13 个技能 · 引入新前端框架 · 再做上游对比。

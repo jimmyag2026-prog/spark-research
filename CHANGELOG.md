@@ -5,6 +5,30 @@
 
 ---
 
+## [0.9.1] — 2026-09-16
+
+**本地使用窗口的修复批**：owner 首次以普通用户身份用 v0.9.0，两天六次真实会话撞出 U38–U56 十九条，全部有现场证据、独立复现、门禁与阴性对照（`docs/devlog/UX-window-fixes.md`、`UX-window-timeline.md`）。
+
+### 如实交代
+- 一句话 chat 仍 ~110s；文献流程 5.5 min（U50 后）——本版让它可量、可见、少犯错，压时间是 v0.10（方案已定稿 `docs/DEVELOPMENT_PLAN_v0.10.md`）。
+- arXiv 对本机 IP 级限流（U55）：本版只做每源 deadline + 冷却，根治靠 v0.10 α-5。
+- V172 只做了前半：chat 能真执行 literature-search / literature-review 两个技能，其余 11 个仍只加载上下文。
+- OA 全文命中率 2/8（U51）本版未改。
+
+### 修复（按发现顺序）
+- U38 连接器失败不再记成成功的任务；U39 子代理类型运行期校验（删 `SUB_AGENT_TYPES` 副本）；U40 检索空壳响应判失败。
+- U44 工具返回进对话前瘦身 + 截断明示（单次输入 129,865 → 2,266 tok）；U45 PubMed 认 NCBI 原名 `term`、空检索词当场拒、上游 200-带错判失败；U46 placeholder 连接器早失败不发请求。
+- U47 规划器拿到真实连接器清单（精确工具名 + 死源黑名单）；U48 summarize 看形状摘要而非前 200 字符；V171 连接器产出落盘到会话工作区并告知规划器绝对路径。
+- U49 文献流程各阶段推 progress；U50 精读/综述用 `subAgentModel_literature`（会话覆盖优先）。
+- U52 记录详情「返回总览」；U53 chat 结果携带产物链接（`ChatResponse.artifacts` 收成真类型）。
+- U54 回复固定结构「结论 → 附件 → 过程校对」；U55 每源 8s deadline + 429 冷却（S4 提前落地）；U56 文献列表加作者/关键词 + PDF 直开路由。
+- V172 前半：`agents/literature_pipeline.ts`——检索 → 入库 → 下载 → 精读 → 综述 + 引用核验，规划阶段拆关键词。
+
+### 新增
+- `GET /api/lit/papers/:id/pdf/file`；`connectorPlanningInventory()`；`searchPayloadProblem()`；`ProgressEmitter.taskNote()`；`OrchestrationResult.failure/artifacts`。
+- 门禁三份共 42 条；阴性对照累计 20 条实跑变红（其中两条反过来抓出门禁自身只钉内容不钉接线：U40、U47）。
+- 文档：`docs/UX_TEST_v0.9.0.md`、`devlog/UX-window-*.md`、`DEVELOPMENT_PLAN_v0.10.md`；USAGE_LOG 到 U56；BACKLOG 到 V176。
+
 ## [0.9.0] — 2026-09-15
 
 **主题：交互链路的速度、稳定性、可控性——先让它可量、可归因、可控。** 汇总 alpha.1–alpha.3 与 A8 修复窗口；各段细节见下方三个 alpha 段。
