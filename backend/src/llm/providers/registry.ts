@@ -1,5 +1,5 @@
 import { resolveSetting, type ConfigOptions } from "../../config";
-import { providerApiKeyEnv } from "../router";
+import { providerApiKeyEnv, type Provider } from "../router";
 
 // R-c-1：provider 单价表 + provider 元数据。
 //
@@ -218,7 +218,128 @@ export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPrici
 // **不再手工维护**：这张映射的真源是 router 的 ADAPTERS（provider 注册表本身）。
 // P11 收口实证：手工副本在接线 anthropic 时立刻失同步，capabilities 的一致性断言当场变红。
 // 从真源派生之后，「加了 provider 忘了更新映射」在结构上不可能发生。
-export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = providerApiKeyEnv();
+// **β-3（v0.9）：改为惰性求值，值与语义完全不变。**
+// 原本这里是 `= providerApiKeyEnv()`，在模块顶层就调进 router.ts。β-3 要让 router.ts
+// 反过来 import 本文件的 `MODELS_BY_PROVIDER`（单价表成为模型清单的唯一真源，见下），
+// 两条**运行期** import 边一旦成环，先被求值的那一侧会在 ESM 的 TDZ 里炸：
+// router 的 `ADAPTERS`（const）还没初始化，registry 顶层就已经调用 `providerApiKeyEnv()`。
+// 把这一次调用推迟到第一次真正读这张表的时候（那时两个模块都已经初始化完），环就是安全的。
+// 对调用方透明：`PROVIDER_API_KEY_ENV[p]` / `Object.keys()` / `Object.entries()` / `in`
+// 全部照常（Proxy 实现了 get/has/ownKeys/getOwnPropertyDescriptor 四个陷阱）。
+export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = (() => {
+  let cache: Record<string, string> | null = null;
+  const map = (): Record<string, string> => (cache ??= { ...providerApiKeyEnv() });
+  return new Proxy({} as Record<string, string>, {
+    get: (_t, prop) => (typeof prop === "string" ? map()[prop] : undefined),
+    has: (_t, prop) => typeof prop === "string" && prop in map(),
+    ownKeys: () => Reflect.ownKeys(map()),
+    getOwnPropertyDescriptor: (_t, prop) =>
+      typeof prop === "string" && prop in map()
+        ? { value: map()[prop], enumerable: true, configurable: true, writable: false }
+        : undefined,
+  });
+})();
+
+// ── β-3（v0.9，USAGE_LOG U5）：模型清单从单价表派生，单价表成为唯一真源 ──────────
+//
+// U5 证据三：「这个模型属于哪一家」这同一个事实，`router.ts` 的 `PROVIDER_MODELS`
+// 与本文件的单价表各写了一份手写副本，没有任何门禁对撞，实测已经漂移
+// （单价表有、PROVIDER_MODELS 没有：deepseek-v4-flash · deepseek-v4-pro · kimi-k2.6 · kimi-k3）。
+// 单价表本来就是 provider → model → price 的嵌套结构，**已经携带了 provider 归属**，
+// 所以正确的方向是让 `PROVIDER_MODELS` 从它派生，而不是另写一份。
+//
+// 派生**不 import router 的任何运行期符号**（`Provider` 是 `import type`，编译期擦除）：
+// router 要 import 本常量，这条边必须保持单向，否则成环（见上面 PROVIDER_API_KEY_ENV 的注释）。
+export const MODELS_BY_PROVIDER: Readonly<Record<Provider, readonly string[]>> = Object.freeze(
+  Object.fromEntries(
+    Object.entries(PRICING).map(([provider, models]) => [provider, Object.freeze(Object.keys(models).sort())]),
+  ),
+) as Readonly<Record<Provider, readonly string[]>>;
+
+/**
+ * 关键词兜底：模型名里含 kimi/moonshot、gpt/o4、claude、deepseek、qwen 就判给对应 provider。
+ * **低保真，只是兜底**——`z-ai/glm-5.3-flash` 这种名字它一个都认不出（U5 证据二里 router.ts
+ * 自己的注释承认了这一点）。β-3 之后它仍然保留，但每命中一次会 `console.warn` 一行
+ * （见 `assertKnownModel`）：自动降级必须留痕，这是本仓库自己的纪律。
+ */
+export function keywordProviderFor(model: string): Provider | null {
+  const low = model.toLowerCase();
+  if (low.includes("kimi") || low.includes("moonshot")) return "kimi";
+  if (low.includes("gpt") || low.includes("o4")) return "openai";
+  if (low.includes("claude")) return "anthropic";
+  if (low.includes("deepseek")) return "deepseek";
+  if (low.includes("qwen")) return "qwen";
+  return null;
+}
+
+/** `local/<model>` / `local:<model>`：显式前缀路由到本地端点，不经 provider 字典。 */
+const LOCAL_MODEL_PREFIX = /^local[/:]/;
+
+export type KnownModel =
+  | { kind: "registered"; provider: Provider }
+  | { kind: "keyword"; provider: Provider }
+  | { kind: "local" };
+
+/**
+ * 认不出的模型名的错误。**不是静默当 Kimi**（U5：最糟的失败模式不是报错，
+ * 而是用错误的 baseUrl 把请求发出去，最后表现为一个看不懂的上游错误，真因在三层之外）。
+ * `kind: "unsupported"` 与 `LlmError` 同口径，便于调用方统一分类。
+ */
+export class UnknownModelError extends Error {
+  readonly kind = "unsupported" as const;
+  readonly retryable = false;
+  constructor(
+    readonly model: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "UnknownModelError";
+  }
+}
+
+export function unknownModelError(model: string): UnknownModelError {
+  const registered = (Object.entries(MODELS_BY_PROVIDER) as Array<[string, readonly string[]]>)
+    .filter(([, models]) => models.length > 0)
+    .map(([provider, models]) => `  ${provider}: ${models.join(" · ")}`)
+    .join("\n");
+  return new UnknownModelError(
+    model,
+    `模型 '${model}' 未登记。已登记：\n${registered}\n` +
+      `用 spark-research config set defaultModel <名> 指定其中之一，` +
+      `或在 llm/providers/registry.ts 登记单价（单价表就是模型清单的真源）。` +
+      `本地端点用 'local/<模型名>' 前缀。`,
+  );
+}
+
+/** 已经警告过的模型名——同一个名字每次调用都刷一行会淹掉真正的日志。 */
+const warnedKeywordModels = new Set<string>();
+
+/**
+ * 模型名校验（**β-3 的收口点**）：认识就返回它是怎么被认出来的，认不出就抛 `UnknownModelError`。
+ *
+ * 三处调用方共用这一个判据（U5「顺带」那条：写入时就校验，而不是等真正调用时才炸）：
+ *   ① `router.ts` 的 `providerForModel()`（收口 diff）——运行期路由；
+ *   ② `config/cli.ts` 的 `config set defaultModel/subAgentModel_*`——CLI 写入前；
+ *   ③ lane γ 的设置面 HTTP 路由——网页端写入前（γ import 本函数，不另写一份判据）。
+ */
+export function assertKnownModel(model: string): KnownModel {
+  if (LOCAL_MODEL_PREFIX.test(model)) return { kind: "local" };
+  for (const [provider, models] of Object.entries(MODELS_BY_PROVIDER) as Array<[Provider, readonly string[]]>) {
+    if (models.includes(model)) return { kind: "registered", provider };
+  }
+  const guess = keywordProviderFor(model);
+  if (guess) {
+    if (!warnedKeywordModels.has(model)) {
+      warnedKeywordModels.add(model);
+      console.warn(
+        `⚠️  模型 '${model}' 未显式登记，按关键词判给 ${guess}——` +
+          `路由与计价都可能不对，建议在 llm/providers/registry.ts 的单价表里登记它。`,
+      );
+    }
+    return { kind: "keyword", provider: guess };
+  }
+  throw unknownModelError(model);
+}
 
 /**
  * 单价可被 config 覆盖（`SPARK_LLM_PRICING_JSON`，见 `config/index.ts` 的
