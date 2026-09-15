@@ -1,6 +1,6 @@
 import { searchPayloadProblem } from "../connectors/base";
 import { renderConnectorInventory } from "../connectors/registry";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SparkResearchDaemon } from "../daemon/daemon";
 import type { ArtifactStore } from "../artifacts/store";
@@ -308,6 +308,42 @@ export function connectorFailureOf(res: unknown): string | null {
 export function normalizeSubAgentType(raw: unknown): SubAgentType | null {
   const name = String(raw ?? "execute").trim().toLowerCase();
   return (SUB_AGENT_TYPES as readonly string[]).includes(name) ? (name as SubAgentType) : null;
+}
+
+/**
+ * V171 / U48（v0.9.1）：给 summarize 看的连接器结果摘要。
+ *
+ * 现场：summarize 原来对每步输出只取前 200 字符——connector 的结果是一整份 JSON，200 字符刚好
+ * 只够看见 `meta.count`，模型于是如实汇报「四次检索成功，但只留下了命中计数」。
+ * 这里按各源的形状抽「条数 + 前几条标题」，认不出形状就退回原始截断（更长一些）。
+ */
+export function connectorSearchDigest(output: string, limit = 5): string | null {
+  let env: { ok?: unknown; server?: unknown; result?: unknown };
+  try { env = JSON.parse(output); } catch { return null; }
+  if (env === null || typeof env !== "object" || env.ok !== true) return null;
+  const r = env.result as Record<string, unknown> | null | undefined;
+  if (!r || typeof r !== "object") return null;
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : null);
+  const msg = r.message as Record<string, unknown> | undefined;
+  const count =
+    num((r.meta as Record<string, unknown> | undefined)?.count) ??
+    num(msg?.["total-results"]) ??
+    num(r.hitCount) ??
+    num((r.esearchresult as Record<string, unknown> | undefined)?.count) ??
+    null;
+  let items: unknown[] = [];
+  if (Array.isArray(r.results)) items = r.results;
+  else if (Array.isArray(msg?.items)) items = msg!.items as unknown[];
+  else if (Array.isArray((r.resultList as Record<string, unknown> | undefined)?.result)) items = (r.resultList as { result: unknown[] }).result;
+  else if (Array.isArray(r.entries)) items = r.entries;
+  else if (r.result && typeof r.result === "object") items = Object.values(r.result as Record<string, unknown>).filter((x) => x && typeof x === "object" && "title" in (x as object));
+  const titles = items.slice(0, limit).map((x) => {
+    const o = x as Record<string, unknown>;
+    const t = o.display_name ?? o.title;
+    return Array.isArray(t) ? String(t[0] ?? "") : String(t ?? "");
+  }).filter(Boolean);
+  if (count === null && items.length === 0) return null;
+  return JSON.stringify({ server: env.server, count, returned: items.length, sampleTitles: titles });
 }
 
 export class OrchestratorAgent {
@@ -795,6 +831,10 @@ export class OrchestratorAgent {
           `"connector"=query a database (params.server, params.tool, params.args), ` +
           `"subagent"=delegate (params.subagent), ` +
           `"skill"=load skill context (params.skill). No markdown, no prose, only JSON. ` +
+          // V171：步骤间的落盘约定。没有这句，模型只能按常识去 /workspace 找上一步的产物。
+          `Every connector task's full JSON result is saved to ${join(this.workspaceRoot, sessionId)}/<taskId>.json ` +
+          `(absolute path). A "code" task that consumes earlier connector results MUST open exactly those files by absolute path; ` +
+          `the Python working directory is unrelated to this session and must not be globbed. ` +
           `Request: ${userMessage}`,
       },
     ];
@@ -904,6 +944,11 @@ export class OrchestratorAgent {
             // 以前这里无条件 `ok: true`，于是「PubMed 超时」「arXiv 429」全都成了**成功的任务**——
             // 2026-09-15 的 mRNA 检索里三次连接器失败在执行摘要里写着 ok，只有模型自己去读 JSON 正文才看出不对。
             // ExecutionOutcome.ok 是证据图、review 层与 repairing 判定的输入，不能由「没抛异常」代劳。
+            // V171：每个 connector 任务的完整结果落到会话工作区 <workspace>/<sessionId>/<taskId>.json。
+            // 以前它只以字符串回到 ExecutionOutcome.output，后续 code 任务照常识去 /workspace 找文件，
+            // 找不到就归并出 0 条——三次真实会话都死在这一步。规划器同时被告知这个绝对路径（见 plan()）。
+            const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);
+            try { writeFileSync(savedTo, JSON.stringify(res, null, 2)); } catch { /* 落盘失败不影响本次返回 */ }
             const failure =
               connectorFailureOf(res) ??
               // U40：只对 search 查「有没有结果或计数」。getPaper / getAbstract 这类单条取回不适用。
@@ -1035,7 +1080,14 @@ export class OrchestratorAgent {
     onDelta?: (chunk: string) => void,
   ): Promise<{ text: string; failure?: OrchestrationFailure }> {
     const exec = execution
-      .map((e) => `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${e.output.slice(0, 200)}`)
+      .map((e) => {
+        // U48：connector 的成功结果按形状摘要（条数 + 前几条标题 + 落盘路径），其余截 600 字符。
+        const digest = e.kind === "connector" && e.ok ? connectorSearchDigest(e.output) : null;
+        const body = digest
+          ? `${digest} (full result: ${join(this.workspaceRoot, sessionId, `${e.taskId}.json`)})`
+          : e.output.slice(0, 600);
+        return `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${body}`;
+      })
       .join("\n");
     const messages: ChatMessage[] = [
       {

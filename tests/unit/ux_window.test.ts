@@ -6,6 +6,7 @@ import { SparkResearchDaemon } from "../../backend/src/daemon/daemon";
 import {
   OrchestratorAgent,
   connectorFailureOf,
+  connectorSearchDigest,
   normalizeSubAgentType,
 } from "../../backend/src/agents/orchestrator";
 import {
@@ -330,5 +331,48 @@ describe("U47 · 规划器拿到真实连接器清单，不再猜工具名 / 不
     expect(s2.usable).toBe(true);
     expect(s2.note).toContain("需凭据");
     expect(renderConnectorInventory()).toContain("semanticscholar:");
+  });
+});
+
+describe("V171 / U48 · 连接器产出落盘 + 规划器知道路径 + summarize 看摘要而非前 200 字符", () => {
+  const openalexShaped = {
+    ok: true, server: "openalex", tool: "search",
+    result: { meta: { count: 56768, page: 1, per_page: 25 }, results: [
+      { display_name: "Recursive Self-Improvement in AI", publication_year: 2024 },
+      { display_name: "Superintelligence Governance", publication_year: 2023 },
+      { display_name: "Third Paper", publication_year: 2022 },
+    ] },
+  };
+  test("summarize 收到的是「条数 + 标题 + 落盘路径」，不是被 200 字符截断的 meta", async () => {
+    const { result, prompts } = await runWithConnector("s-v171", openalexShaped, { server: "openalex", tool: "search", args: { query: "x" } });
+    expect(result.execution.find((e) => e.taskId === "t1")?.ok).toBe(true);
+    const summ = prompts[prompts.length - 1]!;
+    expect(summ).toContain("Recursive Self-Improvement in AI");
+    expect(summ).toContain('"count":56768');
+    expect(summ).toMatch(/full result: .*s-v171\/t1\.json/);
+  });
+  test("结果真的落盘到 <workspace>/<sessionId>/<taskId>.json，内容是完整信封", async () => {
+    const { result } = await runWithConnector("s-v171b", openalexShaped, { server: "openalex", tool: "search", args: { query: "x" } });
+    void result;
+    const { readFileSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { dataDir } = await import("../../backend/src/config");
+    const p = join(dataDir(), "workspaces", "s-v171b", "t1.json");
+    expect(existsSync(p)).toBe(true);
+    const saved = JSON.parse(readFileSync(p, "utf8")) as typeof openalexShaped;
+    expect(saved.result.results).toHaveLength(3);
+  });
+  test("规划器的提示词写明了绝对路径约定（AD-17：约定必须真的被读到）", async () => {
+    const { prompts } = await runWithConnector("s-v171c", openalexShaped, { server: "openalex", tool: "search", args: { query: "x" } });
+    expect(prompts[0]).toMatch(/saved to .*s-v171c\/<taskId>\.json/);
+    expect(prompts[0]).toContain("must not be globbed");
+  });
+  test("digest 认得 openalex / crossref / europepmc / pubmed 四种形状，认不出返回 null", () => {
+    expect(connectorSearchDigest(JSON.stringify(openalexShaped))).toContain("Recursive Self-Improvement");
+    expect(connectorSearchDigest(JSON.stringify({ ok: true, server: "crossref", result: { message: { "total-results": 7, items: [{ title: ["Cross Title"] }] } } }))).toContain("Cross Title");
+    expect(connectorSearchDigest(JSON.stringify({ ok: true, server: "europepmc", result: { hitCount: 12, resultList: { result: [{ title: "EPMC Title" }] } } }))).toContain('"count":12');
+    expect(connectorSearchDigest(JSON.stringify({ ok: true, server: "pubmed", result: { result: { uids: ["1"], "1": { uid: "1", title: "PubMed Title" } } } }))).toContain("PubMed Title");
+    expect(connectorSearchDigest(JSON.stringify({ ok: true, server: "x", result: { version: "6.9" } }))).toBeNull();
+    expect(connectorSearchDigest("not json")).toBeNull();
   });
 });
