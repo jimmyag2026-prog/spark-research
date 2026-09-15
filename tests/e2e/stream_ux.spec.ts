@@ -156,6 +156,10 @@ test("ε-1 ①：阶段条按事件推进，每段显示自己的耗时，没进
 
   await push(page, "progress", { ...progress({ stage: "execute", complete: 1, total: 3, message: "执行中 2/3：精读 3 篇", offset: 4200, etaMs: 8400 }) });
   await expect(page.getByTestId("stage-read")).toHaveAttribute("data-state", "active");
+  // V158（ε-2）：执行段计数直接用 β 事件里的 complete/total，前端不重算。
+  await expect(page.getByTestId("stream-counter")).toHaveText("执行 1/3");
+  // eta 只在 β 给了 etaMs 时出现（拿不准就不给字段，前端也就不画）。
+  await expect(page.getByTestId("stream-eta")).toHaveText("约剩 8.4s");
   await expect(page.getByTestId("stage-search-ms")).toHaveText("2.7s");
 
   // **没进过的段不显示 0ms**：这一轮压根没发过下载相关的事件。
@@ -166,6 +170,9 @@ test("ε-1 ①：阶段条按事件推进，每段显示自己的耗时，没进
   await push(page, "progress", { ...progress({ stage: "summarize", complete: 3, total: 3, message: "汇总中：正在生成结果摘要", offset: 9000 }) });
   await expect(page.getByTestId("stage-summarize")).toHaveAttribute("data-state", "active");
   await expect(page.getByTestId("stage-plan-ms")).toHaveText("1.5s");
+  await expect(page.getByTestId("stream-counter")).toHaveText("执行 3/3");
+  // 这一条没有 etaMs → 界面上也不许凭空出现一个「约剩」。
+  await expect(page.getByTestId("stream-eta")).toHaveCount(0);
 });
 
 test("ε-1 ②：partial.papers 到达 10s 内出现论文标题，且每条可点开到文献库", async ({ page }) => {

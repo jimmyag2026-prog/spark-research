@@ -184,9 +184,19 @@ export function parseBudgetInput(raw: string): number | undefined {
   return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * 预算入口。
+ *
+ * V166（v0.10 ε-2）：这个数**不是「本次调用最多花多少」**，而是「这个项目累计已知花费
+ * 的上限」——闸在 `usage/ledger.ts` 上按项目累计判（CLI 的 `--budget-usd` 帮助文案
+ * alpha.3 已经改过，前端这半边一直没改，U20 点的就是这个）。界面上不写清楚，
+ * 填「1」的人会以为自己限的是这一次。
+ */
+const BUDGET_HINT = "本项目累计已知花费上限";
+
 export function BudgetInput(props: { id: string; value: string; onInput: (value: string) => void }): JSX.Element {
   return (
-    <label class="row" style={{ gap: "4px", "align-items": "center" }} for={props.id}>
+    <label class="row" style={{ gap: "4px", "align-items": "center" }} for={props.id} title={BUDGET_HINT}>
       <span class="faint" style={{ "font-size": "11.5px" }}>
         预算 $
       </span>
@@ -200,7 +210,16 @@ export function BudgetInput(props: { id: string; value: string; onInput: (value:
         placeholder="不限"
         value={props.value}
         onInput={(e) => props.onInput(e.currentTarget.value)}
+        aria-describedby={`${props.id}-hint`}
       />
+      <span
+        id={`${props.id}-hint`}
+        class="faint"
+        style={{ "font-size": "11px" }}
+        data-testid={`${props.id}-hint`}
+      >
+        {BUDGET_HINT}
+      </span>
     </label>
   );
 }
