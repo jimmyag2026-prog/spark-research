@@ -180,3 +180,64 @@ notes 里说清去哪做，比做一个半截的授权入口诚实。
 与本分支一模一样——所以这不是本 lane 的回归。解法是跑测试时带
 `no_proxy=127.0.0.1,localhost,::1`，带上之后同一个文件全绿。
 本报告里的六套件数字全部是带 `no_proxy` 跑出来的。
+
+---
+
+## 追加（收口复核后的三件事）
+
+### γ-8 · loopback 闸改成 fail-closed
+
+原来的判定是「地址解析不出来（null）→ 当进程内调用，放行」。收口指出这本身就是
+一条**隐性放开路径**——AD-18 ② 的要义是不受任何配置、任何环境放开，而这条口子
+一旦某个部署形态（反向代理、非 Bun 运行时、未来换适配器）让 `getConnInfo` 取不到
+地址就静默生效，**且失效时没有任何信号**。fail-open 的门禁等于没有门禁。改了。
+
+进程内调用改走 `SettingsRouteOptions.assumeLoopback` 这个**构造参数**。
+两个候选里选它而不是「`NODE_ENV=test` 时认某个请求头」：后者一旦生产的 NODE_ENV
+被设错（容器镜像里这事很常见），那个头就变成人人可发的绕过口；构造参数则是
+请求方无论如何都够不到的东西——生产挂载点 `settingsRoutes(ctx)` 不传它，恒为 false。
+为此专门加了一条测试：拿 `x-spark-test-loopback` / `x-forwarded-for` / `host` /
+`assume-loopback` 四个头去绕，全部仍 403。
+
+**fail-closed 是有生产风险的改动**（万一 `getConnInfo` 在真 server 上也取不到地址，
+整个凭据面板就废了），所以起了真 server 复核：真 loopback 的 `PUT` 凭据仍是 200。
+
+### γ-9 · 设置面响应类型进 contract
+
+`gen-contract-schemas.ts` 的 `SCHEMA_SOURCES` 只扫 `server/types.ts` 与
+`data/manifest.ts`。在 `server/types.ts` 文末 `export type { … } from
+"./routes/settings/types"` 转一道（**只加，不复制定义**——两份类型定义迟早对不上）。
+
+临时挂载后核对：`http.schemas` 里 10 个设置面类型齐全、`definitions` 全部可解引用，
+JSDoc 也带了过去（`SettingsItem.value` 的 schema 上就写着「kind === secret 时恒为 null」）。
+
+**顺带炸出一个生成器既有缺陷**：`scripts/gen-sdk-python.ts:60` 的 `pyLiteral`
+用 `JSON.stringify` 处理布尔字面量，产出 JS 的 `true`/`false` 而不是 Python 的
+`True`/`False`。`SettingsItem.value` 是本仓库**第一个**含 `boolean` 的契约类型，
+所以这个 bug 到今天才第一次被触发。因为 `_types.py` 头上有
+`from __future__ import annotations`，import 与 58 条 SDK 测试全绿，
+但 `typing.get_type_hints(SettingsItem)` 会 `NameError: name 'false'`。
+`scripts/` 不在本 lane 足迹里，一行修法交收口。
+
+### γ-10 · D-7 闸不再对无 body 的写请求要求 Content-Type
+
+`curl -X DELETE` 不发 Content-Type，被闸成 415。放宽不打开攻击面：闸 1 防的是
+跨站**简单请求**，而简单请求必须带 body 才有意义，跨站 `<form>` 又只能发 GET/POST。
+
+**这里踩了一次**：第一版判据只看 `Content-Length`，结果进程内
+`new Request(url, { body })` 的 headers 上根本没有这个头（那个头由网络层加），
+于是「带 body 但看不出来」让整道闸被静默绕开——`带 body 仍应 415` 那条测试当场红。
+改成以 `c.req.raw.body !== null` 为准，两个头只作兜底。
+**值得记**：这正是「探针选错了会让门禁看起来绿」的一个实例，
+幸好那条正向断言（带 body 仍 415）在，否则这次放宽就是真的把闸拆了。
+
+测试探针用 `POST /api/projects/:slug/archive`：设置面的挂载归收口，本分支上
+`/api/settings/**` 经 `createApp()` 还走不到，而在 `createApp()` 之后再
+`app.route()` 挂上去也不行——先注册的兜底路由先匹配，实测 404（路由表里 25 条都在）。
+archive 是今天就挂着、同样不读 body 的写路由，是这道闸最贴近的替身。
+阴性对照：把 `hasRequestBody` 恒真 → 「无 body 不再 415」当场红。
+
+### 追加后的六套件
+
+typecheck 干净 · unit **2524 pass / 1 fail**（仍是 llms.txt 幂等，归收口）·
+concurrency 33/0 · timeout 4/0 · lab 26 passed · e2e 25 passed · test:sdk 58 passed。
