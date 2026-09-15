@@ -168,18 +168,20 @@
 
 ## 八、v0.9.0 DONE 定义（八条全满足）
 
-- [ ] 闸门 I 门禁绿 + 三条阴性对照红；盘点名单全部入 BACKLOG 且每条有去向；AD-17 入库
-- [ ] 一轮 chat 墙钟 P90 相对 R6 基线下降，**或**给出机制解释并附实测数字（R6 与 A8 各测一次，网络前提达标）
-- [ ] 失败调用 100% 带 `errorKind`；`usage --json` 能按 errorKind 分布出报表；一次人为断网下的 chat 失败在台账里可归因
-- [ ] 传一个已登记但当前 provider 无 key 的模型 → 调用必失败（β-1 门禁实跑）；台账 `model` / `provider` 字段与实际调用一致
-- [ ] 每个会调 LLM 的子命令 `--help` 零模型调用（β-2 门禁实跑，含 `chat`）
-- [ ] 网页端改非密配置即时生效（A8 实测：换模型后台账 model 字段跟着变）；凭据「未配置」旁有可执行下一步
-- [ ] 数据源面板可勾选默认检索源，勾掉一个源后 `lit search`（无 `--sources`）真的不再查它（A8 实测）；需 key 的源显示的是 `auth --connector <id>`，且该命令在终端能把 key 写进 `credentials.json`（0600，不回显）
-- [ ] T5「配置与运维」跑通，其发现全部登记（含不成立的复核记录）
-- [ ] 凭据经设置面板写入后：`lit sources` / `capabilities` 显示已配置；**该值不出现在任何 HTTP 响应体、server 日志、raw、record、usage 里**（A8 用 Playwright 全量响应断言 + grep 数据目录）；伪造非 loopback 来源 → 403 且不受 `originAllowlist` 影响
-- [ ] 设置面板 8 个「一样」面板每个字段都对应后端真实值（`narrative_parity` 绿）；不存在 `sandbox` 面板
-- [ ] **GitHub Actions 对 v0.9.0 tag 的 CI 结论 = success**（V142 教训；本地绿不算）
-- [ ] 集成套件在 CI 里**要么真跑要么显式报「本轮未验证」**，不再出现 `0 pass / 8 skip / 0 fail` 静默形态
+> **2026-09-15 收口核对**：第 2 条走「或」分支——P90 未下降，机制解释与实测见 `docs/devlog/R6-baseline.md` §机制解释（109.6s / 4 次调用 / 8590 输出 token，78% 是输出生成）与 `A8-baseline.md`（A8 侧复测）。第 3 条的「断网」为不等价替代探针（A8 探针 B：黑洞代理），台账 `errorKind:upstream` 可归因。第 11 条在 tag 推送后核。
+
+- [x] 闸门 I 门禁绿 + 三条阴性对照红；盘点名单全部入 BACKLOG 且每条有去向；AD-17 入库
+- [x]（走「或」分支）一轮 chat 墙钟 P90 相对 R6 基线下降，**或**给出机制解释并附实测数字（R6 与 A8 各测一次，网络前提达标）
+- [x] 失败调用 100% 带 `errorKind`；`usage --json` 能按 errorKind 分布出报表；一次人为断网下的 chat 失败在台账里可归因
+- [x] 传一个已登记但当前 provider 无 key 的模型 → 调用必失败（β-1 门禁实跑）；台账 `model` / `provider` 字段与实际调用一致
+- [x] 每个会调 LLM 的子命令 `--help` 零模型调用（β-2 门禁实跑，含 `chat`）
+- [x] 网页端改非密配置即时生效（A8 实测：换模型后台账 model 字段跟着变）；凭据「未配置」旁有可执行下一步
+- [x] 数据源面板可勾选默认检索源，勾掉一个源后 `lit search`（无 `--sources`）真的不再查它（A8 实测）；需 key 的源显示的是 `auth --connector <id>`，且该命令在终端能把 key 写进 `credentials.json`（0600，不回显）
+- [x] T5「配置与运维」跑通，其发现全部登记（含不成立的复核记录）
+- [x] 凭据经设置面板写入后：`lit sources` / `capabilities` 显示已配置；**该值不出现在任何 HTTP 响应体、server 日志、raw、record、usage 里**（A8 用 Playwright 全量响应断言 + grep 数据目录）；伪造非 loopback 来源 → 403 且不受 `originAllowlist` 影响
+- [x] 设置面板 8 个「一样」面板每个字段都对应后端真实值（`narrative_parity` 绿）；不存在 `sandbox` 面板
+- [ ]（tag 推后核，见 CHANGELOG 发布段）**GitHub Actions 对 v0.9.0 tag 的 CI 结论 = success**（V142 教训；本地绿不算）
+- [x] 集成套件在 CI 里**要么真跑要么显式报「本轮未验证」**，不再出现 `0 pass / 8 skip / 0 fail` 静默形态
 
 ---
 

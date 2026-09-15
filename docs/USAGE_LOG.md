@@ -50,6 +50,16 @@
 | [U25](devlog/R6.md#u25) | server 无请求级日志，凭据「日志零命中」证明力弱 | 低 | 可观测性 | → V164 |
 | [U26](devlog/R6.md#u26) | AMiner 中文主题词检索基本无效 + 结果零摘要 | 中 | 检索 | → V161 |
 | [U27](devlog/R6.md#u27) | arxiv 持续 429 / biorxiv 空响应污染召回基线 | 低 | 检索 | → V165 |
+| [U28](devlog/A8.md#u28) | `originAllowlist` 里的远端 Origin 能写入/删除凭据（A8 BLOCKER-1；AD-18 ② 字面不覆盖 Origin） | **高** | 安全 | ✅ v0.9.0（凭据写路径 Origin 单独卡回环，不看 allowlist） |
+| [U29](devlog/A8.md#u29) | 上游网络失败不冒泡到 SSE，界面无限等待；非流式挂到 255s（A8 HIGH-1） | **高** | 正确性 | ✅ v0.9.0（plan 调用失败即止，`failure.kind=llm`，14s 内返回） |
+| [U30](devlog/A8.md#u30) | lab 审批令牌按全 UUID 绑定，UI/CLI 只印短 id，照文档操作必撞「令牌无效」（A8 HIGH-2） | 中 | 体验/正确性 | ✅ v0.9.0（接受 ≥8 位唯一前缀） |
+| [U31](devlog/A8.md#u31) | V19 的 TTY 门可被 pty 包装器满足（安全含义待核实） | 低 | 安全 | → V167 |
+| [U32](devlog/A8.md#u32) | 凭据面板「删除」按钮空操作（A8 HIGH-3） | — | — | ❌ **复核不成立**（Playwright 真实路径：弹窗在最上层、DELETE 发出、行更新；验收探针等的是原生 confirm）见 A8-window-fixes.md |
+| [U33](devlog/A8.md#u33) | `doctor` 只探 4321（= U24） | 中 | 运维 | → V160 |
+| [U34](devlog/A8.md#u34) | 权限面板「有效审批令牌」计数不随签发/消费变化 | 低 | 体验 | → V168 |
+| [U35](devlog/A8.md#u35) | `data import` 文案说「空项目」，实际要求「项目不存在」 | 低 | 文案 | → V169 |
+| [U36](devlog/A8.md#u36) | 工作台默认视图躺着约 40 个历史验收产物（= U14） | 低 | 数据卫生 | → V157 |
+| [U37](devlog/A8.md#u37) | T5 第 13 步引用的 `/api/config/*` 端点已不存在（文档漂移） | 低 | 文档 | → V170（T5 已冻结，下版修） |
 
 ### 方法缺陷
 
