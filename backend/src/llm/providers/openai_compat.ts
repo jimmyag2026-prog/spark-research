@@ -120,6 +120,13 @@ function buildRequestBody(
     messages: toWireMessages(messages),
     temperature: 0.2,
   };
+  // α-3（v0.10）：`CallOptions.maxTokens` 自 P11 起就声明了，但**OpenAI 兼容侧一直没消费它**
+  // ——只有 anthropic 适配器读。于是 deepseek / openrouter / kimi（生产实际走的三家）
+  // 无论调用方传什么上限都不生效，α-3 的「输出 token −40%」在这一行不接上就是空转。
+  // 只在调用方显式给了值时加字段：不传仍由上游决定，既有行为逐字节不变。
+  if (typeof options.maxTokens === "number" && options.maxTokens > 0) {
+    body.max_tokens = Math.floor(options.maxTokens);
+  }
   if (options.tools?.length) {
     body.tools = options.tools.map((t) => ({
       type: "function",

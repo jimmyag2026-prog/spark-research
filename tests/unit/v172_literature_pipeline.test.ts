@@ -94,7 +94,9 @@ describe("V172 · runLiteraturePipeline", () => {
     const llm = new ScriptLlm([CARD, CARD, CARD, () => `# 综述\n\nRSI 患病率约三成[@${realKey()}]。`]);
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s2", searcher: fakeSearcher(3), downloadPdf: async () => ({ ok: false, reason: "no-oa" }) },
-      { mode: "review", queries: ["rsi"], topic: "中美 RSI", maxRead: 3 },
+      // v0.10 α-1：默认档从「逐篇精读」改成 quick，这个用例验的是 deep 路径 → 显式写死 deep。
+      // 候选 3 篇 ≤ 预筛的 skipBelow(3)，预筛不发调用，所以调用数仍是 3 卡 + 1 综述。
+      { mode: "review", queries: ["rsi"], topic: "中美 RSI", maxRead: 3, depth: "deep" },
     );
     expect(r.downloads).toHaveLength(3);
     expect(r.downloads.every((d) => !d.ok)).toBe(true);
@@ -133,7 +135,7 @@ describe("V172 · chat 的 skill 任务真执行", () => {
     const result = await orch.processRequest("RSI 中美进展", "s-orch");
     const t1 = result.execution.find((e) => e.taskId === "t1")!;
     expect(t1.ok).toBe(true);
-    expect(t1.output).toContain("文献流程（search）");
+    expect(t1.output).toContain("文献流程（search · quick 档）");
     expect(searcher.calls).toEqual(["rsi china", "rsi usa"]);
     const saved = join(root, "ws", "s-orch", "t1.json");
     expect(existsSync(saved)).toBe(true);
