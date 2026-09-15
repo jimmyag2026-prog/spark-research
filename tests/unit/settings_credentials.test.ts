@@ -6,6 +6,8 @@ import { Hono } from "hono";
 import { CONFIG_FILE } from "../../backend/src/config";
 import { CREDENTIALS_FILE } from "../../backend/src/daemon/credentials";
 import { clearRegisteredSecrets, redactSecrets } from "../../backend/src/llm/types";
+import { createApp } from "../../backend/src/server/app";
+import { ProjectManager } from "../../backend/src/project/manager";
 import { ServerContext } from "../../backend/src/server/context";
 import { settingsRoutes } from "../../backend/src/server/routes/settings";
 import { DELETE_NOTE } from "../../backend/src/server/routes/settings/credentials";
@@ -289,5 +291,59 @@ describe("AD-18 ⑥+ 值不出现在 server 日志里", () => {
     const body = await res.text();
     expect(body).not.toContain(SECRET);
     expect(body).toContain("not_a_field");
+  });
+});
+
+describe("D-7 闸：无 body 的写请求不要求 Content-Type", () => {
+  // 收口实测的现象：`curl -X DELETE .../api/settings/credentials/<id>` 被 D-7 闸挡成 415，
+  // 因为 curl 没有 body 时本来就不发 Content-Type。删掉一个凭据这种最普通的动作，
+  // 不该要求调用方手写一个描述空 body 的头。
+  //
+  // **为什么这里拿 `POST /api/projects/:slug/archive` 当探针而不是凭据 DELETE**：
+  // D-7 中间件住在 `createApp()` 里，而设置面的挂载那一行归收口（app.ts 是枢纽文件），
+  // 所以在本分支上 `/api/settings/**` 经 `createApp()` 还走不到（在 createApp 之后
+  // 再 `app.route()` 挂上去也不行——先注册的兜底路由会先匹配，实测 404）。
+  // archive 是**今天就已经挂着**的写路由，而且同样不读 body，是这道闸最贴近的替身。
+  // 收口把挂载接上之后，凭据 DELETE 走的是同一条中间件，行为一致。
+
+  function projectApp(): { app: Hono; slug: string } {
+    const dir = mkdtempSync(join(tmpdir(), "spark-d7-"));
+    const app = createApp({ root: dir });
+    const manager = new ProjectManager(dir);
+    const project = manager.create("d7-probe", { name: "D-7 探针" });
+    const slug = project.slug;
+    project.close();
+    return { app, slug };
+  }
+
+  test("POST 不带 Content-Type、不带 body → 到得了处理函数（不再是 415）", async () => {
+    const { app, slug } = projectApp();
+    const res = await app.fetch(
+      new Request(`http://127.0.0.1/api/projects/${slug}/archive`, { method: "POST" }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  test("带 body 的写请求照常强制 application/json（闸没有被放开）", async () => {
+    const { app, slug } = projectApp();
+    const res = await app.fetch(
+      new Request(`http://127.0.0.1/api/projects/${slug}/archive`, {
+        method: "POST",
+        headers: { "content-type": "text/plain" },
+        body: "{}",
+      }),
+    );
+    expect(res.status).toBe(415);
+  });
+
+  test("凭据 DELETE 本身（直挂路由）返回删除确认语义", async () => {
+    // 这一条不经 D-7（路由直挂），测的是处理函数那一半；上面两条测中间件那一半。
+    const app = makeApp();
+    await put(app, CONNECTOR_ID, { api_key: SECRET });
+    const res = await app.fetch(
+      new Request(`http://127.0.0.1/api/settings/credentials/${CONNECTOR_ID}`, { method: "DELETE" }),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { note: string }).note).toBe(DELETE_NOTE);
   });
 });
