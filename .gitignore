@@ -24,3 +24,7 @@ playwright-report/
 .tmp-scaffold-*/
 uv.lock
 dist/
+
+# worktree 里 node_modules/.venv 常是指向主检出的**软链**：`node_modules/` 只匹配目录、不匹配软链（v0.10 收口撞过，CI ENOENT）。
+node_modules
+.venv
