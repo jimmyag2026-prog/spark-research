@@ -114,15 +114,27 @@ process.on("exit", () => {
   if (originalCurrent) console.log(`（当前项目已改回 ${originalCurrent}）`);
 });
 
+// `budgetUsd` 是**项目累计已知花费**的上限（不是本次调用的额度）：已知花费 + 在飞预留 + 本次估价 > 上限就拒。
+// 课题项目上已经有几美分到几美元的历史花费，直接传 perRoundBudget 会 20 轮全被拒（HTTP 200、0 调用、0.0s）。
+// 所以每轮取「该项目当前已知花费 + 本轮额度」——总额度语义不变，仍是 --budget 均摊。
+async function knownCost(slug: string): Promise<number> {
+  const j = (await fetch(`${base}/api/usage?project=${encodeURIComponent(slug)}`).then((r) => r.json())) as {
+    totals?: { knownCostUsd?: number };
+    knownCostUsd?: number;
+  };
+  return j.totals?.knownCostUsd ?? j.knownCostUsd ?? 0;
+}
+
 for (const slug of projects) {
   await setCurrent(slug);
   for (let r = 1; r <= rounds; r++) {
     const before = readUsage(slug);
+    const cap = (await knownCost(slug)) + perRoundBudget;
     const t0 = performance.now();
     const res = await fetch(`${base}/api/session/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: `r6-${slug}-${r}-${Date.now()}`, message: MESSAGE, mode: "chat", budgetUsd: perRoundBudget }),
+      body: JSON.stringify({ sessionId: `r6-${slug}-${r}-${Date.now()}`, message: MESSAGE, mode: "chat", budgetUsd: cap }),
     }).catch((e) => ({ status: 0, statusText: String(e) } as Response));
     const wallMs = performance.now() - t0;
     const after = readUsage(slug);
@@ -141,7 +153,15 @@ for (const slug of projects) {
         /* 残行不计 */
       }
     }
-    rows.push({ project: slug, round: r, wallMs, calls: added.length, failed, kinds, http: res.status });
+    let gated = false;
+    try {
+      const bodyText = await res.text();
+      gated = bodyText.includes("预算闸") && bodyText.includes("拒绝");
+      if (gated) console.log(`  ⚠️ 本轮被预算闸拒绝（HTTP 仍是 200）：${bodyText.slice(0, 160).replace(/\n/g, " ")}`);
+    } catch {
+      /* 读不到 body 不影响计数 */
+    }
+    rows.push({ project: slug, round: r, wallMs, calls: added.length, failed: failed + (gated ? 1 : 0), kinds: gated ? { ...kinds, "(预算闸拒绝)": 1 } : kinds, http: res.status });
     rawAppend.push(`### ${slug} · 第 ${r} 轮（HTTP ${res.status}，${(wallMs / 1000).toFixed(1)}s，新增 ${added.length} 行）`, "```json", ...added, "```", "");
     console.log(`${slug} r${r}: HTTP ${res.status} 墙钟 ${(wallMs / 1000).toFixed(1)}s 调用 ${added.length} 失败 ${failed}`);
   }
