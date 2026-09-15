@@ -136,7 +136,9 @@ async function openWorkbench(page: Page): Promise<void> {
   await expect(page.locator(".brand")).toHaveText("Spark Research");
 }
 
-test.describe.configure({ mode: "serial" });
+// **不配 serial**：每条用例各自建/选项目、各自开一条假流，互不依赖。serial 会在第一条红之后把后面的全部 skip，
+// 阴性对照时就看不出「破坏 A 到底钉红了哪几条」——那正是这些门禁存在的意义。
+// （playwright.config.ts 里 workers=1，本来就不会并行跑。）
 
 test("ε-1 ①：阶段条按事件推进，每段显示自己的耗时，没进过的段不补假 0", async ({ page }) => {
   await openWorkbench(page);
