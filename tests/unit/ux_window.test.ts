@@ -312,6 +312,19 @@ describe("U47 · 规划器拿到真实连接器清单，不再猜工具名 / 不
     expect(renderConnectorInventory().length).toBeLessThan(2000);
   });
 
+  test("清单真的进了 plan 的提示词——不只是「存在一个函数」（AD-17：声明即须有读者）", async () => {
+    // 阴性对照第一版只钉了清单内容，把 renderConnectorInventory() 从 prompt 里整段删掉仍然全绿。
+    // 判据必须落在「规划器真的看见了它」上。
+    const daemon = new SparkResearchDaemon();
+    const llm = new RecordingLlm([JSON.stringify([{ id: "t1", kind: "analysis", description: "x" }]), "汇总"]);
+    const orch = new OrchestratorAgent(daemon, { llm: llm as never });
+    await orch.processRequest("查点文献", "s-u47");
+    const planPrompt = llm.prompts[0]!;
+    expect(planPrompt).toContain("pubmed: search, getPaper, getAbstract");
+    expect(planPrompt).toContain("Do NOT plan connector tasks for these");
+    expect(planPrompt).toContain("cnki");
+  });
+
   test("需凭据的源仍列出来但标注会被跳过（不是黑名单）", () => {
     const s2 = connectorPlanningInventory().find((e) => e.name === "semanticscholar")!;
     expect(s2.usable).toBe(true);
