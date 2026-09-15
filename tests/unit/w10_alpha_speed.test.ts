@@ -400,6 +400,17 @@ describe("α-3 · 各阶段 maxTokens", () => {
     project.close();
   });
 
+  test("推理模型空输出 → 重试那一次不带上限（省钱的前提是还能拿到东西）", async () => {
+    // 真实现场：kimi-k2.6 在 maxTokens=300 下 outputTokens 正好打满 300、content 为空。
+    const llm = new RecordingLlm(["", JSON.stringify([[1, 3], [2, 0], [3, 3], [4, 0]])]);
+    const candidates = FIXTURE.candidates.slice(0, 4).map((c, i) => ({ id: `p${i}`, title: c.title, year: c.year, abstract: c.abstract }));
+    const r = await prescreenCandidates({ llm }, candidates, { topic: FIXTURE.topic, topK: 2, skipBelow: 0 });
+    expect(r.llmCalls).toBe(2);
+    expect(r.failOpen).toBe(false);          // 第二次拿到了东西，没有退化成「全留」
+    expect((llm.options[0] as { maxTokens?: number }).maxTokens).toBe(STAGE_MAX_TOKENS.prescreen);
+    expect((llm.options[1] as { maxTokens?: number } | undefined)?.maxTokens).toBeUndefined();
+  });
+
   test("接线：OpenAI 兼容请求体真的带上 max_tokens（P11 起声明、从未被消费）", async () => {
     const { OpenAiCompatAdapter } = await import("../../backend/src/llm/providers/openai_compat");
     const bodies: Array<Record<string, unknown>> = [];
