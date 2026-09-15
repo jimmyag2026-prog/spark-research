@@ -12,6 +12,7 @@ import { SimulationRegistry } from "../simulation/registry";
 import { OpentronsSimulatorBackend } from "../lab/wet_backend";
 import { probeSegmenter as probeSegmenterViaSegmentQuery } from "../literature/segment";
 import { PACKAGE_VERSION } from "../version";
+import { probePorts, probeRunningInstances, type RunningInstanceScan } from "./running_instance";
 
 // W1-d（B-a 打包分发）：`spark-research doctor`。
 //
@@ -76,6 +77,12 @@ export interface DoctorReport {
   // 字面量喂给 `renderDoctor()`，不知道这个新字段——可选，不强改那份不属于本 lane 的测试；
   // `buildDoctorReport()`（真实生产路径）始终会填上它，不会漏。
   segmenter?: { available: boolean; reason: string | null };
+  /**
+   * δ-2（USAGE_LOG U2）：本机正在跑的 server 实例。探端口（方案甲），不落 pid 文件。
+   * 与 `segmenter` 同理是**可选字段**：`tests/unit/doctor.test.ts` 手写了几份 DoctorReport
+   * 字面量喂给 renderDoctor()，不知道这个新字段；`buildDoctorReport()` 始终会填。
+   */
+  runningInstances?: RunningInstanceScan;
   frontendBuilt: boolean;
   frontendDir: string;
   dataDir: string;
@@ -111,6 +118,8 @@ export interface DoctorOptions extends ConfigOptions {
   probeLab?: (python: string) => Promise<TierProbeResult>;
   probeSegmenter?: (python: string) => Promise<TierProbeResult>;
   probePython?: (python: string) => Promise<PythonStatus>;
+  // δ-2：探端口这一步的注入点（测试起一个假 health server，或直接断言「无运行实例」）。
+  probeRunningInstances?: (currentVersion: string, ports: number[]) => Promise<RunningInstanceScan>;
   env?: Record<string, string | undefined>;
   now?: () => Date;
 }
@@ -258,6 +267,11 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     setupHint: v.setupHint,
   }));
 
+  // δ-2：探本机运行实例。config 里若配了端口就一起探；探不到任何东西是常态，不是错误。
+  const ports = probePorts((config as Record<string, unknown>).serverPort);
+  const scanRunning = options.probeRunningInstances ?? ((v: string, ps: number[]) => probeRunningInstances({ currentVersion: v, ports: ps }));
+  const runningInstances = await scanRunning(PACKAGE_VERSION, ports);
+
   const frontendDir = options.frontendDir ?? DEFAULT_FRONTEND_DIR;
   const frontendBuilt = existsSync(join(frontendDir, "index.html"));
 
@@ -270,6 +284,7 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
     providers,
     computeTargets,
     segmenter: { available: segmenter.ok, reason: segmenter.ok ? null : segmenter.reason },
+    runningInstances,
     frontendBuilt,
     frontendDir,
     dataDir: dataDir(options),

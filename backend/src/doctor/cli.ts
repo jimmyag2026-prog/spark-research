@@ -4,7 +4,8 @@ export const DOCTOR_HELP = `用法:
   spark-research doctor [--json]
 
   报告环境状态：bun 版本 / Python 解释器 / 三档 Python 依赖（core/science/lab）各自是否
-  可用 / 配置了哪些 LLM provider key（只报已配置/未配置，值永不打印）/ 前端产物是否已构建。
+  可用 / 配置了哪些 LLM provider key（只报已配置/未配置，值永不打印）/ 前端产物是否已构建 /
+  本机有没有正在跑的 server 实例（版本对不对得上、工作目录还在不在）。
   缺什么就给出可直接复制的修复命令。
 
   --json    输出机器可读报告（给 agent 脚本化判断）
@@ -84,6 +85,35 @@ export function renderDoctor(report: DoctorReport, out: (line: string) => void):
     if (t.setupHint) for (const line of t.setupHint.split("\n")) out(`      ${line}`);
   }
   out("");
+
+  // δ-2（USAGE_LOG U2）：运行实例。这一段的价值全在「探了哪几个端口」也要打出来——
+  // 探端口方案看不见非常用端口上的实例，把盲区说清楚，比笼统报一句「没有实例」诚实。
+  if (report.runningInstances) {
+    const { scannedPorts, instances } = report.runningInstances;
+    out(`▎运行实例（探端口 ${scannedPorts.join(" / ")}）`);
+    if (instances.length === 0) {
+      out(`  · 这几个端口上没有在跑的实例`);
+      out(`      注意：探端口只看得见这几个端口。\`spark-research server <别的端口>\` 起的实例这里看不到。`);
+    }
+    for (const inst of instances) {
+      const icon = inst.verdict === "match" ? "✅" : "⚠️ ";
+      const label =
+        inst.verdict === "match"
+          ? `版本一致（v${inst.version}）`
+          : inst.verdict === "foreign"
+            ? `端口被 ${inst.service ?? "未知服务"} 占着`
+            : inst.verdict === "orphan_cwd"
+              ? `孤儿实例（v${inst.version}，工作目录已不存在）`
+              : `版本不一致（实例 v${inst.version} ≠ 当前 v${report.version}）`;
+      out(`  ${icon}:${pad(String(inst.port), 8)}${label}`);
+      if (inst.pid !== null) out(`      pid ${inst.pid}${inst.startedAt ? ` · 启动于 ${inst.startedAt}` : ""}`);
+      if (inst.command) out(`      ${inst.command}`);
+      if (inst.cwd) out(`      cwd ${inst.cwd}${inst.cwdExists === false ? "（已不存在）" : ""}`);
+      if (inst.degraded) out(`      ${inst.degraded}`);
+      if (inst.nextStep) out(`      下一步：${inst.nextStep}`);
+    }
+    out("");
+  }
 
   out("▎前端");
   if (report.frontendBuilt) {
