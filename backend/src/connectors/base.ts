@@ -14,6 +14,15 @@ export interface HttpTool {
   responseType?: ToolResponseType;
 }
 
+/**
+ * β-4（v0.10）：一次 connector 调用的调用方选项。目前只有取消信号。
+ * 单独一个接口而不是裸 `signal` 形参：下一个要透传的东西（超时覆盖、请求级 trace id）
+ * 来的时候不必再改一遍所有签名。
+ */
+export interface ConnectorCallOptions {
+  signal?: AbortSignal;
+}
+
 export interface ConnectorMetadata {
   domain: string;
   apiKeyRequired: boolean;
@@ -79,7 +88,7 @@ export class HttpConnector {
 
   // 显式 handler 表（构造期由子类注册）。见下方 `handle()` 的注释了解为什么不是
   // 「同名方法即 handler」的反射分发——那是 P9 及更早版本的设计，v0.3 已移除。
-  private readonly handlers = new Map<string, (params: Record<string, unknown>) => Promise<unknown>>();
+  private readonly handlers = new Map<string, (params: Record<string, unknown>, options?: ConnectorCallOptions) => Promise<unknown>>();
 
   // 子类构造函数里调用：为某个工具名注册显式 handler。
   //
@@ -95,7 +104,7 @@ export class HttpConnector {
   // 契约本身要改，不是加兜底——所以这里不再做任何反射，`handlers` 是构造期一次性
   // 写入、运行期只读的表，`call()` 只有「查表命中就走 handler，否则走通用路径」
   // 两条路，不存在任何跨请求共享的可变状态。
-  protected handle(toolName: string, fn: (params: Record<string, unknown>) => Promise<unknown>): void {
+  protected handle(toolName: string, fn: (params: Record<string, unknown>, options?: ConnectorCallOptions) => Promise<unknown>): void {
     this.handlers.set(toolName, fn);
   }
 
@@ -163,7 +172,7 @@ export class HttpConnector {
     }
   }
 
-  async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  async call(toolName: string, params: Record<string, unknown> = {}, options: ConnectorCallOptions = {}): Promise<unknown> {
     this.assertKnownTool(toolName);
     // U46（v0.9.1）：`status: "placeholder"` 的连接器**自己就知道调用会失败**（caveat 原文写着），
     // 却仍然真发一次网络请求，把 TLS 证书错 / 404 这类上游噪声丢给 agent，白费一个计划步骤。
@@ -178,15 +187,19 @@ export class HttpConnector {
 
     const handler = this.handlers.get(toolName);
     if (handler) {
-      return await handler(params);
+      // β-4：signal 继续往 handler 传。既有 handler 都只声明了一个参数，多传一个不影响它们
+      // （TS 允许形参更少的函数）；handler **内部**再调 requestRaw 时要不要接着传，
+      // 由各 connector 自己决定——本 lane 不逐个改子类（connectors/** 是 α/γ 的地），
+      // 没转发的 handler 现状 = 取消只在下一次请求生效，devlog 里如实登记。
+      return await handler(params, options);
     }
 
-    return this.requestRaw(toolName, params);
+    return this.requestRaw(toolName, params, options);
   }
 
   // 通用 URL 拼装 + 发请求路径。子类 handler 内部要落到这条路径时调用它，而不是
   // `call()`——它不查 handler 表，所以不会递归回到 handler 自己（见上方 handlers 注释）。
-  protected async requestRaw(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  protected async requestRaw(toolName: string, params: Record<string, unknown> = {}, options: ConnectorCallOptions = {}): Promise<unknown> {
     const tool = this.assertKnownTool(toolName);
     let path = tool.endpoint;
     const remaining: Record<string, unknown> = { ...params };
@@ -240,6 +253,9 @@ export class HttpConnector {
         method: tool.method ?? "GET",
         headers,
         body: isPost ? JSON.stringify(remaining) : undefined,
+        // β-4：取消信号落到真正发请求的这一处（全体 connector 唯一的 HTTP 落地点，
+        // 见上面那段注释）——埋在这里，所有 connector 自动覆盖。
+        ...(options.signal ? { signal: options.signal } : {}),
       });
       status = response.status;
       rateLimitWaitMs = (response as { rateLimitWaitMs?: number }).rateLimitWaitMs ?? 0;

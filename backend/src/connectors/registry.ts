@@ -1,5 +1,6 @@
 import {
   HttpConnector,
+  type ConnectorCallOptions,
   type ConnectorMetadata,
   type ConnectorOptions,
   type HttpConnectorConfig,
@@ -189,12 +190,21 @@ export class ConnectorRegistry {
     return this.connectors.get(name);
   }
 
-  async call(connectorName: string, toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  /**
+   * β-4（v0.10 · V156 ③）：`options.signal` 透传到底下的 HttpClient——
+   * `/stream` 断开时在飞的检索请求跟着收掉。不给 = 与接线前一字不差。
+   */
+  async call(
+    connectorName: string,
+    toolName: string,
+    params: Record<string, unknown> = {},
+    options: ConnectorCallOptions = {},
+  ): Promise<unknown> {
     const connector = this.connectors.get(connectorName);
     if (!connector) {
       throw new Error(`Unknown connector "${connectorName}". Available: ${[...this.connectors.keys()].join(", ")}`);
     }
-    return connector.call(toolName, params);
+    return connector.call(toolName, params, options);
   }
 
   listTools(connectorName: string): HttpTool[] {
