@@ -38,8 +38,6 @@ const TYPES = join(BACKEND_SRC, "llm/types.ts");
 const ALLOWLIST: Record<string, string> = {
   // 例：`LlmUsage.costUsd`：只由记账层写、由 usage 读侧消费——不在这里登记，因为它有读者。
   // ---- v0.9 闸门 I-3 盘点（2026-09-14，main@644cccd 首跑抓到；alpha.2 前必须移除，否则陈旧检查红）----
-  streaming: "V143：ProviderCapabilities 三字段之一，router.ts:123 构造、无人消费。lane α-1 看门狗只对 streaming 生效，接线后移除",
-  usageReported: "V143：同上。lane α-4 用它区分「上游没返 usage」与「查不到单价」，接线后移除",
   toolCalling: "V143：同上。子代理 tool loop 提供工具前应核一次；归收口接线（sub_agent.ts），接线后移除",
 };
 

@@ -123,6 +123,20 @@ export async function runUsageCommand(args: string[], deps: UsageCliDeps = {}): 
       if (totals.unpricedCalls > 0) {
         out(`  ⚠️ 其中 ${totals.unpricedCalls} 次是 --allow-unpriced 放行的无单价模型调用（预算闸对它们不计价）。`);
       }
+      // V77：把「查不到单价」与「上游没返 usage」分开报——两者的下一步完全不同
+      // （前者补单价表就解决，后者补什么都没用，只能换 provider 或接受不可计量）。
+      if (totals.noUsageCalls > 0) {
+        out(`  ⚠️ 其中 ${totals.noUsageCalls} 次是上游没有返回 usage 帧（补单价表也无法计价，与上一条互不蕴含）。`);
+      }
+    }
+    // α-4（U1）：失败分布。此前 ok:false 只是一个布尔，事后无法判断该怪谁。
+    const failures = Object.entries(totals.byErrorKind);
+    if (failures.length > 0) {
+      out("  失败分类:");
+      for (const [kind, count] of failures.sort((a, b) => b[1] - a[1])) {
+        out(`    ${kind}: ${count} 次`);
+      }
+      out("  （逐条的脱敏错误摘要见 usage.jsonl 的 errorMessage 字段）");
     }
     out("  按命令:");
     for (const [cmd, t] of Object.entries(totals.byCommand)) {
