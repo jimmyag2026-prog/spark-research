@@ -295,3 +295,23 @@ export function createRevisionCounter(): RevisionCounter {
     },
   };
 }
+
+/**
+ * β 收口用的一组钩子。**存在的理由是把收口 diff 压进 10 行**：
+ * `orchestrator.ts` 与 `routes/session.ts` 是收口专属文件，本 lane 一行不碰，
+ * 它们要加的字段全在这里定义好，收口时只需 `& StreamHooks` 一处、透传一处。
+ *
+ * 三个字段互相独立，都可以不给（不给 = 与 v0.9 行为一字不差）。
+ */
+export interface StreamHooks {
+  /** β-2：中间产物（papers / search_source / card）。 */
+  onPartial?: PartialListener;
+  /**
+   * β-3：**带 target / revision 的**正文增量。与既有的 `onDelta(chunk: string)` 并存：
+   * 那一条是 chat 最终正文（收口时由出口补上 `target:"summary", revision:1`），
+   * 这一条是综述与精读卡的增量，target 由产生端自己给。
+   */
+  onDeltaEvent?: DeltaListener;
+  /** β-4：客户端断开时 abort，透传到 `llmFor` 的 CallOptions 与 ConnectorRegistry.call。 */
+  signal?: AbortSignal;
+}
