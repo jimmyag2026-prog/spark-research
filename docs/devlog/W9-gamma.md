@@ -122,3 +122,61 @@ re-export 的常量来（`AMINER_CREDENTIAL_KEY` / `MODAL_REQUIRED_CREDENTIAL_KE
 `compute/cli.ts` 的注释记着一次真实事故：设计文档写 `token_id`/`token_secret`、
 adapter 读 `tokenId`/`tokenSecret`，用户照提示填完永远报「未配置」。
 凭据面板要是手写第二份字段名清单，就是在重演它。
+
+---
+
+## γ-4 / γ-5 · 十个面板
+
+一个跨面板统一的 `SettingsItem`，面板专属数据一律进 `extra`——这样「只增字段不改名」
+这条对 ε 的承诺在实现阶段不会被逼破。`summary` / `effect` 直接用 `CONFIG_SETTINGS`
+里的原文，不另写一份给 UI 看的说明（U6 证据段点名过这件事）。
+
+`meta.level` 如实分级：`full` ×4（general / models / scientific-tools / credentials）·
+`reduced` ×4（local / extensions / compute / storage）· `readonly` ×1（permissions）。
+减配的地方在 `meta.notes` 里写明少了什么，不假装全功能（AD-12）。
+
+**砍了什么**：通用审批令牌（`server/approval_token.ts`）按 §七 砍尾顺序砍掉，
+extensions 退回「只读 + 无 trust 的 add-mcp」，trust / grant / revoke 维持 CLI。
+理由不只是时间：启动任意 command 等价于本地任意命令执行，一个能从网页点出来的
+「信任并连接」按钮就是把这件事的门槛降到一次点击。面板 `level` 标 `reduced` 并在
+notes 里说清去哪做，比做一个半截的授权入口诚实。
+
+**`?probe=1` 的两处真探**：`local` 面板真去 `GET <baseUrl>/v1/models`（3s 超时），
+`scientific-tools` 真 spawn 子进程问本地平台。失败一律归一成一句话，
+**不把上游响应体透出来**——那里面可能带 key 片段。
+
+## γ-6 · V130 / includeArchived / auth --connector
+
+- **V130**：`/api/usage` 不带 `?project` 时汇总全部项目（**含归档**——钱已经花掉了，
+  归档不会退回来），响应加 `scope` 与 `projects[]`。聚合仍只用 `UsageStore.totals()`
+  这一套算法，HTTP 层只是把每个项目的结果加起来（V37：两处算同一数字）。
+- **`includeArchived`**：既有的 `?all=1` 保留为同义词。改名是 breaking change，
+  而这里要的只是一个语义更清楚的名字，不值得打断 SDK 与既有测试。
+- **`auth --connector`**：与 HTTP 写入路径**共用同一个 `CredentialStore`**，
+  两条路径都登记 `redactSecrets`。测试里有两条互相看得见的对照（CLI 写 → 面板读到、
+  面板写 → CLI 的 store 读到）——两份存储各写各的，迟早出现「网页说配了、CLI 说没配」。
+
+## 真实核验（不是只跑单测）
+
+临时把挂载行加进 `app.ts`（跑完即 `cp` 还原，`git status` 复核过），起一个真的 server：
+
+- `contract --json` 的路由数 **78 → 103**，25 条全部在册、`group=settings`。
+  U6 证据段的原话是「78 条 HTTP 路由里，没有一条能写配置」——这就是那 25 条。
+- `config` 段里出现 `searchSources`。
+- `PUT /api/settings/credentials/aminer` 走**真 loopback**（生产的 `getConnInfo` 路径，
+  不是测试注入的 resolver）→ 200，响应里 `value: null`、`fieldsSet: ["api_key"]`、
+  `fileMode: "600"`；`ls -l` 是 `-rw-------`；值在盘上但 **server 日志里 grep 不到**。
+- `PUT /api/settings/models/default {"model":"no-such-model"}` → 422 且 `nextStep`
+  列出了可选模型名。
+- `/api/usage` → `scope: "global"`；`/api/projects?includeArchived=1` → 200。
+
+## 环境坑（不是代码问题，但会让人误判）
+
+本 session 的 shell 里设了 `http_proxy` / `https_proxy` / `all_proxy`，**Bun 的 fetch
+连 127.0.0.1 也走代理**，于是任何起真 server 再 fetch 的测试统统拿到 503。
+最小复现：`Bun.serve` + `fetch("http://127.0.0.1:<port>/")` → 503。
+
+在**基线 f921bf0** 上跑 `tests/unit/ui_cli_parity.test.ts` 同样是 `0 pass / 9 fail`，
+与本分支一模一样——所以这不是本 lane 的回归。解法是跑测试时带
+`no_proxy=127.0.0.1,localhost,::1`，带上之后同一个文件全绿。
+本报告里的六套件数字全部是带 `no_proxy` 跑出来的。
