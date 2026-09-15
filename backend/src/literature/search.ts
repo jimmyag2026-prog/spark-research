@@ -5,11 +5,13 @@ import { compareMergedPapers, dedupePapers, type DedupeOptions } from "./dedupe"
 import { normalizeResponse } from "./normalize";
 import {
   DEFAULT_SEARCH_SOURCES,
+  LITERATURE_SOURCES,
   normalizeDoi,
   type LiteratureSource,
   type Paper,
   type RankMode,
 } from "./models";
+import { configuredSearchSources } from "../config";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
 import { segmentQuery, type SegmentResult } from "./segment";
 
@@ -18,6 +20,21 @@ import { segmentQuery, type SegmentResult } from "./segment";
 // 关键性质：**单源失败不拖垮整次检索**。每个源独立 settle，失败的源在
 // sourceStatus 里如实标注（含错误摘要），成功的源照常合并返回。
 // AMiner 无 key 时走 connector 的降级返回体，标为 skipped 而不是 failed。
+
+/**
+ * v0.9 lane γ（U6）：配置的默认检索源，落空回内置默认集。
+ *
+ * 配置里混进不认识的 id 时**只丢掉那几个**，不整体作废——配置是用户一个一个勾的，
+ * 因为一个陈旧 id 就把整份偏好扔掉太粗暴。全都不认识（或没配）时返回内置默认集。
+ * 写入侧（`PUT /api/settings/sources`）已经拦掉未知 id（422），这里是读侧的兜底。
+ */
+export function configuredDefaultSources(): LiteratureSource[] {
+  const configured = configuredSearchSources();
+  if (!configured) return DEFAULT_SEARCH_SOURCES;
+  const known = new Set<string>(LITERATURE_SOURCES);
+  const valid = configured.filter((id): id is LiteratureSource => known.has(id));
+  return valid.length > 0 ? valid : DEFAULT_SEARCH_SOURCES;
+}
 
 export type SourceOutcome = "ok" | "failed" | "skipped";
 
@@ -226,7 +243,11 @@ export class LiteratureSearcher {
   }
 
   async search(query: string, options: LiteratureSearchOptions = {}): Promise<LiteratureSearchResult> {
-    const sources = options.sources ?? DEFAULT_SEARCH_SOURCES;
+    // v0.9 lane γ（U6）：不给 `sources` 时读用户配置的 `searchSources`，落空才回内置默认集。
+    // **只改这一处**——`fetchById`（`lit add` 按标识符取单篇）刻意仍用全量默认集：
+    // 那条路径是「我知道这篇论文的 DOI，去哪儿都行，找到就行」，用检索偏好去缩窄它
+    // 只会让明明取得到的论文取不到。
+    const sources = options.sources ?? configuredDefaultSources();
     // rank 要在算 perSource 之前先解出来（下面 BLENDED_DEEP_POOL 判据要用它）；
     // 类级默认仍是 "hits"，理由见下面 `applyRank` 调用点之前的既有注释（V67 2.3）。
     const rank = options.rank ?? "hits";
