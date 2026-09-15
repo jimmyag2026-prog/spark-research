@@ -41,7 +41,7 @@
 | 09-15 20:30 | spark0915 | 新建项目并切为当前项目 | 用户本轮测试开始；server 已切到含 U38/U39/U40 修复的 `fix/ux-U38-U40` |
 | 09-15 20:34 | spark0915 | **COST 告警**：一次 `chat:subagent` 输入 129,865 token / $0.058 | 三次 `lit_search` 把 384 KB 原始 JSON 塞进对话历史；单价没问题，是返回体不摘要 → **U44 / V174** |
 | 09-15 20:34 | spark0915 | 监控脚本自身崩了（f-string 转义） | 真出错时反而不报——已重写并实跑验证；教训：监控的失败分支必须先跑一遍 |
-| 09-16 | — | **U38 U39 U40 已修并带门禁**（`tests/unit/ux_window.test.ts` 10 条，四条阴性对照实跑变红） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
+| 09-16 | — | **U38–U40 · U44–U47 已修并带门禁**（`tests/unit/ux_window.test.ts` 7 describe / 25 条；十一条阴性对照实跑变红，其中一条反过来抓出门禁自身只钉内容不钉接线） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
 
 ## 四·补 · 使用中提出的需求（原话记录）
 

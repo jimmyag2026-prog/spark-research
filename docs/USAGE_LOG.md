@@ -66,7 +66,7 @@
 | [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | → V171（步骤间落盘约定，须裁定） |
 | [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
 | [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
-| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 20 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
+| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 40 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
 | [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
 | [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
 
@@ -919,7 +919,7 @@ $ spark-research lit search "mRNA vaccine artificial intelligence" --sources ami
 <a id="u44"></a>
 ## U44 · `lit_search` 的工具返回不摘要，整份 JSON 进对话历史 → 单次调用 13 万输入 token
 
-**现场**：2026-09-16 用户自测（项目 `spark0915`，课题「中美 RSI 领域 2020–2025 进展对比」）。监控报出一次 `COST` 事件。
+**现场**：2026-09-15 20:32 +0800（台账原文 UTC `2026-09-15T12:32:11.706Z`；本文档其余处出现的「2026-09-16」是笔误，以台账为准）用户自测（项目 `spark0915`，课题「中美 RSI 领域 2020–2025 进展对比」）。监控报出一次 `COST` 事件。
 
 **证据**：台账那一行——
 
