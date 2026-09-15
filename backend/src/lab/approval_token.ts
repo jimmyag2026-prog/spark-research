@@ -225,6 +225,15 @@ export function issue(projectRoot: string, experimentId: string): IssuedApproval
  * 全程持锁：并发 consume 同一枚令牌，保证恰好一次成功（见
  * `tests/concurrency/lab_token_once.test.ts`）。
  */
+/**
+ * A8 U30（v0.9.0）：UI / CLI 到处印的是 record 的短 id（前 8 位），令牌却按全 UUID 绑定——
+ * 照着屏幕上的 id 去批准 100% 撞「令牌无效」。这里接受**唯一前缀**：≥ 8 位且只可能匹配一条。
+ */
+function idMatches(bound: string, given: string): boolean {
+  if (bound === given) return true;
+  return given.length >= 8 && bound.startsWith(given);
+}
+
 export function consume(projectRoot: string, experimentId: string, token: string): void {
   if (typeof token !== "string" || token.trim() === "") {
     throw new ApprovalTokenError(
@@ -238,7 +247,7 @@ export function consume(projectRoot: string, experimentId: string, token: string
     const now = Date.now();
 
     const boundToThisExperiment = data.tokens.filter(
-      (t) => t.experimentId === experimentId && hashesEqual(t.tokenHash, tokenHash),
+      (t) => idMatches(t.experimentId, experimentId) && hashesEqual(t.tokenHash, tokenHash),
     );
     if (boundToThisExperiment.length === 0) {
       throw new ApprovalTokenError(

@@ -138,11 +138,16 @@ export interface OrchestrationFailure {
   message: string;
 }
 
-/** plan() 被预算闸拒绝时抛出：不能再退到 defaultPlan() 去跑连接器任务（U12：花 49s 网络 I/O 然后再被拒一次）。 */
-class BudgetGateError extends Error {
-  constructor(message: string) {
+/**
+ * plan() 的模型调用失败时抛出：不能再退到 defaultPlan() 去跑连接器任务。
+ * U12：预算闸拒了还去跑 49s 网络 I/O 然后再被拒一次；A8 U29：上游连不上时默认计划的
+ * 连接器任务在坏网络上逐个超时，SSE 只剩 ping、非流式 chat 挂到 255s 被掐——
+ * 没有模型就不可能有真答案，第一次失败就该把 errorKind 交给用户。
+ */
+class PlanCallFailedError extends Error {
+  constructor(readonly kind: OrchestrationFailure["kind"], message: string) {
     super(message);
-    this.name = "BudgetGateError";
+    this.name = "PlanCallFailedError";
   }
 }
 
@@ -615,11 +620,14 @@ export class OrchestratorAgent {
     try {
       plan = await this.plan(sessionId, userMessage, skills, skillContext);
     } catch (error) {
-      if (!(error instanceof BudgetGateError)) throw error;
-      // U12：规划就被闸拒了——整轮到此为止。不跑默认计划、不再调 summarize（那只会再被拒一次），
+      if (!(error instanceof PlanCallFailedError)) throw error;
+      // U12 / U29：规划调用失败——整轮到此为止。不跑默认计划、不再调 summarize，
       // 直接给结构化失败；review 不能 approved（没有任何产出可批）。
-      this.record(sessionId, "orchestrator", "done", "budget gate rejected the plan call; nothing executed");
-      const message = `[orchestrator] 本次调用被预算闸拒绝，未执行任何任务。${error.message}`;
+      this.record(sessionId, "orchestrator", "done", `plan call failed (${error.kind}); nothing executed`);
+      const message =
+        error.kind === "budget"
+          ? `[orchestrator] 本次调用被预算闸拒绝，未执行任何任务。${error.message}`
+          : `[orchestrator] LLM 调用失败，未执行任何任务（这是调用失败，不是模型产出）。${error.message}`;
       return {
         sessionId,
         projectSlug: project?.slug ?? null,
@@ -629,7 +637,7 @@ export class OrchestratorAgent {
         summary: message,
         review: { approved: false, findings: [] } as ReviewResult,
         reviewRounds: 0,
-        failure: { kind: "budget", message: error.message },
+        failure: { kind: error.kind, message: error.message },
       };
     }
     progress.planned(plan.length);
@@ -784,9 +792,9 @@ export class OrchestratorAgent {
     // 空串的）`res.content` 当成计划文本喂给 parsePlan()。
     if (!res.ok) {
       this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.error.message}`);
-      // U12：预算闸拒绝不是「模型没答好」，退到默认计划只会白跑连接器任务再被拒一次。
-      if (res.error.kind === "budget") throw new BudgetGateError(res.error.message);
-      return this.defaultPlan();
+      // U12 / A8 U29：调用失败（闸拒、上游连不上、鉴权…）一律到此为止，不退默认计划。
+      // 只有「模型答了但不是合法计划」才退 defaultPlan()（下一行）。
+      throw new PlanCallFailedError(res.error.kind === "budget" ? "budget" : "llm", res.error.message);
     }
     return this.parsePlan(res.content) ?? this.defaultPlan();
   }

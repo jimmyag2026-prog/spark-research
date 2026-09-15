@@ -73,15 +73,30 @@ export function isLoopbackRequest(address: string | null): boolean {
  * ——那正是「两处算同一件事」迟早对不上的形状。
  */
 export function loopbackGuard(options: SettingsRouteOptions): (c: Context) => boolean {
-  if (options.assumeLoopback === true) return () => true;
+  // A8 U28（v0.9.0）：传输层是回环还不够——浏览器发来的请求还带 `Origin`。用户把某个远端域名
+  // 加进 originAllowlist 是给「用远端页面看工作台」开的口子，不该顺带把凭据写路径也开给它：
+  // 一个被加进白名单的页面就能在用户本机上改写/删除凭据。所以这里对 Origin 单独再卡一道，
+  // **不看 originAllowlist**：Origin 缺省（curl / 同源）或本身是回环才放行。
+  if (options.assumeLoopback === true) return (c) => isLoopbackOrigin(c.req.header("origin"));
   const resolve = options.remoteAddress ?? defaultRemoteAddress;
-  return (c) => isLoopbackRequest(resolve(c));
+  return (c) => isLoopbackRequest(resolve(c)) && isLoopbackOrigin(c.req.header("origin"));
+}
+
+/** Origin 头缺省 → true（非浏览器/同源）；有 → 主机名必须是回环。解析不出来的 Origin 一律拒。 */
+export function isLoopbackOrigin(origin: string | undefined): boolean {
+  if (origin === undefined || origin === "" || origin === "null") return origin !== "null";
+  try {
+    const host = new URL(origin).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
 }
 
 export const LOOPBACK_REJECTION = {
   error: "凭据只接受本机（loopback）来源的写入请求",
   nextStep:
-    "在运行 server 的那台机器上，用浏览器打开 http://127.0.0.1:<端口> 再操作；" +
+    "在运行 server 的那台机器上，用浏览器打开 http://127.0.0.1:<端口> 再操作（页面来源也必须是本机）；" +
     "或在终端执行 `spark-research auth --connector <id>` 写入凭据。" +
     "（这条限制不受 originAllowlist 影响，配置白名单也不会放开它；" +
     "取不到来源地址时同样拒绝，不会因为「看不出来是谁」就放行——AD-18 ②）",
