@@ -22,20 +22,10 @@ export type SettingsSection = "inference" | "capabilities" | "runtime" | "app";
 
 // 可达面板的真源清单，按左导航从上到下的顺序。注册表契约测试会核这张表：
 // 谁想加/删一个面板，都必须同时动它，不存在「悄悄多一个面板」。
-export const SETTINGS_PANEL_IDS = [
-  "models",
-  "local-models",
-  "credentials",
-  "sources",
-  "scientific-tools",
-  "connectors",
-  "skills",
-  "compute",
-  "network",
-  "storage",
-  "permissions",
-  "general",
-] as const;
+// **这张表随交付逐个长出来**：一个面板的实现文件真的存在、真的接了后端之后，
+// 它的 id 才会出现在这里。先把 12 个 id 写全、文件慢慢补，中间态就是一批点开是空的
+// 面板——那正是「放占位」的另一种写法。
+export const SETTINGS_PANEL_IDS = ["general"] as const;
 
 export type SettingsPanelId = (typeof SETTINGS_PANEL_IDS)[number];
 
@@ -76,107 +66,11 @@ export interface SettingsPanel {
 }
 
 export const SETTINGS_PANELS: SettingsPanel[] = [
-  // ── 推理 ──
-  {
-    id: "models",
-    title: "模型",
-    glyph: "◆",
-    section: "inference",
-    parity: "same",
-    component: lazy(() => import("./Models")),
-  },
-  {
-    id: "local-models",
-    title: "本地模型",
-    glyph: "◇",
-    section: "inference",
-    parity: "reduced",
-    gap: "只管一个 OpenAI 兼容端点并实探它的 /v1/models；不做 Ollama 模型拉取与本地进程管理。",
-    component: lazy(() => import("./LocalModels")),
-  },
-  {
-    id: "credentials",
-    title: "凭据",
-    glyph: "⚿",
-    section: "inference",
-    parity: "same",
-    component: lazy(() => import("./Credentials")),
-  },
-  // ── 能力 ──
-  {
-    id: "sources",
-    title: "检索源",
-    glyph: "◎",
-    section: "capabilities",
-    parity: "same",
-    component: lazy(() => import("./Sources")),
-  },
-  {
-    id: "scientific-tools",
-    title: "科学工具",
-    glyph: "⚗",
-    section: "capabilities",
-    parity: "same",
-    component: lazy(() => import("./ScientificTools")),
-  },
-  {
-    id: "connectors",
-    title: "连接器（MCP）",
-    glyph: "⇄",
-    section: "capabilities",
-    parity: "reduced",
-    gap: "可添加（不带 --trust）、验证、删除、看发现结果；装载受信扩展与 grant/revoke 是授权动作，只能在终端做。",
-    component: lazy(() => import("./Connectors")),
-  },
-  {
-    id: "skills",
-    title: "技能",
-    glyph: "✦",
-    section: "capabilities",
-    parity: "same",
-    component: lazy(() => import("./Skills")),
-  },
-  // ── 运行时 ──
-  {
-    id: "compute",
-    title: "算力",
-    glyph: "▤",
-    section: "runtime",
-    parity: "reduced",
-    gap: "只看执行地、可用性与默认目标；派发与审批不上 HTTP（V47 / AD-6，是设计不是缺陷）。",
-    component: lazy(() => import("./Compute")),
-  },
-  {
-    id: "network",
-    title: "网络",
-    glyph: "≋",
-    section: "runtime",
-    parity: "same",
-    component: lazy(() => import("./Network")),
-  },
-  {
-    id: "storage",
-    title: "存储",
-    glyph: "▦",
-    section: "runtime",
-    parity: "reduced",
-    gap: "看路径与体积、切两个原始记录开关、一键导出；不做数据目录迁移。",
-    component: lazy(() => import("./Storage")),
-  },
-  {
-    id: "permissions",
-    title: "权限",
-    glyph: "⛨",
-    section: "runtime",
-    parity: "reduced",
-    gap: "只读权限矩阵与扩展授权；撤销要在终端做，这里只给命令。",
-    component: lazy(() => import("./Permissions")),
-  },
   // ── 应用 ──
   {
     id: "general",
     title: "通用",
-    glyph: "≡",
+    glyph: "\u2261",
     section: "app",
     parity: "same",
     component: lazy(() => import("./General")),

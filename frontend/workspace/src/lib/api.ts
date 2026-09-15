@@ -207,8 +207,14 @@ export const api = {
   health: () => request<{ status: string; version: string }>("/api/health"),
 
   projects: {
+    // U3：`all` 是这条路由今天就有的参数名（routes/projects.ts 里 `queryBool(c, "all")`
+    // 直接喂给 `list({ includeArchived })`）；γ 的契约把它对外改叫 `includeArchived`。
+    // 两个都发：今天走 `all`，γ 合进来之后走 `includeArchived`，中间不会有一段时间
+    // 下拉框里突然多出 20 多个验收产物。两个名字语义相同，同时出现不会打架。
     list: (all = false) =>
-      request<{ projects: ProjectMeta[]; current: string | null }>(`/api/projects${all ? "?all=1" : ""}`),
+      request<{ projects: ProjectMeta[]; current: string | null }>(
+        `/api/projects?all=${all ? 1 : 0}&includeArchived=${all ? 1 : 0}`,
+      ),
     current: () => request<{ project: ProjectSummary }>("/api/projects/current"),
     create: (body: { slug: string; name?: string; description?: string }) =>
       post<{ project: ProjectSummary }>("/api/projects", body),

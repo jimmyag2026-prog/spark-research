@@ -53,3 +53,62 @@ lane 启动时 `git log feat/W9-gamma --oneline` 的 HEAD 仍是 f921bf0——γ
 
 `lib/api.ts` 的 `request()` 顺手加了一件事：错误体里的 `nextStep` 拼进 message。U6 点名批过
 「只显示状态不说去哪做」，设置面的 403（凭据键走错路由）如果只剩「403」就正好复刻那个毛病。
+
+### 步骤 2 · 壳 + `general` 面板 + 注册表门禁
+
+壳：`components/settings/shell.tsx`。弹窗语义（焦点陷阱 / Esc / 点背景关闭）**复用
+`components/ui.tsx` 的 `Modal`**，只给它加了 `wide` 与 `bodyClass` 两个参数——设置面没有
+理由把这三件事再实现一遍。左导航按四组 section 排，搜索框过滤面板名与面板内设置项。
+
+入口三处：左栏「运维」加「设置」、数字键 `6`、`Esc` 关。设置面**不进 `CenterView`**——
+它是覆盖层，要能从任何视图上打开、关掉之后回到原处。
+
+**搜索索引的真实覆盖范围（如实交代）**：索引是面板自己在拿到 API 数据后登记的
+（`SettingsPanelProps.register`），所以只覆盖本次打开过的面板。`general` 是默认面板、
+壳一开就挂，那 32 个配置键永远可搜——U6 的主诉正是这 32 个键。没建索引的面板在有搜索词时
+**不隐藏**，降一档显示并在导航项上标 `?`：搜不到不等于里面没有，藏掉就是做一个兑现不了的
+承诺。彻底解法要后端一条总索引路由，已写进「给 γ 的契约请求」。
+
+`② 面板可懒加载` 这条只做到一半，原因写在测试注释里：Solid 的 JSX 是
+`vite-plugin-solid` 在编译期整个消掉的，`solid-js/jsx-dev-runtime` 指向 `dist/solid.js`
+而那里没有 `jsxDEV` 导出，bun test 里 `import("./General.tsx")` 必然
+`SyntaxError: Export named 'jsxDEV' not found`（在文件头加 `@jsxImportSource solid-js`
+pragma 试过，改得了解析目标改不了「那个模块没有这个导出」）。于是静态半在单测里做
+（`lazy()` 产出组件函数 + import 路径在磁盘上真有文件 + 文件真有 `export default`，
+路径从 registry.ts 源码读出来而不是手抄），**运行半交给 e2e**（每个面板一条用例，
+真浏览器点开）。`bun run build:web` 的产物里有独立的 `assets/General-*.js` chunk，
+懒加载在构建层面是成立的。
+
+#### 阴性对照（真跑，输出见下）
+
+| 改法 | 结果 |
+|---|---|
+| 注册一个 `section: "misc"` 的面板 | ① 红 |
+| 在 `General.tsx` 里硬编码 `contactEmail` 的 `summary` 原文 | ③ 红，指名 `General.tsx 抄了 contactEmail 的说明原文` |
+| 注册一个 `sandbox` 面板 | ④ 红 |
+
+```
+################ 阴性对照 A：注册一个 section:"misc" 的面板 ################
+error: expect(received).toBe(expected)
+Received: false
+(fail) 设置面板注册表 > ① 面板 id 唯一，section ∈ 四组，且与 SETTINGS_PANEL_IDS 一一对应
+ 4 pass
+ 1 fail
+################ 阴性对照 B：在 General 面板里硬编码一条 key 的说明原文 ################
+借用的说明原文： 文献 API 礼貌头里的联系邮箱（OpenAlex/CrossRef 的 polite pool）
++   "General.tsx 抄了 contactEmail 的说明原文",
+(fail) 设置面板注册表 > ③ 面板源码里不得出现任何 CONFIG_SETTINGS 说明的原文（说明只有一份，来自 API）
+ 4 pass
+ 1 fail
+################ 阴性对照 C：注册一个 sandbox 面板 ################
+(fail) 设置面板注册表 > ④ 没有 sandbox 面板，也没有 sandbox 占位文件
+ 4 pass
+ 1 fail
+################ 复原后 ################
+ 5 pass
+ 0 fail
+```
+
+**注册表随交付长出来**：一个面板的实现文件真的存在、真的接了后端之后，它的 id 才进
+`SETTINGS_PANEL_IDS`。先把 12 个 id 写全、文件慢慢补，中间态就是一批点开是空的面板
+——那是「放占位」的另一种写法。

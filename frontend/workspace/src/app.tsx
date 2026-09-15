@@ -1,9 +1,10 @@
-import { For, Show, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { For, Show, createResource, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { BottomPanel } from "./components/bottom";
 import { CenterPanel } from "./components/center";
 import { LeftPanel } from "./components/left";
 import { RightPanel } from "./components/right";
 import { api } from "./lib/api";
+import { SettingsShell } from "./components/settings/shell";
 import { Badge, Spinner } from "./components/ui";
 import { useWorkspace, WorkspaceProvider } from "./state";
 
@@ -26,6 +27,32 @@ function ThemeToggle(): JSX.Element {
     >
       {theme() === "dark" ? "☀" : "☾"}
     </button>
+  );
+}
+
+// U2：孤儿 server 活了两天没人发现，直接原因是「界面上没有任何地方提示你连的是个旧构建」。
+// `/api/health.version` 一直有这个数，只是从来没上过屏。两个版本一致时只显示一枚安静的
+// 徽标；不一致就变黄并说清是哪两个版本——不阻断，但没法再视而不见。
+function VersionBadge(): JSX.Element {
+  const [health] = createResource(() => api.health());
+  const serverVersion = () => health()?.version;
+  const mismatch = () => Boolean(serverVersion()) && serverVersion() !== __SPARK_UI_VERSION__;
+  return (
+    <Show when={serverVersion()}>
+      <span
+        class="badge"
+        classList={{ "badge-warn": mismatch() }}
+        data-testid="version-badge"
+        data-mismatch={mismatch() ? "true" : "false"}
+        title={
+          mismatch()
+            ? "浏览器里这份工作台和正在服务的 server 不是同一个构建。多半是有个旧 server 还在监听这个端口——先把它停掉再重开。"
+            : "server 与工作台是同一个构建"
+        }
+      >
+        {mismatch() ? `server v${serverVersion()} ≠ UI v${__SPARK_UI_VERSION__}` : `v${serverVersion()}`}
+      </span>
+    </Show>
   );
 }
 
@@ -57,6 +84,12 @@ function Shell(): JSX.Element {
       const target = event.target as HTMLElement | null;
       if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
+      // 6 = 设置（U6）。它排在 1-5 那五个中栏视图后面，但不是第六个视图——
+      // 它是覆盖层，开在当前视图之上，Esc 关掉回到原处。
+      if (event.key === "6") {
+        ws.setSettingsOpen(true);
+        return;
+      }
       const index = Number(event.key) - 1;
       if (Number.isInteger(index) && index >= 0 && index < views.length) {
         ws.setView({ kind: views[index]! });
@@ -96,6 +129,7 @@ function Shell(): JSX.Element {
             导出报告
           </a>
         </Show>
+        <VersionBadge />
         <ThemeToggle />
       </header>
 
@@ -103,6 +137,9 @@ function Shell(): JSX.Element {
       <CenterPanel />
       <RightPanel />
       <BottomPanel />
+      <Show when={ws.settingsOpen()}>
+        <SettingsShell onClose={() => ws.setSettingsOpen(false)} />
+      </Show>
       <Toasts />
     </div>
   );

@@ -132,6 +132,19 @@ export function LeftPanel(): JSX.Element {
               <button class="btn btn-sm" onClick={() => setDialog(true)}>
                 ＋ 新建项目
               </button>
+              {/* U3：默认不列已归档项目。指针是全局可变状态，上一次会话留在哪就是哪——
+                  20 多个 r4 / r5 / a5 验收产物混在下拉框里时，第一次检索很容易默认
+                  写进测试项目。要找回它们点这一下，不是把它们删了。 */}
+              <button
+                class="btn btn-sm btn-ghost"
+                data-testid="toggle-archived"
+                aria-pressed={ws.showArchived()}
+                onClick={() => ws.setShowArchived(!ws.showArchived())}
+              >
+                {ws.showArchived()
+                  ? `隐藏已归档（${list().projects.filter((p) => p.status === "archived").length}）`
+                  : "显示已归档"}
+              </button>
             </div>
           )}
         </Show>
@@ -212,6 +225,16 @@ export function LeftPanel(): JSX.Element {
             current={ws.view().kind === "usage"}
             onSelect={() => ws.setView({ kind: "usage" })}
           />
+          {/* U6：设置面在这里进（数字键 6 同款）。它是覆盖层不是中栏视图，所以
+              `current` 跟着 `settingsOpen` 走，不跟 `ws.view()`。 */}
+          <button
+            class="nav-item"
+            data-testid="nav-settings"
+            aria-current={ws.settingsOpen()}
+            onClick={() => ws.setSettingsOpen(true)}
+          >
+            <span>设置</span>
+          </button>
         </div>
       </div>
 
