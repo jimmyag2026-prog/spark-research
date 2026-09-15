@@ -571,12 +571,15 @@ describe("α-5 · arXiv 令牌桶 + Retry-After", () => {
     expect(sent).toHaveLength(1);
     expect(limiter.cooldownOf("arxiv.org")).toBe(now + 30_000); // 检索侧的 429 冷却了 PDF 侧
 
-    // 冷却期内发第二条（走 PDF 那个 host）：等着，不发。
+    // 关键：先把虚拟时钟推 10s——令牌桶（3s 一个令牌）**早就满了**，此时还发不出去
+    // 就只能是冷却闸的功劳。不这么做的话，挡住第二条的其实是桶，冷却拆掉测试照样绿
+    // （本 lane 实际踩到：第一版 α-5c 阴性对照没变红）。
+    now += 10_000;
     const pending = limiter.request("https://arxiv.org/pdf/2303.12712");
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 120));
     expect(sent).toHaveLength(1); // ← 冷却期内 0 请求
 
-    now += 31_000; // 冷却过去
+    now += 21_000; // 越过 Retry-After 给的 30s
     await pending;
     expect(sent).toHaveLength(2);
     expect(sent[1]).toContain("arxiv.org/pdf");
