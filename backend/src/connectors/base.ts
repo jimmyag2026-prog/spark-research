@@ -329,11 +329,36 @@ const SEARCH_RESULT_KEYS = [
   "totalResults",
 ] as const;
 
+/** 上游用 200 回的业务错误（NCBI `esearchresult.ERROR`、REST 源的顶层 `errCode`/`error`）。没有则 null。 */
+function upstreamErrorOf(p: Record<string, unknown>): string | null {
+  const esearch = p.esearchresult;
+  if (esearch !== null && typeof esearch === "object") {
+    const e = (esearch as Record<string, unknown>).ERROR;
+    if (typeof e === "string" && e !== "") return e;
+  }
+  for (const key of ["errCode", "errMsg", "error"] as const) {
+    const v = p[key];
+    if (typeof v === "string" && v !== "") return v;
+    if (typeof v === "number") return `${key}=${v}`;
+  }
+  return null;
+}
+
 export function searchPayloadProblem(connector: string, payload: unknown): string | null {
   if (payload === null || typeof payload !== "object") {
     return `连接器 "${connector}" 的 search 返回了非对象响应。下一步：检查查询语法，或换一个源重试。`;
   }
   const p = payload as Record<string, unknown>;
+  // U45（v0.9.1）：上游用 HTTP 200 回业务错误——NCBI 是 `esearchresult.ERROR`，多数 REST 源是
+  // 顶层 `errCode`/`error`。键在（`esearchresult` 就在 SEARCH_RESULT_KEYS 里）不代表查询成功，
+  // 这一条必须排在「有没有结果容器」之前，否则一个错误信封会被当成合法空结果放行。
+  const upstream = upstreamErrorOf(p);
+  if (upstream !== null) {
+    return (
+      `连接器 "${connector}" 的 search 被上游拒绝（HTTP 200，但响应体里是错误）：${upstream}。` +
+      `下一步：检查检索词与字段限定语法；确认必填参数都传了。`
+    );
+  }
   if (SEARCH_RESULT_KEYS.some((k) => p[k] !== undefined)) return null;
   const keys = Object.keys(p);
   return (

@@ -321,11 +321,28 @@ export class PubMedConnector extends HttpConnector {
   // 统一检索调用方传 { query, limit }（见 search.ts `searchOne`），与其余五个 JSON
   // 源同一约定——旧实现只认 `retmax`，caller 传的 `limit` 会被当成一个上游不认识
   // 的裸查询参数发出去，等于**从未真正生效过**。这里补上 limit→retmax 的对齐。
-  async search(params: { query?: string; limit?: number; retmax?: number } & Record<string, unknown>): Promise<unknown> {
-    const term = typeof params.query === "string" ? params.query : "";
+  async search(params: { query?: string; term?: string; limit?: number; retmax?: number } & Record<string, unknown>): Promise<unknown> {
+    // U45（v0.9.1）：NCBI 自己的参数名是 `term`，平台的统一名是 `query`。以前这里只认 `query`，
+    // 而且把算出来的空串放在 `...rest` **之后**——调用方明明写了 `term`，却被静默覆盖成空串，
+    // NCBI 于是回 HTTP 200 + `{"esearchresult":{"ERROR":"Empty term and query_key - nothing todo"}}`。
+    // 模型用的是官方文档上的名字，怪不到它头上。两个名字都认，`query` 优先（平台口径）。
+    // 守卫写法与 arXiv 的 `!("search_query" in params)` 同源。
+    const term =
+      typeof params.query === "string" && params.query.trim() !== ""
+        ? params.query
+        : typeof params.term === "string"
+          ? params.term
+          : "";
+    if (term.trim() === "") {
+      throw new Error(
+        `连接器 "pubmed" 的 search 缺少检索词。下一步：传 query（平台统一名）或 term（NCBI 原名），` +
+          `例如 {"query":"repetitive strain injury AND China[Affiliation]"}。空检索词不会发给上游。`,
+      );
+    }
     const retmax = params.retmax ?? params.limit ?? 10;
     const rest = { ...params };
     delete rest.query;
+    delete rest.term;
     delete rest.limit;
     delete rest.retmax;
 

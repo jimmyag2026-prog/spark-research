@@ -10,6 +10,8 @@ import {
 } from "../../backend/src/agents/orchestrator";
 import { buildSubAgentSpec, SUB_AGENT_TYPES } from "../../backend/src/agents/sub_agent";
 import { searchPayloadProblem } from "../../backend/src/connectors/base";
+import { PubMedConnector } from "../../backend/src/connectors/literature";
+import { StubHttp, BufferedResponse } from "../../backend/src/http/client";
 import type { ChatMessage, LlmResponse } from "../../backend/src/llm/types";
 
 /** 只按顺序吐预设内容、并把收到的 prompt 存下来的假 LLM。 */
@@ -132,5 +134,51 @@ describe("U40 · search 的响应里至少要有计数或结果容器", () => {
 
     const fetched = await runWithConnector("s-u40b", { ...shell, tool: "getPaper" }, { server: "europepmc", tool: "getPaper", args: { id: "PMC1" } });
     expect(fetched.result.execution.find((e) => e.taskId === "t1")?.ok).toBe(true);
+  });
+});
+
+describe("U45 · PubMed 认 NCBI 原名 term，空检索词不发给上游", () => {
+  function capture() {
+    const calls: string[] = [];
+    const http = new StubHttp((url: string) => {
+      calls.push(url);
+      return new BufferedResponse({
+        status: 200,
+        headers: { "content-type": "application/json" },
+        body: new TextEncoder().encode(JSON.stringify({ esearchresult: { idlist: [] } })),
+      });
+    });
+    return { http, calls };
+  }
+
+  test("只传 term（NCBI 原名）→ 真的带进 esearch，不被空串覆盖", async () => {
+    const { http, calls } = capture();
+    await new PubMedConnector({ http }).search({ term: "repetitive strain injury AND China[Affiliation]" });
+    expect(calls[0]).toContain("term=repetitive");
+    expect(calls[0]).not.toContain("term=&");
+  });
+
+  test("query 与 term 同时给 → query 赢（平台统一名优先）", async () => {
+    const { http, calls } = capture();
+    await new PubMedConnector({ http }).search({ query: "alpha", term: "beta" });
+    expect(calls[0]).toContain("term=alpha");
+    expect(calls[0]).not.toContain("beta");
+  });
+
+  test("两个都不给 / 都是空 → 当场失败，不向上游发空检索词", async () => {
+    const { http, calls } = capture();
+    const c = new PubMedConnector({ http });
+    await expect(c.search({})).rejects.toThrow(/缺少检索词/);
+    await expect(c.search({ term: "   " })).rejects.toThrow(/缺少检索词/);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("上游 200 + 业务错误（NCBI ERROR / REST errCode）→ 判为失败，不当成合法空结果", () => {
+    const ncbi = searchPayloadProblem("pubmed", { esearchresult: { ERROR: "Empty term and query_key - nothing todo" } });
+    expect(ncbi).toContain("被上游拒绝");
+    expect(ncbi).toContain("Empty term");
+    expect(searchPayloadProblem("europepmc", { errCode: 404, errMsg: "No search criteria provided" })).toContain("被上游拒绝");
+    // 正常空结果仍然放行：0 条是合法结果
+    expect(searchPayloadProblem("pubmed", { esearchresult: { idlist: [] } })).toBeNull();
   });
 });
