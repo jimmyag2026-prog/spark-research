@@ -250,13 +250,16 @@ describe("U44 · 工具返回进对话历史前先瘦身", () => {
     const out = toolResultContentForTest(outcome);
     expect(raw.length).toBeGreaterThan(50_000); // 原始返回是六位数量级；瘦身后必须落到四位
     expect(out.length).toBeLessThan(TOOL_RESULT_MAX_CHARS_FOR_TEST);
-    const parsed = JSON.parse(out) as { payload: { sources: unknown[]; papers: unknown[]; _compacted: { papersShown: number; papersTotal: number; note: string } } };
+    const parsed = JSON.parse(out) as { payload: { sources: unknown[]; papers: unknown[]; _compacted: { papersShown: number; papersTotal: number; note: string; droppedFields: string[] } } };
     expect(parsed.payload.sources).toHaveLength(1); // 每源的 outcome/count 一条不少
     expect(parsed.payload.papers).toHaveLength(10);
     expect(parsed.payload._compacted.papersTotal).toBe(20);
     expect(parsed.payload._compacted.note).toContain("10/20");
-    expect(out).not.toContain("references");
+    // 「references」这个词只该出现在 droppedFields / note 里，不该再有真数据
+    expect(out).not.toContain('"references":[');
     expect(out).not.toContain("Author 29");
+    expect(out).not.toContain("10.9/"); // 参考文献 DOI 一条都不该留
+    expect(parsed.payload._compacted.droppedFields).toContain("references");
   });
 
   test("认不出形状的大返回 → 截断且**明说**被截断（静默截断比截断更危险）", () => {
