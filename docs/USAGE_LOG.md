@@ -73,6 +73,8 @@
 | [U49](#u49) | 文献流程精读 8 篇期间界面无任何进度（阶段只进执行日志，没推 SSE），用户以为卡死 | 中 | 体验 | ✅ 本地已修（`progress.taskNote`，每阶段推「执行中 i/n：检索/下载/精读/综述」） |
 | [U50](#u50) | 精读卡/综述没读 `subAgentModel_literature`，跟着聊天选择器的模型走（选了 kimi 就 8 篇全 kimi，每篇 ~50s） | 中 | 配置 | ✅ 本地已修（顺序：会话覆盖 > `subAgentModel_literature` > 默认） |
 | [U51](#u51) | OA 全文命中率低（8 篇标 OA 只拿到 2）：`pdfUrl` 常是落地页而下载器不再解析一跳；`pdfUrl` 失败后没有按 DOI 的 Unpaywall 兜底 | 中 | 功能缺口 | → v0.10 S9 一起做（技能文档已如实写明目前不做） |
+| [U52](#u52) | 右侧打开一条记录/文献后没有关闭按钮回总览（只能回时间线再点一次同一条） | 中 | 体验 | ✅ 本地已修（详情头部「← 返回总览」） |
+| [U53](#u53) | 生成的产物（综述草稿）只以纯文字 id 出现在回复里，聊天框没有可点链接 | 中 | 体验 | ✅ 本地已修（结果带 `artifacts[]`，聊天框渲染成按钮切到产物视图；`ChatResponse.artifacts` 此前是无人填写的 `unknown[]`） |
 
 ### 方法缺陷
 
@@ -1078,6 +1080,25 @@ caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中�
 **问题**：下载器只吃三类候选（arXiv id、PMCID、`pdfUrl`），拿到 HTML 就判 `not_a_pdf` 放弃；而 `not_a_pdf` 的三篇至少两篇真有 OA 全文，只是链接停在落地页。精读档的价值完全取决于全文命中率。
 
 **修改方向**：① 落地页解析一跳：响应是 HTML 时找 `citation_pdf_url` / `<link rel="alternate" type="application/pdf">`；② `pdfUrl` 失败后按 DOI 查 Unpaywall（免 key，需 email）取 `best_oa_location`；③ OA 标记来自 OpenAlex 时在结果里标「乐观」。技能文档 `paper-download/SKILL.md` 已补「下载前必须满足什么」「真实批次命中率」「目前不做的两跳」三节。
+
+
+<a id="u52"></a>
+## U52 · 右侧详情打开后没有路回总览
+
+**现场**：2026-09-15 用户原话「选择一篇文献打开后，就没办法关掉回到总览界面」。
+
+**证据**：`right.tsx` 时间线条目 `onClick={() => ws.selectRecord(ws.selectedRecord() === record.id ? null : record.id)}`（再点同一条才取消），`RecordDetail` 头部没有任何关闭控件；列表滚走后详情区就成了单行道。
+
+**修改方向（已做）**：`RecordDetail` 头部加 `← 返回总览`（`ws.selectRecord(null)`），`data-testid="record-detail-close"`。
+
+<a id="u53"></a>
+## U53 · 产物链接不在聊天框里
+
+**现场**：同上，「生成的结果的链接也要放到 chat 对话框里有显示」。
+
+**证据**：`result` 事件只有 `response` 文本；`server/types.ts` 的 `ChatResponse.artifacts?: unknown[]` 声明了但**没有任何代码填它**（AD-17 形状）；文献流程的综述 `artifactId` 只在 digest 里当纯文字。
+
+**修改方向（已做）**：`ExecutionOutcome.artifacts[]` → `OrchestrationResult.artifacts[]` → `chat()` → SSE `result.artifacts[]`；前端消息渲染成「📄 综述草稿」按钮，点了切到产物视图。类型收成 `Array<{id,label}>` 并重生成契约。
 
 
 <a id="p1"></a>
