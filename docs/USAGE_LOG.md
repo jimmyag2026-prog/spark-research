@@ -72,6 +72,7 @@
 | [U48](#u48) | summarize 只看每步输出前 200 字符——连接器成功了，模型只见到 `meta.count`，如实汇报「只留下命中计数」 | **高** | 正确性 | ✅ 本地已修（形状摘要：条数 + 前 5 条标题 + 落盘路径；其余截 600） |
 | [U49](#u49) | 文献流程精读 8 篇期间界面无任何进度（阶段只进执行日志，没推 SSE），用户以为卡死 | 中 | 体验 | ✅ 本地已修（`progress.taskNote`，每阶段推「执行中 i/n：检索/下载/精读/综述」） |
 | [U50](#u50) | 精读卡/综述没读 `subAgentModel_literature`，跟着聊天选择器的模型走（选了 kimi 就 8 篇全 kimi，每篇 ~50s） | 中 | 配置 | ✅ 本地已修（顺序：会话覆盖 > `subAgentModel_literature` > 默认） |
+| [U51](#u51) | OA 全文命中率低（8 篇标 OA 只拿到 2）：`pdfUrl` 常是落地页而下载器不再解析一跳；`pdfUrl` 失败后没有按 DOI 的 Unpaywall 兜底 | 中 | 功能缺口 | → v0.10 S9 一起做（技能文档已如实写明目前不做） |
 
 ### 方法缺陷
 
@@ -1065,6 +1066,18 @@ caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中�
 **证据**：`config get defaultModel` = `z-ai/glm-5.3-flash`、`subAgentModel_literature` = `deepseek-v4-flash`，本会话精读却全是 kimi——来自网页端聊天框旁的模型选择器（请求 `model` 字段 → `sessionModel`），而 `runLiteraturePipeline` 未给 `ReadingCardGenerator` / `ReviewDraftGenerator` 传 `model`，全部走 `llmFor(sessionId)` 的会话覆盖。配置里专门给文献子代理留的模型项从未被这条路读到（AD-17 形状）。
 
 **修改方向（已做）**：pipeline 接受 `model`；编排层按「会话覆盖 > `subAgentModel_literature` > 默认模型」选。选择器仍能整体覆盖——用户明确选了就尊重。
+
+
+<a id="u51"></a>
+## U51 · OA 全文命中率低：落地页不再解析一跳，`pdfUrl` 失败后无 DOI 兜底
+
+**现场**：2026-09-15 用户问「这次任务下载了多少 pdf 全文」「是没有找到 doi 或 oa 链接就开始下载了吗」。
+
+**证据**（`workspaces/web_1789480157513/t1-lit-review-rsi.json` 的 `downloads`，与 `library.db` 对照）：8 篇全部 `is_open_access=1`、全部有 DOI 与 `pdf_url`；成功 2；`not_a_pdf` 3（handle.net / journals.aom.org / iopscience 的文章页）；`http_403` 2（BMJ、ScienceDirect）；`network_error` 1（arxiv.org/pdf，限流）。精读卡 8 张中仅 2 张基于全文。
+
+**问题**：下载器只吃三类候选（arXiv id、PMCID、`pdfUrl`），拿到 HTML 就判 `not_a_pdf` 放弃；而 `not_a_pdf` 的三篇至少两篇真有 OA 全文，只是链接停在落地页。精读档的价值完全取决于全文命中率。
+
+**修改方向**：① 落地页解析一跳：响应是 HTML 时找 `citation_pdf_url` / `<link rel="alternate" type="application/pdf">`；② `pdfUrl` 失败后按 DOI 查 Unpaywall（免 key，需 email）取 `best_oa_location`；③ OA 标记来自 OpenAlex 时在结果里标「乐观」。技能文档 `paper-download/SKILL.md` 已补「下载前必须满足什么」「真实批次命中率」「目前不做的两跳」三节。
 
 
 <a id="p1"></a>

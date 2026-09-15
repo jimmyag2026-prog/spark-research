@@ -37,6 +37,30 @@ allowed-tools: [Bash, Read]
 
 前两条是**由标识符推导**的，不依赖源 API 返回的链接字段，所以最稳。
 
+## 下载前必须满足什么（否则根本不会发请求）
+
+下载器**只对手上已有的候选链接动手**：`ids.arxiv`、`ids.pmcid`、`pdfUrl` 三样至少有一样，否则直接返回
+`no_oa_link`，一次 HTTP 都不发。所以正确顺序永远是：**先检索拿到 DOI / arXiv id / PMCID 与 OA 标记（`lit search` / `lit add`），
+再下载**——不存在「没找到链接就开始下」这条路。库内每篇的 `pdf_reason` 字段记着上次为什么没拿到，看它，别重试。
+
+## 一次真实批次的命中率（2026-09-15，8 篇全部标 OA、全部有 DOI 与 pdfUrl）
+
+| 结果 | 篇数 | 真因 |
+|------|-----|------|
+| ✅ 拿到 | 2 | Europe PMC 渲染链接、Springer `content/pdf` 直链 |
+| `not_a_pdf` | 3 | `pdfUrl` 指向**落地页**（handle.net / AOM / IOP 文章页），真 PDF 在一跳之后 |
+| `http_403` | 2 | BMJ、ScienceDirect——元数据标 OA，出版社仍拒绝程序化下载 |
+| `network_error` | 1 | arXiv 对本机限流（与检索侧的 429 同源） |
+
+两个教训：① **「标了 OA」≠「能下到」**，OpenAlex 的 OA 标记偏乐观；② `not_a_pdf` 多半不是付费墙，是**链接给错了一层**。
+
+## 目前刻意不做的两跳（已登记 USAGE_LOG U51，归 v0.10）
+
+- 落地页不再解析一跳（多数出版社页面有 `citation_pdf_url` 元标签，顺着走一步能拿到真 PDF）。
+- `pdfUrl` 失败后没有按 DOI 的兜底（Unpaywall 查真正的 OA 副本）。
+
+在这两跳落地之前，遇到 `not_a_pdf` 的正确做法是把 `attempts` 里的落地页 URL 交给用户手动打开，不要自己猜 URL 拼接。
+
 ## 用法
 
 ```bash
@@ -86,6 +110,7 @@ const result = await downloader.downloadMany(ids);   // 串行，不并发打同
 - ❌ 下载失败后凭摘要编造全文内容——没有全文就只用摘要，并标注证据类型为 `sourced`（摘要级）
 - ❌ 把 PDF 提交进 git（`papers/` 已在 .gitignore 里）
 - ❌ 并发下载几十篇——串行，慢一点没关系
+- ❌ 没有 DOI / arXiv id / PMCID 就试图下载——先检索入库，再下载
 
 ## 验证方式
 
