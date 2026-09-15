@@ -8,9 +8,15 @@ import {
   connectorFailureOf,
   normalizeSubAgentType,
 } from "../../backend/src/agents/orchestrator";
-import { buildSubAgentSpec, SUB_AGENT_TYPES } from "../../backend/src/agents/sub_agent";
+import {
+  buildSubAgentSpec,
+  SUB_AGENT_TYPES,
+  toolResultContent as toolResultContentForTest,
+  TOOL_RESULT_MAX_CHARS as TOOL_RESULT_MAX_CHARS_FOR_TEST,
+} from "../../backend/src/agents/sub_agent";
 import { searchPayloadProblem } from "../../backend/src/connectors/base";
 import { PubMedConnector } from "../../backend/src/connectors/literature";
+import { ConnectorRegistry } from "../../backend/src/connectors/registry";
 import { StubHttp, BufferedResponse } from "../../backend/src/http/client";
 import type { ChatMessage, LlmResponse } from "../../backend/src/llm/types";
 
@@ -180,5 +186,90 @@ describe("U45 · PubMed 认 NCBI 原名 term，空检索词不发给上游", () 
     expect(searchPayloadProblem("europepmc", { errCode: 404, errMsg: "No search criteria provided" })).toContain("被上游拒绝");
     // 正常空结果仍然放行：0 条是合法结果
     expect(searchPayloadProblem("pubmed", { esearchresult: { idlist: [] } })).toBeNull();
+  });
+});
+
+describe("U46 · placeholder 连接器早失败，不发网络请求", () => {
+  test("cnki / wanfang 调用 → 抛「占位实现」+ 下一步，且一次 HTTP 都没发", async () => {
+    const calls: string[] = [];
+    const http = new StubHttp((url: string) => {
+      calls.push(url);
+      return new BufferedResponse({ status: 200, headers: {}, body: new TextEncoder().encode("{}") });
+    });
+    const reg = new ConnectorRegistry({ http }).registerBuiltins();
+    for (const id of ["cnki", "wanfang"]) {
+      await expect(reg.call(id, "search", { query: "重复性劳损" })).rejects.toThrow(/占位实现/);
+      await expect(reg.call(id, "search", { query: "重复性劳损" })).rejects.toThrow(/下一步/);
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  test("非 placeholder 的源不受影响（回归防护）", async () => {
+    const http = new StubHttp(
+      () =>
+        new BufferedResponse({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: new TextEncoder().encode(JSON.stringify({ esearchresult: { idlist: [] } })),
+        }),
+    );
+    const reg = new ConnectorRegistry({ http }).registerBuiltins();
+    await expect(reg.call("pubmed", "search", { query: "x" })).resolves.toBeDefined();
+  });
+});
+
+describe("U44 · 工具返回进对话历史前先瘦身", () => {
+  const bigPaper = (i: number) => ({
+    title: `Paper ${i}`,
+    authors: Array.from({ length: 30 }, (_, k) => ({ name: `Author ${k}` })),
+    year: 2024,
+    venue: "Nature",
+    doi: `10.1/${i}`,
+    ids: { pmid: String(i), pmcid: `PMC${i}` },
+    abstract: "A".repeat(3000),
+    url: "https://example.com/x",
+    pdfUrl: "https://example.com/x.pdf",
+    citedByCount: i,
+    isOpenAccess: true,
+    sources: ["openalex"],
+    references: Array.from({ length: 80 }, (_, k) => `10.9/${k}`),
+  });
+
+  test("检索结果被瘦身：保留每源 outcome/count 与前 10 篇要素，砍掉 references/authors，注明砍了什么", () => {
+    const outcome = {
+      ok: true,
+      payload: {
+        query: "rsi",
+        sources: [{ source: "openalex", outcome: "ok", count: 30 }],
+        papers: Array.from({ length: 20 }, (_, i) => bigPaper(i)),
+        totalBeforeDedupe: 60,
+        afterDedupe: 20,
+      },
+    };
+    const raw = JSON.stringify(outcome);
+    const out = toolResultContentForTest(outcome);
+    expect(raw.length).toBeGreaterThan(50_000); // 原始返回是六位数量级；瘦身后必须落到四位
+    expect(out.length).toBeLessThan(TOOL_RESULT_MAX_CHARS_FOR_TEST);
+    const parsed = JSON.parse(out) as { payload: { sources: unknown[]; papers: unknown[]; _compacted: { papersShown: number; papersTotal: number; note: string } } };
+    expect(parsed.payload.sources).toHaveLength(1); // 每源的 outcome/count 一条不少
+    expect(parsed.payload.papers).toHaveLength(10);
+    expect(parsed.payload._compacted.papersTotal).toBe(20);
+    expect(parsed.payload._compacted.note).toContain("10/20");
+    expect(out).not.toContain("references");
+    expect(out).not.toContain("Author 29");
+  });
+
+  test("认不出形状的大返回 → 截断且**明说**被截断（静默截断比截断更危险）", () => {
+    const outcome = { ok: true, payload: { blob: "Z".repeat(50_000) } };
+    const parsed = JSON.parse(toolResultContentForTest(outcome)) as { _truncated?: boolean; _note?: string; _originalChars?: number };
+    expect(parsed._truncated).toBe(true);
+    expect(parsed._originalChars).toBeGreaterThan(50_000);
+    expect(parsed._note).toContain("不是完整结果");
+  });
+
+  test("小返回原样透传（不给正常路径加噪声）", () => {
+    const outcome = { ok: true, payload: { project: "p", papers: [], sources: [] } };
+    const parsed = JSON.parse(toolResultContentForTest(outcome)) as { _truncated?: boolean };
+    expect(parsed._truncated).toBeUndefined();
   });
 });

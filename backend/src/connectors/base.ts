@@ -165,6 +165,16 @@ export class HttpConnector {
 
   async call(toolName: string, params: Record<string, unknown> = {}): Promise<unknown> {
     this.assertKnownTool(toolName);
+    // U46（v0.9.1）：`status: "placeholder"` 的连接器**自己就知道调用会失败**（caveat 原文写着），
+    // 却仍然真发一次网络请求，把 TLS 证书错 / 404 这类上游噪声丢给 agent，白费一个计划步骤。
+    // 现在早失败、说人话、给下一步；不发请求 = 不浪费时间也不给上游添无意义流量。
+    const meta = this.config.metadata;
+    if (meta?.status === "placeholder") {
+      throw new Error(
+        `连接器 "${this.name}" 是占位实现，没有可用的调用渠道${meta.caveat ? `：${meta.caveat}` : ""}。` +
+          `下一步：换用已可用的源（\`spark-research lit sources\` 看哪些免 key / 已配凭据），不要把它排进计划。`,
+      );
+    }
 
     const handler = this.handlers.get(toolName);
     if (handler) {

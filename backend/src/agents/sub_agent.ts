@@ -335,12 +335,87 @@ export interface SubAgentDeps {
   promptDir?: string;
 }
 
-function toolResultContent(outcome: ToolOutcome): string {
+/**
+ * U44（v0.9.1）：工具返回进对话历史前先瘦身。
+ *
+ * 现场：一次 explore 子代理跑了三次 `lit_search`，三份**完整检索 JSON**（每份 80–200 KB，
+ * 20 篇 × 每篇 6.5 KB，大头是 abstract 与 references）原样进了消息历史 →
+ * 单次调用 **129,865 输入 token / $0.058**，是同轮其它调用的 40 倍；而 tool loop 每轮重发历史，
+ * 成本按轮复利。模型真正需要的是「哪些源查到了、各多少条、前几条是什么」，不是每篇的全文摘要。
+ *
+ * 两层：① 认识的形状（检索结果）按字段瘦身；② 兜底按字符数截断并**明说被截断了**——
+ * 静默截断会让模型以为自己看到了全部，那比截断本身更危险。
+ */
+export const TOOL_RESULT_MAX_CHARS = 8000;
+const COMPACT_ABSTRACT_CHARS = 200;
+const COMPACT_PAPERS = 10;
+
+interface LiteraturePayloadLike {
+  query?: unknown;
+  sources?: unknown;
+  papers?: unknown;
+  [k: string]: unknown;
+}
+
+/** 检索结果（`{query, sources[], papers[]}`）→ 只留决策需要的字段。认不出形状返回 null。 */
+function compactLiteraturePayload(payload: unknown): unknown | null {
+  if (payload === null || typeof payload !== "object") return null;
+  const p = payload as LiteraturePayloadLike;
+  if (!Array.isArray(p.sources) || !Array.isArray(p.papers)) return null;
+  const papers = (p.papers as Array<Record<string, unknown>>).slice(0, COMPACT_PAPERS).map((x) => {
+    const abstract = typeof x.abstract === "string" ? x.abstract : "";
+    return {
+      title: x.title,
+      year: x.year,
+      venue: x.venue,
+      doi: x.doi,
+      isOpenAccess: x.isOpenAccess,
+      citedByCount: x.citedByCount,
+      sources: x.sources,
+      abstract:
+        abstract.length > COMPACT_ABSTRACT_CHARS ? `${abstract.slice(0, COMPACT_ABSTRACT_CHARS)}…[摘要已截断]` : abstract,
+    };
+  });
+  const total = (p.papers as unknown[]).length;
+  return {
+    query: p.query,
+    sources: p.sources,
+    totalBeforeDedupe: p.totalBeforeDedupe,
+    afterDedupe: p.afterDedupe,
+    added: p.added,
+    papers,
+    _compacted: {
+      papersShown: papers.length,
+      papersTotal: total,
+      droppedFields: ["authors", "ids", "url", "pdfUrl", "references"],
+      note:
+        total > papers.length
+          ? `只回前 ${papers.length}/${total} 篇、摘要截断、去掉 authors/ids/url/pdfUrl/references。要更多或要全文字段，缩小检索范围后重查，或按 DOI 用 getPaper 单篇取回。`
+          : `摘要截断、去掉 authors/ids/url/pdfUrl/references。要全文字段请按 DOI 用 getPaper 单篇取回。`,
+    },
+  };
+}
+
+export function toolResultContent(outcome: ToolOutcome): string {
+  let value: unknown = outcome;
+  const payload = (outcome as { payload?: unknown }).payload;
+  const compacted = compactLiteraturePayload(payload);
+  if (compacted !== null) value = { ...(outcome as object), payload: compacted };
+
+  let text: string;
   try {
-    return JSON.stringify(outcome);
+    text = JSON.stringify(value);
   } catch {
     return JSON.stringify({ ok: outcome.ok, error: "[unserializable tool result]" });
   }
+  if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
+  return JSON.stringify({
+    ok: outcome.ok,
+    _truncated: true,
+    _originalChars: text.length,
+    _note: `工具返回 ${text.length} 字符，超过单条上限 ${TOOL_RESULT_MAX_CHARS}，已截断。**下面不是完整结果**——缩小范围重查，或按 id/DOI 单条取回。`,
+    preview: text.slice(0, TOOL_RESULT_MAX_CHARS),
+  });
 }
 
 /** 一轮内的多个 tool call：受限并发执行，结果按原始顺序对齐回 calls 数组。 */
