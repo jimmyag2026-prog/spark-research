@@ -35,6 +35,7 @@
 | [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | ✅ alpha.2（β-1 + 收口：`sessionModel` 进 `llmFor`；V145） |
 | [U11](#u11) | `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账 → 脚本 20 轮全记进 speed-probe | 中 | 契约一致性 | 待转 V（alpha.2 R6 基线发现） |
 | [U12](#u12) | 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；且拒绝前仍耗时 49.8s | **高** | 正确性 | 待转 V（alpha.2 R6 基线发现，耗时部分待核实） |
+| [U13](#u13) | 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收 | **高** | 正确性 | 待转 V（alpha.2 R6 基线发现） |
 
 ### 方法缺陷
 
@@ -732,6 +733,25 @@ $ tail -1 ~/.spark-research/projects/speed-probe/usage.jsonl     ← 时间戳�
 
 **待核实**：被拒那次为什么花了 49.8s 而台账零行——闸在 summarize 前才拒，前面 plan/execute 是否真的调了模型？
 若调了，行去了哪；若没调，49 秒花在哪（连接器 I/O？）。核实法：同样的请求打开 server 侧 α-3 progress 事件（`/stream`）看阶段时间线。
+
+<a id="u13"></a>
+## U13 · 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收
+
+**现场**：R6 基线，t2-sc-r3 第 1 轮。
+
+**证据**：
+
+```
+{"project":"t2-sc-r3","round":1,"wallMs":287193.37,"calls":1,"http":0}     ← fetch 抛错，HTTP 0
+{"project":"t2-sc-r3","round":2,"wallMs":56600,"calls":5,"http":200}       ← 下一轮多出 2 次调用 = 上一轮漏的
+backend/src/server/server.ts: export const SERVER_IDLE_TIMEOUT_S = 255;     // Bun 上限
+```
+
+**问题**：A5 把 `idleTimeout` 拉到 Bun 的上限 255s 是对的，但 chat 的同步路由在这个上限之上没有任何兜底：超过它，
+客户端收到的是连接重置（不是错误消息），服务端不知道没人在听，继续把 plan/execute/summarize 跑完、把钱花完。
+基线里 20 轮有 3 轮墙钟 >170s，逼近这个天花板；网络稍差就会撞上。
+
+**修改方向**：① 同步 `/api/session/chat` 超过阈值（如 200s）时改回 202 + 任务句柄（任务路由已有这套）；或 ② 把 UI 与脚本一律推到 `/stream`（SSE 有心跳，不受 idleTimeout 影响——需核实 Bun 对 SSE 的 idle 判定是否按帧刷新）；③ 无论哪条，server 端在客户端断开时应取消编排（`AbortSignal` 透传到 LLM 调用），别把钱花在没人要的结果上。
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合
