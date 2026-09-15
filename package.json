@@ -24,7 +24,7 @@
     "smoke": "bash scripts/smoke-binary.sh",
     "build:web": "vite build --config frontend/workspace/vite.config.ts",
     "dev:web": "vite --config frontend/workspace/vite.config.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p frontend/workspace/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p frontend/workspace/tsconfig.json && tsc --noEmit -p tests/e2e/tsconfig.json",
     "test": "bun test tests/unit",
     "test:concurrency": "bun test tests/concurrency",
     "test:timeout": "bun test tests/timeout",
