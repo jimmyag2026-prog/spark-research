@@ -110,13 +110,6 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
-  // v0.10 lane δ-4：chat_sync.ts **本该被接上，接线那一行在收口专属文件里**（session.ts），
-  // 所以本 lane 的分支上它暂时没有生产调用方。这是「等接线」，收口把 diff 打上后必须删除本条
-  // （否则这道门就变成了永久豁免，正是它要防的东西）。收口 diff 原文在
-  // docs/devlog/W10-delta.md「收口 diff」段，两处都已在本机临时打上实测通过。
-  "backend/src/server/chat_sync.ts":
-    "等接线（δ-4/V156）：server/routes/session.ts 的 POST /chat 改走 runChatWithSyncDeadline() 之后删除本条。",
-
   // v0.9 lane γ 曾在此登记 settings/index.ts 与 cli/auth_connector.ts 两条「等接线」——
   // 收口已接（app.ts 挂 /api/settings；index.ts `auth --connector`），按对称检查删除。
 

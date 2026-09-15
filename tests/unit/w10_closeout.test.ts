@@ -158,3 +158,18 @@ describe("收口 · session.ts SSE 出口转发 partial", () => {
     }
   });
 });
+
+describe("收口 · δ-2 /api/health 带 frontendBuilt（app.ts 接线）", () => {
+  test("GET /api/health 的载荷来自 server/health.ts：有 frontendBuilt 字段，status/version 仍在", async () => {
+    const fx = makeServer({});
+    try {
+      const { status, body } = await fx.get<{ status: string; version: string; frontendBuilt?: boolean | null }>("/api/health");
+      expect(status).toBe(200);
+      expect(body.status).toBe("ok");
+      expect(typeof body.version).toBe("string");
+      expect("frontendBuilt" in body).toBe(true);
+    } finally {
+      await fx.stop();
+    }
+  });
+});

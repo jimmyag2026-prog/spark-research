@@ -4,6 +4,7 @@ import { CoExploreError } from "../../ideation/coexplore";
 import { HttpError, type ServerContext } from "../context";
 import { ProjectError } from "../../project/manager";
 import { sseResponse } from "../sse";
+import { chatAcceptedBody, chatSyncMaxMs, runChatWithSyncDeadline } from "../chat_sync";
 import type { TaskEvent } from "../tasks";
 import { jsonBody, optionalBool, optionalNumber, optionalString, queryNumber, queryString, requireString } from "./shared";
 
@@ -59,8 +60,10 @@ export function sessionRoutes(ctx: ServerContext): Hono {
     bindRequestedProject(ctx, c, body, sessionId);
     const mode = parseMode(optionalString(body, "mode"));
     let result: Awaited<ReturnType<typeof ctx.agent.chat>>;
+    // δ-4（V156 ①）：同步路由等过 Bun.serve 的 255s 就被掐断、结果蒸发。改走任务句柄兜底。
+    const maxMs = chatSyncMaxMs({ root: ctx.deps.root });
     try {
-      result = await ctx.agent.chat({
+      const outcome = await runChatWithSyncDeadline({ tasks: ctx.tasks, maxMs, run: () => ctx.agent.chat({
         sessionId,
         message,
         model: optionalString(body, "model"),
@@ -68,7 +71,9 @@ export function sessionRoutes(ctx: ServerContext): Hono {
         // V119：UI 预算入口透传（只做类型校验，闸在 usageTrackingLlm）。
         budgetUsd: optionalNumber(body, "budgetUsd"),
         allowUnpriced: optionalBool(body, "allowUnpriced"),
-      });
+      }) });
+      if (outcome.kind === "accepted") return c.json(chatAcceptedBody({ sessionId, mode: mode ?? "chat", task: outcome.task, maxMs }), 202);
+      result = outcome.result;
     } catch (error) {
       // 模型两次都产不出合契约的 Idea 卡：服务端没坏，是这次生成不可用 → 422 而不是 500。
       if (error instanceof CoExploreError) throw new HttpError(422, error.message);

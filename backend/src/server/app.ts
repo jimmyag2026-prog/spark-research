@@ -27,6 +27,7 @@ import { settingsRoutes } from "./routes/settings";
 import { registerExistingSecrets } from "./routes/settings/credentials";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
+import { healthPayload } from "./health";
 
 export type { ServerDeps } from "./context";
 
@@ -222,7 +223,8 @@ export function createApp(deps: ServerDeps = {}): Hono {
 
   // 版本号单一真源是 package.json。此前这里硬编码 "0.2.0"，而 package.json 还写着 0.1.0——
   // 两处不一致时没有任何东西会报警，只会让「你跑的是哪个版本」这个问题变得不可回答。
-  app.get("/api/health", (c) => c.json({ status: "ok", service: "spark-research", version: PACKAGE_VERSION }));
+  // δ-2（V162）：载荷含 frontendBuilt，判定住在 server/health.ts（doctor 复用同一函数）。
+  app.get("/api/health", (c) => c.json(healthPayload(frontendDir)));
 
   app.get("/api/connectors", (c) => c.json({ connectors: ctx.connectors.listAll() }));
 
