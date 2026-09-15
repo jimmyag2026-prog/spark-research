@@ -1,4 +1,4 @@
-# 本地使用窗口 · U38 U39 U40 U44 U45 U46（U41 U42 U43 登记不做）
+# 本地使用窗口 · U38 U39 U40 U44–U50 U52 U53 + V171 路线① + V172 前半（U43 登记不做，U51 → v0.10）
 
 **日期** 2026-09-16 · **分支** `fix/ux-U38-U40` · 复跑：typecheck 干净 · unit 2663/0 · concurrency+timeout 37/0 · integration 8/0 · e2e 50/50 · sdk 68/0 · llms 无变化 · 触发：owner 首次以普通用户身份用 v0.9.0，网页端 chat 问「帮我下载 mRNA × AI 的综述」，0 篇 0 PDF。现场记录 `docs/UX_TEST_v0.9.0.md`，条目 `USAGE_LOG.md` U38–U46。第二次会话（`web_1789475371793`，「rsi 领域最近中国和美国有怎样的进展」）又带出 U44 U45 U46，一并在本窗口修掉；完整时间线见 `docs/devlog/UX-window-timeline.md`。
 
@@ -34,6 +34,12 @@
 | **U44** | `sub_agent.ts` 的 `toolResultContent()` 在工具返回进消息历史前瘦身：认得出 `{query, sources[], papers[]}` 的按字段瘦身（每源 outcome/计数 + 前 10 篇要素，摘要截 200 字，砍 authors/ids/url/pdfUrl/references，`_compacted.droppedFields`/`note` 写明砍了什么）；认不出形状的按 `TOOL_RESULT_MAX_CHARS = 8000` 截断并在 `_truncated`/`_note` 里明说 | `ux_window` U44 ×3 | compact 关掉 → **1 红**；截断关掉 → **1 红** |
 | **U45** | `connectors/literature.ts` `PubMedConnector.search` 同时认 `term`（NCBI 原名）与 `query`（平台统一名），`query` 优先，`rest` 里两个都删——修前算出的空串排在 `...rest` 之后，把调用方写的 `term` 覆盖掉；检索词为空当场抛错不发上游。`base.ts` 新增 `upstreamErrorOf()`（NCBI `esearchresult.ERROR` + REST 的 `errCode`/`errMsg`/`error`），在 `searchPayloadProblem()` 里**排在「有没有结果容器」之前**——`esearchresult` 本身就在 `SEARCH_RESULT_KEYS` 里，不先判错误信封就会被当成合法空结果放行 | `ux_window` U45 ×4 | `term` 别名去掉 → **1 红**；`upstreamErrorOf` 恒空 → **1 红** |
 | **U46** | `connectors/base.ts` 的 `HttpConnector.call()` 开头判 `metadata.status === "placeholder"` → 抛「占位实现 + caveat 原文 + 下一步（换用已可用的源）」，**一次 HTTP 都不发**。修前 cnki 回 `ERR_TLS_CERT_ALTNAME_INVALID`、wanfang 回 404，而两者的 caveat 早就写着「调用会失败」 | `ux_window` U46 ×2 | placeholder 判断恒假 → **1 红** |
+| **U47** | `connectors/registry.ts` 渲染一份**真实连接器清单**（每个源的精确工具名 + `usable` 标记 + placeholder 黑名单），`orchestrator.ts` 把它拼进 plan 提示词。纯数据、零网络、906 字符——修前 `plan()` 只喂技能描述不喂能力清单，规划器于是照连接器描述里的字眼猜出不存在的 `pubmed.esearch`，并连着三次会话把 cnki / wanfang 这两个死源排进计划 | `ux_window` U47 ×5 | `usable` 恒真 → **1 红**；tools 改成 `esearch` → **1 红**；清单从 prompt 删掉 → **1 红**（**第一版门禁没抓到**，补钉 `daa6d67` 之后才红） |
+| **U48 / V171 路线①** | `orchestrator.ts` 的 `executeTask` 统一出口把每个任务产出落盘到 `<workspace>/<sessionId>/<taskId>.json`（完整信封），plan 提示词写明这条**绝对路径约定**，summarize 收到的执行摘要从 `slice(0, 200)` 改成**形状摘要**：认得 openalex `results[]` / crossref `message.items[]` / europepmc `resultList.result[]` / pubmed esummary map 四种形状 → 条数 + 前 5 条标题 + 落盘路径；其余截 600。修前一份 OpenAlex 结果的前 200 字符恰好只够到 `meta`，模型「只留下了命中计数」说的是实话 | `ux_window` V171/U48 ×4 | 不落盘 → **1 红**；digest 关掉 → **1 红**；prompt 里的路径约定删掉 → **1 红** |
+| **U49** | `agents/progress.ts` 新增 `ProgressEmitter.taskNote(message)`——**计数不变、只换文案**；`literature_pipeline.ts` 的 `note()` 同时进执行日志与 progress，检索 / 下载 / 精读 / 综述每个阶段都推一条。修前精读 8 篇（每篇约 50s）期间 SSE 上零事件，用户以为卡死 | `v172_literature_pipeline` U49 ×1 | `taskNote` 删掉 → **1 红** |
+| **U50** | `runLiteraturePipeline` 接受 `model` 并透传给 `ReadingCardGenerator` / `ReviewDraftGenerator` 的每次调用；编排层按 **会话覆盖 > `subAgentModel_literature` > 默认模型** 选。修前两个生成器都走 `llmFor(sessionId)`，聊天框选了 kimi 就 8 篇全 kimi，配置里专门给文献子代理留的模型项从未被这条路读到（AD-17 形状） | `v172_literature_pipeline` U50 ×2（含源码级钉住选择顺序） | `model` 透传删掉 → **1 红** |
+| **U52** | `right.tsx` 的 `RecordDetail` 头部加 `← 返回总览`（`ws.selectRecord(null)`，`data-testid="record-detail-close"`）。修前只能回时间线再点一次同一条才能取消，列表滚走后详情区就是单行道 | 前端改动，由 e2e 覆盖（无新增单测） | — |
+| **U53** | `ExecutionOutcome.artifacts[]` → `OrchestrationResult.artifacts[]` → `chat()` → SSE `result.artifacts[]`，前端把它渲染成「📄 综述草稿」按钮、点了切到产物视图；`ChatResponse.artifacts` 从 `unknown[]` 收成 `Array<{id,label}>` 并重生成契约（`schemas.generated.json` + Python SDK `_types.py`） | 类型 + 契约重生成；前端由 e2e 覆盖（无新增单测） | — |
 
 ## 如实交代
 
@@ -44,6 +50,9 @@
 - **U44 的瘦身只认得「检索结果」这一种形状**（`{query, sources[], papers[]}`），其余工具一律走通用截断。通用截断会丢结构（模型拿到的是一段 JSON 前缀 + 一个说明），但它**明说了被截断**——静默截断比截断更危险。要按工具定制表现层，正路仍是 `McpToolRunner` 已有的 `tool.present()` 钩子（V174 ①）。
 - **U46 之后 `cnki` / `wanfang` 变成「调用即失败」。** 将来真接通了官方 API 或机构订阅渠道，记得**同时**把 `status` 从 `placeholder` 改掉，否则新渠道会被这道闸原封不动地挡在门外。
 - 过程失误一条：第一轮阴性对照在 commit **之前**跑，`git checkout` 把未提交的两个文件改动冲掉了，重做了一遍。纪律补充：**先 commit 再做阴性对照**。
+- **V172 的精读默认最多 8 篇（`maxRead`）是花钱上限，不是质量上限。** 8 这个数字来自「一次会话愿意付多少钱」，不代表「读到第 8 篇就够了」，也不代表这 8 篇是最相关的 8 篇——它就是入库顺序的前 8 条。会话五实测这 8 张卡烧掉 1001s / 1363s 墙钟，而 PDF 只命中 2/8，等于**用全文级成本做摘要级的事**。v0.10 S9（两档综述 + 批量预筛）就是冲这条来的。
+- **用户定义五步里的④「读取文献确认哪些有用」目前只产卡不筛卡。** `runLiteraturePipeline` 给每篇生成精读卡（卡里有 `relationToProject` 字段），但**没有任何一步拿这个字段去剔除无关论文**，综述照单全收。V172 review 模式真冒烟里就撞上了：blended 排序把两篇心血管指南混进「prevention」命中，精读卡没挡住、综述照引。这是 V172 的残余，不是本轮修掉的东西。
+- **U53 的 `ChatResponse.artifacts` 此前是一个无人填写的 `unknown[]`。** 类型声明在 `server/types.ts` 里躺了很久，**没有任何代码往里写过一个元素**，前端自然也没读过；文献流程的综述 `artifactId` 只能以纯文字出现在 digest 里。这和 U50（`subAgentModel_literature` 声明了没人读）是同一个形状（AD-17：声明即须有读者）——本轮一口气撞到两例，值得当成一类缺陷看，而不是两个孤立 bug。
 
 ## 追加 · V172 前半（chat 真执行文献技能）
 
