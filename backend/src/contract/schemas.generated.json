@@ -18,6 +18,9 @@
       "ChatResponse": {
         "$ref": "#/definitions/ChatResponse"
       },
+      "CredentialDeleteResponse": {
+        "$ref": "#/definitions/CredentialDeleteResponse"
+      },
       "EdgeType": {
         "$ref": "#/definitions/EdgeType"
       },
@@ -44,6 +47,33 @@
       },
       "RecordType": {
         "$ref": "#/definitions/RecordType"
+      },
+      "SettingsErrorResponse": {
+        "$ref": "#/definitions/SettingsErrorResponse"
+      },
+      "SettingsItem": {
+        "$ref": "#/definitions/SettingsItem"
+      },
+      "SettingsItemKind": {
+        "$ref": "#/definitions/SettingsItemKind"
+      },
+      "SettingsItemSource": {
+        "$ref": "#/definitions/SettingsItemSource"
+      },
+      "SettingsMeta": {
+        "$ref": "#/definitions/SettingsMeta"
+      },
+      "SettingsPanelId": {
+        "$ref": "#/definitions/SettingsPanelId"
+      },
+      "SettingsPanelResponse": {
+        "$ref": "#/definitions/SettingsPanelResponse"
+      },
+      "SettingsTaskResponse": {
+        "$ref": "#/definitions/SettingsTaskResponse"
+      },
+      "SettingsWriteResponse": {
+        "$ref": "#/definitions/SettingsWriteResponse"
       },
       "TaskResponse": {
         "$ref": "#/definitions/TaskResponse"
@@ -257,6 +287,34 @@
       "additionalProperties": false,
       "required": [
         "response"
+      ]
+    },
+    "CredentialDeleteResponse": {
+      "type": "object",
+      "properties": {
+        "panel": {
+          "const": "credentials"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "item": {
+          "$ref": "#/definitions/SettingsItem"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel",
+        "removed",
+        "id",
+        "note",
+        "item"
       ]
     },
     "DependencyMapping": {
@@ -1127,6 +1185,334 @@
         "provenanceClass",
         "license",
         "quality"
+      ]
+    },
+    "SettingsErrorResponse": {
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "nextStep": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "error",
+        "nextStep"
+      ]
+    },
+    "SettingsItem": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "面板内唯一键：配置键 / provider id / connector id / 执行地名 / 扩展名。"
+        },
+        "label": {
+          "type": "string",
+          "description": "人读标题。"
+        },
+        "kind": {
+          "enum": [
+            "string",
+            "number",
+            "enum",
+            "bool",
+            "secret",
+            "info",
+            "action"
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ],
+          "description": "当前值；`kind === \"secret\"` 时**恒为 null**，永不返回凭据值。"
+        },
+        "source": {
+          "enum": [
+            "env",
+            "config",
+            "default",
+            "unset"
+          ],
+          "description": "值从哪来；`info` / `action` 条目可缺省。"
+        },
+        "configured": {
+          "type": "boolean",
+          "description": "是否已配置（secret 条目唯一可见的状态位）。"
+        },
+        "allowed": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ],
+          "description": "enum 的可选值；非 enum 为 null。"
+        },
+        "editable": {
+          "type": "boolean",
+          "description": "这一条能不能在网页端改。false 时 `nextStep` 必须说明去哪改。"
+        },
+        "summary": {
+          "type": "string",
+          "description": "这一项是什么（直接用 `CONFIG_SETTINGS` 的 summary，不另写一份）。"
+        },
+        "effect": {
+          "type": "string",
+          "description": "改了影响什么。"
+        },
+        "nextStep": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "不可写 / 未配置时的可执行下一步；可写且已配置时为 null。"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "仅 credentials 面板：这个 id 需要哪些字段名。"
+        },
+        "fieldsSet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "仅 credentials 面板：**已设置**的字段名（只有名字，永远没有值）。"
+        },
+        "extra": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {},
+          "description": "面板专属附加数据（探测结果、体积、计数……）。只增键，不改既有键的含义。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "kind",
+        "value",
+        "editable",
+        "summary"
+      ]
+    },
+    "SettingsItemKind": {
+      "enum": [
+        "string",
+        "number",
+        "enum",
+        "bool",
+        "secret",
+        "info",
+        "action"
+      ]
+    },
+    "SettingsItemSource": {
+      "enum": [
+        "env",
+        "config",
+        "default",
+        "unset"
+      ]
+    },
+    "SettingsMeta": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "enum": [
+            "full",
+            "reduced",
+            "readonly"
+          ],
+          "description": "这个面板的能力分级，如实标注（AD-12）：`full` 全功能 / `reduced` 减配 / `readonly` 只读。"
+        },
+        "summary": {
+          "type": "string",
+          "description": "面板一句话说明，给 ε 直接渲染在标题下。"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "面板级的注意事项（减配的地方在这里如实写明）。"
+        },
+        "extra": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": {},
+          "description": "面板专属元数据。只增键。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "level",
+        "summary",
+        "notes"
+      ]
+    },
+    "SettingsPanelId": {
+      "enum": [
+        "credentials",
+        "general",
+        "models",
+        "local",
+        "scientific-tools",
+        "extensions",
+        "compute",
+        "network",
+        "storage",
+        "permissions"
+      ]
+    },
+    "SettingsPanelResponse": {
+      "type": "object",
+      "properties": {
+        "panel": {
+          "enum": [
+            "credentials",
+            "general",
+            "models",
+            "local",
+            "scientific-tools",
+            "extensions",
+            "compute",
+            "network",
+            "storage",
+            "permissions"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SettingsItem"
+          }
+        },
+        "meta": {
+          "$ref": "#/definitions/SettingsMeta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel",
+        "items",
+        "meta"
+      ]
+    },
+    "SettingsTaskResponse": {
+      "type": "object",
+      "properties": {
+        "panel": {
+          "enum": [
+            "credentials",
+            "general",
+            "models",
+            "local",
+            "scientific-tools",
+            "extensions",
+            "compute",
+            "network",
+            "storage",
+            "permissions"
+          ]
+        },
+        "task": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "project": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "kind",
+            "state",
+            "project"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel",
+        "task"
+      ]
+    },
+    "SettingsWriteResponse": {
+      "type": "object",
+      "properties": {
+        "panel": {
+          "enum": [
+            "credentials",
+            "general",
+            "models",
+            "local",
+            "scientific-tools",
+            "extensions",
+            "compute",
+            "network",
+            "storage",
+            "permissions"
+          ]
+        },
+        "item": {
+          "$ref": "#/definitions/SettingsItem"
+        },
+        "meta": {
+          "$ref": "#/definitions/SettingsMeta"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "panel",
+        "item",
+        "meta"
       ]
     },
     "TaskEvent": {

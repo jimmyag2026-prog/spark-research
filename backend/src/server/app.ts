@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { file } from "bun";
 import { existsSync } from "node:fs";
 import { extname, join } from "node:path";
@@ -89,9 +90,11 @@ function serveFile(dir: string, relative: string): Response | null {
 // 现在后端是模拟器，后果有限；接了真实 Opentrons 设备之后这条直接是 P0。
 //
 // 两道闸：
-//   1) 写请求（POST/PUT/PATCH/DELETE）必须显式声明 `Content-Type: application/json`——
-//      堵住「用非 JSON Content-Type 绕开预检」这条路。跨站攻击者可以伪造这个头，
-//      但伪造了它就正好落进闸 2）。
+//   1) **带请求体的**写请求（POST/PUT/PATCH/DELETE）必须显式声明
+//      `Content-Type: application/json`——堵住「用非 JSON Content-Type 绕开预检」这条路。
+//      跨站攻击者可以伪造这个头，但伪造了它就正好落进闸 2）。
+//      v0.9 lane γ：无 body 的写请求（典型是 `curl -X DELETE`）不要求这个头，
+//      理由见下面 `hasRequestBody` 调用点的注释——简单请求必须带 body 才有意义。
 //   2) 若请求带 Origin header，必须在白名单内（本地默认 localhost/127.0.0.1，
 //      任意端口；可用 config 的 originAllowlist 扩展）。
 //
@@ -135,6 +138,22 @@ function isAllowedOrigin(origin: string, allowlist: string[]): boolean {
   return isLocalHostname(hostname) || allowlist.includes(hostname) || allowlist.includes(origin);
 }
 
+// 这个请求有没有请求体。
+//
+// 判据优先看 `raw.body`（`ReadableStream | null`）——它是**规范里权威的那个**：
+// 没有 body 的请求恒为 null。只看 `Content-Length` 不够：进程内 `new Request(url, { body })`
+// 构造出来的请求在 `headers` 上常常根本没有 Content-Length（那个头由网络层加），
+// 于是「带 body 但看不出来」会让这道闸被静默绕开——实测就是这么红的一次。
+// 两个头留作兜底（分块传输、以及某些运行时不暴露 body 流的情形）。
+//
+// 刻意**不去读 body 内容来判断**：读一次会把流消费掉，后面的路由就拿不到了。
+function hasRequestBody(c: Context): boolean {
+  if (c.req.raw.body !== null) return true;
+  if (c.req.header("transfer-encoding") !== undefined) return true;
+  const length = c.req.header("content-length");
+  return length !== undefined && length !== "0";
+}
+
 function isJsonContentType(contentType: string): boolean {
   // 只看 `;` 前的 media type，忽略 charset 等参数；大小写不敏感。
   return contentType.split(";")[0]!.trim().toLowerCase() === "application/json";
@@ -170,7 +189,17 @@ export function createApp(deps: ServerDeps = {}): Hono {
     if (!WRITE_METHODS.has(method)) return next();
 
     const contentType = c.req.header("content-type") ?? "";
-    if (!isJsonContentType(contentType)) {
+    // v0.9 lane γ：**没有请求体的写请求不要求这个头**。
+    //
+    // 收口实测：`curl -X DELETE http://127.0.0.1:<port>/api/settings/credentials/<id>`
+    // 被这道闸挡成 415——curl 在没有 body 时本来就不发 Content-Type，于是「删掉一个凭据」
+    // 这个最普通的动作要求调用方手写一个描述空 body 的头，纯属噪音。
+    //
+    // 放宽这一条不打开任何攻击面：闸 1 防的是「用非 JSON Content-Type 绕开 CORS 预检的
+    // 跨站简单请求」，而**简单请求必须带 body 才有意义，且跨站 `<form>` 只能发 GET/POST**
+    // ——发不出无 body 的 DELETE/PUT。浏览器要跨站发 DELETE 一定先触发预检，我们不应答
+    // OPTIONS，它在闸门之前就被浏览器拦下了。带 body 的写请求照常强制校验（见下）。
+    if (hasRequestBody(c) && !isJsonContentType(contentType)) {
       return c.json(
         { error: `写请求必须使用 Content-Type: application/json（收到 '${contentType || "(missing)"}'）` },
         415,

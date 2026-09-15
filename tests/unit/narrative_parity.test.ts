@@ -110,14 +110,13 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
-  // v0.9 W9-1 lane α：两个新模块的接入点都在**收口专属文件**里，lane 一行都不许碰，
-  // 所以它们必然先以孤儿形态落盘，接线以 ≤10 行 diff 交收口（见 docs/devlog/W9-alpha.md
-  // 「收口 diff」段）。**接上后必须按对称检查删除这两条**，否则本门禁会以「在册但已
-  // 不是孤儿」的方向变红——忘接会红，接了不删也会红。
-  // v0.9 lane β-2（USAGE_LOG U9）：`chat` 子命令的旗标解析。等收口接线——
-  // 接线点是 `backend/src/index.ts` 的 `case "chat"`（枢纽文件，归收口）：
-  // 改调 parseChatArgs() 并把 model / budgetUsd / allowUnpriced / project 透传给
-  // chatOnce → orch.chat()。收口接上后按对称检查删除本条。chat\" 改调 parseChatArgs（β-2 收口 diff），接上后删除本条",
+  // v0.9 lane γ（W9-1）：两条「等接线」。两个枢纽文件都归收口（DEVELOPMENT_PLAN_v0.9.md §六
+  // 足迹表），lane 不许改，所以这两个模块在 γ 分支上必然零引用者。
+  // **收口接上之后按对称检查删除这两条**——接了不删会红。
+  "backend/src/server/routes/settings/index.ts":
+    "等收口接：app.ts 里加 `app.route(\"/api/settings\", settingsRoutes(ctx))` 一行（app.ts 是枢纽文件，归收口）",
+  "backend/src/cli/auth_connector.ts":
+    "等收口接：index.ts 的 `case \"auth\"` 里加 `--connector` 分支（index.ts 是枢纽文件，归收口）",
 
   // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
   // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，

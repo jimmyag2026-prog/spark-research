@@ -134,9 +134,58 @@ export interface CallOptions {
   onDelta?: (chunk: string) => void;
 }
 
+// ── v0.9 lane γ · AD-18 ④：可注册的脱敏集合 ────────────────────────────────
+//
+// 形状匹配（下面那两条正则）只认得出「长得像凭据」的东西：`sk-` 开头的、`Bearer xxx`、
+// `api_key: xxx`。可是很多源的 key 就是一串普通的十六进制或 base64——它**不长得像**
+// 凭据，形状匹配一个字都挡不住。凭据一旦能经 HTTP 写进来（方案「乙」），这个缺口就从
+// 「理论上」变成「用户刚填的那个值随时可能出现在下一条上游错误消息里」。
+//
+// 所以写入路径（HTTP 的 PUT /api/settings/credentials/*、CLI 的 auth --connector、
+// 进程启动时已存在的凭据）统统把值 `registerSecret()` 一次，此后任何经 redactSecrets
+// 的输出都按**字面量**把它打掉，不依赖它长什么样。
+//
+// 只在进程内存里，永不落盘、永不序列化——`process.env` 同理不碰（AD-18 ③）。
+const REGISTERED_SECRETS = new Set<string>();
+
+// 太短的值当不成判据：注册一个 3 字符的「凭据」会把正常文本打成筛子，
+// 反而让错误消息不可读。低于这个长度直接忽略（连同空串与纯空白）。
+const MIN_REGISTERED_SECRET_LENGTH = 6;
+
+/** 把一个凭据值登记进脱敏集合。非字符串 / 过短的值静默忽略。 */
+export function registerSecret(value: unknown): void {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (trimmed.length < MIN_REGISTERED_SECRET_LENGTH) return;
+  REGISTERED_SECRETS.add(trimmed);
+}
+
+/** 登记一个 map 里的所有值（`CredentialStore.set()` 的入参形状）。 */
+export function registerSecrets(values: Record<string, unknown>): void {
+  for (const value of Object.values(values)) registerSecret(value);
+}
+
+/** 已登记的条数。**只回条数，不回值**——这个函数本身也不许成为泄漏口。 */
+export function registeredSecretCount(): number {
+  return REGISTERED_SECRETS.size;
+}
+
+/** 只给测试用：清空登记表，免得用例之间互相污染。 */
+export function clearRegisteredSecrets(): void {
+  REGISTERED_SECRETS.clear();
+}
+
 /** 错误消息里绝不能出现凭据。构造 LlmError 时统一走这里做一次兜底。 */
 export function redactSecrets(text: string): string {
-  return text
+  let out = text;
+  // 先按字面量打掉已登记的值。长的先替换：短值可能是长值的子串，反过来会在
+  // 已经替换出的 "[redacted]" 里留下半截原文。
+  if (REGISTERED_SECRETS.size > 0) {
+    for (const secret of [...REGISTERED_SECRETS].sort((a, b) => b.length - a.length)) {
+      if (out.includes(secret)) out = out.split(secret).join("[redacted]");
+    }
+  }
+  return out
     .replace(/\b(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,})/g, "[redacted]")
     .replace(/("?(?:api[_-]?key|authorization|token)"?\s*[:=]\s*)("?)[^"'\s,}]{6,}\2/gi, "$1[redacted]");
 }
