@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // V118：openmm 探测与真提交同源——runner.py 暴露 probe()，TS 侧走 probeCodeFor（不再内联探测串）。
@@ -19,6 +19,12 @@ describe("V118 · openmm 探测同源", () => {
     const { probeCodeFor } = await import("../../backend/src/simulation/probe");
     const code = probeCodeFor(join(REPO, "backend/src/simulation/openmm/runner.py"), "openmm", "uv pip install openmm");
     const python = join(REPO, ".venv/bin/python");
+    // V142：CI runner 没有 .venv，spawnSync 会先于「没装 openmm 则 skip」的判断抛 ENOENT——
+    // main@v0.8.0 与 PR #109 的 CI 都红在这一行。没有 .venv 与没装 openmm 是同一档：跳过并说明。
+    if (!existsSync(python)) {
+      console.log("[V118] 没有 .venv/bin/python（CI 或未建 venv），跳过真实探测");
+      return;
+    }
     const proc = Bun.spawnSync([python, "-c", code], { stdout: "pipe", stderr: "pipe" });
     const stderr = proc.stderr.toString();
     if (proc.exitCode !== 0 && /No module named 'openmm'/.test(stderr)) {
