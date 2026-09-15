@@ -12,6 +12,16 @@ export interface HttpRequestInit {
   // 否则任一上游挂起就等于 CLI/server 永久卡死。传 0 或负数显式关闭超时（供已有
   // 自己超时逻辑的调用方，如 fixture 录制，避免双重计时）。
   timeoutMs?: number;
+  /**
+   * β-4（v0.10 · V156 ③）：**调用方的取消信号**。`/stream` 的客户端一断开，
+   * 这条 signal 就 abort，在飞的连接器请求随之收掉——否则用户关掉页面之后，
+   * 检索还在替他打上游、还在替他记账（台账继续增行就是它的可观测形态）。
+   *
+   * 与 `timeoutMs` 是两件事：超时是「这一条请求自己等太久」，取消是「整件事不要了」。
+   * 两者都会 abort 底下那个 fetch，但**抛出来的错不一样**——超时抛 `HttpTimeoutError`
+   * （可重试、可报告为上游慢），取消原样抛 abort 错误（不该被当成上游故障去重试）。
+   */
+  signal?: AbortSignal;
 }
 
 export interface HttpResponse {
@@ -106,6 +116,13 @@ export class NativeHttp implements HttpClient {
   async request(url: string, init: HttpRequestInit = {}): Promise<HttpResponse> {
     const timeoutMs = init.timeoutMs ?? defaultHttpTimeoutMs();
     const controller = new AbortController();
+    // β-4：调用方的取消信号并进同一个 controller。**不能直接把 init.signal 交给 fetch**——
+    // 那样超时就没法 abort 它了（一个 fetch 只认一个 signal）。已经 abort 的信号
+    // 立刻透传，省掉一次注定要被取消的连接。
+    if (init.signal) {
+      if (init.signal.aborted) controller.abort(init.signal.reason);
+      else init.signal.addEventListener("abort", () => controller.abort(init.signal!.reason), { once: true });
+    }
     const timer =
       timeoutMs > 0
         ? setTimeout(() => controller.abort(), timeoutMs)
@@ -126,6 +143,9 @@ export class NativeHttp implements HttpClient {
         body,
       });
     } catch (error) {
+      // 取消优先于超时：调用方主动取消时抛原始 abort 错误，**不许伪装成超时**——
+      // 上游没有慢，是我们自己不要了；两者混成一种，重试逻辑与诊断都会读错。
+      if (init.signal?.aborted) throw error;
       if (controller.signal.aborted) {
         throw new HttpTimeoutError(url, timeoutMs);
       }
