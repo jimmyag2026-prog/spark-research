@@ -1,10 +1,12 @@
 import type {
   ApiCallTotals,
   ArtifactVersion,
+  DeltaEventData,
   ComputeJobView,
   ConclusionAssessment,
   ConclusionCard,
   DryExperiment,
+  PartialEvent,
   IdeaCard,
   LibraryPaper,
   ReportCounts,
@@ -14,6 +16,7 @@ import type {
   RecordEdge,
   ResearchRecord,
   StateMachine,
+  StreamProgressEvent,
   TaskSnapshot,
   UsageTotals,
   WetExperiment,
@@ -147,8 +150,13 @@ export interface StreamHandlers {
   // （权威回答走完整的 plan/execute/review 循环，预览只是一次独立的直接模型调用）。
   // 没配置 provider、或后端 fake LLM 不支持流式时，这个事件永远不会到达——UI 不能
   // 假设它一定会来。
-  onDelta?: (data: { chunk: string }) => void;
-  onProgress?: (data: { message: string }) => void;
+  // v0.10 β-3：补了 `target` / `revision` 两个字段（**只增不改**，老消费端读 chunk 不受影响）。
+  onDelta?: (data: DeltaEventData) => void;
+  // v0.10 β-1：`progress` 补了 ts / elapsedMs / etaMs?，并带着既有的 stage/complete/total。
+  // 这里放宽成完整事件体；只读 `message` 的老调用方原样可用。
+  onProgress?: (data: StreamProgressEvent) => void;
+  /** v0.10 β-2：中间产物（检索候选清单 / 每源结果 / 每张精读卡）。 */
+  onPartial?: (data: PartialEvent) => void;
   onResult?: (data: { response: string; review?: unknown; ideaRecordId?: string | null; artifacts?: Array<{ id: string; label: string }> }) => void;
   onError?: (data: { message: string }) => void;
 }
@@ -194,6 +202,7 @@ export async function streamChat(
       if (name === "start") handlers.onStart?.(data);
       else if (name === "delta") handlers.onDelta?.(data);
       else if (name === "progress") handlers.onProgress?.(data);
+      else if (name === "partial") handlers.onPartial?.(data);
       else if (name === "result") handlers.onResult?.(data);
       else if (name === "error") handlers.onError?.(data);
       else if (name === "done") return;
