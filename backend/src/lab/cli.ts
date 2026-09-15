@@ -33,12 +33,15 @@ export const LAB_HELP = `用法:
   spark-research lab token <id> [--json]
                                         V95：签发一枚一次性 HTTP 审批令牌（10 分钟有效，
                                         只能被 approve/simulate 等触发执行的路由消费一次）。
-                                        TTY 门与 lab approve **同一套**：必须来自真实交互终端，
+                                        TTY 门与 lab approve **同一套**（同样不是安全边界，见 V167）：
                                         非交互环境同样需要 --ci-bypass-token/--ci-bypass-reason。
                                         令牌只打印这一次，不会再出现在任何日志/记录里。
   spark-research lab approve <id> [--actor 谁] [--note 备注] [--json]
                                         人工批准执行（AD-6）。落 decision record，记协议 hash。
-                                        V19：必须来自真实交互终端（会现场要求输入 'yes' 确认），
+                                        V19：要求一次交互终端里的显式 'yes'（会现场提示）。
+                                        **别把 TTY 检测当成安全边界**（V167 实测：pty 包装器
+                                        \`script -q /dev/null …\` 就能满足它）——真正的门是那句
+                                        字面 'yes'（显式、不可误触）与下面的 token+reason（留痕）。
                                         非交互环境（脚本/CI/Bash 工具）默认拒绝，除非同时给出
                                         --ci-bypass-token <与 SPARK_LAB_CI_BYPASS_TOKEN 一致>（或 --ci-bypass-token-env <变量名>：从环境变量取值，不走 argv）
                                         与 --ci-bypass-reason "<理由>"（旁路会写进 decision record）

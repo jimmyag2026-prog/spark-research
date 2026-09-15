@@ -13,8 +13,25 @@ import { createHash, timingSafeEqual } from "node:crypto";
 //
 // 判据：`process.stdin.isTTY && process.stdout.isTTY`——Node/Bun 对「这个文件描述符
 // 连着真终端」的标准探测。管道（`echo yes | lab approve ...`）、重定向、子进程、
-// Bash 工具调用全都是 false：piping 一个答案进 stdin 不会让 isTTY 变 true，所以
-// 「伪造一次交互」本身就先过不了这一步判定，不需要额外去防「stdin 被脚本控制」这件事。
+// Bash 工具调用全都是 false。
+//
+// ── V167（v0.10 δ-5）核实：**TTY 检测不是安全边界，别再这么说** ─────────────
+//
+// 上面这段原本接着写「所以『伪造一次交互』本身就先过不了这一步判定」。那句话是错的，
+// 本轮在本机实测证伪（输出原文见 `docs/devlog/W10-delta.md` §δ-5）：一个 pty 包装器
+// （`script -q /dev/null <命令>`，macOS/Linux 自带，不需要装任何东西）就让 isTTY 变成
+// true，把 `yes` 延时喂进去，`lab approve` 走完整条 TTY 分支、落 decision record、
+// 状态迁到 approved，actor 还是一个现编的名字。也就是说任何能跑 Bash 的 agent 都能批准。
+//
+// 那这道门还剩什么？剩下的是**真的**那两样，这也是该写进文档的口径：
+//   ① 那句字面 `yes`——它保证「批准」是一个**显式、不可与别的输入混淆**的动作，
+//      挡的是误触与「顺手回车」，不是挡有意的自动化；
+//   ② 非交互分支的 `token + reason`——它保证旁路**留痕**（理由进 decision record），
+//      挡的同样不是「能不能」，而是「能不能不留痕地」。
+// 两条都属于「显式 + 可追溯」，不属于「不可绕过」。审批的真实边界在**别处**：
+// decision record 的 actor 与 hash 让事后追责成立（V10 的「谁自称就是谁」仍未解），
+// 以及 MCP_WITHHELD 把这两个动作挡在子代理的默认路径之外。
+// 在这些之上声称「审批无法被自动化」是不成立的，不要写、也不要暗示。
 //
 // 两条分支都不静默放行（AD-2/AD-9 同一套纪律：默认拒绝，旁路必须显式且留痕）：
 //   ① 交互终端：必须真的在这次调用里读到一行确认——默认从真实 stdin/stdout 读
