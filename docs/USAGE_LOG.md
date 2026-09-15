@@ -1,0 +1,787 @@
+# 使用日志
+
+> **这份文档记什么**：真实使用 Spark Research 时撞到的问题、摩擦和疑问。
+> 原始现场记录 + 修改方向，**只记录不动手**——改与不改、先改哪条，由人决定。
+>
+> **和 `docs/BACKLOG.md` 的关系**：BACKLOG 是**已归口**的登记处，每条都有 V 号和明确去向。
+> 本文是它的**上游**——使用中的发现先落这里，确认成立后再转入 BACKLOG 拿 V 号。
+> 两边不重复登记：一条转走后，本文那条标「→ V1xx」并保留原始现场描述。
+>
+> **编号**：产品问题用 `U` 前缀（Usage），方法问题用 `P` 前缀（Process，见文末「方法缺陷」一节），
+> 都避免与 BACKLOG 的 V 号抢号。
+> 截至 2026-09-14，全仓（含 `fix/v0.8.1-gate-h` 分支）已用到 **V141**，下一个可用 V 号是 **V142**。
+>
+> **证据规矩**：现场证据（时间戳、命令输出、源码行号）比描述重要。
+> **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
+> 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
+>
+> 最后更新：2026-09-14
+
+---
+
+## 总表
+
+| 编号 | 一句话 | 严重度 | 类型 | 状态 |
+|---|---|---|---|---|
+| [U1](#u1) | 首次 chat 调用失败，台账不记错误类型，日志无输出 → 失败即黑箱 | 中 | 可观测性 | 待转 V |
+| [U2](#u2) | alpha.3 孤儿 server 存活两天，工作树已删除，`doctor` 查不到 | 中 | 运维 | 待转 V |
+| [U3](#u3) | 网页端打开时指针停在验收测试项目，易误写进测试数据 | 中 | 体验 | 待转 V |
+| [U4](#u4) | 聊天进度文案只有一句、只发一次，长回复时界面无推进感 | 低 | 体验 | 待转 V |
+| [U5](#u5) | 模型路由有无条件静默兜底 `return "kimi"`，两份模型清单不同步 | **高** | 正确性 | 待转 V |
+| [U6](#u6) | 网页端没有设置入口，32 个配置项一个也够不着 | **高** | 功能缺失 | 待转 V |
+| [U7](#u7) | 集成套件默认整体跳过，「8 skip」读起来像通过 | 中 | 测试门禁 | 待转 V |
+| [U8](#u8) | server 启动日志打两遍，两处手写副本 | 低 | 整洁 | 待转 V |
+| [U9](#u9) | CLI `chat` 没有任何参数：无预算闸、无 `--model`、`--help` 会被当消息发出去 | **高** | 正确性 | 待转 V |
+| [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | 待转 V |
+
+### 方法缺陷
+
+| 编号 | 一句话 | 状态 |
+|---|---|---|
+| [P1](#p1) | 三道防线（OpenScience 对比 / AD-12 门禁 / 零上下文验收）的盲区恰好重合，十条里八条都漏了 | 待讨论 |
+
+### 修改方向速览
+
+| 编号 | 方向 | 改动量 | 需要先拍板吗 |
+|---|---|---|---|
+| U5 | 兜底改为显式拒绝；两份清单合一或加对撞门禁 | 小 | 否 |
+| U1 | usage 记录补 `errorKind` + 错误摘要 | 小 | 否 |
+| U8 | 删掉其中一处 `console.log` | 极小 | 否 |
+| U4 | orchestrator 跨阶段各发一次 progress | 小 | 否 |
+| U7 | 跳过时把「本轮未验证」打成显式提示，或 CI 强制 record 模式 | 小 | 否 |
+| U3 | 项目支持归档/打标，或对久未动的项目给轻提示 | 中 | 是（交互取舍） |
+| U6·A | 非密配置的设置面板 + 一组写路由 | 中 | 否 |
+| U6·B | 凭据能否走 HTTP 写入 | 大 | **是（与 AD-2 冲突）** |
+| U2 | `doctor` 增加运行实例探测，或 server 落 pid 文件 | 中 | 是（选哪种方案） |
+| U10 | `chat()` 真的把 `req.model` 用起来；加一条「换模型真换了」的门禁 | 小 | 否 |
+| U9 | `chat` 补 `--model` / `--budget-usd` / `--project`；`--help` 先于消息解析 | 小 | 否 |
+
+---
+
+<a id="u5"></a>
+## U5 · 模型路由有无条件静默兜底，两份模型清单不同步
+
+> **本条原为「待核实」，核实后成立且比初判严重，已升为高。**
+> 最初的怀疑是「文档没讲清楚该填哪种模型名形态」，核实后发现真正的问题在路由兜底。
+
+**现场**：想把 `defaultModel` 从 `z-ai/glm-5.3-flash` 换成更快的模型，
+查单价表发现键名有两种形态（裸名 `deepseek-v4-flash` 与带前缀 `z-ai/glm-5.3-flash`），
+不确定该填哪种、填错会怎样。
+
+**证据一 · 兜底是无条件的**
+
+```ts
+// backend/src/llm/router.ts:126
+export function providerForModel(model: string): Provider {
+  for (const provider of SUPPORTED_PROVIDERS) {
+    if (PROVIDER_MODELS[provider].includes(model)) return provider;
+  }
+  const low = model.toLowerCase();
+  if (low.includes("kimi") || low.includes("moonshot")) return "kimi";
+  if (low.includes("gpt")  || low.includes("o4"))      return "openai";
+  if (low.includes("claude"))                          return "anthropic";
+  if (low.includes("deepseek"))                        return "deepseek";
+  if (low.includes("qwen"))                            return "qwen";
+  return "kimi";          // ← 认不出的一律当 kimi
+}
+```
+
+**任何认不出的模型名都会被静默当成 Kimi**，用 Moonshot 的 baseUrl 发请求。
+不报错、不警告。
+
+**证据二 · 代码注释自己承认了后果**
+
+```ts
+// backend/src/llm/router.ts:20-23
+// z-ai/glm-5.3-flash：v0.6 B2 轮次指定模型。必须显式登记——providerForModel 的
+// 关键词兜底认不出 "z-ai/glm"（不含 kimi/gpt/claude/deepseek/qwen 任何一个词），
+// 不登记会静默落到 kimi adapter 用错误的 baseUrl 调用。
+```
+
+也就是说：这个陷阱是**已知的**，处理方式是「记得去登记」，而不是「让它没法出错」。
+下一个新模型如果有人忘了登记，同样的事会再发生一次。
+
+**证据三 · 同一件事存在两份手写清单**
+
+| 位置 | 结构 | 作用 |
+|---|---|---|
+| `backend/src/llm/router.ts` 的 `PROVIDER_MODELS` | provider → 模型名数组 | 决定请求发给谁 |
+| `backend/src/llm/providers/registry.ts` 的单价表 | provider → 模型名 → 单价 | 决定怎么计费、预算闸怎么判 |
+
+两边都编码了「这个模型属于哪家」这个**同一个事实**，各写一份，没有任何门禁对撞。
+
+实测差集（单价表里有、`PROVIDER_MODELS` 里没有）：
+
+```
+deepseek-v4-flash · deepseek-v4-pro · kimi-k2.6 · kimi-k3
+```
+
+这四个目前靠关键词兜底侥幸落对了 provider。但它们没被显式登记这件事本身，
+说明两份清单已经漂移了。
+
+**证据四 · 一个具体的坑**
+
+`moonshotai/kimi-k2.6` 登记在 `openrouter` 名下，而裸名 `kimi-k2.6` 会被关键词
+兜底判给 `kimi`。**两个几乎同名的字符串走两条完全不同的路由和两套单价。**
+用户凭直觉填哪个都不奇怪，填错了不会有任何提示。
+
+**问题**
+
+1. 静默降级。这个项目自己的纪律是「自动化降级必须 log」，这里连 log 都没有。
+2. 同一事实两份手写副本。CHANGELOG 记载这个形态在一个版本里出现过四次，这是第五次。
+3. 失败模式最糟糕的一种：不是报错，是**用错误的 baseUrl 发出请求**，
+   最后表现为一个看不懂的上游错误，而真因在三层之外。
+
+**修改方向**
+
+- **立刻可做**：把 `return "kimi"` 改成抛错，错误消息里列出已登记的模型名并指向
+  `config set defaultModel`。宁可拒绝，不要猜。关键词兜底那几行也应该至少 log 一行
+  「模型 X 未显式登记，按关键词判给 Y」。
+- **根治**：让单价表成为唯一真源。它本来就是 provider → model → price 的嵌套结构，
+  已经携带了 provider 归属，`PROVIDER_MODELS` 可以从它派生而不是另写一份。
+  做不到合并的话，加一条对撞门禁：两份清单的模型集合必须相等，不等就测试失败。
+- **顺带**：`config set defaultModel` 应该在写入时就校验模型名，而不是等到真正调用时才炸。
+
+**影响面**：`llm/router.ts`、`llm/providers/registry.ts`，加一条单测。不动任何调用方。
+
+**风险**：改成抛错后，如果有人正在用某个未登记但恰好能跑的模型，会当场失败。
+所以这条要配一次全量模型名盘点，把在用的都补登记。
+
+---
+
+<a id="u6"></a>
+## U6 · 网页端没有设置入口，什么配置都改不了
+
+**现场**：在网页工作台想换个更快的模型、想调整默认检索源、想给
+Semantic Scholar 配个 key，**找遍四栏没有任何设置按钮**。
+最后只能回终端敲 `spark-research config set` 和 `spark-research auth`。
+
+**证据一 · 78 条 HTTP 路由里，没有一条能写配置**
+
+```
+$ spark-research contract --json | <按前缀统计>
+HTTP 路由总数: 78
+  /api/artifacts 4 · /api/capabilities 1 · /api/chat 1 · /api/chem 1
+  /api/compute 8 · /api/conclusions 4 · /api/connectors 1 · /api/experiments 7
+  /api/health 1 · /api/ideas 4 · /api/lab 11 · /api/lineage 1 · /api/lit 11
+  /api/projects 6 · /api/proteins 1 · /api/records 5 · /api/report 1
+  /api/session 4 · /api/tasks 3 · /api/usage 2
+```
+
+涉及配置、凭据、数据源的只有三条，**全是 GET**：
+
+```
+GET  /api/capabilities
+GET  /api/connectors
+GET  /api/lit/sources
+```
+
+`backend/src/server/routes/` 下 13 个模块，没有 `config.ts`、没有 `auth.ts`、
+没有 `credentials.ts`。
+
+**证据二 · 前端知道凭据状态，只是没法写**
+
+```ts
+// frontend/workspace/src/lib/api.ts:207
+apiKeyRequired: boolean;
+credentialConfigured: boolean | null;
+```
+
+这是最刺眼的地方：界面**能告诉你**某个源需要 key、以及配没配，
+**却不给你任何地方把 key 填进去**。诊断做完了，动作缺失。
+
+全前端搜「设置 / setting / config / 凭据」只命中上面这两行类型声明，没有任何 UI。
+
+**证据三 · 配置项一共 32 个，网页端一个也够不着**
+
+`spark-research config list` 列出 32 个键，包括 `defaultModel`、`contactEmail`、
+`httpTimeoutMs`、`llmTimeoutMs`、`wetBackend`、`simulationPlatform`、
+`computeTarget`、`embeddingModel`、五个 `subAgentModel_*` 等等。
+
+**这条要拆成两半，不要一起处置**
+
+| | 内容 | 判断 |
+|---|---|---|
+| **A 非密配置** | `defaultModel`、检索源、各类超时、`contactEmail`、`computeTarget`… | **没有理由不能在网页端改。**这些不是秘密，写进 `config.json` 而已。 |
+| **B 凭据** | 各家 LLM API key、connector 的 key | **需要先做设计裁定，别默认照做。** |
+
+**修改方向 · A（不需要拍板）**
+
+加一个「设置」面板 + 一组配置写路由，把 32 个键里非密的那些暴露出来。
+
+- 路由：`GET /api/config`（现有 `config list` 的投影）、`PUT /api/config/:key`。
+  契约是机械生成的，加完路由 `contract --json` 和 Python SDK 会自动跟上。
+- 前端：左栏「运维」下加一项「设置」，中栏出一个表单视图。
+  每个键的说明文字 `config list` 里已经有了，直接用，不要另写一份。
+- 校验：写入时就校验（模型名是否已登记、超时是否为正整数），
+  不要等到运行时才炸——这条和 U5 的第三点是同一件事。
+
+光是能在网页端换模型，就解决了现在「用着用着得开终端」的断裂感。
+
+**修改方向 · B（必须先拍板）**
+
+凭据能不能走 HTTP 写入，与 AD-2「凭据只在 daemon 进程」正面冲突。
+`auth` 命令从 V115 起连回显都掐掉了，让 key 经 HTTP body 进来是反方向的。
+
+要做的话至少先回答三个问题：
+
+1. key 走 HTTP 进来时，怎么保证不落 server 日志、不落 raw、不进 usage、不进 record？
+2. server 现在绑 127.0.0.1，但 `originAllowlist` 是可配的。放开之后这条路径就暴露了，
+   要不要硬编码成「凭据路由永不接受非 loopback 来源」？
+3. 要不要照 `lab token` 的先例，凭据写入也要一枚终端签发的一次性令牌？
+
+**裁定之前就该做的一件小事**：网页端在显示某个源「未配置」时，
+应该同时给出「去终端跑 `spark-research auth`」这条下一步。
+现在只显示状态不说去哪做，**违反了这个项目自己的约定——失败消息都要带可执行的下一步**。
+
+**关联**：agent 指南里写过「审批类动作不暴露为 MCP 工具，这是设计不是缺陷」，
+并明确正确做法是把待办呈现给人类。凭据应该照同一个模式处理：
+不提供写入口可以，但要把「去哪做」说清楚。
+
+---
+
+<a id="u1"></a>
+## U1 · 首次 chat 调用失败，没有留下可诊断痕迹
+
+**现场**：2026-09-14 在 `spark` 项目用网页端聊天，第一条消息失败。
+
+**证据**：`~/.spark-research/projects/spark/usage.jsonl` 第一行
+
+```json
+{
+  "ts": "2026-09-14T08:21:34.014Z",
+  "command": "chat",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3-flash",
+  "ok": false,
+  "inputTokens": 0,
+  "outputTokens": 0,
+  "costUsd": null
+}
+```
+
+同一时刻 `logs/server.log` 里**没有任何输出**——整个文件只有四行启动日志。
+
+**问题**：台账记了「失败了」，但没记**失败在哪一类**。`LlmErrorKind` 这个类型本身是存在的
+（`auth` / `rate_limit` / `timeout` / `parse` / `upstream` / `unsupported` / `budget`，见
+`backend/src/llm/types.ts`），失败时却没有落进 usage 记录。
+
+结果是：事后完全无法判断这次失败该怪谁。紧接着的第二次调用成功了，所以也没法复现。
+
+**修改方向**
+
+- `UsageStore.append` 的记录结构增加 `errorKind`（用现成的 `LlmErrorKind`）和
+  `errorMessage`（截断的摘要，注意脱敏——错误体里可能带 key 片段）。
+- server 侧对 `ok: false` 的 LLM 调用打一行结构化日志，至少含 provider、model、errorKind。
+  现在是完全静默的。
+- `usage --json` 的输出把 errorKind 分布也统计出来，和 `unknownCostCalls` 并列。
+
+**影响面**：`llm/` 的记账路径 + usage 的读侧。契约里 `/api/usage` 的响应形状会变，
+SDK 需要重新生成。
+
+**关联**：AD-13「LLM 失败无内容可用」。这条是它的观测面版本——
+不是「失败后没内容」，是「失败后没证据」。
+
+---
+
+<a id="u2"></a>
+## U2 · 孤儿 server 存活两天，工作树已删除仍在监听
+
+**现场**：4321 端口上有一个 `v0.8.0-alpha.3` 的 server 在监听，从 2026-09-12 11:46 一直活到
+09-14，两天没人发现。它是 A7 验收时起的，验收结束后没人关。
+
+**证据**：
+
+```
+$ lsof -nP -iTCP:4321 -sTCP:LISTEN
+spark-res 79165 jimmyclaw ... TCP 127.0.0.1:4321 (LISTEN)
+
+$ ps -o args=,ppid=,lstart= -p 79165
+./dist/spark-research server 4321    1    Sat Sep 12 11:46:45 2026
+
+$ lsof -a -p 79165 -d cwd
+n/Users/jimmyclaw/Desktop/AI4S/spark-research-a7      ← 这个目录已经不存在了
+
+$ curl -s localhost:4321/api/health
+{"status":"ok","service":"spark-research","version":"0.8.0-alpha.3"}
+```
+
+父进程是 launchd（1），说明起它的终端早就关了，进程被系统收养。
+它的二进制所在工作树 `spark-research-a7` 已经被删除，进程靠已打开的 inode 继续跑。
+
+**三个后果**
+
+1. **版本困惑**。浏览器打开 4321 看到的是 alpha.3 的工作台，但 `package.json`、
+   CLI、文档全是 0.8.0。界面上没有任何地方提示「你连的是个旧构建」。
+2. **数据目录是共用的**。这个旧 server 和新 CLI 指向同一个 `~/.spark-research`，
+   两边都能写。旧构建有没有已修复的写入 bug，无从保证。
+3. **没有任何机制会告诉你**。`doctor` 不查端口，`capabilities` 不查运行中的实例。
+
+**修改方向**（两种方案，选一种，需要拍板）
+
+- **方案甲 · doctor 探测**：`doctor` 增加一档「运行实例」，
+  探本机常用端口上有没有 spark-research 在监听、版本是多少、和当前 checkout 是否一致，
+  不一致就给出「先停掉旧实例」的下一步。优点是零新状态；缺点是只能探已知端口。
+- **方案乙 · pid 文件**：server 启动时把 `{pid, version, port, cwd, startedAt}` 写进
+  `~/.spark-research/server.json`，退出时清掉。`doctor` 和其他命令读它。
+  优点是能发现任意端口；缺点是引入需要维护的状态，异常退出会留下陈旧文件
+  （要靠 `kill -0` 校验 pid 是否还活着）。
+
+**顺带**：工作台顶栏应该显示 server 版本。现在只有 `/api/health` 里有，
+界面上看不到，这是「版本困惑」能持续两天的直接原因。
+
+---
+
+<a id="u3"></a>
+## U3 · 网页工作台打开时，指针停在验收测试项目
+
+**现场**：新起 server 后用浏览器打开工作台，顶栏显示的项目是 `r5-t2`，
+里面有 32 条 record、10 篇文献、2 条思路。那是 R5 验收批量跑出来的测试项目。
+
+**证据**：
+
+```
+$ curl -s http://127.0.0.1:4321/api/projects/current
+{"project":{"slug":"r5-t2","name":"r5-t2", ...
+ "counts":{"records":32,"papers":10,"ideas":2,"dryExperiments":2,"wetExperiments":0}...
+```
+
+`project list` 里 30 个项目中有 20 多个是 `r4-*` / `r5-*` / `a5-*` / `*-copy` 这类
+验收产物，真实课题混在里面很难挑。
+
+**问题**：当前项目指针是全局可变状态，上一次会话留在哪就是哪。
+一个刚打开网页端的人，第一次检索和精读会**默认写进测试项目**，而界面上没有任何
+「这是个测试项目」的标记。等发现时证据图已经脏了。
+
+**修改方向**（需要拍板，是交互取舍）
+
+- **最小改动**：项目支持 `archived` 状态（`project archive` 命令已经存在了，
+  先确认它有没有真的落状态、网页端读不读），下拉框默认折叠已归档的。
+  把 20 多个验收产物一次性归档，问题当场消失一大半。
+- **加一层保险**：工作台在指针指向一个「超过 N 天没有新 record」的项目时，
+  顶栏给一条轻提示加一个「新建项目」快捷入口。不阻断，只提醒。
+- **不建议**：改成「每次打开都不选项目」。那会破坏 CLI 侧已有的指针语义，
+  而且 CLI 和网页共用同一个指针，改一边会让另一边行为变怪。
+
+---
+
+<a id="u4"></a>
+## U4 · 聊天等待期的进度文案只有一句、只发一次
+
+**现场**：网页端聊天，发出消息后要等相当久才见到完整回复。
+
+**证据**：`spark` 项目 2026-09-14 当天六次调用的输出长度
+
+| 时刻 UTC | 输入 token | 输出 token | 结果 |
+|---|---:|---:|---|
+| 08:21:34 | 0 | 0 | 失败（见 U1） |
+| 08:22:06 | 537 | 1464 | 成功 |
+| 08:22:19 | 383 | 978 | 成功 |
+| 08:23:04 | 705 | 568 | 成功 |
+| 08:23:29 | 594 | 1780 | 成功 |
+| 08:23:47 | 499 | 549 | 成功 |
+
+**问题**：链路本身是通的——后端在开跑前发一个 `progress` 事件，前端在还没收到任何
+增量时拿它当占位文案（`center.tsx` 的 `onProgress`，逻辑正确，不会覆盖正在流入的正文）。
+
+真正的问题是**那条 progress 只有一句固定文案、只发一次**：
+
+```ts
+// backend/src/server/routes/session.ts:95
+sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" });
+```
+
+于是不管 plan 跑了三秒还是三十秒，界面上永远是「规划与执行中」五个字，不动。
+既不区分现在是 plan、execute 还是 review，也没有任何推进感。
+回复越好、等待越长，而等待期内信息量恒定为零。
+
+这不是性能问题，是预期管理问题。
+
+**修改方向**
+
+让 orchestrator 在跨阶段时各发一次 progress（「规划中」→「执行中」→「复核中」），
+文案跟着阶段走。传输层（SSE）和消费端（`onProgress`）都是现成的，
+只差生产端在管线里多发几次。
+
+**影响面**：`agents/orchestrator.ts` 加几个回调点，`routes/session.ts` 把回调接到
+`sender.send("progress", ...)`。前端一行不用改。
+
+**已核实**：`onProgress` 两端都有实现，**不是**「建好了但没有生产调用方」那个形态。
+最初的怀疑方向是错的，这里如实留痕。
+
+---
+
+<a id="u7"></a>
+## U7 · 集成套件默认整体跳过，「8 skip」读起来像通过
+
+**现场**：跑全量测试想确认环境没问题，`bun run test:integration` 的输出是：
+
+```
+ 0 pass
+ 8 skip
+ 0 fail
+Ran 8 tests across 3 files. [27.00ms]
+```
+
+零失败，绿的。但实际上**这三条链路这一轮一次都没被验证**。
+
+**证据**：三个文件都在顶层无条件跳过
+
+```ts
+// tests/integration/literature_record.test.ts:33
+describe.skipIf(!RECORDING)("真实网络 · 录制 fixture", () => { ... });
+// novelty_record.test.ts:22 与 protein_record.test.ts:22 同构
+
+// 开关来自环境变量，默认 replay
+const MODE = fixtureModeFromEnv();          // backend/src/http/fixture.ts:74
+const RECORDING = MODE === "record" || MODE === "live";
+```
+
+要真跑必须显式开：
+
+```bash
+FIXTURE_MODE=record bun run test:integration   # 打真实网络并重录 fixture
+FIXTURE_MODE=live   bun run test:integration   # 打真实网络但不覆盖 fixture
+```
+
+**问题**：这是个「静默的门禁空转」。`27ms` 跑完 8 个用例这件事本身就说明什么都没做，
+但输出里的 `0 fail` 会让人以为过了。CI 里也一样——如果哪天有人把它接进 CI
+而不设 `FIXTURE_MODE`，会得到一条永远绿的流水线。
+
+这个形态在本项目有先例：pytest 曾因文件名不匹配**静默收集到零个用例**，
+等于整个 Python 侧没有门槛，后来靠 `pyproject.toml` 的 `python_files` 补上。
+这条是同一个形态换了个位置。
+
+**修改方向**
+
+- **最小**：跳过时打一行显著提示，例如
+  `⚠️ 集成套件已整体跳过（FIXTURE_MODE=replay）——这三条链路本轮未验证`。
+  让「跳过」和「通过」在输出上长得不一样。
+- **更好**：把 replay 模式下**真的能跑**的那部分跑起来。现在是整个 describe 跳掉，
+  但 fixture 已经录好了，回放本身不需要网络——值得确认一下为什么连回放都跳。
+  如果回放能跑，默认就该跑，只有重录才需要开关。
+- **CI**：定期（比如每周一次）跑一轮 `FIXTURE_MODE=live`，把上游接口漂移暴露出来。
+  fixture 回放永远绿，恰恰意味着它发现不了上游变更。
+
+---
+
+<a id="u8"></a>
+## U8 · server 启动日志打两遍
+
+**现场**：新起 server 后看日志，四行里有两组重复：
+
+```
+Spark Research server listening at http://127.0.0.1:4321
+Press Ctrl+C to stop
+Spark Research server listening at http://127.0.0.1:4321
+Press Ctrl+C to stop
+```
+
+一度怀疑起了两个进程，查了确认只有一个（`pgrep -f "index.ts server" | wc -l` = 1）。
+
+**证据**：两处各写了一份
+
+```
+backend/src/index.ts:686       console.log(`Spark Research server listening at http://127.0.0.1:${server.port}`);
+backend/src/index.ts:687       console.log("Press Ctrl+C to stop");
+backend/src/server/server.ts:26  console.log(`Spark Research server listening at ${url}`);
+backend/src/server/server.ts:27  console.log("Press Ctrl+C to stop");
+```
+
+**问题**：本身无害，但它会让人误判「是不是起重了」——我就误判了一次，
+多花了一条命令去确认。而且这又是一次「同一件事两份手写副本」。
+
+注意两处的 URL 还不是同一个来源：`index.ts` 硬编码了 `http://127.0.0.1:`，
+`server.ts` 用的是 `url` 变量。将来要支持绑别的地址时，前者会打印出错误的地址。
+
+**修改方向**：删掉 `index.ts` 里那两行，留 `server.ts` 的（它拿的是真实 url）。
+一分钟的改动。
+
+---
+
+<a id="u10"></a>
+## U10 · `model` 覆盖声明了但从不读取，换模型是静默空操作
+
+> **这条是在排查「chat 为什么慢」时撞出来的，顺带作废了我自己的一次测量。**
+
+**现场**：想对比 `z-ai/glm-5.3-flash` 与 `deepseek-v4-flash` 的速度，
+用 HTTP 接口传 `body.model` 切模型跑同一个问题。两轮墙钟差了近三倍
+（162.8s vs 43.9s），一度以为换模型有效。
+
+**证据一 · 用量记录出卖了它**
+
+两轮跑完，`speed-probe` 项目的台账里**一条 deepseek 记录都没有**：
+
+```
+$ spark-research usage --project speed-probe
+  LLM 调用 9 次 · 输入 4225 tokens · 输出 8740 tokens
+  按模型:
+    z-ai/glm-5.3-flash: 9 次 · $0.0026 · 2 次未知
+```
+
+逐条看，deepseek 那轮产生的三条记录是：
+
+```json
+{"provider": "openrouter", "model": "z-ai/glm-5.3-flash", "ok": true, ...}
+```
+
+**证据二 · 决定性实验**
+
+指定 `qwen-max`——`QWEN_API_KEY` **未配置**。如果模型覆盖真的生效，
+这次调用必然因为拿不到 key 而失败。实际结果是**正常回答**：
+
+```
+$ curl -X POST .../api/session/chat -d '{"model":"qwen-max", ...}'
+[session probe-qwen]
+## 结果摘要
+**最终答复**：> 今天天气很好，适合出门散步。
+```
+
+落的记录仍是 `provider=openrouter model=z-ai/glm-5.3-flash`。
+
+**证据三 · 根因在签名与实现之间**
+
+HTTP 路由读了，也传下去了：
+
+```ts
+// backend/src/server/routes/session.ts:37
+result = await ctx.agent.chat({
+  sessionId, message,
+  model: optionalString(body, "model"),      // ← 读到了，传下去了
+  mode, budgetUsd: ..., allowUnpriced: ...,
+});
+```
+
+`chat()` 的签名也声明了：
+
+```ts
+// backend/src/agents/orchestrator.ts:1053
+async chat(req: {
+  sessionId: string;
+  message: string;
+  model?: string;          // ← 声明了
+  ...
+}) {
+  if (req.budgetUsd !== undefined || req.allowUnpriced !== undefined) {
+    this.sessionBudget.set(req.sessionId, { budgetUsd: ..., allowUnpriced: ... });
+  }
+  ...                      // ← req.model 之后再也没出现过
+}
+```
+
+**`req.model` 被声明、被传入，然后从头到尾没有任何一处读它。**
+`budgetUsd` 和 `allowUnpriced` 在紧邻的几行里都被存进了 `sessionBudget`，唯独 `model` 没有。
+
+**后果**
+
+1. **换模型是静默空操作**。传什么都用 `config.json` 里的 `defaultModel`，不报错不告警。
+2. **没有任何办法只为一次对话换模型**。CLI 的 `chat` 也没有 `--model`（见 U9），
+   于是唯一能换模型的途径是改全局配置。
+3. **把我的测量作废了**。162.8s 与 43.9s 的差距**不是模型差异**，两轮跑的都是 glm。
+   真实差异来自网络抖动，以及第一轮里两次失败调用（其中一次等了 75 秒才放弃）。
+   **如果不是记账里的 `provider` 字段露了馅，这个错误结论就发出去了。**
+
+**这正是本仓反复出现的那个形态**：参数建好了、接口签名有了、调用方也传了，
+**就是没有生产读取方**。CHANGELOG 记载过 `defaultProvider` 只写不读（V40），
+说它「藏在配置项里，孤儿门禁抓不到」。这次是藏在函数签名里，同样抓不到。
+
+**修改方向**
+
+- `chat()` 真的把 `req.model` 用起来——按 `budgetUsd` 的同一套路存进会话状态，
+  让本次会话的所有模型调用都走它。
+- 加一条门禁，形式要能抓住这一类而不只是这一个：
+  **传一个已登记但当前 provider 无 key 的模型，断言调用失败**。
+  这条断言只有在覆盖真的生效时才通过，静默忽略必然被抓。
+- usage 记录的 `model` / `provider` 必须来自**实际发出请求的那次调用**，
+  而不是配置默认值。现在这两个字段会撒谎。
+- 顺带核一遍 `/api/session/stream`：它单独读了 `const model = optionalString(body, "model")`，
+  是不是也一样丢掉了，没验。**本条只对 `/chat` 路径有实证。**
+
+**影响面**：`agents/orchestrator.ts` 的 `chat()` 与其下游取模型的地方；usage 记账的取值来源。
+
+**风险**：修好之后，之前「传了 model 但其实没生效」的调用会开始真的换模型。
+如果有脚本依赖了这个错误行为（传了某个模型但实际跑 glm），行为会变。
+考虑到这个覆盖从来就没生效过，依赖它的可能性极低。
+
+---
+
+<a id="u9"></a>
+## U9 · CLI `chat` 没有任何参数，`--help` 会被当成消息发给模型
+
+**现场**：想给 `chat` 加个 `--model` 试别的模型，先跑 `spark-research chat --help` 看用法。
+命令**挂了两分多钟没有任何输出**，被迫 kill 掉。
+
+**证据 · 整条命令只做一件事**
+
+```ts
+// backend/src/index.ts:489
+case "chat": {
+  const msg = process.argv.slice(3).join(" ");   // ← 整个 argv 拼成消息
+  if (!msg) {
+    console.log("用法: spark-research chat <消息>");
+    process.exitCode = 1;
+    break;
+  }
+  chatOnce(msg);
+  break;
+}
+```
+
+`--help` 非空，于是它成了消息本身，被原样发给模型。那两分钟是真的在等模型回答
+「--help」这个问题。**只有一个字都不传时才会打印用法。**
+
+**证据 · `chatOnce` 不带预算、不带项目、不带模型**
+
+```ts
+// backend/src/index.ts:427
+async function chatOnce(message: string) {
+  ...
+  const result = await orch.chat({ sessionId, message });   // ← 只有这两个
+```
+
+对比同一个 `chat()` 接受的参数：`model`、`budgetUsd`、`allowUnpriced`、`mode`、`onDelta`
+一个都没传。
+
+**后果**
+
+1. **CLI 的 chat 完全没有预算闸。**agent 指南里写的是「每条会调 LLM 的命令都带
+   `--budget-usd`」，`chat` 是个例外，而且是无声的例外——没有地方说明它不支持。
+   一轮 chat 实测会发出 4 到 6 次模型调用（见 U10 的台账），没有任何上限。
+2. **`--help` 是一次要花钱的模型调用。**误打一次就是几分钱加两分钟。
+   CHANGELOG 里 V128 记的是「`--help` 无副作用」，那条修复显然没覆盖到 `chat`。
+3. **`chat` 也不接 `--project`。**会话绑哪个项目取决于全局指针，
+   与 agent 指南「每条涉及项目数据的命令都带 `--project`」相冲突。
+
+**修改方向**
+
+- 在拼消息之前先解析旗标：`--help` / `-h` 打印用法即退出，
+  `--model` / `--budget-usd` / `--allow-unpriced` / `--project` 透传给 `orch.chat()`。
+- 更根本的一条：**旗标解析应该统一，不要每个子命令各写一套。**
+  `lit` / `idea` / `exp` 都有完整旗标，唯独 `chat` 是裸 `argv.join(" ")`。
+  这又是一处「同一件事多份手写副本」。
+- 门禁：给每个会调 LLM 的子命令加一条「`--help` 不产生任何模型调用」的断言。
+  V128 修过一次同名问题却漏了 `chat`，说明靠人记是不够的。
+
+**影响面**：`backend/src/index.ts` 的 `chat` 分支与 `chatOnce`。不动 orchestrator。
+
+---
+
+---
+
+# 方法缺陷
+
+> 上面的 U 系列是**产品**的问题。这一段记**发现问题的方法**本身的问题——
+> 为什么这些东西没有被更早发现。用 `P` 前缀（Process），和 U、V 都不冲突。
+
+<a id="p1"></a>
+## P1 · 三道防线的盲区恰好在同一处重合
+
+**问题**：上面十条里，有八条是三道现有防线（OpenScience 对比、AD-12 能力门禁、
+零上下文验收）**都没有抓到**的。不是哪一道失职，是三道的盲区叠在了一起。
+
+### 证据一 · 对比是在能力层做的，没有界面这个维度
+
+`~/Desktop/AI4S/science_agent/ClaudeScience_vs_OpenScience_架构与功能对比.md`，
+全文 150 行，九节：基本盘 / 能力格局 / Agent 调度 / 审查体系 / 运行时隔离 /
+模型接入 / 工具链坑 / 选型建议 / 未验证待办。
+
+搜「UI / 界面 / 工作台 / 设置 / 配置面 / 前端」——**零命中**。
+
+所以 U6「网页端没有设置入口」那次对比根本没有机会发现：它的视野里没有这个维度。
+
+### 证据二 · 对比能问「有没有」，不能问「通不通」
+
+第六节关于 OpenScience 只写了一句：
+
+> OpenScience 模型中立，任意 provider 可换。
+
+这一句后来成了 Spark Research 的目标，写进 P11。v0.4 实装「provider 2→6 + 本地端点」，
+**勾打上了**。
+
+而 U5 和 U10 说的是这个勾不算数：路由结尾有个无条件 `return "kimi"` 把认不出的模型
+静默当 Kimi；`chat()` 的 `model` 参数声明了、传进来了、**函数体里从没读过**。
+
+按「有没有这个能力」的标准，Spark Research 现在有 6 个 provider、有模型覆盖参数，
+**完全达标**。对比这个方法，结构上就问不出第二个问题。
+
+### 证据三 · 六轮验收一次都没走过配置路径
+
+```
+$ grep -rilE "config set|换模型|切换模型|--model|defaultModel" docs/taskbooks/
+（零命中）
+```
+
+四份任务书全是研究课题：蛋白结构预测、单细胞聚类、脑机接口解码、钙钛矿稳定性。
+验收执行者被要求做研究，不会中途去改配置。
+
+而 U10 只有在「试着换个模型」的时候才暴露。**没人试过，所以没人发现。**
+
+### 十条对三道防线的可见性
+
+| 可见性 | 条目 | 原因 |
+|---|---|---|
+| 对比能发现 | U6 · U9 | 真的是功能面缺失，只要对比时看了那个维度 |
+| 对比看不见 | U5 · U10 · U1 · U4 · U7 | **东西都在，只是没接上线**。类型定义在、参数签名在、事件在、套件在 |
+| 对比无从谈起 | U2 · U3 · U8 | 不是功能，是系统运行两天之后才长出来的东西 |
+
+U1 最典型：`LlmErrorKind` 七个取值定义得一应俱全，任何静态检查都会说这块做完了。
+它只是**没被写进台账**。
+
+### 根因
+
+三道防线各有盲区，而这些问题恰好落在三个盲区的交集里：
+
+- **对比**：看能力，不看接线。
+- **AD-12 能力门禁**：核的是「在不在注册表」，核不了「函数体里读没读」。
+  这与 V34「能力做好了、默认值没跟上」是同一个形状，只是深了一层——
+  V34 是注册表与默认集不一致，U10 是签名与实现不一致。
+- **零上下文验收**：能看接线，这一类它抓到过好几次（V34、`lit add 9999` 导入无关论文、
+  编译器把硫酸写成盐酸）。但它只走研究路径，**不走配置路径**。
+
+CHANGELOG 里「建好了但没有生产调用方」这个形态被记过至少四次
+（`defaultProvider` 只写不读 · 外部 MCP 整条流程不存在 · `broker.recover()` ·
+`runResearchLoop()`）。**项目已经诊断出这个病，也建了药，药只是够不着这个位置。**
+
+### 修改方向
+
+**再加一轮对比是没用的**——对比抓不到这一类。要堵的话加两样：
+
+1. **验收任务书增加一份「配置与运维」课题**，与四份研究课题并列。
+   内容就是普通用户真会做的事：换模型、改检索源、配一个 connector 凭据、
+   重启服务、跑一轮然后核对用量台账对不对得上。
+   本次十条里至少 U1 U2 U3 U5 U9 U10 六条会被这一份课题撞出来。
+
+2. **门禁写成能抓整类的形式，而不是抓这一个。**
+   U10 的建议写法是：**传一个已登记但当前 provider 无 key 的模型，断言调用必须失败。**
+   这条断言只有在覆盖真正生效时才通过，静默忽略必然被抓。
+   同一个套路可以复制到任何「参数声明了就要能生效」的地方——
+   这才是对 AD-12 的正确补强：从「声称的能力存在吗」推进到「声称的能力接线了吗」。
+
+**不建议**：为此再引入一份对比文档或再做一次上游源码走读。
+病根不在信息不足，在检验方式与缺陷形态不匹配。
+
+---
+
+## 模板
+
+往上面加新条目时照抄这一段：
+
+```markdown
+<a id="u<n>"></a>
+## U<n> · <一句话标题>
+
+**现场**：什么时候、在哪个界面/命令、做什么的时候撞到的。
+
+**证据**：
+
+<命令输出 / 日志片段 / 源码行号，原样粘贴，不要转述>
+
+**问题**：这件事为什么不对。
+
+**修改方向**：改哪里、影响面多大、有没有风险。
+没想好就写「没想好」，比编一个方案强。
+需要先做设计裁定的，明确标出来并列出待回答的问题。
+
+**待核实**（可选）：不确定是不是缺陷时，写清楚要核实什么、怎么核实。
+核实完改写本条，并把最初的错误猜测留痕。
+```
