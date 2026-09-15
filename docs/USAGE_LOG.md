@@ -60,6 +60,11 @@
 | [U35](devlog/A8.md#u35) | `data import` 文案说「空项目」，实际要求「项目不存在」 | 低 | 文案 | → V169 |
 | [U36](devlog/A8.md#u36) | 工作台默认视图躺着约 40 个历史验收产物（= U14） | 低 | 数据卫生 | → V157 |
 | [U37](devlog/A8.md#u37) | T5 第 13 步引用的 `/api/config/*` 端点已不存在（文档漂移） | 低 | 文档 | → V170（T5 已冻结，下版修） |
+| [U38](#u38) | `connector` 任务失败被记成 `ok: true`——三次连接器失败（超时/429/空壳）在执行摘要里全是「ok」 | **高** | 正确性 | 待转 V |
+| [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | 待转 V |
+| [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | 待转 V |
+| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | 待转 V |
+| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | 待转 V |
 
 ### 方法缺陷
 
@@ -775,6 +780,104 @@ backend/src/server/server.ts: export const SERVER_IDLE_TIMEOUT_S = 255;     // B
 基线里 20 轮有 3 轮墙钟 >170s，逼近这个天花板；网络稍差就会撞上。
 
 **修改方向**：① 同步 `/api/session/chat` 超过阈值（如 200s）时改回 202 + 任务句柄（任务路由已有这套）；或 ② 把 UI 与脚本一律推到 `/stream`（SSE 有心跳，不受 idleTimeout 影响——需核实 Bun 对 SSE 的 idle 判定是否按帧刷新）；③ 无论哪条，server 端在客户端断开时应取消编排（`AbortSignal` 透传到 LLM 调用），别把钱花在没人要的结果上。
+
+<a id="u38"></a>
+## U38 · `connector` 任务失败被记成 `ok: true`
+
+**现场**：2026-09-15 11:31，网页端 chat 问「帮我下载关于 mRNA 最新的研究综述论文，和 AI 主题相关的更好」（项目 `spark`，session `web_1789471590880`）。
+
+**证据**（summarize 收到的执行摘要原文，取自 `raw/llm/2026-09-15.jsonl`）：
+
+```
+- [connector] t2: ok — {"ok":false,"server":"pubmed","tool":"search","error":"HTTP request timed out after 30000ms: ..."}
+- [connector] t3: ok — {"ok":false,"server":"arxiv","tool":"search","error":"Connector \"arxiv\" tool \"search\" failed: HTTP 429"}
+- [connector] t5: ok — {"ok":true,"server":"europepmc","tool":"search","result":{"version":"6.9"}}
+```
+
+`backend/src/agents/orchestrator.ts:879`：
+
+```ts
+const res = await this.daemon.dispatch("mcp_call", {...});
+this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
+return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };   // ← 无条件 true
+```
+
+**问题**：`mcp_call` 对连接器失败**不抛异常**，而是返回 `{ok:false, error}` 信封。编排层只有 `catch` 分支才置 `ok:false`，于是**每一次连接器失败都是一次「成功的任务」**。这次是模型自己去读 JSON 正文才发现不对；换一个不那么谨慎的模型，摘要就会写成「已检索 PubMed」。下游全部受影响：`ExecutionOutcome.ok` 是证据图、review 层、`repairing` 判定的输入。
+
+**修改方向**：`executeTask` 的 connector 分支解包信封——`res.ok === false` → `ok:false` 且 `output` 带 `error`。同族检查：其它 `dispatch` 调用点（code / lab / compute）是不是也把信封当成功。门禁：一条「连接器返回 ok:false → ExecutionOutcome.ok 必须 false」的单测，阴性对照恢复 `ok: true` 即红。
+
+<a id="u39"></a>
+## U39 · `subagent` 任务的 type 不校验，TypeError 冒给用户
+
+**证据**：
+
+```
+- [subagent] t7: failed — undefined is not an object (evaluating 'defaults.grants')
+```
+
+模型规划的是 `params: {"subagent": "Review"}`（大写 R）。`orchestrator.ts:887`：
+
+```ts
+const type = (task.params?.subagent ?? "execute") as SubAgentType;   // ← 只是类型断言，没有运行时校验
+```
+
+`sub_agent.ts:262` `const defaults = SUB_AGENT_DEFAULTS[type];` → `undefined` → `defaults.grants` 崩。实测：
+
+```
+subagent 'Review' → TypeError: undefined is not an object (evaluating 'defaults.grants')
+subagent 'review' → review
+```
+
+**问题**：`SubAgentType` 是编译期联合类型，模型给的是运行期字符串——`as` 断言把校验的责任凭空抹掉了。这是 AD-17「声明即须有读者」的近亲：**声明的类型不等于运行时的约束**。用户看到的是一句 JS 内部错误，没有下一步。
+
+**修改方向**：`buildSubAgentSpec` 入口校验 type ∈ `SUB_AGENT_TYPES`，不认识就抛带下一步的错误（列出可用类型）；`executeTask` 先做大小写归一（`"Review"` → `"review"`）再校验，认不出就让这个任务 `ok:false` 并说明，而不是崩。顺带：`normalizeTask()`（parsePlan 里）就该把 kind/params 的枚举值一起校验掉——计划是模型写的，**计划本身就是不可信输入**。
+
+<a id="u40"></a>
+## U40 · Europe PMC 查询语法不合法 → `{"version":"6.9"}` 空壳 + HTTP 200 + `ok: true`
+
+**证据**（模型原样 args 复现，`ConnectorRegistry.registerBuiltins()` 直调）：
+
+```
+EPMC 模型原样（query 含 "(SRC:MED OR SRC:PPR)"，sort="DATE_PUBLICATION desc"） → {"version":"6.9"}
+EPMC 去掉 sort                                                                  → {"version":"6.9"}
+query+limit / query+pageSize / query+format+pageSize / query+OPEN_ACCESS        → 均返回 hitCount 41514 / 35814 与结果
+```
+
+**问题**：EPMC 对这条查询返回的是一个**只有 `version` 的空壳**（既没有 `hitCount` 也没有 `errCode`），HTTP 200。连接器与编排层都没有「一次检索至少要有 hitCount 或结果数组」这条判据，于是「查询写错了」和「查到 0 篇」和「查成功了」三件事在平台里长得一模一样。
+
+**修改方向**：literature 连接器的 `search` 统一加一条出口断言——响应里既无结果数组也无计数字段 → 视为失败并回一条带下一步的错误（「查询语法可能不合法，检查 EPMC 语法」）。这条判据对 pubmed/openalex/crossref 同样适用，写在 `base.ts` 一处。
+
+<a id="u41"></a>
+## U41 · chat 多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，而 `connector` 产出从不落盘
+
+**证据**：模型的 t4 代码原文 `open('/workspace/artifacts/t2_pubmed.json')`；t2 的产出只以字符串形式回到 `ExecutionOutcome.output`，交给 summarize，**从不写盘**。session workspace `~/.spark-research/workspaces/web_1789471590880/` 实测是空目录。t4、t6 因此 `failed`，空输出。
+
+**问题**：编排器让模型规划「多步骤、后一步读前一步产物」的计划，却没有给步骤间任何落盘约定。模型（任何模型）都会按常识假设产物在 workspace 里。**这不是模型的错，是契约缺口**：要么给约定，要么别让它规划这种计划。
+
+**修改方向**：二选一须裁定——① 每个任务的产出按 `<workspace>/<taskId>.json` 落盘，并把路径写进给模型的任务描述里（`code` 任务的 prompt 里明确「上一步的产物在这些路径」）；② plan 的提示词明说「步骤之间不共享文件系统，需要串联就写成一个任务」。倾向 ①——② 等于放弃多步计划。
+
+<a id="u42"></a>
+## U42 · chat 绕开成熟的 `lit search` 管线，让模型手搓 connector 调用
+
+**现场**：同一需求，两条路径的实测对照。
+
+chat 路径（7 步计划，2 次 LLM 调用，约 46s）：0 篇论文、0 个 PDF、1 次崩溃。
+
+CLI 路径（`lit search`，零 LLM 调用，约 26s）：
+
+```
+$ bun backend/src/index.ts lit search "mRNA vaccine machine learning review" --project spark --limit 5
+  ✅ pubmed: 30 条（深池 30/源）
+  ❌ biorxiv: 上游返回空响应（HTTP 200、0 字节）
+ 1. Therapeutic cancer vaccines: advancements, challenges and prospects … doi:10.1038/s41392-023-01674-3 · 有 OA PDF
+ 4. Algorithm for optimized mRNA design improves stability and immunogenicity … doi:10.1038/s41586-023-06127-z · 有 OA PDF
+ …（5 篇，均有 OA PDF）
+```
+
+**问题**：`lit search` 是被六轮验收打磨过的管线——多源并行、按 DOI/标题去重、blended 排序、OA 判定、失败源如实标注、入库、可接 PDF 下载与 SHA256 血缘。chat 模式的 plan 提示词却只告诉模型有 `connector` 这种原始任务类型（`params.server/tool/args`），**没有告诉它平台已经有一条文献检索管线**。于是模型每次都从零手搓 esearch 参数、手写去重代码、手写 PDF 下载代码——把一条测过的路重新发明一遍，还发明错了。
+
+**修改方向**：给 plan 增加一种任务类型（如 `kind: "literature"`，params 只有 `query/limit/sources`），直接调 `LiteratureSearcher`；并在 plan 提示词里把它排在 `connector` 之前，`connector` 的描述改成「只在没有现成管线时用的低层出口」。同族问题值得盘一遍：**还有哪些成熟 CLI 能力没有出现在 plan 的任务类型表里**（精读、综述、novelty check、data export…）——这正是 P1「对比看能力不看接线」的形状，只是这次缺口在「模型知不知道我们有什么」。
+
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合
