@@ -65,7 +65,7 @@ describe("γ-1 ② 接线：检索源面板每行都带三态", () => {
     expect(options && options.length).toBeGreaterThan(0);
     for (const o of options!) {
       expect(typeof o.selected).toBe("boolean");
-      expect(["will_search", "missing_credential", "configured_not_selected", "not_selected"]).toContain(o.participation);
+      expect(["will_search", "missing_credential", "configured_not_selected", "not_selected"]).toContain(String(o.participation));
       expect(typeof o.participationLabel).toBe("string");
     }
   });

@@ -79,7 +79,10 @@ async function buildItems(ctx: ServerContext, probe: boolean): Promise<SettingsI
           const state = describeSourceState(connector.id, {
             selected: selected.includes(connector.id),
             apiKeyRequired: connector.apiKeyRequired,
-            credentialConfigured: connector.credentialConfigured,
+            // capabilities 的 credentialConfigured 对免 key 的源是 null（「不适用」）。
+            // 三态只问「有没有」，null 与 false 在这里同义——但**不许**把 null 悄悄
+            // 当成 false 传下去，那会让 source_state 的入参类型说谎。
+            credentialConfigured: connector.credentialConfigured === true,
           });
           return {
             ...state,
