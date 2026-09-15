@@ -66,6 +66,7 @@
 | [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | → V171（步骤间落盘约定，须裁定） |
 | [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
 | [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
+| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 20 倍 | **高** | 成本/性能 | 待转 V |
 
 ### 方法缺陷
 
@@ -911,6 +912,45 @@ $ spark-research lit search "mRNA vaccine artificial intelligence" --sources ami
 **问题**：两层。① **配置面没有把「凭据」与「检索源勾选」这两件事关联起来**——用户配了一个源的 key，合理预期是「以后会用它」，实际要再去另一个面板勾上；反过来，勾了但没 key 的源每次都被 skip，用户也看不出来。② 设置面板的检索源列表没有显示「这个源有没有凭据、这次会不会真被查」。
 
 **修改方向**：① 检索源面板每行显示凭据状态与「本次会不会参与」（已勾 + 有凭据 = 参与；已勾 + 缺凭据 = 跳过并给 `auth --connector <id>`；未勾 + 有凭据 = 提示「已配置但未启用，要不要勾上」）。② 凭据写入成功后，如果该源不在 `searchSources` 里，回一句可执行的下一步。③ AMiner 本身的检索质量问题归 V161，本条只管「会不会被用到」。
+
+
+<a id="u44"></a>
+## U44 · `lit_search` 的工具返回不摘要，整份 JSON 进对话历史 → 单次调用 13 万输入 token
+
+**现场**：2026-09-16 用户自测（项目 `spark0915`，课题「中美 RSI 领域 2020–2025 进展对比」）。监控报出一次 `COST` 事件。
+
+**证据**：台账那一行——
+
+```json
+{"ts":"2026-09-15T12:32:11.706Z","command":"chat:subagent","provider":"deepseek",
+ "model":"deepseek-v4-flash","ok":true,
+ "inputTokens":129865,"outputTokens":783,"costUsd":0.05817416}
+```
+
+单价没问题（0.44 USD/M 输入 × 129865 ≈ $0.057，表是对的）。问题在输入量。raw 层那次调用的 prompt 落成了 blob（428,696 字节），拆开看 9 条消息：
+
+```
+[system   ]     2397 字符   Explore Sub-Agent 提示词
+[user     ]      216 字符   任务描述
+[assistant]      137 字符   模型的开场白
+[tool     ]       71 字符   library 查询（空库）
+[tool     ]      101 字符   records 查询（空）
+[tool     ]       65 字符   {"ok":false,...,"error":"工具 'lit_search' 调用超时（>30000ms）"}
+[tool     ]    81707 字符   lit_search 返回（wearable sensor …）
+[tool     ]   105448 字符   lit_search 返回（tele-rehabilitation …）
+[tool     ]   197383 字符   lit_search 返回（clinical practice guideline …）
+                 ─────
+                387525 字符（≈ 384 KB），其中 384,538 字符是三次检索的原始 JSON
+```
+
+**问题**：`lit_search` 在子代理 tool loop 里把**完整检索结果 JSON**（7 个源 × 每源 30 条，每条含全部字段）原样塞回对话历史。三次检索就把上下文顶到 13 万 token。两层后果：
+① **成本**——这一次 $0.058，是同轮其它调用（$0.0014 上下）的 40 倍；子代理多搜几轮就是几毛钱一次对话。
+② **复利**——tool loop 每轮都重发整段历史，第四次检索会把前三次再付一遍。
+③ 顺带暴露：同一轮里有一次 `lit_search` **30 秒超时**（MCP 工具超时），而超时那条只回了 65 字符，说明成功路径与失败路径的返回体量差了三个数量级，没有任何一层对此设限。
+
+`McpToolRunner` 其实**已经有** `tool.present(result, args)` 这个表现层钩子（`mcp/server.ts:150`），只是 `lit_search` 没用它。
+
+**修改方向**：① 给 `lit_search` 写 `present()`：只回「每源 outcome + 命中数 + 前 N 条的标题/DOI/年份/OA 标记」，完整结果留在 artifact 里并把 artifact id 告诉模型（要细节就去取）。② 给工具返回定一条**通用上限**（如 8 KB），超了自动截断并注明「已截断，完整结果见 artifact <id>」——这条要放在 tool loop 的统一出口，不是每个工具各写一份。③ 台账加一条可观测：单次调用输入 token 超阈值时在 `usage --json` 里打标，便于事后归因（本次是靠监控脚本的 COST 分支才看见的）。
 
 
 <a id="p1"></a>
