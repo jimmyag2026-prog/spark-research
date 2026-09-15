@@ -1621,3 +1621,42 @@ test("㉝ U3：项目下拉默认不列已归档，点「显示已归档」之�
   await expect(options.filter({ hasText: slug })).toHaveCount(1);
   await expect(page.locator('[data-testid="toggle-archived"]')).toContainText("隐藏已归档");
 });
+
+test("㉞ 设置面搜索框：既过滤面板名，也过滤面板内设置项；没建索引的面板不隐藏", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "general");
+
+  const nav = page.locator(".settings-nav__item");
+  await expect(nav).toHaveCount(12);
+
+  // ① 按面板名过滤。
+  await page.locator("#settings-search").fill("凭据");
+  await expect(nav.filter({ hasText: "凭据" })).toHaveCount(1);
+
+  // ② 按**面板内设置项**过滤：`llmTimeoutMs` 只存在于 general 的 items 里，
+  //    面板名里没有这四个字。搜得到它，说明索引用的是 API 给的条目而不是面板名。
+  await page.locator("#settings-search").fill("llmtimeoutms");
+  const general = nav.filter({ has: page.locator('text="通用"') });
+  await expect(general).toHaveCount(1);
+  // 命中数以角标显示（general 里恰好一条命中）。
+  await expect(general.locator(".nav-count").first()).toHaveText("1");
+  // 右侧面板本身也跟着只剩命中的那一行。
+  await expect(page.locator('.settings-main__body[data-panel="general"] .settings-row')).toHaveCount(1);
+
+  // ③ 本次没打开过的面板**不隐藏**，而是标成 unindexed——搜不到不等于里面没有，
+  //    藏掉就是做一个兑现不了的承诺（壳里那段注释说的就是这件事）。
+  const unindexed = page.locator('.settings-nav__item[data-state="unindexed"]');
+  expect(await unindexed.count()).toBeGreaterThan(0);
+  await expect(page.locator(".settings-nav__foot")).toContainText("还没打开过");
+
+  // ④ 打开其中一个之后它就建了索引，同一个搜索词下变成「不命中」而被过滤掉。
+  await page.locator('.settings-nav__item[data-panel="network"]').click();
+  await expect(page.locator('.settings-main__body[data-panel="network"]')).toBeVisible();
+  await page.locator("#settings-search").fill("llmtimeoutms");
+  await expect(page.locator('.settings-nav__item[data-panel="network"][data-state="unindexed"]')).toHaveCount(0);
+
+  // ⑤ 清空搜索框 → 12 个面板全回来。
+  await page.locator("#settings-search").fill("");
+  await expect(nav).toHaveCount(12);
+});
