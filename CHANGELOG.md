@@ -5,6 +5,31 @@
 
 ---
 
+## [0.10.0-alpha.1] — 2026-09-16
+
+**主题：回复速度 + 流式可见 + 文献流程补完。** 五条 lane 合入（`docs/devlog/W10-1-closeout.md`；各 lane 细节 `W10-{alpha,beta,gamma,delta,epsilon}.md`；基线 `W10-0-baseline.md`）。
+
+### 如实交代（先说没做到的）
+- 速度数字只有 lane α 的一次复测（quick 66s / deep 136s，基线 181.5s）；**一句话 chat P50 ≤ 20s 与「输出 token −40%」都还没测**——R7 在 alpha.1 上用 `measure-chat` / `--pipeline --depth deep` 复测才算数。
+- 思考型模型（kimi-k2.6 等）**不能设 maxTokens**（设了拿到空输出），router 按名单剥掉；所以 α-3 对默认模型 kimi-k2.6 基本不生效，省 token 只在非思考型模型上成立。
+- 取消（断开 SSE → 整条管线 abort）单测钉到 chat 层；真 server 端到端交 R7。
+- T3 复跑、8 篇 OA ≥ 5 篇、arXiv 200-带错：未在真实网络验（本机 IP 仍被 arXiv 封）。
+- 前端阶段条靠 `taskNote` 文案认阶段（`ProgressEvent` 还没有结构化 `phase`）。
+
+### 变化
+- **chat 的 literature-review 默认 quick 档**（预筛 → 一次调用按摘要出综述，不下载不建卡；`params.depth:"deep"` 才走精读卡）；`prescreen` 便宜调用剔无关候选，fail-open。
+- 精读并行 `readConcurrency`（默认 3，进配置；CLI 带 `--budget-usd` 固定串行）；各阶段 `STAGE_MAX_TOKENS`（plan 600 / summarize 1200 / 卡 700 / 综述 2500 / 预筛 300，`literature/limits.ts` 单一真源）；OpenAI 兼容适配器开始真的发 `max_tokens`。
+- 流式协议：`partial`（papers / search_source / card）与 `delta.target/revision`；`progress` 带 `etaMs`；断开 `/stream` 即 abort 在飞模型调用；同步 `POST /chat` 超 `chatSyncMaxMs`（默认 200s）改 202 + 任务句柄。
+- 中文检索：英译双查 + 相关性地板（U58 实测 0/6 → 6/6）；`searchLanguage` 配置项（只对 OpenAlex 生效）；零摘要且无 PDF 的论文不精读；检索源面板三态（有凭据 / 已勾选 / 可用）；上游 200-带错按连接器显式表判定（crossref / s2 / aminer）。
+- chat 可执行技能 2 → 5（+ paper-download / research-report / novelty-check；盘点表 `docs/taskbooks/v0.10/SKILL_EXEC_INVENTORY.md`）。
+- 全文命中率：落地页 `citation_pdf_url` 一跳 + Unpaywall 兜底；arXiv 检索与 PDF 直链共桶（1/3 rps）+ 尊重 `Retry-After`。
+- 运维：`project archive --pattern`（归档后指针自动跳到最近活动的未归档项目）；`doctor` 探多实例、`/api/health.frontendBuilt`；`config list` 省略号；`data import` 文案；`lab approve` 的 TTY 门措辞（V167 成立：TTY 检测不是安全边界）。
+- 前端：阶段条 + 实时日志 + 分区流式正文 + 停止；设置项 422 行内显示；预算说明；权限面板令牌计数实时；文献列表关键词列与行内下载。
+- SDK 生成器：类型别名排在 TypedDict 之后（否则 NameError）。
+
+### 门禁
+lane 门禁 α30 / β20 / γ53 / δ31 / ε10(e2e) + 收口 9；阴性对照 α8 / β8 / γ8 / δ6 / ε7 + 收口 3 + 主会话每 lane 一条，全部实跑变红。套件：unit 2842 · concurrency/timeout 37 · integration 8 · sdk 69 · lab 26 · e2e 60。
+
 ## [0.9.1] — 2026-09-16
 
 **本地使用窗口的修复批**：owner 首次以普通用户身份用 v0.9.0，两天六次真实会话撞出 U38–U56 十九条，全部有现场证据、独立复现、门禁与阴性对照（`docs/devlog/UX-window-fixes.md`、`UX-window-timeline.md`）。
