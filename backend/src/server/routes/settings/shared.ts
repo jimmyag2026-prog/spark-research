@@ -59,6 +59,12 @@ export const LOOPBACK_REJECTION = {
     "（这条限制不受 originAllowlist 影响，配置白名单也不会放开它——AD-18 ②）",
 } as const;
 
+/** `?probe=1` 这类开关。与 `routes/shared.ts` 的 `queryBool` 同口径。 */
+export function queryFlag(c: Context, name: string): boolean {
+  const raw = c.req.query(name);
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 /** 统一错误出口：`{ error, nextStep }`，`nextStep` 非空是硬约定。 */
 export function fail(c: Context, status: number, error: string, nextStep: string): Response {
   return c.json({ error, nextStep }, status as 400);
