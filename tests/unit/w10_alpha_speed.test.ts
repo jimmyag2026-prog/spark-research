@@ -418,3 +418,179 @@ describe("α-3 · 各阶段 maxTokens", () => {
     expect("max_tokens" in bodies[1]!).toBe(false); // 不传时不加字段 → 既有行为不变
   });
 });
+
+// ────────────────────────────── α-4 ──────────────────────────────
+import { PdfDownloader, pdfLinkFromLandingPage, unpaywallPdfUrl, unpaywallUrl } from "../../backend/src/literature/pdf";
+import type { HttpClient, HttpRequestInit, HttpResponse } from "../../backend/src/http/client";
+
+/** 按 URL 给固定响应的假 http（每次请求都记下来，门禁靠它数「发了几次、发给谁」）。 */
+class StubHttp implements HttpClient {
+  readonly requests: string[] = [];
+  constructor(private readonly routes: Array<{ match: RegExp; status?: number; body: string | Uint8Array; headers?: Record<string, string> }>) {}
+  async request(url: string, _init?: HttpRequestInit): Promise<HttpResponse> {
+    this.requests.push(url);
+    const hit = this.routes.find((r) => r.match.test(url));
+    const body = hit?.body ?? "";
+    const bytes = typeof body === "string" ? new TextEncoder().encode(body) : body;
+    const status = hit?.status ?? (hit ? 200 : 404);
+    return {
+      status, ok: status >= 200 && status < 300, url,
+      headers: hit?.headers ?? { "content-type": "text/html" },
+      text: async () => new TextDecoder().decode(bytes),
+      json: async () => JSON.parse(new TextDecoder().decode(bytes)),
+      bytes: async () => bytes,
+    };
+  }
+}
+
+const PDF_BYTES = new TextEncoder().encode("%PDF-1.7\nfake");
+const seedPaper = (project: { paths: { libraryDb: string }; records: () => never }, extra: Record<string, unknown>) => {
+  const lib = new LibraryStore(project.paths.libraryDb, { records: project.records() });
+  const id = lib.add({ ...paperOf("Landing page paper", 1, 2024), ...extra } as never, { tags: ["t"] }).paper.id;
+  return { lib, id };
+};
+
+describe("α-4 · S10 全文命中率", () => {
+  test("落地页解析：citation_pdf_url 与 <link rel=alternate type=pdf> 都认，相对链接按落地页解析", () => {
+    expect(pdfLinkFromLandingPage(`<meta name="citation_pdf_url" content="https://x.test/a.pdf">`, "https://x.test/art/1"))
+      .toBe("https://x.test/a.pdf");
+    expect(pdfLinkFromLandingPage(`<meta content="/rel.pdf" name="citation_pdf_url">`, "https://x.test/art/1"))
+      .toBe("https://x.test/rel.pdf");
+    expect(pdfLinkFromLandingPage(`<link rel="alternate" type="application/pdf" href="/alt.pdf">`, "https://x.test/art/1"))
+      .toBe("https://x.test/alt.pdf");
+    expect(pdfLinkFromLandingPage(`<html>没有任何 pdf 线索</html>`, "https://x.test/art/1")).toBeNull();
+  });
+
+  test("接线：not_a_pdf 的落地页 → 顺元标签走一跳真的拿到 PDF（origin=landing_meta）", async () => {
+    const project = pm.create("a4-hop", { name: "x" });
+    const { lib, id } = seedPaper(project as never, { pdfUrl: "https://pub.test/article/99" });
+    const http = new StubHttp([
+      { match: /article\/99$/, body: `<html><meta name="citation_pdf_url" content="https://pub.test/pdf/99.pdf"></html>` },
+      { match: /pdf\/99\.pdf$/, body: PDF_BYTES, headers: { "content-type": "application/pdf" } },
+    ]);
+    const r = await new PdfDownloader({ http, papersDir: join(root, "papers"), library: lib, contactEmail: "a@b.test" }).download(id);
+    expect(r.ok).toBe(true);
+    expect(r.origin).toBe("landing_meta");
+    expect(http.requests).toEqual(["https://pub.test/article/99", "https://pub.test/pdf/99.pdf"]);
+    lib.close();
+    project.close();
+  });
+
+  test("接线：直链全失败 → 按 DOI 问一次 Unpaywall 并下到 PDF（origin=unpaywall）", async () => {
+    const project = pm.create("a4-unpaywall", { name: "x" });
+    const { lib, id } = seedPaper(project as never, { pdfUrl: "https://paywall.test/x", doi: "10.1000/t1.1" });
+    const http = new StubHttp([
+      { match: /paywall\.test/, status: 403, body: "no" },
+      { match: /api\.unpaywall\.org/, body: JSON.stringify({ best_oa_location: { url_for_pdf: "https://oa.test/real.pdf" } }), headers: { "content-type": "application/json" } },
+      { match: /oa\.test/, body: PDF_BYTES, headers: { "content-type": "application/pdf" } },
+    ]);
+    const r = await new PdfDownloader({ http, papersDir: join(root, "papers"), library: lib, contactEmail: "a@b.test" }).download(id);
+    expect(r.ok).toBe(true);
+    expect(r.origin).toBe("unpaywall");
+    expect(http.requests.some((u) => u.startsWith("https://api.unpaywall.org/v2/10.1000%2Ft1.1?email=a%40b.test"))).toBe(true);
+    lib.close();
+    project.close();
+  });
+
+  test("contactEmail 未配置（占位邮箱）→ 不敲 Unpaywall，但降级留痕", async () => {
+    const project = pm.create("a4-noemail", { name: "x" });
+    const { lib, id } = seedPaper(project as never, { pdfUrl: "https://paywall.test/x", doi: "10.1000/t1.1" });
+    const http = new StubHttp([{ match: /paywall\.test/, status: 403, body: "no" }]);
+    const r = await new PdfDownloader({
+      http, papersDir: join(root, "papers"), library: lib,
+      contactEmail: "spark-research@example.invalid",
+    }).download(id);
+    expect(r.ok).toBe(false);
+    expect(http.requests.some((u) => u.includes("unpaywall"))).toBe(false);
+    expect(r.attempts.some((a) => a.outcome.includes("contactEmail 未配置"))).toBe(true);
+    lib.close();
+    project.close();
+  });
+
+  test("拿不到 PDF 时 OA 标记标成 openalex(optimistic)（U51：标了 OA ≠ 能下到）", async () => {
+    const project = pm.create("a4-oa", { name: "x" });
+    const { lib, id } = seedPaper(project as never, { pdfUrl: "https://paywall.test/x", isOpenAccess: true });
+    const http = new StubHttp([{ match: /paywall\.test/, status: 403, body: "no" }]);
+    const r = await new PdfDownloader({ http, papersDir: join(root, "papers"), library: lib, unpaywall: false }).download(id);
+    expect(r.ok).toBe(false);
+    expect(r.oaSource).toBe("openalex(optimistic)");
+    lib.close();
+    project.close();
+  });
+
+  test("Unpaywall 响应解析：best 优先，其次任意 url_for_pdf；都没有就 null", () => {
+    expect(unpaywallPdfUrl({ best_oa_location: { url_for_pdf: "https://a.test/1.pdf" } })).toBe("https://a.test/1.pdf");
+    expect(unpaywallPdfUrl({ best_oa_location: { url_for_pdf: null }, oa_locations: [{ url_for_pdf: "https://b.test/2.pdf" }] })).toBe("https://b.test/2.pdf");
+    expect(unpaywallPdfUrl({ best_oa_location: null, oa_locations: [] })).toBeNull();
+    expect(unpaywallUrl("https://doi.org/10.1/x", "a@b.test")).toBe("https://api.unpaywall.org/v2/10.1%2Fx?email=a%40b.test");
+  });
+});
+
+// ────────────────────────────── α-5 ──────────────────────────────
+import { HOST_RATE_POLICIES, MAX_RETRY_AFTER_MS, RateLimitedHttp, bucketKeyForHost, parseRetryAfterMs } from "../../backend/src/http/ratelimit";
+import { pickHeaders } from "../../backend/src/http/client";
+
+describe("α-5 · arXiv 令牌桶 + Retry-After", () => {
+  test("检索与 PDF 直链归到同一个桶键（否则对 arXiv 就是 1.5s 一次）", () => {
+    expect(bucketKeyForHost("export.arxiv.org")).toBe("arxiv.org");
+    expect(bucketKeyForHost("arxiv.org")).toBe("arxiv.org");
+    expect(bucketKeyForHost("api.openalex.org")).toBe("api.openalex.org"); // 未归并的照旧 = host
+    expect(HOST_RATE_POLICIES["arxiv.org"]!.rps).toBeCloseTo(1 / 3, 10);
+    expect(HOST_RATE_POLICIES["arxiv.org"]!.burst).toBe(1);
+  });
+
+  test("接线：NativeHttp 的响应头白名单含 retry-after（不含它 = 冷却逻辑永远读到 undefined）", () => {
+    const kept = pickHeaders(new Headers({ "retry-after": "7", "set-cookie": "a=b", "content-type": "text/html" }));
+    expect(kept["retry-after"]).toBe("7");
+    expect(kept["set-cookie"]).toBeUndefined();
+  });
+
+  test("Retry-After 解析：秒数、HTTP-date、上限 60s、垃圾值 → null", () => {
+    const now = Date.parse("2026-09-16T00:00:00Z");
+    expect(parseRetryAfterMs("7", now)).toBe(7000);
+    expect(parseRetryAfterMs("9999", now)).toBe(MAX_RETRY_AFTER_MS); // 上限截断，绝不无限等
+    expect(parseRetryAfterMs("Wed, 16 Sep 2026 00:00:10 GMT", now)).toBe(10_000);
+    expect(parseRetryAfterMs("随便写点什么", now)).toBeNull();
+    expect(parseRetryAfterMs(undefined, now)).toBeNull();
+  });
+
+  test("接线：假 429 + Retry-After → 冷却期内一个请求都不发（不浪费一次请求）", async () => {
+    let now = 1_000_000;
+    const sent: string[] = [];
+    const inner: HttpClient = {
+      async request(url: string): Promise<HttpResponse> {
+        sent.push(url);
+        return {
+          status: 429, ok: false, url, headers: { "retry-after": "30" },
+          text: async () => "", json: async () => ({}), bytes: async () => new Uint8Array(),
+        };
+      },
+    };
+    const limiter = new RateLimitedHttp(inner, HOST_RATE_POLICIES, () => now);
+    await limiter.request("https://export.arxiv.org/api/query?q=1");
+    expect(sent).toHaveLength(1);
+    expect(limiter.cooldownOf("arxiv.org")).toBe(now + 30_000); // 检索侧的 429 冷却了 PDF 侧
+
+    // 冷却期内发第二条（走 PDF 那个 host）：等着，不发。
+    const pending = limiter.request("https://arxiv.org/pdf/2303.12712");
+    await new Promise((r) => setTimeout(r, 60));
+    expect(sent).toHaveLength(1); // ← 冷却期内 0 请求
+
+    now += 31_000; // 冷却过去
+    await pending;
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toContain("arxiv.org/pdf");
+  });
+
+  test("没有 Retry-After 头的 429 不设冷却（没有可核实的数字就不自己编一个退避）", async () => {
+    let now = 2_000_000;
+    const inner: HttpClient = {
+      async request(url: string): Promise<HttpResponse> {
+        return { status: 429, ok: false, url, headers: {}, text: async () => "", json: async () => ({}), bytes: async () => new Uint8Array() };
+      },
+    };
+    const limiter = new RateLimitedHttp(inner, HOST_RATE_POLICIES, () => now);
+    await limiter.request("https://export.arxiv.org/api/query");
+    expect(limiter.cooldownOf("arxiv.org")).toBeNull();
+  });
+});
