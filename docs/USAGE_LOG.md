@@ -63,12 +63,13 @@
 | [U38](#u38) | `connector` 任务失败被记成 `ok: true`——三次连接器失败（超时/429/空壳）在执行摘要里全是「ok」 | **高** | 正确性 | ✅ 本地已修（`connectorFailureOf` 解包信封；`ok:false` → 任务 failed） |
 | [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | ✅ 本地已修（`normalizeSubAgentType` 运行期校验 + `buildSubAgentSpec` 入口拦；并删掉 `SUB_AGENT_TYPES` 副本） |
 | [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | ✅ 本地已修（`searchPayloadProblem` 在编排层、只对 search：无计数也无结果容器 → 任务 failed 并给下一步） |
-| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | → V171（步骤间落盘约定，须裁定） |
+| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | ✅ 本地已修（V171 路线①：connector 产出落盘 `<workspace>/<sessionId>/<taskId>.json`，plan 提示词写明绝对路径，code 任务不再 glob cwd） |
 | [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
 | [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
 | [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 40 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
 | [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
 | [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
+| [U48](#u48) | summarize 只看每步输出前 200 字符——连接器成功了，模型只见到 `meta.count`，如实汇报「只留下命中计数」 | **高** | 正确性 | ✅ 本地已修（形状摘要：条数 + 前 5 条标题 + 落盘路径；其余截 600） |
 
 ### 方法缺陷
 
@@ -1024,6 +1025,26 @@ caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中�
 **已修（v0.9.1 本地窗口，`c099342`）**：`base.ts` 的 `call()` 开头判 `metadata.status === "placeholder"` → 抛「占位实现 + caveat 原文 + 下一步（换用已可用的源，`spark-research lit sources` 看哪些免 key / 已配凭据）」，**一次 HTTP 都不发**。门禁 `ux_window` U46 ×2（含一条非 placeholder 源不受影响的回归防护）。
 
 **残余** → **V176**：CNKI / 万方的真实可用渠道（官方 API 或机构订阅）仍未接通——这是老 D3，本条只把「调用即失败」变得诚实。**注意**：将来真接通了渠道，记得同时把 `status` 从 `placeholder` 改掉，否则新渠道会被这道闸挡在门外。
+
+<a id="u48"></a>
+## U48 · summarize 只看每步输出的前 200 字符
+
+**现场**：2026-09-15 用户自测第三次（session `web_1789477865031`，「RSI 中美进展」）。U47 生效后 OpenAlex / Crossref / EuropePMC 四次检索**真的成功了**，模型却汇报「只留下了命中计数（条目级数据未进入可读记录）」。
+
+**证据**：summarize 收到的执行摘要，每行都是 223 字符：
+
+```
+- [connector] t5: ok — {"ok":true,"server":"openalex","tool":"search","result":{"meta":{"count":56768,"db_response_time_ms":216,"page":1,"per_page":25,"groups_count":null
+```
+
+`orchestrator.ts`（修前）：`e.output.slice(0, 200)`。一份 OpenAlex 结果的前 200 字符恰好只够到 `meta`，`results[]` 在后面。模型说的是实话。
+
+同一会话的 t10 聚合代码 `glob('**/*.json', recursive=True)` 扫到 **496 个文件、0 条记录**——内核 cwd 是 server 的检出目录（仓库），连接器产出从未落盘（U41）。t12 于是把 `rsi_cn_us_report.md` 写进了仓库工作区（已移出留存）。
+
+**问题**：编排器让模型「基于执行记录汇总」，却只给它看每条记录的开头。对 analysis/code 输出 200 字符勉强够，对 connector 的 JSON 等于什么都没给。
+
+**修改方向（已做）**：connector 成功结果按形状摘要（openalex `results[]` / crossref `message.items[]` / europepmc `resultList.result[]` / pubmed esummary map → 条数 + 前 5 条标题）并附落盘路径；其余输出截 600。与 V171 路线①同一提交。
+
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合
