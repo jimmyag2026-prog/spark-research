@@ -942,3 +942,682 @@ test("⑳ V79②：结论 review 面板在没有实验时显示前置提示，�
   await expect(empty).toContainText("先跑一个实验");
   await expect(empty).toContainText("conclude");
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// W9-ε · 设置面（U6·A / U3 / U2 徽标）。编号接 ㉑ 起，上面的用例一条没动。
+//
+// **这批用例跑在哪个后端上**，如实说清楚：
+//
+// 设置面的后端是 lane γ 的 `backend/src/server/routes/settings/**`，挂载进
+// `server/app.ts` 的那一行是枢纽文件，归收口。所以在 ε 的分支上 `/api/settings/**`
+// 还是 404。下面的 `installSettingsBackend()` 装一个**回退**拦截器：每个请求先真的发给
+// server（`route.fetch()`），**只有在 404 时**才由本文件里的内存假件应答。
+//
+// 三个后果，都不藏：
+//   ① 今天这批用例验的是**前端**（发对请求、渲染对响应、写完刷新、值不回显），
+//      后端那一半由 γ 自己的 `tests/unit/settings_*.test.ts` 验。
+//   ② 收口把 `app.route("/api/settings", settingsRoutes(ctx))` 那一行合进去之后，
+//      同一批断言**自动**改为打真路由，假件变成死代码——它是会自己退役的脚手架，
+//      不是一个需要记得回来删的 TODO。
+//   ③ 凭据那条「任何 XHR 响应体都不含填入的值」在假件下只证明了假件不回显；
+//      它的牙齿在收口后才完整。**但同一条用例里的「页面任何位置不出现该值」是真的**
+//      ——那一半盯的正是前端有没有把值画回界面，也正是本 lane 的阴性对照要拆的地方。
+
+/** 假件的可变状态：PUT 真的改它，所以「改了刷新仍在」这件事在前端侧是真的被验的。 */
+function makeSettingsFixture() {
+  const general = new Map<string, { value: string | number | null; source: string }>([
+    ["defaultModel", { value: "moonshotai/kimi-k2.6", source: "default" }],
+    ["llmTimeoutMs", { value: 120000, source: "default" }],
+    ["contactEmail", { value: "spark-research@example.invalid", source: "default" }],
+    ["KIMI_API_KEY", { value: null, source: "unset" }],
+  ]);
+  const credentials = new Map<string, string[]>([
+    ["aminer", []],
+    ["kimi", []],
+  ]);
+  let sources = ["openalex", "crossref"];
+  const allSources = ["openalex", "crossref", "arxiv", "pubmed"];
+  const extensions: Array<{ name: string; category: string }> = [
+    { name: "literature-triage", category: "skill" },
+    { name: "novelty-check", category: "skill" },
+    { name: "example-mcp", category: "mcp" },
+  ];
+  let computeTarget = "local";
+  let probed = false;
+
+  const item = (fields: Record<string, unknown>) => ({
+    allowed: null,
+    editable: true,
+    nextStep: null,
+    ...fields,
+  });
+
+  const meta = (level: string, summary: string, notes: string[]) => ({ level, summary, notes });
+
+  return {
+    get sources() {
+      return sources;
+    },
+    get extensions() {
+      return extensions;
+    },
+    handle(method: string, path: string, body: Record<string, unknown>): unknown | null {
+      const seg = path.replace(/^\/api\/settings/, "").split("?")[0]!;
+
+      if (seg === "/general" && method === "GET") {
+        return {
+          panel: "general",
+          items: [...general.entries()].map(([key, state]) =>
+            item({
+              key,
+              label: key,
+              kind: key.endsWith("_API_KEY") ? "secret" : typeof state.value === "number" ? "number" : "string",
+              value: key.endsWith("_API_KEY") ? null : state.value,
+              source: state.source,
+              configured: state.value !== null,
+              editable: !key.endsWith("_API_KEY"),
+              summary: `假件：${key} 的说明来自后端，不在前端写第二份`,
+              nextStep: key.endsWith("_API_KEY") ? "凭据请在「凭据」面板填" : null,
+            }),
+          ),
+          meta: meta("full", "假件 general 面板", ["这是 e2e 回退假件，收口后由真路由接管"]),
+        };
+      }
+      if (seg.startsWith("/general/") && (method === "PUT" || method === "DELETE")) {
+        const key = decodeURIComponent(seg.slice("/general/".length));
+        const state = general.get(key);
+        if (!state) return { error: `未知配置项 ${key}`, nextStep: "用 config list 看有哪些键" };
+        if (method === "DELETE") {
+          state.value = null;
+          state.source = "default";
+        } else {
+          state.value = body.value as string | number | null;
+          state.source = "config";
+        }
+        return {
+          panel: "general",
+          item: item({ key, label: key, kind: "string", value: state.value, source: state.source, summary: "假件" }),
+          meta: meta("full", "假件 general 面板", []),
+        };
+      }
+
+      if (seg === "/credentials" && method === "GET") {
+        return {
+          panel: "credentials",
+          items: [...credentials.entries()].map(([id, fieldsSet]) =>
+            item({
+              key: id,
+              label: id,
+              kind: "secret",
+              value: null,
+              configured: fieldsSet.length > 0,
+              summary: `假件：${id} 的凭据`,
+              nextStep: `在本面板直填，或在终端执行 spark-research auth --connector ${id}`,
+              fields: ["api_key"],
+              fieldsSet,
+            }),
+          ),
+          meta: meta("full", "假件凭据面板", ["值写进来之后永不回显"]),
+        };
+      }
+      if (seg.startsWith("/credentials/")) {
+        const id = decodeURIComponent(seg.slice("/credentials/".length));
+        if (method === "PUT") {
+          const fields = (body.fields ?? {}) as Record<string, string>;
+          // **假件也绝不把值存进响应**：只记住字段名。这是契约本身的形状。
+          credentials.set(id, Object.keys(fields));
+          return {
+            panel: "credentials",
+            item: item({
+              key: id,
+              label: id,
+              kind: "secret",
+              value: null,
+              configured: true,
+              summary: `假件：${id} 的凭据`,
+              fields: ["api_key"],
+              fieldsSet: Object.keys(fields),
+            }),
+            meta: meta("full", "假件凭据面板", []),
+          };
+        }
+        if (method === "DELETE") {
+          credentials.set(id, []);
+          return {
+            panel: "credentials",
+            removed: true,
+            id,
+            note: "只删本机保存的值，不影响外部账户",
+            item: item({ key: id, label: id, kind: "secret", value: null, configured: false, summary: "假件", fields: ["api_key"], fieldsSet: [] }),
+          };
+        }
+      }
+
+      if (seg === "/scientific-tools" && method === "GET") {
+        probed = path.includes("probe=1") || probed;
+        return {
+          panel: "scientific-tools",
+          items: [
+            item({
+              key: "searchSources",
+              label: "默认检索源",
+              kind: "enum",
+              value: sources.join(","),
+              source: "config",
+              allowed: allSources,
+              summary: "假件：不给 --sources 时查哪些源",
+              extra: { selected: sources },
+            }),
+            item({
+              key: "opentrons",
+              label: "Opentrons",
+              kind: "info",
+              value: null,
+              editable: false,
+              summary: "假件：湿实验后端",
+              nextStep: "pip install opentrons",
+              extra: { category: "wetBackend", probe: probed ? { ok: false, note: "假件：没装" } : null },
+            }),
+          ],
+          meta: meta("full", "假件科学工具面板", ["?probe=1 才会真探"]),
+        };
+      }
+      if (seg === "/sources" && method === "PUT") {
+        sources = (body.ids as string[]) ?? [];
+        return {
+          panel: "scientific-tools",
+          item: item({ key: "searchSources", label: "默认检索源", kind: "enum", value: sources.join(","), allowed: allSources, summary: "假件", extra: { selected: sources } }),
+          meta: meta("full", "假件科学工具面板", []),
+        };
+      }
+
+      if (seg === "/models" && method === "GET") {
+        return {
+          panel: "models",
+          items: [
+            item({ key: "defaultModel", label: "默认模型", kind: "enum", value: "moonshotai/kimi-k2.6", source: "default", allowed: ["moonshotai/kimi-k2.6", "openai/gpt-5"], summary: "假件：默认模型" }),
+            item({ key: "subAgentModel_review", label: "子代理 review 的模型覆盖", kind: "enum", value: null, source: "unset", allowed: ["moonshotai/kimi-k2.6"], summary: "假件：review 子代理", extra: { subAgent: "review" } }),
+          ],
+          meta: meta("full", "假件模型面板", []),
+        };
+      }
+      if (seg.startsWith("/models/") && method === "PUT") {
+        return { panel: "models", item: item({ key: "defaultModel", label: "默认模型", kind: "enum", value: body.model ?? null, allowed: ["moonshotai/kimi-k2.6"], summary: "假件" }), meta: meta("full", "假件模型面板", []) };
+      }
+
+      if (seg === "/local" && method === "GET") {
+        return {
+          panel: "local",
+          items: [item({ key: "SPARK_LOCAL_LLM_BASE_URL", label: "本地端点 baseUrl", kind: "string", value: null, source: "unset", summary: "假件：本地端点", extra: { probe: { ok: false, reason: "没配端点", models: [] } } })],
+          meta: meta("reduced", "假件本地模型面板", ["不做模型拉取"]),
+        };
+      }
+      if (seg === "/local" && method === "PUT") {
+        return { panel: "local", item: item({ key: "SPARK_LOCAL_LLM_BASE_URL", label: "本地端点 baseUrl", kind: "string", value: body.baseUrl ?? null, summary: "假件" }), meta: meta("reduced", "假件本地模型面板", []) };
+      }
+
+      if (seg === "/extensions" && method === "GET") {
+        return {
+          panel: "extensions",
+          items: extensions.map((ext) =>
+            item({
+              key: ext.name,
+              label: ext.name,
+              kind: "info",
+              value: null,
+              editable: false,
+              summary: `假件：${ext.category} ${ext.name}`,
+              extra: { category: ext.category, triggers: ext.category === "skill" ? ["分诊", "triage"] : [], tools: ext.category === "mcp" ? ["echo"] : [] },
+            }),
+          ),
+          meta: meta("reduced", "假件扩展面板", ["装载一律不带 --trust"]),
+        };
+      }
+      if (seg === "/extensions/mcp" && method === "POST") {
+        extensions.push({ name: String(body.name), category: "mcp" });
+        return { panel: "extensions", item: item({ key: String(body.name), label: String(body.name), kind: "info", value: null, editable: false, summary: "假件", extra: { category: "mcp" } }), meta: meta("reduced", "假件扩展面板", []) };
+      }
+      if (seg.startsWith("/extensions/") && (method === "POST" || method === "DELETE")) {
+        const name = decodeURIComponent(seg.split("/")[2]!);
+        if (method === "DELETE") {
+          const index = extensions.findIndex((e) => e.name === name);
+          if (index >= 0) extensions.splice(index, 1);
+        }
+        return { panel: "extensions", item: item({ key: name, label: name, kind: "info", value: null, editable: false, summary: "假件", extra: { category: "mcp" } }), meta: meta("reduced", "假件扩展面板", []) };
+      }
+
+      if (seg === "/compute" && method === "GET") {
+        return {
+          panel: "compute",
+          items: [
+            item({ key: "computeTarget", label: "默认执行地", kind: "enum", value: computeTarget, source: "default", allowed: ["local", "modal"], summary: "假件：默认执行地" }),
+            item({ key: "modal", label: "modal", kind: "info", value: null, editable: false, summary: "假件：Modal 可用性", nextStep: "在「凭据」面板配 modal token" }),
+          ],
+          meta: meta("reduced", "假件算力面板", ["派发与审批刻意不走 HTTP（V47 / AD-6）"]),
+        };
+      }
+      if (seg === "/compute/target" && method === "PUT") {
+        computeTarget = String(body.target);
+        return { panel: "compute", item: item({ key: "computeTarget", label: "默认执行地", kind: "enum", value: computeTarget, allowed: ["local", "modal"], summary: "假件" }), meta: meta("reduced", "假件算力面板", []) };
+      }
+
+      if (seg === "/network" && method === "GET") {
+        return {
+          panel: "network",
+          items: [item({ key: "httpTimeoutMs", label: "httpTimeoutMs", kind: "number", value: 30000, source: "default", summary: "假件：HTTP 超时" })],
+          meta: meta("full", "假件网络面板", []),
+        };
+      }
+      if (seg.startsWith("/network/") && method === "PUT") {
+        return { panel: "network", item: item({ key: "httpTimeoutMs", label: "httpTimeoutMs", kind: "number", value: body.value ?? null, summary: "假件" }), meta: meta("full", "假件网络面板", []) };
+      }
+
+      if (seg === "/storage" && method === "GET") {
+        return {
+          panel: "storage",
+          items: [item({ key: "rawLlm", label: "保留 LLM 原文", kind: "enum", value: "on", source: "default", allowed: ["on", "off"], summary: "假件：raw 开关", extra: { bytes: 2048, records: 7 } })],
+          meta: meta("reduced", "假件存储面板", ["不做目录迁移"]),
+        };
+      }
+      if (seg.startsWith("/storage/export") && method === "POST") {
+        return { panel: "storage", task: { id: "fixture-export", kind: "data-export", state: "running", project: String(body.project ?? "") } };
+      }
+      if (seg.startsWith("/storage/") && method === "PUT") {
+        return { panel: "storage", item: item({ key: "rawLlm", label: "保留 LLM 原文", kind: "enum", value: body.value ?? null, allowed: ["on", "off"], summary: "假件" }), meta: meta("reduced", "假件存储面板", []) };
+      }
+
+      if (seg === "/permissions" && method === "GET") {
+        return {
+          panel: "permissions",
+          items: [item({ key: "withheld:lab_approve", label: "lab_approve", kind: "info", value: null, editable: false, summary: "假件：刻意不暴露的动作", nextStep: "在终端执行 spark-research lab approve <id>" })],
+          meta: meta("readonly", "假件权限面板", ["只读面板"]),
+        };
+      }
+
+      return null;
+    },
+  };
+}
+
+/**
+ * 装上「先打真 server，404 才回退假件」的拦截器。收口把 γ 的路由挂进 app.ts 之后，
+ * 真 server 不再 404，这个假件就再也不会被调用——脚手架自己退役。
+ */
+async function installSettingsBackend(page: Page): Promise<{ stubbed: () => number }> {
+  const fixture = makeSettingsFixture();
+  let stubHits = 0;
+
+  await page.route("**/api/settings/**", async (route) => {
+    const request = route.request();
+    const live = await route.fetch().catch(() => null);
+    if (live && live.status() !== 404) {
+      await route.fulfill({ response: live });
+      return;
+    }
+    stubHits += 1;
+    let body: Record<string, unknown> = {};
+    try {
+      body = (request.postDataJSON() ?? {}) as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    const url = new URL(request.url());
+    const payload = fixture.handle(request.method(), url.pathname + url.search, body);
+    if (payload === null) {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "假件没有这条路由", nextStep: "在 workbench.spec.ts 的假件里补上" }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+  });
+
+  return { stubbed: () => stubHits };
+}
+
+/** 打开设置面并切到某个面板。 */
+async function openSettings(page: Page, panelId?: string): Promise<void> {
+  await page.locator('[data-testid="nav-settings"]').click();
+  await expect(page.getByRole("dialog", { name: "设置" })).toBeVisible();
+  if (panelId) {
+    await page.locator(`.settings-nav__item[data-panel="${panelId}"]`).click();
+    await expect(page.locator(`.settings-main__body[data-panel="${panelId}"]`)).toBeVisible();
+  }
+}
+
+/** 直接问 API 要某个面板的条目（与 UI 走同一个拦截器，所以两边看到的是同一份数据）。 */
+async function panelItems(page: Page, path: string): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(async (p) => {
+    const res = await fetch(p);
+    const body = (await res.json()) as { items?: Array<Record<string, unknown>> };
+    return body.items ?? [];
+  }, path);
+}
+
+test("㉑ 设置面：左栏「设置」打开壳，四组导航齐，且没有 sandbox 面板", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page);
+
+  // 四组 section 的标签。
+  for (const label of ["推理", "能力", "运行时", "应用"]) {
+    await expect(page.locator(".settings-nav__label", { hasText: new RegExp(`^${label}$`) })).toBeVisible();
+  }
+
+  // 12 个面板，一个不多一个不少。
+  await expect(page.locator(".settings-nav__item")).toHaveCount(12);
+
+  // **sandbox 不是 disabled，是根本不存在**：没有底子的能力不放占位（AD-12）。
+  await expect(page.locator('.settings-nav__item[data-panel="sandbox"]')).toHaveCount(0);
+  const navText = await page.locator(".settings-nav").innerText();
+  expect(navText.toLowerCase()).not.toContain("sandbox");
+  expect(navText).not.toContain("沙箱");
+});
+
+test("㉒ 设置面：数字键 6 打开，Esc 关闭，回到原来在看的视图", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "文献库", exact: false }).first().click();
+  await page.locator("body").press("6");
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await expect(dialog).toBeVisible();
+
+  await dialog.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // 关掉之后中栏还是刚才那个视图（设置面是覆盖层，不是第六个视图）。
+  await expect(page.locator(".left .nav-item[aria-current='true']")).toContainText("文献库");
+});
+
+test("㉓ general 面板：行数 == GET 的 items 数；改一个值刷新后仍在", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "general");
+
+  const items = await panelItems(page, "/api/settings/general");
+  const rows = page.locator('.settings-main__body[data-panel="general"] .settings-row');
+  await expect(rows).toHaveCount(items.length);
+
+  // 凭据类 key 在这条路由上不给输入框——渲染一个注定 403 的控件就是死按钮。
+  const secretRow = rows.filter({ hasText: "KIMI_API_KEY" });
+  await expect(secretRow).toHaveCount(1);
+  await expect(secretRow.locator("input")).toHaveCount(0);
+
+  // 改 llmTimeoutMs → 保存 → 整页刷新 → 重新打开设置面，新值还在。
+  const timeoutInput = page.locator('input[aria-label="llmTimeoutMs"]');
+  await timeoutInput.fill("45678");
+  await page.locator('.settings-main__body[data-panel="general"] .settings-row')
+    .filter({ hasText: "llmTimeoutMs" })
+    .getByRole("button", { name: "保存" })
+    .click();
+  await expect(page.locator(".toast")).toContainText("llmTimeoutMs 已保存");
+
+  await page.reload();
+  await openSettings(page, "general");
+  await expect(page.locator('input[aria-label="llmTimeoutMs"]')).toHaveValue("45678");
+});
+
+test("㉔ 凭据面板：填入的假 key 不出现在页面任何位置，也不出现在任何响应体里", async ({ page }) => {
+  await installSettingsBackend(page);
+
+  // 一个不可能被别的东西撞上的假值。**这个字符串是本条用例的全部判据**。
+  const FAKE_KEY = "sk-e2e-epsilon-NEVER-ECHO-3f9a71c2d4b6";
+
+  // 盯住这一页发出的**每一个**响应体。凭据写入之后，它不许出现在任何一个里面。
+  const leaks: string[] = [];
+  page.on("response", async (response) => {
+    try {
+      const body = await response.text();
+      if (body.includes(FAKE_KEY)) leaks.push(`${response.request().method()} ${response.url()}`);
+    } catch {
+      // 二进制 / 已关闭的响应读不出来，跳过——它们本来也不可能是设置面的 JSON。
+    }
+  });
+
+  await page.goto("/");
+  await openSettings(page, "credentials");
+
+  const items = await panelItems(page, "/api/settings/credentials");
+  const rows = page.locator('.settings-main__body[data-panel="credentials"] .settings-row');
+  await expect(rows).toHaveCount(items.length);
+
+  await page.locator('[data-testid="cred-aminer-api_key"]').fill(FAKE_KEY);
+  await page.locator('[data-testid="cred-save-aminer"]').click();
+  await expect(page.locator(".toast")).toContainText("已保存");
+
+  // ① 保存成功后这一行只显示**字段名**已设，没有值。
+  const aminerRow = rows.filter({ hasText: "aminer" });
+  // 「已设」（字段级）与「已配置」（行级）都是 .badge-ok，按文本区分，别用 first()
+  // 这种会随渲染顺序漂移的写法。
+  await expect(aminerRow.locator(".badge-ok").filter({ hasText: /^已设$/ })).toHaveCount(1);
+  await expect(aminerRow).toContainText("已配置");
+
+  // ② 输入框被清空——刚填的值不留在 DOM 里等着被截图。
+  await expect(page.locator('[data-testid="cred-aminer-api_key"]')).toHaveValue("");
+
+  // ③ 整页文本（含已渲染的属性值）里不出现那个值。**阴性对照要拆的就是这一条**：
+  //    让面板把保存的值回显到行里，这里立刻红。
+  const pageHtml = await page.content();
+  expect(pageHtml).not.toContain(FAKE_KEY);
+
+  // ④ 刷新后重新打开，仍然只见字段名。
+  await page.reload();
+  await openSettings(page, "credentials");
+  await expect(page.locator('.settings-main__body[data-panel="credentials"] .settings-row').filter({ hasText: "aminer" })).toContainText("已配置");
+  expect(await page.content()).not.toContain(FAKE_KEY);
+
+  // ⑤ 所有响应体里一次都没出现过。
+  expect(leaks).toEqual([]);
+});
+
+test("㉕ 检索源面板：勾掉一个源 → 保存 → 回读 searchSources 真的变了", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "sources");
+
+  const before = await panelItems(page, "/api/settings/scientific-tools");
+  const sourcesItem = before.find((i) => i.key === "searchSources")!;
+  const selectedBefore = ((sourcesItem.extra as Record<string, unknown>).selected ?? []) as string[];
+  expect(selectedBefore.length).toBeGreaterThan(0);
+
+  const dropped = selectedBefore[0]!;
+  await page.locator(`[data-testid="source-${dropped}"]`).uncheck();
+  await page.locator('[data-testid="sources-save"]').click();
+  await expect(page.locator(".toast")).toContainText("默认检索源已保存");
+
+  const after = await panelItems(page, "/api/settings/scientific-tools");
+  const selectedAfter = ((after.find((i) => i.key === "searchSources")!.extra as Record<string, unknown>)
+    .selected ?? []) as string[];
+  expect(selectedAfter).not.toContain(dropped);
+  expect(selectedAfter.length).toBe(selectedBefore.length - 1);
+});
+
+test("㉖ 科学工具面板：「真探一次」之后条目上出现探测结论", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "scientific-tools");
+
+  const body = page.locator('.settings-main__body[data-panel="scientific-tools"]');
+  await expect(body).toContainText("没有探测过");
+
+  await page.locator('[data-testid="probe-tools"]').click();
+  await expect(body).toContainText("来自刚才那次真实探测");
+  await expect(body.locator(".badge").filter({ hasText: /探通了|没探通/ }).first()).toBeVisible();
+});
+
+test("㉗ 算力设置面板：只有改默认执行地，没有任何派发/审批按钮（V47 / AD-6）", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "compute");
+
+  const body = page.locator('.settings-main__body[data-panel="compute"]');
+  await expect(body.locator('select[aria-label="computeTarget"]')).toBeVisible();
+
+  // 与既有 ⑰ 同一条硬断言，换个面板再钉一遍：HTTP 面刻意没开派发/审批这个口子。
+  const forbidden = /派发|批准|拒绝|approve|reject|dispatch|^运行$|^执行$/i;
+  const buttons = body.locator("button");
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    expect((await buttons.nth(i).innerText()).trim()).not.toMatch(forbidden);
+  }
+});
+
+test("㉘ 连接器面板：添加一个 MCP → 列表里出现它", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "connectors");
+
+  const body = page.locator('.settings-main__body[data-panel="connectors"]');
+  await page.locator('[data-testid="mcp-name"]').fill("e2e-mcp");
+  await page.locator('[data-testid="mcp-cmd"]').fill("bun run e2e-mcp");
+  await page.locator('[data-testid="mcp-add"]').click();
+
+  await expect(page.locator(".toast")).toContainText("已添加");
+  await expect(body.locator(".settings-row").filter({ hasText: "e2e-mcp" })).toBeVisible();
+});
+
+test("㉙ 技能面板：每条技能列出它的触发词", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await openSettings(page, "skills");
+
+  const items = await panelItems(page, "/api/settings/extensions");
+  const skills = items.filter((i) => (i.extra as Record<string, unknown> | undefined)?.category === "skill");
+  const body = page.locator('.settings-main__body[data-panel="skills"]');
+  await expect(body.locator(".settings-row")).toHaveCount(skills.length);
+  await expect(body.locator(".chip").first()).toBeVisible();
+});
+
+test("㉚ 存储面板：导出当前项目拿到任务句柄", async ({ page }) => {
+  await installSettingsBackend(page);
+  await page.goto("/");
+  await waitIdle(page);
+  await openSettings(page, "storage");
+
+  await page.locator('[data-testid="storage-export"]').click();
+  await expect(page.locator(".toast")).toContainText("导出任务已提交");
+});
+
+// 每个面板一条：打开它，断言它可见、且行数 == 对应 GET 的 items 数（按面板自己的
+// 过滤规则）。sources 的控件是勾选框不是设置行，单独按勾选框数算。
+const PANEL_ROW_EXPECTATIONS: Array<{
+  id: string;
+  endpoint: string;
+  rows: (items: Array<Record<string, unknown>>) => number;
+  selector?: string;
+}> = [
+  { id: "general", endpoint: "/api/settings/general", rows: (i) => i.length },
+  { id: "models", endpoint: "/api/settings/models", rows: (i) => i.length },
+  { id: "local-models", endpoint: "/api/settings/local", rows: (i) => i.length },
+  { id: "credentials", endpoint: "/api/settings/credentials", rows: (i) => i.length },
+  {
+    id: "sources",
+    endpoint: "/api/settings/scientific-tools",
+    rows: (i) => ((i.find((x) => x.key === "searchSources")?.allowed ?? []) as string[]).length,
+    selector: 'input[type="checkbox"]',
+  },
+  {
+    id: "scientific-tools",
+    endpoint: "/api/settings/scientific-tools",
+    rows: (i) => i.filter((x) => x.key !== "searchSources").length,
+  },
+  {
+    id: "connectors",
+    endpoint: "/api/settings/extensions",
+    rows: (i) =>
+      i.filter((x) => {
+        const category = (x.extra as Record<string, unknown> | undefined)?.category;
+        return category === "mcp" || category === "connector";
+      }).length,
+  },
+  {
+    id: "skills",
+    endpoint: "/api/settings/extensions",
+    rows: (i) => i.filter((x) => (x.extra as Record<string, unknown> | undefined)?.category === "skill").length,
+  },
+  { id: "compute", endpoint: "/api/settings/compute", rows: (i) => i.length },
+  { id: "network", endpoint: "/api/settings/network", rows: (i) => i.length },
+  { id: "storage", endpoint: "/api/settings/storage", rows: (i) => i.length },
+  { id: "permissions", endpoint: "/api/settings/permissions", rows: (i) => i.length },
+];
+
+for (const expectation of PANEL_ROW_EXPECTATIONS) {
+  test(`㉛ 面板 ${expectation.id}：可见，且行数 == 对应 GET 的 items 数`, async ({ page }) => {
+    await installSettingsBackend(page);
+    await page.goto("/");
+    await openSettings(page, expectation.id);
+
+    const items = await panelItems(page, expectation.endpoint);
+    const body = page.locator(`.settings-main__body[data-panel="${expectation.id}"]`);
+    await expect(body).toBeVisible();
+    // 面板抬头的能力分级来自 API 的 meta.level，前端不存第二份——它在就说明 meta 渲染了。
+    await expect(body.locator(".settings-meta .badge").first()).toBeVisible();
+    await expect(body.locator(expectation.selector ?? ".settings-row")).toHaveCount(expectation.rows(items));
+  });
+}
+
+test("㉜ 顶栏版本徽标：server 报一个不同的版本 → 出现黄色「server vX ≠ UI vY」", async ({ page }) => {
+  // 先看真实情况：同一个构建，徽标不该报不一致。
+  await page.goto("/");
+  const badge = page.locator('[data-testid="version-badge"]');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveAttribute("data-mismatch", "false");
+
+  // 再伪造一个「端口上蹲着个旧 server」的场景——U2 那次困惑持续两天，直接原因就是
+  // 界面上看不到这两个版本号。
+  await page.route("**/api/health", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ok", service: "spark-research", version: "0.0.1-orphan" }),
+    });
+  });
+  await page.reload();
+  await expect(badge).toHaveAttribute("data-mismatch", "true");
+  await expect(badge).toContainText("server v0.0.1-orphan");
+  await expect(badge).toContainText("≠ UI v");
+});
+
+test("㉝ U3：项目下拉默认不列已归档，点「显示已归档」之后才出现", async ({ page }) => {
+  await page.goto("/");
+  await waitIdle(page);
+
+  // 造一个会被归档的项目，再把指针切回主线项目——不影响上面那些串行用例的现场。
+  const slug = "e2e-epsilon-archived";
+  // `page.evaluate` 的回调在浏览器里跑，拿不到本文件的模块作用域——两个 slug 都得
+  // 显式传进去（上一版只传了一个，`PROJECT is not defined` 就是这么来的）。
+  await page.evaluate(
+    async ([archiveSlug, mainSlug]) => {
+      await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: archiveSlug, name: archiveSlug }),
+      });
+      // 写请求一律要 `Content-Type: application/json`（server/app.ts 的既有闸），
+      // 哪怕没有请求体。少了这个头会拿到 400 而不是归档成功，且下拉框里看不出差别。
+      await fetch(`/api/projects/${archiveSlug}/archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      await fetch("/api/projects/current", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: mainSlug }),
+      });
+    },
+    [slug, PROJECT] as const,
+  );
+
+  await page.reload();
+  await waitIdle(page);
+
+  const options = page.locator("#project-select option");
+  await expect(options.filter({ hasText: slug })).toHaveCount(0);
+
+  await page.locator('[data-testid="toggle-archived"]').click();
+  await expect(options.filter({ hasText: slug })).toHaveCount(1);
+  await expect(page.locator('[data-testid="toggle-archived"]')).toContainText("隐藏已归档");
+});

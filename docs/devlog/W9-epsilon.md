@@ -162,3 +162,101 @@ Received: false
 ① 契约层面 `SettingsItem.value` 在 `kind === "secret"` 时恒为 null，GET 只给 `fieldsSet`
 ——前端连回显的材料都拿不到；② 保存**无论成败**都立刻清空本地草稿，不把刚填的值留在
 内存里等某次重渲染画回输入框；③ e2e 用 `page.on("response")` 盯住所有响应体。
+
+### 步骤 4 · e2e（㉑–㉝，只追加，既有 ①–⑳ 一条没动）
+
+13 个编号、49 条用例（㉛ 是一个面板一条，展开成 12 条）。
+
+**这批用例跑在哪个后端上，如实说清楚。** γ 的设置路由挂载进 `server/app.ts` 的那一行是
+枢纽文件、归收口，所以在 ε 的分支上 `/api/settings/**` 还是 404。`installSettingsBackend()`
+装的是一个**回退**拦截器：每个请求先真的发给 server（`route.fetch()`），**只有 404 时**
+才由 spec 里的内存假件应答。三个后果：
+
+1. 今天验的是**前端**（发对请求、渲染对响应、写完刷新、值不回显），后端那一半由 γ 自己的
+   `tests/unit/settings_*.test.ts` 验。
+2. 收口把那一行合进去之后，同一批断言**自动**改为打真路由，假件变成死代码——它是会自己
+   退役的脚手架，不是一个需要记得回来删的 TODO。
+3. 凭据那条「任何 XHR 响应体都不含填入的值」在假件下只证明了假件不回显，牙齿在收口后才
+   完整；**但同一条用例里的「页面任何位置不出现该值」是真的**——那一半盯的正是前端有没有
+   把值画回界面，也正是阴性对照要拆的地方。
+
+假件是**有状态**的（PUT 真的改它），所以「改了刷新仍在」这件事在前端侧是真的被验的。
+
+#### 环境坑（不是代码问题，但会让人以为是）
+
+这台机器的 agent 环境设了 `http_proxy` / `https_proxy` / `all_proxy=socks5://127.0.0.1:11080`。
+Playwright 的 webServer 就绪探测与 `bun test` 里的 `fetch("http://127.0.0.1:…")` 都会被
+路由进代理，拿到 **503**：
+
+```
+$ curl -s -m 5 -w "status=%{http_code}" http://127.0.0.1:4521/api/health
+status=503                                   ← 空响应体
+$ curl -s -m 5 --noproxy '*' -w "\nstatus=%{http_code}" http://127.0.0.1:4522/api/health
+{"status":"ok","service":"spark-research","version":"0.8.0"}
+status=200
+```
+
+表现是 `Error: Timed out waiting 120000ms from config.webServer`（server 明明打印了
+listening），以及 `bun test tests/unit` 里 **164 条红**（全是 `body.version` 之类的
+`null is not an object`）。跑法：
+
+```
+env -u http_proxy -u https_proxy -u all_proxy NO_PROXY='127.0.0.1,localhost' \
+  no_proxy='127.0.0.1,localhost' bun run test:e2e
+```
+
+同一份代码，带代理 2325 pass / 164 fail，不带代理 **2489 pass / 0 fail**。这条值得进
+收口的环境备注：谁在这台机器上复跑，不设 `no_proxy` 会看到一片假红。
+
+#### 三个写测试时踩到的真实缺陷（都改了测试，不是改代码去迁就测试）
+
+1. `.badge-ok` 在凭据行里有两个（行级「已配置」、字段级「已设」），`toContainText` 撞上
+   strict mode。改成按文本 `/^已设$/` 过滤，而不是 `first()`——后者会随渲染顺序漂移。
+2. `page.evaluate` 的回调在浏览器里跑，拿不到模块作用域的 `PROJECT` 常量
+   （`ReferenceError: PROJECT is not defined`）。两个 slug 都显式传进去。
+3. `POST /api/projects/:slug/archive` **没有请求体也要 `Content-Type: application/json`**
+   （`server/app.ts` 的既有写请求闸）。少这个头拿到的是 400，而下拉框里看不出任何差别
+   ——用例会「通过归档失败」来变红，排查方向完全错。这条坑值得记：**写请求没有 body 时
+   最容易忘这个头**。
+
+#### 阴性对照（真跑，输出见下）
+
+| # | 改法 | 结果 |
+|---|---|---|
+| A | 注册一个 `section: "misc"` 的面板 | 单测 ① 红 |
+| B | 在 `General.tsx` 里硬编码 `contactEmail` 的 `summary` 原文 | 单测 ③ 红 |
+| C | 注册一个 `sandbox` 面板 | 单测 ④ 红 |
+| D | **凭据面板把保存的值回显到行里** | e2e ㉔ 红（页面文本断言） |
+| E | **让后端把值回显进响应体** | e2e ㉔ 红（`page.on("response")` 断言） |
+
+D 第一次写错了：只是「保存后不清草稿」，结果**测试照样绿**——因为 `refetch` 让
+`<For>` 重建了 CredentialRow，组件级的 `draft` 信号跟着重置，值自己没了。这说明第一版
+对照根本没复现出泄漏。改成把值记进模块作用域的 `LEAKED_VALUES` 并渲染进行内（一个天真
+实现真正会有的样子），才红。**记一笔**：阴性对照本身也会假绿，「改了之后测试还是绿」的
+第一反应应该是「我的对照是不是没生效」，而不是「门禁没牙」。
+
+D 的输出（页面 HTML 里出现了那个值）：
+
+```
+1) ㉔ 凭据面板：填入的假 key 不出现在页面任何位置，也不出现在任何响应体里
+   Error: expect(received).not.toContain(expected) // indexOf
+   Expected substring: not "sk-e2e-epsilon-NEVER-ECHO-3f9a71c2d4b6"
+   Received string: "<!DOCTYPE html>… <span class=\"badge badge-ok\">已设</span>
+     <span data-testid=\"leaked-echo\">sk-e2e-epsilon-NEVER-ECHO-3f9a71c2d4b6</span> …"
+     at tests/e2e/workbench.spec.ts:1403:24   (expect(pageHtml).not.toContain(FAKE_KEY))
+   1 failed
+```
+
+E 的输出（三个响应体里带上了那个值）：
+
+```
+✘ 1 ㉔ 凭据面板：填入的假 key 不出现在页面任何位置，也不出现在任何响应体里 (803ms)
+  Error: expect(received).toEqual(expected) // deep equality
+  - Expected  - 1
+  + Received  + 3
+  > 1414 |   expect(leaks).toEqual([]);
+      at tests/e2e/workbench.spec.ts:1414:17
+  1 failed
+```
+
+复原后全绿：`49 passed (30.7s)`。
