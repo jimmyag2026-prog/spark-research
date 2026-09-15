@@ -3,25 +3,19 @@ import { anthropicAdapter } from "./providers/anthropic";
 import { OpenAiCompatAdapter } from "./providers/openai_compat";
 import { failure, type ProviderAdapter } from "./providers/types";
 import type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities } from "./types";
+import { guardLlmCall } from "./watchdog";
+import { retryDelayMs } from "./provider_error";
+import { MODELS_BY_PROVIDER, UnknownModelError, assertKnownModel } from "./providers/registry";
 
 export type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, ToolSpec, Usage } from "./types";
 
 export const SUPPORTED_PROVIDERS = ["kimi", "openai", "anthropic", "deepseek", "qwen", "openrouter"] as const;
 export type Provider = (typeof SUPPORTED_PROVIDERS)[number];
 
-export const PROVIDER_MODELS: Record<Provider, readonly string[]> = {
-  kimi: ["kimi-k2", "moonshot-v1-32k", "moonshot-v1-8k"],
-  openai: ["gpt-4o", "gpt-4o-mini", "o4-mini"],
-  // V94（2026-09-11）：对齐官方定价页当前在售清单——Opus 5 / Sonnet 5 / Haiku 4.5 为主力，
-  // 4.5 两个别名仍在售保留。单价见 providers/registry.ts 的 anthropic 段（官方页直读）。
-  anthropic: ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-sonnet-4-5", "claude-opus-4-5"],
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  qwen: ["qwen3", "qwen-max"],
-  // z-ai/glm-5.3-flash：v0.6 B2 轮次指定模型。必须显式登记——providerForModel 的
-  // 关键词兜底认不出 "z-ai/glm"（不含 kimi/gpt/claude/deepseek/qwen 任何一个词），
-  // 不登记会静默落到 kimi adapter 用错误的 baseUrl 调用。
-  openrouter: ["moonshotai/kimi-k2.6", "z-ai/glm-5.3-flash"],
-};
+// v0.9 β-3（U5）：模型归属只有一份真源——单价表（providers/registry.ts）。此处不再手写清单。
+// 必须是 re-export 而不是 `const X = MODELS_BY_PROVIDER`：registry → router（providerApiKeyEnv）与
+// router → registry 成环，后者在模块顶层求值会踩 ESM TDZ（β 实测）。
+export { MODELS_BY_PROVIDER as PROVIDER_MODELS } from "./providers/registry";
 
 export const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
 
@@ -124,16 +118,14 @@ function localCapabilities(): ProviderCapabilities {
 }
 
 export function providerForModel(model: string): Provider {
-  for (const provider of SUPPORTED_PROVIDERS) {
-    if (PROVIDER_MODELS[provider].includes(model)) return provider;
+  // v0.9 β-3（U5）：认不出的模型名**抛错**（UnknownModelError，kind: unsupported），不再静默当 Kimi；
+  // 关键词兜底命中时 registry 打一行 warn（自动化降级必须留痕）。
+  const known = assertKnownModel(model);
+  if (known.kind === "local") {
+    // resolve() 先按 LOCAL_MODEL_PREFIX 分流，本函数在生产路径上不会收到 local/ 名；记账层用 resolveModelName（不抛）。
+    throw new Error(`模型 "${model}" 是本地端点（local/ 前缀），不属于任何云端 provider`);
   }
-  const low = model.toLowerCase();
-  if (low.includes("kimi") || low.includes("moonshot")) return "kimi";
-  if (low.includes("gpt") || low.includes("o4")) return "openai";
-  if (low.includes("claude")) return "anthropic";
-  if (low.includes("deepseek")) return "deepseek";
-  if (low.includes("qwen")) return "qwen";
-  return "kimi";
+  return known.provider;
 }
 
 function defaultLlmTimeoutMs(): number {
@@ -166,7 +158,9 @@ function defaultSleep(ms: number): Promise<void> {
 
 export class LLMRouter {
   static readonly SUPPORTED_PROVIDERS = SUPPORTED_PROVIDERS;
-  static readonly PROVIDER_MODELS = PROVIDER_MODELS;
+  static get PROVIDER_MODELS(): Readonly<Record<Provider, readonly string[]>> {
+    return MODELS_BY_PROVIDER;
+  }
   static readonly DEFAULT_MODEL = DEFAULT_MODEL;
 
   private env: Record<string, string | undefined>;
@@ -205,19 +199,31 @@ export class LLMRouter {
       typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
     const model = options.model ?? DEFAULT_MODEL;
 
-    const entry = this.resolve(model);
+    let entry: ReturnType<LLMRouter["resolve"]>;
+    try {
+      entry = this.resolve(model);
+    } catch (e) {
+      // v0.9 β-3 / AD-13：未登记的模型名不许异常穿透——翻成 ok:false，消息里已列出已登记模型与下一步。
+      if (e instanceof UnknownModelError) return failure("(unknown)", model, { kind: "unsupported", message: e.message, retryable: false });
+      throw e;
+    }
     if (!entry) {
       const configured = implementedProviders()
         .filter((p) => this.env[ADAPTERS[p]!.envKey])
         .join(" / ");
       const isLocal = LOCAL_MODEL_PREFIX.test(model);
-      return failure(isLocal ? "local" : providerForModel(model), model, {
+      const owner = isLocal ? null : providerForModel(model);
+      const ownerKey = owner ? ADAPTERS[owner]?.envKey : undefined;
+      return failure(owner ?? "local", model, {
         kind: "auth",
         message: isLocal
           ? `模型 '${model}' 以 local/ 开头，但没设置 ${LOCAL_BASE_URL_ENV}——本地端点（ollama / vLLM / 任意自建 OpenAI 兼容服务）需要先设这个环境变量指向其 baseUrl。`
-          : configured
-            ? `模型 '${model}' 没有可用的 provider（已配置：${configured}）`
-            : "没有配置任何 API key。设置 KIMI_API_KEY 或 OPENROUTER_API_KEY，或运行 `spark-research auth`",
+          : !configured
+            ? "没有配置任何 API key。设置 KIMI_API_KEY 或 OPENROUTER_API_KEY，或运行 `spark-research auth`"
+            : ownerKey
+              // V154：不再静默回退到别家 provider；把「该配哪把 key」说清楚。
+              ? `模型 '${model}' 属于 ${owner}，但没有设置 ${ownerKey}（已配置的 provider：${configured}）。运行 \`spark-research auth\` 配置，或改用已配置 provider 的模型。`
+              : `模型 '${model}' 没有可用的 provider（已配置：${configured}）`,
         retryable: false,
       });
     }
@@ -229,19 +235,31 @@ export class LLMRouter {
     const maxRetries = options.onDelta ? 0 : options.maxRetries ?? this.defaultMaxRetries;
     let attempt = 0;
     for (;;) {
-      const response = await entry.adapter.call({
-        model: entry.wireModel(model),
-        messages,
+      // α-1（v0.9）：输出看门狗——只计等待模型事件的时间，真实增量续期，元数据帧不续期。
+      // guard 必须建在循环内：run() 在 finally 里 dispose()，跨重试复用会带着上一轮的剩余预算。
+      const guard = guardLlmCall({
+        provider: entry.adapter.id,
+        model,
         options,
-        // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
-        // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
-        apiKey: this.env[entry.envKey] ?? "",
-        baseUrl: "",
-        timeoutMs: options.timeoutMs ?? this.timeoutMs,
-        fetchImpl: this.fetchImpl,
+        capabilities: entry.adapter.capabilities(model),
+        defaultIdleTimeoutMs: this.timeoutMs,
       });
+      const response = await guard.run((guarded) =>
+        entry.adapter.call({
+          model: entry.wireModel(model),
+          messages,
+          options: guarded,
+          // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
+          // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
+          apiKey: this.env[entry.envKey] ?? "",
+          baseUrl: "",
+          timeoutMs: guarded.timeoutMs ?? this.timeoutMs,
+          fetchImpl: this.fetchImpl,
+        }),
+      );
       if (response.ok || !response.error.retryable || attempt >= maxRetries) return response;
-      const delay = Math.min(this.retryBaseDelayMs * 2 ** attempt, RETRY_MAX_DELAY_MS) + Math.random() * this.retryBaseDelayMs;
+      // α-2（v0.9）：有 Retry-After 时按 provider 给的时间表走；否则指数退避 + 抖动（V137 本体不动）。
+      const delay = retryDelayMs({ error: response.error, attempt, baseDelayMs: this.retryBaseDelayMs, maxDelayMs: RETRY_MAX_DELAY_MS });
       await this.sleepImpl(delay);
       attempt++;
     }
@@ -263,10 +281,9 @@ export class LLMRouter {
     const identity = (m: string) => m;
     const preferred = ADAPTERS[providerForModel(model)];
     if (preferred && this.env[preferred.envKey]) return { ...preferred, wireModel: identity };
-    for (const provider of implementedProviders()) {
-      const entry = ADAPTERS[provider]!;
-      if (this.env[entry.envKey]) return { ...entry, wireModel: identity };
-    }
+    // V154（v0.9 收口，β 挖出的 U10 第二成因）：模型所属 provider 没配 key 时**不再**隐式回退到任一
+    // 已配置的 provider——那会把 "qwen-max" 原样发给 OpenRouter 并"照常回答"，用户完全看不见。
+    // 现在 fail-closed：返回 null，call() 落 kind:"auth" 并列出已配置的 provider 作下一步。
     return null;
   }
 
@@ -278,7 +295,7 @@ export class LLMRouter {
   listModels(): Record<Provider, readonly string[]> {
     const result = {} as Record<Provider, readonly string[]>;
     for (const provider of SUPPORTED_PROVIDERS) {
-      result[provider] = [...PROVIDER_MODELS[provider]];
+      result[provider] = [...MODELS_BY_PROVIDER[provider]];
     }
     return result;
   }

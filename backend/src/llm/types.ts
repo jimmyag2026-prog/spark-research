@@ -42,6 +42,17 @@ export interface LlmError {
   message: string;
   /** 只有幂等且可能自愈的失败才是 true（限流 / 超时 / 5xx）。 */
   retryable: boolean;
+  // α-2（U1）：跨 provider 规范化字段，来自 `provider_error.ts` 的
+  // `normalizeProviderError()`。可选——不是每条失败都过了规范化（本地网络失败、
+  // 超时等在到达这一层之前就已经分类完，没有原始 HTTP 错误体可提取）。
+  /** 上游 HTTP 状态码；流式错误帧（无状态码）时为 undefined。 */
+  statusCode?: number;
+  /** provider 自己的错误码（字符串化；OpenRouter 的 `error.code` 数字也转成字符串）。 */
+  code?: string;
+  /** provider 自己的错误类型（如 Anthropic 的 `error.type`、OpenRouter metadata 的 `error_type`）。 */
+  type?: string;
+  /** `Retry-After` / `retry-after-ms` 头解析出的建议重试延迟（毫秒）。V137 的退避有它时按它走。 */
+  retryAfterMs?: number;
 }
 
 interface LlmResponseBase {
@@ -101,7 +112,21 @@ export interface CallOptions {
   maxTokens?: number;
   /** BACKLOG V12 的根治：不再靠「解析失败重试一次」治标。 */
   responseFormat?: "text" | "json_object";
+  /**
+   * **总时长硬上限**（毫秒）。α-1 之后它不再是唯一的超时：静默时长由
+   * `idleTimeoutMs` 管，这一条只负责「无论多活跃都到点结束」。
+   * 不传时由看门狗取 `idleTimeoutMs × 3`（见 `llm/watchdog.ts` 的 `resolveCallTimeouts`）。
+   * provider 适配器内部仍把它当作自己那层 AbortController 的超时，语义不变。
+   */
   timeoutMs?: number;
+  /**
+   * α-1（U4）：**静默超时**——只计「等待模型事件」的时间，真实内容增量到达即重置为满额，
+   * 元数据帧（usage / role / 空 delta）不续期。默认取配置的 `llmTimeoutMs`
+   * （**语义变了**：同一个数从「总时长」变成「静默时长」）。
+   * 只对流式调用生效（`onDelta` + `capabilities.streaming`）——非流式没有中途事件，
+   * 对它开静默看门狗等于换名字重新实现总超时，会杀掉正常的慢响应。
+   */
+  idleTimeoutMs?: number;
   /** 仅对 `retryable` 的失败生效。 */
   maxRetries?: number;
   signal?: AbortSignal;
@@ -109,9 +134,58 @@ export interface CallOptions {
   onDelta?: (chunk: string) => void;
 }
 
+// ── v0.9 lane γ · AD-18 ④：可注册的脱敏集合 ────────────────────────────────
+//
+// 形状匹配（下面那两条正则）只认得出「长得像凭据」的东西：`sk-` 开头的、`Bearer xxx`、
+// `api_key: xxx`。可是很多源的 key 就是一串普通的十六进制或 base64——它**不长得像**
+// 凭据，形状匹配一个字都挡不住。凭据一旦能经 HTTP 写进来（方案「乙」），这个缺口就从
+// 「理论上」变成「用户刚填的那个值随时可能出现在下一条上游错误消息里」。
+//
+// 所以写入路径（HTTP 的 PUT /api/settings/credentials/*、CLI 的 auth --connector、
+// 进程启动时已存在的凭据）统统把值 `registerSecret()` 一次，此后任何经 redactSecrets
+// 的输出都按**字面量**把它打掉，不依赖它长什么样。
+//
+// 只在进程内存里，永不落盘、永不序列化——`process.env` 同理不碰（AD-18 ③）。
+const REGISTERED_SECRETS = new Set<string>();
+
+// 太短的值当不成判据：注册一个 3 字符的「凭据」会把正常文本打成筛子，
+// 反而让错误消息不可读。低于这个长度直接忽略（连同空串与纯空白）。
+const MIN_REGISTERED_SECRET_LENGTH = 6;
+
+/** 把一个凭据值登记进脱敏集合。非字符串 / 过短的值静默忽略。 */
+export function registerSecret(value: unknown): void {
+  if (typeof value !== "string") return;
+  const trimmed = value.trim();
+  if (trimmed.length < MIN_REGISTERED_SECRET_LENGTH) return;
+  REGISTERED_SECRETS.add(trimmed);
+}
+
+/** 登记一个 map 里的所有值（`CredentialStore.set()` 的入参形状）。 */
+export function registerSecrets(values: Record<string, unknown>): void {
+  for (const value of Object.values(values)) registerSecret(value);
+}
+
+/** 已登记的条数。**只回条数，不回值**——这个函数本身也不许成为泄漏口。 */
+export function registeredSecretCount(): number {
+  return REGISTERED_SECRETS.size;
+}
+
+/** 只给测试用：清空登记表，免得用例之间互相污染。 */
+export function clearRegisteredSecrets(): void {
+  REGISTERED_SECRETS.clear();
+}
+
 /** 错误消息里绝不能出现凭据。构造 LlmError 时统一走这里做一次兜底。 */
 export function redactSecrets(text: string): string {
-  return text
+  let out = text;
+  // 先按字面量打掉已登记的值。长的先替换：短值可能是长值的子串，反过来会在
+  // 已经替换出的 "[redacted]" 里留下半截原文。
+  if (REGISTERED_SECRETS.size > 0) {
+    for (const secret of [...REGISTERED_SECRETS].sort((a, b) => b.length - a.length)) {
+      if (out.includes(secret)) out = out.split(secret).join("[redacted]");
+    }
+  }
+  return out
     .replace(/\b(sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._-]{8,})/g, "[redacted]")
     .replace(/("?(?:api[_-]?key|authorization|token)"?\s*[:=]\s*)("?)[^"'\s,}]{6,}\2/gi, "$1[redacted]");
 }
@@ -142,7 +216,19 @@ export function llmText(
 
 /** 构造一个失败响应。**保证 AD-13 的不变式**（content 恒空，错误只在 error）。 */
 export function llmFailure(
-  args: { provider: string; model: string; kind: LlmErrorKind; message: string; retryable?: boolean },
+  args: {
+    provider: string;
+    model: string;
+    kind: LlmErrorKind;
+    message: string;
+    retryable?: boolean;
+    // α-2：规范化字段（`llm/provider_error.ts` 填）。不传就不出现在 error 上——
+    // 本地网络失败 / 预算闸拒绝这类失败根本没有上游 HTTP 错误体可提取。
+    statusCode?: number;
+    code?: string;
+    type?: string;
+    retryAfterMs?: number;
+  },
 ): LlmResponse {
   return {
     ok: false,
@@ -151,7 +237,15 @@ export function llmFailure(
     content: "",
     toolCalls: [],
     usage: { inputTokens: 0, outputTokens: 0, costUsd: null, usageUnavailable: true },
-    error: { kind: args.kind, message: args.message, retryable: args.retryable ?? false },
+    error: {
+      kind: args.kind,
+      message: args.message,
+      retryable: args.retryable ?? false,
+      ...(args.statusCode !== undefined ? { statusCode: args.statusCode } : {}),
+      ...(args.code !== undefined ? { code: args.code } : {}),
+      ...(args.type !== undefined ? { type: args.type } : {}),
+      ...(args.retryAfterMs !== undefined ? { retryAfterMs: args.retryAfterMs } : {}),
+    },
   };
 }
 

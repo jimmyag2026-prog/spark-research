@@ -110,6 +110,9 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
+  // v0.9 lane γ 曾在此登记 settings/index.ts 与 cli/auth_connector.ts 两条「等接线」——
+  // 收口已接（app.ts 挂 /api/settings；index.ts `auth --connector`），按对称检查删除。
+
   // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
   // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，
   // tsc 靠 tsconfig 的 include 自动收进程序，不靠任何人 import 它。

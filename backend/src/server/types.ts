@@ -95,3 +95,25 @@ export interface TaskResponse {
 }
 
 export type { EdgeType, EvidenceLabel, RecordType, TaskSnapshot };
+
+// ── v0.9 lane γ · 设置面（U6）的响应类型 ───────────────────────────────────
+//
+// 真源在 `routes/settings/types.ts`（一面板一文件的那个新目录里），这里**只是转出去**，
+// 不复制一份定义——两份类型定义迟早对不上，那正是 V34/V37 的病根。
+//
+// 为什么非要从这个文件转一道：`scripts/gen-contract-schemas.ts` 的 `SCHEMA_SOURCES`
+// 只扫 `backend/src/server/types.ts` 与 `backend/src/data/manifest.ts` 两个入口。
+// 不转出来，`contract --json` 的 `http.schemas` 里就没有设置面的响应形状——
+// 路由列得出来、形状却查不到，SDK 与外部调用方只能靠猜。
+export type {
+  CredentialDeleteResponse,
+  SettingsErrorResponse,
+  SettingsItem,
+  SettingsItemKind,
+  SettingsItemSource,
+  SettingsMeta,
+  SettingsPanelId,
+  SettingsPanelResponse,
+  SettingsTaskResponse,
+  SettingsWriteResponse,
+} from "./routes/settings/types";

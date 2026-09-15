@@ -5,17 +5,20 @@
     "moduleResolution": "bundler",
     "lib": [
       "ESNext",
-      "DOM"
+      "DOM",
+      "DOM.AsyncIterable"
     ],
     "types": [
-      "node"
+      "bun"
     ],
     "strict": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true
   },
   "include": [
-    "**/*.ts"
+    "**/*.ts",
+    "../../backend/src/assets/assets.d.ts"
   ]
 }

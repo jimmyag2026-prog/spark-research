@@ -4,9 +4,11 @@ import { configuredRawLlm, type ConfigOptions } from "../config";
 import { USER_OWNED_LICENSE } from "../provenance/policy";
 import { redactLlmOptions, type RawSink } from "../raw";
 import { BudgetLedger, estimateCallCostUsd } from "../llm/budget";
-import { DEFAULT_MODEL, providerForModel } from "../llm/router";
+import { DEFAULT_MODEL } from "../llm/router";
+import { resolveModelName } from "../llm/providers/registry";
 import { failure } from "../llm/providers/types";
-import type { CallOptions, ChatMessage, LlmResponse } from "../llm/types";
+import { redactSecrets } from "../llm/types";
+import type { CallOptions, ChatMessage, LlmErrorKind, LlmResponse, ProviderCapabilities } from "../llm/types";
 
 // G-3（v0.6）：轮级用量台账 + 预算闸。
 //
@@ -43,6 +45,24 @@ export interface UsageEntry {
    * 混进同一个 unknownCostCalls 桶里（那会让「已知花费下界」比实际更保守）。
    */
   zeroCostReason?: string;
+  /**
+   * α-4（USAGE_LOG U1）：这次失败属于哪一类。`LlmErrorKind` 这个类型一直存在
+   * （auth / rate_limit / timeout / parse / upstream / unsupported / budget），
+   * 但失败时从来没落进台账——U1 现场的那一行 `ok:false` 除了「失败了」之外什么都没留下，
+   * 紧接着的第二次调用又成功了，于是事后**完全无法判断这次失败该怪谁**。只在 ok:false 时写入。
+   */
+  errorKind?: LlmErrorKind;
+  /**
+   * α-4：错误摘要，**≤ 200 字且已脱敏**。上游错误体可能回显请求内容（含鉴权头），
+   * 台账是明文落盘的长期文件，所以这里的脱敏比 `LlmError.message` 那层更狠（见 `redactErrorMessage`）。
+   */
+  errorMessage?: string;
+  /**
+   * V77：**上游根本没返 usage 帧**（不是「返了但查不到单价」）。两者此前都掉进
+   * `unknownCostCalls` 一个桶里，于是「补一份单价表就能解决」和「这个 provider 压根不报用量」
+   * 这两件完全不同的事看起来一模一样。只在 true 时写入。
+   */
+  noUsage?: boolean;
 }
 
 export interface UsageTotals {
@@ -54,6 +74,14 @@ export interface UsageTotals {
   unknownCostCalls: number;
   /** V94：其中因「模型无单价」而成本未知的次数（unknownCostCalls 的子集）。 */
   unpricedCalls: number;
+  /**
+   * V77：其中因「上游没返 usage 帧」而成本未知的次数（unknownCostCalls 的子集，与
+   * `unpricedCalls` **互不蕴含**：能拿到 usage 但查不到单价 → unpriced；
+   * 拿不到 usage → noUsage，补单价表也救不了）。
+   */
+  noUsageCalls: number;
+  /** α-4（U1）：失败按 `LlmErrorKind` 的分布。没有失败时是空对象，不是 undefined。 */
+  byErrorKind: Record<string, number>;
   byCommand: Record<string, { calls: number; knownCostUsd: number; unknownCostCalls: number }>;
   byModel: Record<string, { calls: number; knownCostUsd: number; unknownCostCalls: number }>;
 }
@@ -141,12 +169,21 @@ export class UsageStore {
       knownCostUsd: 0,
       unknownCostCalls: 0,
       unpricedCalls: 0,
+      noUsageCalls: 0,
+      byErrorKind: {},
       byCommand: {},
       byModel: {},
     };
     for (const e of entries) {
       totals.calls += 1;
       if (e.unpriced === true) totals.unpricedCalls += 1;
+      if (e.noUsage === true) totals.noUsageCalls += 1;
+      // 只统计真正落了 kind 的失败行。历史文件里 ok:false 但没有 errorKind 的行
+      // （α-4 之前写的，U1 现场那一行就是）**不计入**——凭空补一个 "unknown" 桶
+      // 会把「我们当时没记」伪装成「我们记了、就是不知道」。
+      if (e.ok === false && typeof e.errorKind === "string") {
+        totals.byErrorKind[e.errorKind] = (totals.byErrorKind[e.errorKind] ?? 0) + 1;
+      }
       totals.inputTokens += e.inputTokens;
       totals.outputTokens += e.outputTokens;
       const cmd = (totals.byCommand[e.command] ??= { calls: 0, knownCostUsd: 0, unknownCostCalls: 0 });
@@ -167,6 +204,30 @@ export class UsageStore {
   }
 }
 
+/** α-4：错误摘要进台账前的上限（字符）。够读懂上游说了什么，又不至于把一页 HTML 落盘。 */
+export const MAX_LEDGER_ERROR_MESSAGE_CHARS = 200;
+
+/**
+ * α-4（U1）：错误摘要脱敏。**比 `llm/types.ts` 的 `redactSecrets` 更狠**，因为落点不同——
+ * `LlmError.message` 是进程内的一次性对象，这里是**明文长期落盘**的 usage.jsonl。
+ *
+ * 三层：
+ *   ① `redactSecrets`：`sk-…` / `Bearer …` / `api_key: …` 这些有结构的形状；
+ *   ② 任何 ≥16 位的连续字母数字串——上游错误体常常原样回显请求（含鉴权头），
+ *      而一个没有 `sk-` 前缀的 key（Anthropic/Qwen/自建网关都有）① 抓不到；
+ *   ③ 截断到 200 字。
+ *
+ * **已知代价，如实记**：② 会把长 request-id 一起抹掉（它们也是 ≥16 位字母数字串）。
+ * 诊断主力是 `errorKind`，摘要是补充；宁可少一个 request-id，不可多一个 key 落盘。
+ */
+export function redactErrorMessage(raw: string): string {
+  return redactSecrets(raw)
+    .replace(/[A-Za-z0-9]{16,}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_LEDGER_ERROR_MESSAGE_CHARS);
+}
+
 // --budget-usd 的统一校验（literature 与 ideation CLI 共用，不留两份副本）。
 // 失败时给下一步（V36），不让用户猜格式。
 export function parseBudgetUsd(
@@ -183,7 +244,15 @@ export function parseBudgetUsd(
 }
 
 export interface UsageTrackingOptions {
-  llm: { call(messages: ChatMessage[], modelOrOptions?: string | CallOptions): Promise<LlmResponse> };
+  llm: {
+    call(messages: ChatMessage[], modelOrOptions?: string | CallOptions): Promise<LlmResponse>;
+    /**
+     * V77：可选。生产上这里递进来的就是 `LLMRouter`，它有这个方法；测试里的假 LLM
+     * 大多没有——所以是可选的，**拿不到就不猜**（`noUsage` 仍按 usageUnavailable 记，
+     * 只是少了「上游声称会报却没报」那条异常提示）。
+     */
+    capabilitiesFor?(model: string): ProviderCapabilities | null;
+  };
   store: UsageStore;
   command: string;
   /** 项目累计已知成本（含历史 + 本进程）达到即拒绝后续调用。不给 = 只记账不设闸。 */
@@ -267,7 +336,8 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
     async call(messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> {
       const callOptions: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
       const requestedModel = callOptions.model ?? DEFAULT_MODEL;
-      const provider = providerForModel(requestedModel);
+      const known = resolveModelName(requestedModel); // β（v0.9）：不抛版本——记账层不能被未登记名打断
+      const provider = known ? (known.kind === "local" ? "local" : known.provider) : "(unknown)";
       // V93：发前估价。查不到单价 → 预留 0（闸仍按已结算+在飞判，未定价模型的拒绝由 G-4 负责）。
       const estimated = estimateUsd(messages, callOptions, { provider, model: requestedModel });
       const unpriced = estimated === null;
@@ -340,6 +410,27 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         costUsd = 0;
         zeroCostReason = `error.kind=${res.error.kind}：上游在计费前拒绝了请求，可证明 $0`;
       }
+      // V77：「上游没返 usage 帧」与「返了 usage 但查不到单价」此前都掉进
+      // unknownCostCalls 一个桶。后者补一份单价表就解决，前者补什么都没用——
+      // 合在一起统计等于把两件事的下一步混成一件。
+      const caps = llm.capabilitiesFor?.(res.model) ?? null;
+      const noUsage = costUsd === null && res.usage.usageUnavailable === true;
+      if (caps?.usageReported && res.usage.usageUnavailable === true) {
+        // provider 的能力位声称它会报 usage，这次却没报——不是配置问题，是上游行为异常
+        // （或我们的解析漏了一种帧形状）。静默降级必须留痕，否则下次还是查不出来。
+        console.error(
+          `[usage] provider=${res.provider} model=${res.model} 声明 usageReported=true 但本次调用没有返回 usage 帧（command=${command}）`,
+        );
+      }
+      // α-4（U1）：失败落 kind + 脱敏摘要。server 此前对 ok:false 完全静默——
+      // U1 现场的 logs/server.log 整个文件只有四行启动日志。
+      const errorKind = res.ok ? undefined : res.error.kind;
+      const errorMessage = res.ok ? undefined : redactErrorMessage(res.error.message);
+      if (!res.ok) {
+        // 只打 kind，**不打 message**（任务书要求）：message 即便脱敏过也可能带上游回显的
+        // 请求片段，而日志的受众比台账更广（会被 tail、被贴进工单）。要看摘要去 usage.jsonl。
+        console.error(`[llm] fail provider=${res.provider} model=${res.model} kind=${res.error.kind} command=${command}`);
+      }
       store.append({
         ts: new Date().toISOString(),
         command,
@@ -350,7 +441,10 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
         outputTokens: res.usage.usageUnavailable ? 0 : res.usage.outputTokens,
         costUsd,
         ...(unpriced ? { unpriced: true } : {}),
+        ...(noUsage ? { noUsage: true } : {}),
         ...(zeroCostReason ? { zeroCostReason } : {}),
+        ...(errorKind ? { errorKind } : {}),
+        ...(errorMessage ? { errorMessage } : {}),
       });
       if (rawOn) {
         // 失败也记：AD-13 的失败响应没有内容，但「问了什么、为什么失败」本身就是过程数据。

@@ -413,6 +413,29 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     effect:
       "默认 off：只存 sha256 与字节数（ToS 风险，且这类数据永不进共享集合——AD-16）。开了也不会进 --for-sharing 导出，只影响本地可追溯性。",
   },
+  // v0.9 lane γ（U6）：默认检索源终于有了旋钮。
+  //
+  // 此前「查哪些源」只有 `--sources` 一条路：不给这个旗标就是
+  // `literature/models.ts` 的 `DEFAULT_SEARCH_SOURCES` 常量，用户改不了——
+  // 网页端想勾掉一个总在超时的源，只能每次检索都手打一遍 `--sources`。
+  //
+  // **默认值刻意在这里重抄一份**，与本文件顶部「config 层不反向依赖各模块常量」
+  // 同一条纪律（config 不能 import literature/models.ts）。两份的一致性由
+  // `tests/unit/config_search_sources.test.ts` 的第一条断言钉住：
+  // 常量改了这里不改，测试会红。
+  {
+    key: "searchSources",
+    type: "string",
+    envVar: "SPARK_RESEARCH_SEARCH_SOURCES",
+    defaultValue: "openalex,crossref,europepmc,semanticscholar,arxiv,pubmed,biorxiv",
+    summary: "不给 `--sources` 时默认查哪些文献源（逗号分隔的 connector id）",
+    effect:
+      "影响 `lit search` / `lit add` / novelty 候选检索里**没有显式指定源**的那些调用。" +
+      "勾掉一个源之后它真的不再被查（不是查了再丢结果）——检索会更快，但覆盖面变窄，" +
+      "novelty 的「没查到相似工作」结论强度也跟着降。写入时校验每个 id 都在 connector " +
+      "注册表的 literature 域里，未知 id 直接拒绝（422）而不是运行时静默跳过。" +
+      "留空 = 退回内置默认集。",
+  },
 ];
 
 export function settingSpec(key: string): SettingSpec | undefined {
@@ -682,6 +705,155 @@ export function configuredRawLlm(options: ConfigOptions = {}): boolean {
 
 export function configuredRawUpstreamInline(options: ConfigOptions = {}): boolean {
   return stringOr("rawUpstreamInline", "off", options) === "on";
+}
+
+/**
+ * v0.9 lane γ（U6）：默认检索源。
+ *
+ * 返回**字符串数组**而不是 `LiteratureSource[]`——config 层不许反向依赖 literature 模块
+ * （本文件顶部的收口纪律）。调用方（`literature/search.ts`）自己按 `LITERATURE_SOURCES`
+ * 过滤一遍：配置里混进未知 id 时**不静默把它当源去查**，也不整体作废，只丢掉不认识的那些。
+ * 全部不认识（或没配）时返回 `null`，让调用方落回自己的代码默认集。
+ */
+export function configuredSearchSources(options: ConfigOptions = {}): string[] | null {
+  const raw = stringOr("searchSources", "", options);
+  if (raw.trim() === "") return null;
+  const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  return ids.length > 0 ? ids : null;
+}
+
+// ── v0.9 lane γ（U6·A）：写入前校验 ─────────────────────────────────────────
+//
+// U6 修改方向 A 的第三点：「写入时就校验，不要等到运行时才炸」。
+// 这一层只管**config 自己知道的事**：键存不存在、类型对不对、enum 在不在 allowed 里、
+// 超时是不是正整数。需要别的模块才能判的（模型名有没有登记、源 id 在不在 connector
+// 注册表里）留给调用方在写之前自己加一道——config 层保持零依赖。
+
+/** 校验失败时抛这个：带 `nextStep`，让 HTTP 层直接把它铺进 `{ error, nextStep }`。 */
+export class SettingValidationError extends Error {
+  readonly nextStep: string;
+  readonly status: number;
+
+  constructor(message: string, nextStep: string, status = 422) {
+    super(message);
+    this.name = "SettingValidationError";
+    this.nextStep = nextStep;
+    this.status = status;
+  }
+}
+
+// `kernelTimeoutMs` 的 effect 里写明「传 0 或负数显式关闭超时」——它是唯一允许非正数的
+// 超时项。把这个例外写成数据而不是 if 链，免得下次加超时项时漏掉。
+const NON_POSITIVE_ALLOWED = new Set(["kernelTimeoutMs"]);
+
+/**
+ * 把一个用户输入的原始值校验并归一成可以写进 config.json 的形态。
+ *
+ * 抛 `SettingValidationError`（422），除了三类结构性拒绝用 403：
+ * 凭据类键（走凭据面板）、`dataDir`（只能用环境变量设）。
+ */
+export function validateSetting(key: string, raw: unknown): string | number {
+  const spec = settingSpec(key);
+  if (!spec) {
+    throw new SettingValidationError(
+      `未知配置项 '${key}'`,
+      `用 \`spark-research config list\` 或 GET /api/settings/general 看可用的键`,
+      404,
+    );
+  }
+  if (spec.secret) {
+    throw new SettingValidationError(
+      `'${key}' 是凭据，不在这条路径写`,
+      `改用 PUT /api/settings/credentials/${key}，或在终端执行 \`spark-research auth\``,
+      403,
+    );
+  }
+  if (key === "dataDir") {
+    throw new SettingValidationError(
+      "dataDir 不能写进 config.json（先有目录才有文件）",
+      "设环境变量 SPARK_RESEARCH_DATA_DIR 后重启 server",
+      403,
+    );
+  }
+  if (raw === null || raw === undefined) {
+    throw new SettingValidationError(`'${key}' 不能为空`, `给一个值；要恢复默认请用 DELETE 而不是写空值`);
+  }
+
+  if (spec.type === "number") {
+    const value = typeof raw === "number" ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(value)) {
+      throw new SettingValidationError(
+        `'${key}' 必须是数字，收到 '${String(raw)}'`,
+        `填一个毫秒数，例如 ${spec.defaultValue ?? 30000}`,
+      );
+    }
+    if (!Number.isInteger(value)) {
+      throw new SettingValidationError(
+        `'${key}' 必须是整数毫秒，收到 ${value}`,
+        `取整后再填，例如 ${Math.round(value)}`,
+      );
+    }
+    if (value <= 0 && !NON_POSITIVE_ALLOWED.has(key)) {
+      throw new SettingValidationError(
+        `'${key}' 必须是正整数，收到 ${value}`,
+        `填一个大于 0 的毫秒数；想放宽超时就调大，不要填 0`,
+      );
+    }
+    return value;
+  }
+
+  const text = String(raw).trim();
+  if (text === "") {
+    throw new SettingValidationError(`'${key}' 不能是空字符串`, `要恢复默认请用 DELETE，而不是写一个空值`);
+  }
+  if (spec.type === "enum") {
+    const allowed = spec.allowed ?? [];
+    if (!allowed.includes(text)) {
+      throw new SettingValidationError(
+        `'${key}' 只能是 ${allowed.join(" / ")}，收到 '${text}'`,
+        `改成 ${allowed.join(" 或 ")} 之一`,
+      );
+    }
+  }
+  if (key === "contactEmail" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(text)) {
+    throw new SettingValidationError(
+      `contactEmail 不像一个邮箱：'${text}'`,
+      "填一个能收到信的真实邮箱——数据源封禁时靠它通知你",
+    );
+  }
+  return text;
+}
+
+/** 写一个设置项：校验 → 落 config.json → 返回写后的解析结果。 */
+export function writeSetting(key: string, raw: unknown, options: ConfigOptions = {}): ResolvedSetting {
+  const value = validateSetting(key, raw);
+  const config = loadConfig(options);
+  config[key] = value;
+  saveConfig(config, options);
+  return resolveSetting(key, options);
+}
+
+/** 删一个设置项（恢复默认）：返回写后的解析结果。 */
+export function clearSetting(key: string, options: ConfigOptions = {}): ResolvedSetting {
+  const spec = settingSpec(key);
+  if (!spec) {
+    throw new SettingValidationError(
+      `未知配置项 '${key}'`,
+      `用 \`spark-research config list\` 看可用的键`,
+      404,
+    );
+  }
+  if (spec.secret) {
+    throw new SettingValidationError(
+      `'${key}' 是凭据，不在这条路径删`,
+      `改用 DELETE /api/settings/credentials/${key}`,
+      403,
+    );
+  }
+  const config = loadConfig(options);
+  delete config[key];
+  saveConfig(config, options);
+  return resolveSetting(key, options);
 }
 
 /**

@@ -42,10 +42,18 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const isJson = (res.headers.get("content-type") ?? "").includes("json");
   const body = isJson && text ? (JSON.parse(text) as unknown) : text;
   if (!res.ok) {
-    const message =
+    const base =
       isJson && body && typeof body === "object" && "error" in body
         ? String((body as { error: unknown }).error)
         : `HTTP ${res.status}`;
+    // 本项目的约定：失败消息都带可执行的下一步。`/api/settings/**` 的错误体是
+    // `{ error, nextStep }`（见 LANE_gamma 契约），`nextStep` 不拼进 message 的话，
+    // toast 里就只剩「403」这种死路——U6 点名批的正是「只说状态不说去哪做」。
+    const nextStep =
+      isJson && body && typeof body === "object" && "nextStep" in body
+        ? String((body as { nextStep: unknown }).nextStep ?? "").trim()
+        : "";
+    const message = nextStep ? `${base}\n下一步：${nextStep}` : base;
     throw new ApiError(res.status, message, isJson ? (body as { detail?: unknown }).detail : body);
   }
   return body as T;
@@ -56,8 +64,18 @@ function withProject(path: string, project?: string): string {
   return path + (path.includes("?") ? "&" : "?") + `project=${encodeURIComponent(project)}`;
 }
 
-const post = <T>(path: string, body: unknown = {}) =>
+export const post = <T>(path: string, body: unknown = {}) =>
   request<T>(path, { method: "POST", body: JSON.stringify(body) });
+
+// W9-ε：设置面要写配置，需要 PUT / DELETE 两个动词和一个裸 GET。它们和上面的 `post`
+// 是同一个 `request`（同一套错误解包 + `{ error }` 提取），所以设置面拿到的失败消息与
+// 工作台其余部分长得一模一样——不另起一套客户端。
+export const get = <T>(path: string) => request<T>(path);
+
+export const put = <T>(path: string, body: unknown = {}) =>
+  request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+
+export const del = <T>(path: string) => request<T>(path, { method: "DELETE" });
 
 // 长任务：提交拿句柄 → 订阅 SSE → 落定。
 // 订阅失败（连接被切）时退化成轮询，不让界面卡在「运行中」。
@@ -189,8 +207,14 @@ export const api = {
   health: () => request<{ status: string; version: string }>("/api/health"),
 
   projects: {
+    // U3：`all` 是这条路由今天就有的参数名（routes/projects.ts 里 `queryBool(c, "all")`
+    // 直接喂给 `list({ includeArchived })`）；γ 的契约把它对外改叫 `includeArchived`。
+    // 两个都发：今天走 `all`，γ 合进来之后走 `includeArchived`，中间不会有一段时间
+    // 下拉框里突然多出 20 多个验收产物。两个名字语义相同，同时出现不会打架。
     list: (all = false) =>
-      request<{ projects: ProjectMeta[]; current: string | null }>(`/api/projects${all ? "?all=1" : ""}`),
+      request<{ projects: ProjectMeta[]; current: string | null }>(
+        `/api/projects?all=${all ? 1 : 0}&includeArchived=${all ? 1 : 0}`,
+      ),
     current: () => request<{ project: ProjectSummary }>("/api/projects/current"),
     create: (body: { slug: string; name?: string; description?: string }) =>
       post<{ project: ProjectSummary }>("/api/projects", body),

@@ -102,12 +102,31 @@ interface WorkspaceValue {
 
   busy: Accessor<string | null>;
   setBusy: (label: string | null) => void;
+
+  // W9-ε（U6）：设置面是一个覆盖层，不是中栏的第 N 个视图——它要能从任何视图上打开、
+  // Esc 关掉之后回到原来在看的东西。所以它不进 `CenterView`，单独一个开关。
+  settingsOpen: Accessor<boolean>;
+  setSettingsOpen: (open: boolean) => void;
+
+  // U3 前端半边：项目下拉默认只列未归档的。20 多个 r4-*/r5-*/a5-* 验收产物混在里面时，
+  // 真实课题很难挑，而指针又是全局可变状态——挑错就默认写进测试项目。
+  showArchived: Accessor<boolean>;
+  setShowArchived: (show: boolean) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceValue>();
 
 export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element {
-  const [projects, projectsCtl] = createResource(() => api.projects.list(true));
+  // U3：归档项目只有在用户点开「显示已归档」之后才请求（`?includeArchived=1`）——默认
+  // 那次请求就不该把 20 多个验收产物带回来。
+  //
+  // source 包成对象而不是直接返回 boolean：createResource 把**假值 source** 当成
+  // 「还没准备好，别取」，`showArchived() === false` 会让这个资源永远不发请求。
+  const [showArchived, setShowArchived] = createSignal(false);
+  const [projects, projectsCtl] = createResource(
+    () => ({ all: showArchived() }),
+    (source) => api.projects.list(source.all),
+  );
   const [project, projectCtl] = createResource(async () => (await api.projects.current()).project);
   const slug = () => project()?.slug;
 
@@ -129,6 +148,7 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
     null,
   );
   const [busy, setBusy] = createSignal<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
 
   const [messages, setMessages] = createStore<StreamMessage[]>([]);
   const [toasts, setToasts] = createStore<Toast[]>([]);
@@ -221,6 +241,10 @@ export function WorkspaceProvider(props: { children: JSX.Element }): JSX.Element
     recordIdForKey,
     busy,
     setBusy,
+    settingsOpen,
+    setSettingsOpen,
+    showArchived,
+    setShowArchived,
   };
 
   return <WorkspaceContext.Provider value={value}>{props.children}</WorkspaceContext.Provider>;

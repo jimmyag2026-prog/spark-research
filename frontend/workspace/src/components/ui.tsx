@@ -106,6 +106,11 @@ export function Modal(props: {
   onClose: () => void;
   children: JSX.Element;
   footer?: JSX.Element;
+  // W9-ε：设置面是个双栏壳（左导航 + 右面板），560px 塞不下。`wide` 只放宽尺寸，
+  // 焦点陷阱 / Esc / 点背景关闭这些照旧——设置面没有理由自己再实现一遍弹窗语义。
+  wide?: boolean;
+  /** 设置面的 body 自己管布局（左右分栏），不要外层那个 column + gap。 */
+  bodyClass?: string;
 }): JSX.Element {
   let panel: HTMLDivElement | undefined;
 
@@ -146,6 +151,7 @@ export function Modal(props: {
     >
       <div
         class="modal"
+        classList={{ "modal-wide": Boolean(props.wide) }}
         role="dialog"
         aria-modal="true"
         aria-label={props.title}
@@ -159,7 +165,7 @@ export function Modal(props: {
             ✕
           </button>
         </div>
-        <div class="modal-body">{props.children}</div>
+        <div class={props.bodyClass ?? "modal-body"}>{props.children}</div>
         <Show when={props.footer}>
           <div class="modal-foot">{props.footer}</div>
         </Show>

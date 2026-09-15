@@ -56,6 +56,14 @@ class ChatResponse(_ChatResponseRequired, total=False):
     reviewResult: Any
 
 
+class CredentialDeleteResponse(TypedDict):
+    panel: Literal["credentials"]
+    removed: bool
+    id: str
+    note: str
+    item: SettingsItem
+
+
 class DependencyMapping(TypedDict):
     file: str
     versionId: str
@@ -186,6 +194,65 @@ class ResearchRecord(TypedDict):
     provenanceClass: Literal["upstream", "derived", "user_authored", "model_generated"]
     license: str | None
     quality: list[str]
+
+
+class SettingsErrorResponse(TypedDict):
+    error: str
+    nextStep: str
+
+
+class _SettingsItemRequired(TypedDict):
+    key: str
+    label: str
+    kind: Literal["string", "number", "enum", "bool", "secret", "info", "action"]
+    value: str | float | Literal[False] | Literal[True] | None
+    editable: bool
+    summary: str
+
+class SettingsItem(_SettingsItemRequired, total=False):
+    source: Literal["env", "config", "default", "unset"]
+    configured: bool
+    allowed: list[str] | None
+    effect: str
+    nextStep: str | None
+    fields: list[str]
+    fieldsSet: list[str]
+    extra: dict[str, Any]
+
+
+SettingsItemKind = Literal["string", "number", "enum", "bool", "secret", "info", "action"]
+
+
+SettingsItemSource = Literal["env", "config", "default", "unset"]
+
+
+class _SettingsMetaRequired(TypedDict):
+    level: Literal["full", "reduced", "readonly"]
+    summary: str
+    notes: list[str]
+
+class SettingsMeta(_SettingsMetaRequired, total=False):
+    extra: dict[str, Any]
+
+
+SettingsPanelId = Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
+
+
+class SettingsPanelResponse(TypedDict):
+    panel: Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
+    items: list[SettingsItem]
+    meta: SettingsMeta
+
+
+class SettingsTaskResponse(TypedDict):
+    panel: Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
+    task: dict[str, Any]
+
+
+class SettingsWriteResponse(TypedDict):
+    panel: Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
+    item: SettingsItem
+    meta: SettingsMeta
 
 
 class TaskEvent(TypedDict):

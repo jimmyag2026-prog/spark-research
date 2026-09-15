@@ -1,0 +1,14 @@
+Spark Research
+Copyright 2026 Spark Research contributors
+
+Licensed under the Apache License, Version 2.0.
+
+This product includes structural patterns derived from OpenScience
+(https://github.com/synthetic-sciences/openscience), Copyright 2026
+Synthetic Sciences, licensed under the Apache License, Version 2.0.
+
+Specifically: the settings panel registry shape and the settings shell
+layout in frontend/workspace/src/components/settings/ were modelled on
+OpenScience's frontend/workspace/src/components/settings/registry.ts and
+frontend/workspace/src/components/dialog-settings.tsx. No OpenScience
+source code is included; the implementations are original.

@@ -54,6 +54,9 @@ const READERS: Record<string, ReaderEvidence> = {
   llmPricingOverridesJson: { text: '"llmPricingOverridesJson"' },
   rawLlm: { helper: "configuredRawLlm" },
   rawUpstreamInline: { helper: "configuredRawUpstreamInline" },
+  // v0.9 lane γ（U6）：读者是 literature/search.ts 的 configuredDefaultSources()，
+  // 它在 `search()` 里替掉了原先写死的 DEFAULT_SEARCH_SOURCES。
+  searchSources: { helper: "configuredSearchSources" },
 };
 
 // 动态 key 族：`subAgentModel_<type>` 由 subAgentModelSettingKey() 生成，

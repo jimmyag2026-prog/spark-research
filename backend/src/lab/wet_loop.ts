@@ -123,6 +123,7 @@ function emptyWetMeta(input: {
     consumedApproval: null,
     runId: null,
     runDir: null,
+    executionNote: null,
     attempts: 0,
     iteration: input.iteration,
     parentExperimentId: input.parentExperimentId,
@@ -597,6 +598,9 @@ export class WetLabLoop {
         summary: result.summary,
         runLogEntryCount: result.entries.length,
         artifactRecordIds,
+        // V144：execute() 调用方给的 note 落进 meta；analyze() 没有自己的 note 时
+        // 回落读取它，这样这条 note 才会真的出现在 observation 正文里。
+        executionNote: options.note ?? null,
         lastError: null,
       }),
     );
@@ -667,6 +671,9 @@ export class WetLabLoop {
     this.assertTransition(view.state, "analyze");
     const entries = this.readRunLog(view);
     const stepTrace = this.stepTrace(view, entries);
+    // V144：analyze() 没被显式给 note 时，回落读 execute() 存下的 executionNote——
+    // 否则 execute(ref, { note }) 的 note 就是声明了从不读的死字段。
+    const note = options.note ?? view.executionNote ?? null;
     const readings = entries
       .filter((e) => e.type === "read_result")
       .map((e) => ({ stepId: e.stepId ?? null, reading: e.reading ?? null }));
@@ -695,7 +702,7 @@ export class WetLabLoop {
         summary: view.summary ?? {},
         stepTrace,
         readings,
-        note: options.note ?? null,
+        note,
       }),
       evidence: "observed",
       origin: {
@@ -713,7 +720,7 @@ export class WetLabLoop {
         summary: view.summary ?? {},
         stepTrace,
         readings,
-        note: options.note ?? null,
+        note,
       },
     });
     this.records.link(observation.id, view.id, "derives_from");
@@ -937,6 +944,7 @@ export class WetLabLoop {
       consumedApproval: meta.consumedApproval ?? null,
       runId: meta.runId ?? null,
       runDir: meta.runDir ?? null,
+      executionNote: meta.executionNote ?? null,
       attempts: Number(meta.attempts ?? 0),
       iteration: Number(meta.iteration ?? 1),
       parentExperimentId: meta.parentExperimentId ?? null,
