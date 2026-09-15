@@ -38,6 +38,7 @@
 | 11:32:11 | spark | 连接器 arxiv **429** | 已登记 U27 / V165（arxiv 持续限流），本次复现 |
 | 11:32:13 | spark | 连接器 europepmc 200 但空壳 | 模型的查询语法（`SRC:MED OR SRC:PPR` + `sort`）让 EPMC 返回 `{"version":"6.9"}`，无 hitCount → U40 |
 | 11:31–11:32 | spark | 2 次 LLM 调用（plan 3504 tok / summarize 883 tok），$0.0009 | 无失败、无闸拒 |
+| 09-15 20:30 | spark0915 | 新建项目并切为当前项目 | 用户本轮测试开始；server 已切到含 U38/U39/U40 修复的 `fix/ux-U38-U40` |
 | 09-16 | — | **U38 U39 U40 已修并带门禁**（`tests/unit/ux_window.test.ts` 10 条，四条阴性对照实跑变红） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
 
 ## 五、总结（用完再填）
