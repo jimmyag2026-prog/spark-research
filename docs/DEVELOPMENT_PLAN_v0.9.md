@@ -168,7 +168,7 @@
 
 ## 八、v0.9.0 DONE 定义（八条全满足）
 
-> **2026-09-15 收口核对**：第 2 条走「或」分支——P90 未下降，机制解释与实测见 `docs/devlog/R6-baseline.md` §机制解释（109.6s / 4 次调用 / 8590 输出 token，78% 是输出生成）与 `A8-baseline.md`（A8 侧复测）。第 3 条的「断网」为不等价替代探针（A8 探针 B：黑洞代理），台账 `errorKind:upstream` 可归因。第 11 条在 tag 推送后核。
+> **2026-09-15 收口核对（v0.9.0 发布后补勾第 11 条，十二条全勾）**：第 2 条走「或」分支——P90 未下降，机制解释与实测见 `docs/devlog/R6-baseline.md` §机制解释（109.6s / 4 次调用 / 8590 输出 token，78% 是输出生成）与 `A8-baseline.md`（A8 侧复测）。第 3 条的「断网」为不等价替代探针（A8 探针 B：黑洞代理），台账 `errorKind:upstream` 可归因。第 11 条在 tag 推送后核。
 
 - [x] 闸门 I 门禁绿 + 三条阴性对照红；盘点名单全部入 BACKLOG 且每条有去向；AD-17 入库
 - [x]（走「或」分支）一轮 chat 墙钟 P90 相对 R6 基线下降，**或**给出机制解释并附实测数字（R6 与 A8 各测一次，网络前提达标）
@@ -180,7 +180,7 @@
 - [x] T5「配置与运维」跑通，其发现全部登记（含不成立的复核记录）
 - [x] 凭据经设置面板写入后：`lit sources` / `capabilities` 显示已配置；**该值不出现在任何 HTTP 响应体、server 日志、raw、record、usage 里**（A8 用 Playwright 全量响应断言 + grep 数据目录）；伪造非 loopback 来源 → 403 且不受 `originAllowlist` 影响
 - [x] 设置面板 8 个「一样」面板每个字段都对应后端真实值（`narrative_parity` 绿）；不存在 `sandbox` 面板
-- [ ]（tag 推后核，见 CHANGELOG 发布段）**GitHub Actions 对 v0.9.0 tag 的 CI 结论 = success**（V142 教训；本地绿不算）
+- [x]（2026-09-15 核：ci.yml main@6619730 = v0.9.0 tag → success；release.yml v0.9.0 → success，assets darwin-arm64 / linux-x64 / contract.json）**GitHub Actions 对 v0.9.0 tag 的 CI 结论 = success**（V142 教训；本地绿不算）
 - [x] 集成套件在 CI 里**要么真跑要么显式报「本轮未验证」**，不再出现 `0 pass / 8 skip / 0 fail` 静默形态
 
 ---
