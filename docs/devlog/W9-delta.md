@@ -341,8 +341,9 @@ c8eda4d docs: translate planning/backlog to English; add v0.8.1 remediation plan
 | # | 条目 | 改法 | 结果 |
 |---|---|---|---|
 | A | δ-1 | 把 `describe.skipIf(!RECORDING)` 加回三个集成文件（模拟有人重新关掉整套） | `bun run test:integration` **退出码 1**（输出 `0 pass / 8 skip / 0 fail` + 绊线报错）；还原后退出码 0 ✅ |
+| J · K · K′ · K″ | δ-1（门禁收紧后） | 见文末「追加」一节：收口报的「部分跳过」复现，以及把判据②/③ 逐个拆掉 | J **退出码 1** 并逐条列出被跳过的用例名；K 没红（被③兜住）；K′ 红 1 条；K″（②③ 一起拆）红 2 条且真命令退出码回到 0，精确复现漏洞 |
 | B | δ-1 | `decideExitCode` 里「全 skip → return 1」改成 `return 0` | `integration_skip_gate` **红**：`① 全部跳过 → 退出 1` 失败（6 pass / 1 fail） |
-| C | δ-1 | 「零收集 → return 1」改成 `return 0` | `integration_skip_gate` **红**：`② 一个用例都没收集到 → 退出 1` 失败（6 pass / 1 fail） |
+| C | δ-1 | 「零收集 → return 1」改成 `return 0` | `integration_skip_gate` **红**（当时该用例编号为 ②，门禁收紧后改称 ③）：`一个用例都没收集到 → 退出 1` 失败（6 pass / 1 fail） |
 | D | δ-2 | 版本比对 `version === currentVersion` 改成恒 `true` | `doctor_running_instance` **红** 2 条：`版本不一致 → version_mismatch`、`拿不到进程信息时降级`（8 pass / 2 fail） |
 | E | δ-2 | cwd 存在性检查改成恒 `true`（拆掉孤儿判定） | `doctor_running_instance` **红**：`U2 现场：工作目录已不存在 → orphan_cwd`（9 pass / 1 fail） |
 | F | V62 | 从 e2e `include` 里去掉 `assets.d.ts` | `tsc -p tests/e2e` **42 个错误** |
