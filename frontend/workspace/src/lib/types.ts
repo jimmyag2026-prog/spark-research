@@ -425,3 +425,84 @@ export interface ComputeJobView {
   plan: ComputePlanView;
   next: string;
 }
+
+// ── v0.10 lane β · 流式事件（`POST /api/session/stream` 的 SSE 事件体）─────────
+//
+// **形状真源**：`backend/src/agents/progress.ts`（lane β，分支 feat/W10-beta），
+// 经 `backend/src/server/types.ts` 转出去进契约。前后端不共享编译单元，下面是那份
+// 契约在浏览器侧的复述——字段名逐个对齐过，没有自己发明的键（同 settings_api.ts 的口径）。
+//
+// 协议**只增不改**：`start / progress / delta / result / done / error` 六种保留，
+// 新增 `partial`；`progress` 补 `ts/elapsedMs/etaMs?`；`delta` 补 `target/revision`。
+// 所以 `DeltaEventData` 的 target/revision 声明成**可选**：收口之前后端发的老 delta
+// 只有 `chunk`，前端必须照旧能渲染（`stream_model.ts` 里退回 summary / revision 1）。
+
+export type ProgressStage = "plan" | "execute" | "summarize" | "review";
+export type ProgressDecision = "ready" | "continue" | "repair" | "await_user";
+
+export interface StreamProgressEvent {
+  stage: ProgressStage;
+  complete: number;
+  total: number;
+  decision?: ProgressDecision;
+  message: string;
+  ts: number;
+  elapsedMs: number;
+  /** β 拿得准才给：只在 execute 段且已有完成样本时出现。 */
+  etaMs?: number;
+}
+
+export type PartialKind = "papers" | "search_source" | "card";
+
+export interface PartialPaper {
+  id: string;
+  title: string;
+  year: number | null;
+  doi: string | null;
+  sources: string[];
+}
+
+export interface PartialPapersPayload {
+  query: string;
+  found: number;
+  papers: PartialPaper[];
+}
+
+export interface PartialSearchSourcePayload {
+  query: string;
+  source: string;
+  outcome: string;
+  count: number | null;
+  elapsedMs: number | null;
+  error?: string;
+}
+
+export interface PartialCardPayload {
+  paperId: string;
+  title: string;
+  year: number | null;
+  keyFinding: string | null;
+  /** α 的预筛落地前**恒为 null**（β devlog 明说）。前端必须容忍 null，且不得显示成 0。 */
+  relevance: number | null;
+  basis: string | null;
+}
+
+export type PartialPayload = PartialPapersPayload | PartialSearchSourcePayload | PartialCardPayload;
+
+export interface PartialEvent {
+  kind: PartialKind;
+  taskId?: string;
+  ts: number;
+  payload: PartialPayload;
+}
+
+export interface DeltaEventData {
+  chunk: string;
+  /** `summary` / `review` / `card:<paperId>`。收口前的老事件没有这个字段。 */
+  target?: string;
+  /** 同一 target 的第几版，从 1 开始；重试 / 修正轮 +1 → 前端清空重画。 */
+  revision?: number;
+}
+
+/** 阶段条的六段（`stream_model.ts` 的 `UI_STAGES`）。 */
+export type UiStage = "plan" | "search" | "download" | "read" | "review" | "summarize";
