@@ -95,11 +95,31 @@ const rows: Row[] = [];
 const rawAppend: string[] = [];
 const perRoundBudget = Math.max(0.005, budgetUsd / (projects.length * rounds));
 
+// 会话 → 项目的绑定走「当前项目」指针（UI 就是这么做的：POST /api/projects/current）。
+// `/api/session/chat?project=` **不被读取**（首跑时 20 轮全记进了 speed-probe，调用数一律 0）——
+// 已作为 U11 登记；这里先记住原来的当前项目，跑完改回去。
+const originalCurrent = await fetch(`${base}/api/projects/current`)
+  .then((r) => r.json() as Promise<{ project: { slug: string } }>)
+  .then((j) => j.project.slug)
+  .catch(() => null);
+async function setCurrent(slug: string): Promise<void> {
+  const r = await fetch(`${base}/api/projects/current`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  if (!r.ok) throw new Error(`切当前项目到 ${slug} 失败：HTTP ${r.status}`);
+}
+process.on("exit", () => {
+  if (originalCurrent) console.log(`（当前项目已改回 ${originalCurrent}）`);
+});
+
 for (const slug of projects) {
+  await setCurrent(slug);
   for (let r = 1; r <= rounds; r++) {
     const before = readUsage(slug);
     const t0 = performance.now();
-    const res = await fetch(`${base}/api/session/chat?project=${encodeURIComponent(slug)}`, {
+    const res = await fetch(`${base}/api/session/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId: `r6-${slug}-${r}-${Date.now()}`, message: MESSAGE, mode: "chat", budgetUsd: perRoundBudget }),
@@ -126,6 +146,8 @@ for (const slug of projects) {
     console.log(`${slug} r${r}: HTTP ${res.status} 墙钟 ${(wallMs / 1000).toFixed(1)}s 调用 ${added.length} 失败 ${failed}`);
   }
 }
+
+if (originalCurrent) await setCurrent(originalCurrent).catch((e) => console.error(String(e)));
 
 // ---------- 汇总 ----------
 function pct(xs: number[], p: number): number {
