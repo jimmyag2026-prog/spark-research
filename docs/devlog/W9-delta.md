@@ -377,3 +377,125 @@ c8eda4d docs: translate planning/backlog to English; add v0.8.1 remediation plan
 | （加跑）集成 | `bun run test:integration` | **8 pass / 0 fail**，85ms，退出码 0 —— δ-1 之前这里是 `0 pass / 8 skip` |
 
 无 skip、无并行超时重跑。
+
+---
+
+# 追加（2026-09-15，收口复跑之后）
+
+## 追-1 · δ-1 门禁漏洞：只拦「全跳」，不拦「部分跳」
+
+收口复跑报的漏洞，先原样复现确认（在**修之前**跑的）：
+
+```
+$ sed -i '' 's|^describe("protein-analysis · UniProt|describe.skipIf(true)("protein-analysis · UniProt|' \
+    tests/integration/protein_record.test.ts
+$ bun run test:integration
+ 6 pass
+ 2 skip
+ 0 fail
+Ran 8 tests across 3 files. [81.00ms]
+$ echo $?
+0                     ← 放行了
+```
+
+第一版判据是 `total > 0 && skip === total`，字面意思就是「只拦全部跳过」。
+这是我把 U7 读窄了：U7 的现场确实是「8 skip」，但它要的从来不是「别整套跳过」，
+是**「任何一条没跑都要显形」**——一条链路没验和三条链路没验，差别只是程度，
+而 `0 fail` 让两者在输出上长得一样，这才是 U7 的病。
+
+### 新判据
+
+`bun test` 自己非零退出时原样透传（含 137 这类被 SIGKILL 打死的码）；否则：
+
+| # | 条件 | 为什么 |
+|---|---|---|
+| ① | 收集数 == 0 | 一个用例都没收集到也是「什么都没验证却退出 0」（U7 点名的 pytest 零收集先例） |
+| ② | `skip > 0` | **本次补的**。任何一条被跳过就判红 |
+| ③ | `pass < 收集数` | 不依赖「skip」措辞的兜底，一并兜住 `todo`，以及将来 bun 改摘要措辞的情况 |
+
+`summarize()` 同时改成**优先读 `Ran N tests` 作为收集数**（原来是 pass+skip+fail 相加），
+并多解析一个 `todo`。相加的口径在「摘要里缺项」时会低报总数，判据③ 依赖总数，不能将就。
+
+### 拦下时逐条打印跳过了哪些
+
+bun 的默认 reporter 只给汇总数字、**不列名字**（实测：输出里除了 ` 2 skip` 这一行，
+没有任何 `(skip)` 标记）。所以脚本同时让 bun 写一份 junit XML 到临时目录，
+从 `<skipped/>` 里把用例名捞出来；拿不到就降级成一句提示，不因为拿不到名字就不报。
+临时目录在 `finally` 里清掉。
+
+`skippedTestNames()` 有一个坑值得记：bun 把**跳过的** testcase 写成非自闭合标签带
+`<skipped />` 子元素，**没跳过的**写成自闭合 `<testcase … />`。解析时必须按各自的
+`</testcase>` 截断 body——否则自闭合的那条会一路读到后面某条的 `</testcase>`，
+把别人的 skipped 算到自己头上。有专门用例钉住这个（「自闭合在前、带 skipped 的在后」）。
+
+### 阴性对照（真跑，修完之后）
+
+**J · 收口的复现打在新门禁上**：
+
+```
+ 6 pass
+ 2 skip
+ 0 fail
+Ran 8 tests across 3 files. [92.00ms]
+
+✖ check-integration-skip：tests/integration 收集了 8 条，只跑了 6 条（2 条被跳过）。当前 FIXTURE_MODE=(未设置，默认 replay)。
+  没跑的那几条等于本轮没被验证——门禁不区分「跳了一条」和「跳了全部」，只区分「跑没跑」。
+
+  被跳过的用例：
+    · tests/integration/protein_record.test.ts :: protein-analysis · UniProt → PDB → AlphaFold（…） > UniProt → PDB → AlphaFold 三段链路
+    · tests/integration/protein_record.test.ts :: protein-analysis · UniProt → PDB → AlphaFold（…） > AlphaFold 未收录的 accession：是结论不是故障
+
+  δ-1 之后这套用例在默认 replay 下就该全跑（零网络，回放 tests/fixtures/**）；有 skip 说明有人加了条件跳过，或 fixture 不可用。
+error: script "test:integration" exited with code 1
+
+退出码 = 1          ← 修复前是 0
+```
+
+还原 `protein_record.test.ts` 后退出码回到 **0**。
+
+**把修复拆掉的三个方向**（这次学乖了：先 commit 再改文件）：
+
+| # | 改法 | 结果 |
+|---|---|---|
+| K | 只把判据② 退回 `skip === total` | **13 pass / 0 fail —— 没红。** 判据③ 把它兜住了 |
+| K' | 只拆判据③（`pass < total`） | **红 1 条**：`③ 没有 skip 但 pass 不足收集数（todo）→ 退出 1`（12 pass / 1 fail） |
+| K'' | ②③ 一起拆（= 退回第一版「只拦全跳」） | **红 2 条**（11 pass / 2 fail）；同时真命令 `bun run test:integration` 在复现场景下**退出码回到 0**，精确复现收口报的漏洞 |
+
+K 这一条如实记下来：**判据② 单独拆掉不会红**，因为②③ 是故意重叠的防御——
+②是按「skip」这个词判、③是按「跑没跑」判，任一条单独都能拦住部分跳过。
+要让门禁失效必须两条一起拆（K''）。所以「②有阴性对照」这句话的准确说法是：
+②③ 作为一组有阴性对照，单独一条没有。不把 K 写成绿的就当它验过了。
+
+单测 `tests/unit/integration_skip_gate.test.ts`：**7 → 13 条**，新增
+「部分 skip → 1」（用复现的原样输出当输入）、todo 兜底、总数口径、junit 解析共四组。
+
+---
+
+## 追-2 · V 号撞号已裁定，本文件按裁定改号
+
+收口裁定：main 上经 PR #110 / #113 合入的 **V142–V146** 是正式编号；
+从未合入的 `docs/v0.8.1-plan-and-english-i18n` 分支登记的号整体顺延。
+**只改 `docs/DEVELOPMENT_PLAN_v0.8.1.md`，`docs/BACKLOG.md` 一行未动**（收口自己在 BACKLOG 头部补说明）。
+
+改法：降序替换（`V148→V153, V147→V152, …, V142→V147`）。
+**降序是必须的**——升序会连环撞车：先把 V142 改成 V147，轮到处理 V147 时会把刚改出来的那批也一起带走。
+
+第 7 行逐字引用的 git 提交标题「`docs: register V148 + update H-8/H-6 status`」**刻意没改**。
+提交标题是历史事实，改了就成了伪造引用；改号说明另起一段讲。
+
+### 比裁定多带了一个号（V148 → V153），理由
+
+裁定写的是 V142–V147 → V147–V152。但 `3e00f4a` 在同一条分支上还登记了 **V148**
+（`test:sdk` 两条既有的顺序相关失败，被 H-8 那一行引用）。只搬 V142–V147 的话：
+
+- 原 V143 → 新 V148
+- 原 V148 原地不动
+
+**本文内部立刻第二次撞号**，而且这次撞在同一个文件里，比原来的跨文件撞号更难发现——
+等于用一个新 bug 换掉旧 bug。V148 与 V142–V147 同源（同一条从未合入的分支），
+按裁定的同一条口径（未合入的让号）它也该让，所以一并顺延为 V153。
+核对过：main 的 BACKLOG 目前最大号是 **V146**，V147–V153 整段空着，顺延不撞任何已合入条目。
+
+这一步是执行时自行扩的范围、**不是收口原话**，所以在文末单列了一节标明，改回来只动一行。
+
+文末新增「D. 旧号 → 新号对照」表，七行，每行同时给出「本文的新号是什么」与「这个旧号让给了 main 上的哪一条」。
