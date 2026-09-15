@@ -44,3 +44,18 @@
 - **U44 的瘦身只认得「检索结果」这一种形状**（`{query, sources[], papers[]}`），其余工具一律走通用截断。通用截断会丢结构（模型拿到的是一段 JSON 前缀 + 一个说明），但它**明说了被截断**——静默截断比截断更危险。要按工具定制表现层，正路仍是 `McpToolRunner` 已有的 `tool.present()` 钩子（V174 ①）。
 - **U46 之后 `cnki` / `wanfang` 变成「调用即失败」。** 将来真接通了官方 API 或机构订阅渠道，记得**同时**把 `status` 从 `placeholder` 改掉，否则新渠道会被这道闸原封不动地挡在门外。
 - 过程失误一条：第一轮阴性对照在 commit **之前**跑，`git checkout` 把未提交的两个文件改动冲掉了，重做了一遍。纪律补充：**先 commit 再做阴性对照**。
+
+## 追加 · V172 前半（chat 真执行文献技能）
+
+用户定义的五步：关键词拆解 → 多源检索取索引 → connector 下载 → 读取确认 → 综述总结。仓库里 ②–⑤ 早已各有实现（`lit search/add/pdf/read/review`），缺的是①与「接进 chat」。
+
+| 改动 | 说明 |
+|---|---|
+| `agents/literature_pipeline.ts`（新） | `runLiteraturePipeline({llm, project, sessionId, searcher?, downloadPdf?}, {mode, queries, topic, limit, maxRead})`：search 模式零 LLM；review 模式每篇一张精读卡 + 一份综述，全部走会话的 `llmFor`（预算闸生效）；产出摘要 ≤1500 字符给 summarize，完整结果落盘 `<workspace>/<sessionId>/<taskId>.json`（V171 约定） |
+| `orchestrator.ts` `case "skill"` | 仅对 `literature-search` / `literature-review` 真执行；其余技能行为不变 |
+| `orchestrator.ts` plan 提示词 | 文献类需求必须发一个 skill 任务并在 `params.queries[]` 给 3–6 条拆解后的英文检索词；`connector` 只用于非文献库 |
+| 注入点 | `OrchestratorDeps.literatureSearcher` / `literatureDownloadPdf`（测试不碰网络） |
+
+阴性对照（实跑）：skill 分支退回只加载上下文 → 1 红；plan 提示词删掉文献指引 → 1 红；综述引用库外 key `fabricated2099` → 被 citation-integrity veto 而红（验证复用的门真在链上）。
+
+如实交代：① 精读默认最多 8 篇（`maxRead`），是花钱上限不是质量上限；② 引用核验用机械核对（`judge: undefined`），没接 LLM 判定；③ AMiner 是否参与仍由 `searchSources` 决定（U43/V173 未动）。

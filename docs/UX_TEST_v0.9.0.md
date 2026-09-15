@@ -19,6 +19,7 @@
 |---|---|---|---|---|---|
 | 1 | 09-15 11:31 | 网页端 chat：「帮我下载关于 mRNA 最新的研究综述论文吗？和 AI 主题相关的更好」（项目 `spark`，session `web_1789471590880`） | 拿到几篇综述 + PDF | **0 篇 0 PDF**。模型拆成 7 步手搓 connector：PubMed 30s 超时、arXiv 429、Europe PMC 返回空壳、两个 code 步骤读不到前一步产物、子代理崩 TypeError。用时约 46s，2 次 LLM 调用 | 模型的交代是诚实的（没编论文），但**平台把三次连接器失败都记成了 ok**。→ U38 U39 U40 U41 U42 |
 | 2b | 09-15 20:0x | 问：查论文时会不会用到 AMiner | 会 | **不会**。`searchSources` 里没有 aminer（虽然它的凭据已配）；清单里的 semanticscholar 反而没凭据。显式 `--sources aminer` 能查，但 9 条结果没一篇与 mRNA 有关 | 配置面把「配凭据」和「勾选源」当成两件无关的事 → U43 |
+| 4 | 09-15 21:45 | **热更新 V172**：chat 文献需求改走真流程（关键词拆解 → 多源检索 → 入库 → PDF → 精读卡 → 综述+引用核验） | 问「RSI 中美进展」能拿到真论文与综述 | 门禁 5/5；search 模式真网络 45s 入库 16 篇；review 模式真冒烟见监控表 | 服务已带此重启；其余 11 技能未接（V172 残余） |
 | 3 | 09-15 21:21 | 第三次 chat「RSI 中美进展」（session `web_1789477865031`，模型解读为 Recursive Superintelligence） | 拿到中美对比 | **U47 生效**：OpenAlex/Crossref/EuropePMC 4 次检索成功；arXiv 3 次超时/429。但 summarize 只见 `meta.count`（U48），聚合代码 glob 到 496 个仓库 JSON、0 条（U41）→ 无数据草稿 | → U48 已修、U41/V171 已做路线① |
 | 2 | 09-15 19:5x | 对照：CLI `lit search "mRNA vaccine machine learning review" --project spark --limit 5` | 同上 | **26s 出 5 篇，全部有 OA PDF**，零 LLM 调用；如实标注 biorxiv 空响应失败 | 同一需求，成熟管线一条命令就成了 → U42 |
 
