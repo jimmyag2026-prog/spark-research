@@ -1,5 +1,6 @@
 import {
   closeSync,
+  statSync,
   existsSync,
   fsyncSync,
   mkdirSync,
@@ -16,7 +17,7 @@ import { join, resolve } from "node:path";
 import { ArtifactStore } from "../artifacts/store";
 import { RecordStore } from "./records";
 import { JsonlRawSink, type RawSink } from "../raw";
-import { assertSlug, isValidSlug, ProjectError, slugify } from "./slug";
+import { assertSlug, isValidSlug, ProjectError, slugify, slugMatchesGlob } from "./slug";
 import type { ProjectMeta, ProjectPaths, ProjectStatus, WorkspaceState } from "./models";
 import { FindingsStore } from "../reviewer/findings_store";
 // W7-C1（V64 根治）：过期锁回收的死活判据——W7-C2 在 server/tasks.ts 已经写过同一件事
@@ -27,7 +28,7 @@ import { isProcessAlive } from "../server/tasks";
 export const DEFAULT_PROJECT_SLUG = "default";
 export const PROJECT_SCHEMA_VERSION = 1;
 
-export { assertSlug, isValidSlug, ProjectError, slugify };
+export { assertSlug, isValidSlug, ProjectError, slugify, slugMatchesGlob };
 
 export function defaultWorkspaceRoot(): string {
   return process.env.SPARK_RESEARCH_DATA_DIR ?? join(homedir(), ".spark-research");
@@ -295,6 +296,60 @@ export class ProjectManager {
     return this.setStatus(slug, "archived");
   }
 
+  /**
+   * δ-1（V157）：批量归档。
+   *
+   * 为什么要它：R6/A8 的验收产物（`t*-r*`、`r6-*`、`a8-*`、`speed-probe`…）四十来个躺在
+   * 工作区里从没归档，工作台默认打开的是 `speed-probe` 这种探针项目。一个个 `archive` 敲
+   * 四十遍没人会做，于是永远不做——**能力存在但不会被用，等于没有**。
+   *
+   * 匹配口径见 `slug.ts` 的 `globToRegExp`：整串匹配，只认 `*` 与 `?`。
+   * 已归档的项目**不重复计入**（幂等：同一条命令跑两遍，第二遍返回空列表，不是报错）。
+   */
+  archiveMatching(pattern: string): ProjectMeta[] {
+    const targets = this.list({ includeArchived: false }).filter((m) => slugMatchesGlob(m.slug, pattern));
+    return targets.map((m) => this.setStatus(m.slug, "archived"));
+  }
+
+  /** `--dry-run` 用：只算会命中谁，不改任何状态。 */
+  matchActive(pattern: string): ProjectMeta[] {
+    return this.list({ includeArchived: false }).filter((m) => slugMatchesGlob(m.slug, pattern));
+  }
+
+  /**
+   * δ-1（V157）：「最近活动的未归档项目」。
+   *
+   * 「活动」不取 `meta.updatedAt`——那个字段只在建项目和改状态时动，一个项目写了两百条
+   * record 它也不变，拿它排序等于按创建顺序排。取 `records.db` 的 mtime 与 `updatedAt`
+   * 里更晚的那个：真写过东西的项目自然排在前面，从没写过的退化为按 meta 时间排。
+   * records.db 不存在（`project new` 之后立刻就有，这里是防御）就只用 meta 时间。
+   */
+  lastActivityAt(meta: ProjectMeta): string {
+    const metaTime = meta.updatedAt || meta.createdAt;
+    try {
+      const mtime = statSync(this.pathsFor(meta.slug).recordsDb).mtime.toISOString();
+      return mtime > metaTime ? mtime : metaTime;
+    } catch {
+      return metaTime;
+    }
+  }
+
+  mostRecentActiveSlug(exclude?: string): string | null {
+    const candidates = this.list({ includeArchived: false }).filter((m) => m.slug !== exclude);
+    if (candidates.length === 0) return null;
+    let best = candidates[0]!;
+    let bestAt = this.lastActivityAt(best);
+    for (const meta of candidates.slice(1)) {
+      const at = this.lastActivityAt(meta);
+      // 并列时按 slug 字典序定胜负，保证结果可复现（目录读取顺序不保证稳定）。
+      if (at > bestAt || (at === bestAt && meta.slug < best.slug)) {
+        best = meta;
+        bestAt = at;
+      }
+    }
+    return best.slug;
+  }
+
   unarchive(slug: string): ProjectMeta {
     return this.setStatus(slug, "active");
   }
@@ -401,10 +456,17 @@ export class ProjectManager {
     const meta = { ...this.readMeta(paths), status, updatedAt: new Date().toISOString() };
     this.writeMeta(paths, meta);
     if (status === "archived") {
+      // δ-1（V157）：指针落在刚归档的项目上时**跳到最近活动的未归档项目**，而不是置 null。
+      //
+      // 置 null 的老行为看着安全，实际后果是下一次 `defaultProject()` 按需**新建**一个
+      // `default` 项目（见该方法），于是「归档掉探针项目」这个动作会静默地把用户扔进一个
+      // 空白的 default，他真正在做的那个项目反而要自己 open 回来。跳到最近活动的项目是
+      // 用户唯一想要的那个结果；一个未归档的项目都不剩时才落回 null（此时 `defaultProject()`
+      // 建 default 是对的——确实没有别的项目可去）。
       this.withStateLock(() => {
         const state = this.readState();
         if (state.currentProject === slug) {
-          state.currentProject = null;
+          state.currentProject = this.mostRecentActiveSlug(slug);
           this.writeState(state);
         }
       });
