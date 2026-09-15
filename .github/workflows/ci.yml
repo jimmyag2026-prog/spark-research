@@ -10,9 +10,17 @@
 # **明确不加的三个**（如实记录，不是漏项）：
 #   · test:sdk —— 现有 2 个用例在本仓当前状态下就是红的（与本次改动无关，是既有 bug，
 #     见 BACKLOG V148）；红着接入 CI 只会让每次 PR 都挂，不是加了门禁。先修 V148 再接。
-#   · test:integration —— `describe.skipIf(!RECORDING)`，没有 `FIXTURE_MODE=record` +
-#     真实网络凭据时恒定 0 用例执行、全部 skip。接入 CI 不会挂，但也不会验证任何东西——
-#     纯粹的「绿灯剧场」，故意不接。
+#
+# δ-1（v0.9，USAGE_LOG U7）：上面这份「明确不加」名单里原有第三条——test:integration，
+# 理由是「`describe.skipIf(!RECORDING)` 恒定全 skip，接进来是绿灯剧场」。那个前提已经
+# 被 δ-1 消灭：三个文件里每个 HTTP 客户端都由 fixtureHttp(cassette, MODE) 构造，replay
+# 下零网络（miss 抛 FixtureMissError，不会回落连网），去掉 skipIf 后默认就跑，实测
+# 8 pass / 0 fail / 69ms。所以它现在接进主 job；命令走 scripts/check-integration-skip.ts，
+# 哪天又变成全跳过就是红的，不会悄悄退回绿灯剧场。
+#
+# 另起一个每周的 integration-live job 跑 FIXTURE_MODE=live：fixture 回放永远绿，
+# 恰恰意味着它发现不了上游接口漂移，这个 job 就是那根探针。它 continue-on-error，
+# 上游抖一下不该拦住任何人合并。
 #   · test:py（全量）—— 需要 opentrons/scanpy/pydeseq2/cobra 这一整套重量级科学计算依赖
 #     （pyproject.toml 里锁了 numpy<2 等约束），跑起来是分钟级的 CI 基建投入，不是
 #     Gate H 这种小改动该捎带做的事；tests/lab（不需要这些重依赖）已经单独接了。
@@ -21,9 +29,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # 每周一 04:17 UTC。错开整点，避开 GitHub 计划任务的高峰排队。
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
 
 jobs:
   test-and-smoke:
+    # 计划任务那一趟只需要 integration-live 这条探针，主 job 不必跟着每周空跑一遍。
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -44,6 +58,8 @@ jobs:
         run: bun run test:concurrency
       - name: 超时套件（V141：此前从未在 CI 跑过）
         run: bun run test:timeout
+      - name: 集成套件（δ-1：replay 回放，零网络零凭据；全跳过会被绊线判红）
+        run: bun run test:integration
       - name: 实验室后端测试（tests/lab，零重依赖，pytest 直跑）
         run: python3 -m pytest tests/lab
       - name: 安装 Playwright 浏览器（e2e 用）
@@ -52,3 +68,24 @@ jobs:
         run: bun run test:e2e
       - name: 二进制冒烟（构建 + 版本一致 + capabilities + server/UI）
         run: bash scripts/smoke-binary.sh
+
+  # δ-1 ③ · 上游接口漂移探针。每周一趟真打网络，失败只告警不阻塞任何人。
+  # 它和主 job 验的**不是**同一件事：主 job 验本地管线对着录好的响应还对不对，
+  # 这条验录制时的那些上游接口今天还在不在、形状变没变。
+  integration-live:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # live（不是 record）：打真实网络但不落盘，所以这个 job 永远不会把 fixture 改脏。
+      # 无凭据的源（Semantic Scholar / AMiner）会走各自的降级分支，这是预期行为不是失败。
+      - name: 集成套件 · FIXTURE_MODE=live（真实网络，不覆盖 fixture）
+        env:
+          FIXTURE_MODE: live
+        run: bun run test:integration
