@@ -136,16 +136,23 @@ export async function prescreenCandidates(
     { role: "system" as const, content: PRESCREEN_SYSTEM_PROMPT },
     { role: "user" as const, content: buildPrescreenPrompt(options.topic, candidates) },
   ];
-  const response = await deps.llm.call(messages, {
-    ...(options.model ? { model: options.model } : {}),
-    maxTokens: STAGE_MAX_TOKENS.prescreen,
-  });
+  // α-3 的坑（v0.10 实测）：**给推理模型设 maxTokens 会换来空输出，不是短输出**。
+  // r6-probe 复测时 kimi-k2.6 在 maxTokens=300 下 outputTokens 正好打满 300、content 为空
+  // ——推理 token 把预算吃光。所以第一次带上限（省钱），空输出时**不带上限**再来一次
+  // （省钱的前提是还能拿到东西）。根治在 router/适配器层，见 devlog 的收口 diff 段。
+  const model = options.model ? { model: options.model } : {};
+  let response = await deps.llm.call(messages, { ...model, maxTokens: STAGE_MAX_TOKENS.prescreen });
+  let calls = 1;
+  if (response.ok && !response.content.trim()) {
+    response = await deps.llm.call(messages, model);
+    calls = 2;
+  }
   if (!response.ok) {
-    return keepAll(`预筛：调用失败（${response.error?.message?.slice(0, 80) ?? "未知"}）→ 全留（fail-open）`, 1);
+    return keepAll(`预筛：调用失败（${response.error?.message?.slice(0, 80) ?? "未知"}）→ 全留（fail-open）`, calls);
   }
   const parsed = parsePrescreenScores(response.content, candidates.length);
   if (!parsed) {
-    return keepAll(`预筛：输出无法解析（截断 80 字：${response.content.slice(0, 80).replace(/\s+/g, " ")}）→ 全留（fail-open）`, 1);
+    return keepAll(`预筛：输出无法解析（截断 80 字：${response.content.slice(0, 80).replace(/\s+/g, " ") || "（空）"}）→ 全留（fail-open）`, calls);
   }
 
   // 没被打分的候选按 minScore 处理——模型漏了一篇不该成为「悄悄丢掉它」的理由。
@@ -166,7 +173,7 @@ export async function prescreenCandidates(
     kept: keptRows.map((s) => s.c),
     dropped: byScore.filter((s) => !keptIds.has(s.c.id)).map((s) => s.c),
     scores: allScores,
-    llmCalls: 1,
+    llmCalls: calls,
     note,
     failOpen: false,
   };

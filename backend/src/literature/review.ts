@@ -233,9 +233,15 @@ export class ReviewDraftGenerator {
       }
 
       // α-3：综述是本流程输出最长的一档，上限走 STAGE_MAX_TOKENS 的单一真源。
+// α-3 的坑（v0.10 实测，2026-09-16）：**给推理模型设 maxTokens 会换来空输出，不是短输出**。
+// r6-probe 复测时 kimi-k2.6（OpenRouter，思考型）在 maxTokens=300/2500 下
+// outputTokens 正好打满上限、content 为空——推理 token 把预算吃光，正文一个字没出来。
+// 因此重试那一次**不带上限**：省钱的前提是还能拿到东西，拿不到东西的省钱是纯亏。
+// 根治应在 router/适配器层（按模型能力位决定要不要发 max_tokens）——那是收口专属文件，
+// 已写进 docs/devlog/W10-alpha.md 的「收口 diff」段。
       const response = await this.deps.llm.call(messages, {
         ...(this.deps.model ? { model: this.deps.model } : {}),
-        maxTokens: STAGE_MAX_TOKENS.review,
+        ...(attempt === 1 ? { maxTokens: STAGE_MAX_TOKENS.review } : {}),
       });
       if (!response.ok) {
         lastError = `模型调用失败: ${response.error?.message ?? "未知原因"}`;

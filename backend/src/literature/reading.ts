@@ -289,9 +289,15 @@ export class ReadingCardGenerator {
 
       // α-3（v0.10）：精读卡是五字段 JSON，700 token 足够；不给上限时 OpenAI 兼容侧
       // 完全不带 `max_tokens`，模型爱写多长写多长——R6 基线 78% 墙钟就耗在这上面。
+// α-3 的坑（v0.10 实测，2026-09-16）：**给推理模型设 maxTokens 会换来空输出，不是短输出**。
+// r6-probe 复测时 kimi-k2.6（OpenRouter，思考型）在 maxTokens=300/2500 下
+// outputTokens 正好打满上限、content 为空——推理 token 把预算吃光，正文一个字没出来。
+// 因此重试那一次**不带上限**：省钱的前提是还能拿到东西，拿不到东西的省钱是纯亏。
+// 根治应在 router/适配器层（按模型能力位决定要不要发 max_tokens）——那是收口专属文件，
+// 已写进 docs/devlog/W10-alpha.md 的「收口 diff」段。
       const response = await this.deps.llm.call(messages, {
         ...(model ? { model } : {}),
-        maxTokens: STAGE_MAX_TOKENS.card,
+        ...(attempt === 1 ? { maxTokens: STAGE_MAX_TOKENS.card } : {}),
       });
 
       if (!response.ok) {
