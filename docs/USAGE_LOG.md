@@ -33,6 +33,23 @@
 | [U8](#u8) | server 启动日志打两遍，两处手写副本 | 低 | 整洁 | ✅ alpha.2（δ-4） |
 | [U9](#u9) | CLI `chat` 没有任何参数：无预算闸、无 `--model`、`--help` 会被当消息发出去 | **高** | 正确性 | ✅ alpha.2（β-2 `chat --model/--budget-usd/--project/--help`） |
 | [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | ✅ alpha.2（β-1 + 收口：`sessionModel` 进 `llmFor`；V145） |
+| [U11](#u11) | `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账 → 脚本 20 轮全记进 speed-probe | 中 | 契约一致性 | ✅ alpha.3（`/api/session/chat|stream` 认 `?project=`/body.project，不存在 404） |
+| [U12](#u12) | 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；且拒绝前仍耗时 49.8s | **高** | 正确性 | ✅ alpha.3（`failure:{kind,message}` 结构化字段 + review 不 approved + 闸拒落台账 errorKind:budget + plan 被拒即止不跑默认计划；预算语义文案改 CLI 半边，前端 → V166） |
+| [U13](#u13) | 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收 | **高** | 正确性 | → V156（设计裁定：202+任务句柄 / 推到 stream / 断连即取消） |
+| [U14](devlog/R6.md#u14) | 验收/探针项目从没归档，工作台默认打开的就是一次性产物（正文在 R6.md） | 中 | 数据卫生 | → V157 |
+| [U15](devlog/R6.md#u15) | 启动时 config.json 灌进 `process.env`，运行中 server 永远用旧值、`source` 误标 env（T5 第 6 步 P0，U10 同构） | **高** | 正确性 | ✅ alpha.3（桥接键按文件实时读，落盘即刷新 env） |
+| [U16](devlog/R6.md#u16) | `doctor`「前端未构建」判的是 cwd 不是运行实例 | 低 | 运维 | → V162 |
+| [U17](devlog/R6.md#u17) | `config list` 截断长值不加省略号 | 低 | 体验 | → V163 |
+| [U18](devlog/R6.md#u18) | chat 执行段无计数进度，约 15s 空白 | 中 | 体验 | → V158 |
+| [U19](devlog/R6.md#u19) | 设置项被 422 拒时界面不显示错误 | 中 | 体验 | → V159 |
+| [U20](devlog/R6.md#u20) | `--budget-usd` 帮助说「本次会话」，实为「本项目累计」 | 中 | 文档 | ◐ alpha.3 CLI 文案已改；前端 BudgetInput → V166 |
+| [U21](devlog/R6.md#u21) | chat 全失败/被闸拒时 CLI 退出码仍 0 | 中 | 正确性 | ✅ alpha.3（`failure` 存在 → exit 1） |
+| [U22](devlog/R6.md#u22) | `llmTimeoutMs` 无下限，500 被接受 | 中 | 正确性 | ✅ alpha.3（spec.min=1000，两条写路径共用 validateSetting） |
+| [U23](devlog/R6.md#u23) | `config set <PROVIDER>_API_KEY <值>` 明文收凭据进 shell 历史 | **高** | 安全 | ✅ alpha.3（CLI 拒收并指向 `auth`） |
+| [U24](devlog/R6.md#u24) | `doctor` 只探写死的 4321 | 中 | 运维 | → V160 |
+| [U25](devlog/R6.md#u25) | server 无请求级日志，凭据「日志零命中」证明力弱 | 低 | 可观测性 | → V164 |
+| [U26](devlog/R6.md#u26) | AMiner 中文主题词检索基本无效 + 结果零摘要 | 中 | 检索 | → V161 |
+| [U27](devlog/R6.md#u27) | arxiv 持续 429 / biorxiv 空响应污染召回基线 | 低 | 检索 | → V165 |
 
 ### 方法缺陷
 
@@ -672,6 +689,82 @@ async function chatOnce(message: string) {
 
 > 上面的 U 系列是**产品**的问题。这一段记**发现问题的方法**本身的问题——
 > 为什么这些东西没有被更早发现。用 `P` 前缀（Process），和 U、V 都不冲突。
+
+<a id="u11"></a>
+## U11 · `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账
+
+**现场**：2026-09-15 跑 R6 基线脚本（`scripts/measure-chat.ts`，v0.9.0-alpha.2 server @4321）。脚本按仓库其它域路由的惯例
+（`/api/lit`、`/api/usage` 等都认 `?project=<slug>`）给 `POST /api/session/chat?project=t1-protein-r3` 发消息，
+跑前后比对该项目 `usage.jsonl` 行数差。
+
+**证据**：
+
+```
+t1-protein-r3 r1: HTTP 200 墙钟 54.4s 调用 0 失败 0
+$ ls -t ~/.spark-research/projects/*/usage.jsonl | head -1
+/Users/jimmyclaw/.spark-research/projects/speed-probe/usage.jsonl      ← 那 54 秒的三次模型调用记在这里
+$ grep -n "project" backend/src/server/routes/session.ts | head
+61:      projectSlug: ctx.agent.projectForSession(sessionId)?.slug ?? null,   ← 只按 sessionId 反查，query 一个字不读
+```
+
+`projectForSession()` 对未绑定的 sessionId 落到 `state.json` 的 `currentProject`——当时正是 U3 里那个「指针停在测试项目」的 `speed-probe`。
+
+**问题**：同一套 HTTP 面上，其它域路由认 `?project=`，聊天路由静默忽略它。写脚本/SDK 的人按惯例传了参数、
+拿到 200、台账落进另一个项目，没有任何一处报错。这是 U10 的形状（声明了/传了、静默丢弃），只是这次丢的是路径参数。
+网页端不受影响（它先 `POST /api/projects/current` 再聊天），所以六轮验收没撞到。
+
+**修改方向**：二选一，须裁定——① `/api/session/chat` 与 `/stream` 认 `?project=`（或 body `project`），首次出现的 sessionId 据此 `bindSession`；
+② 明确不认，但收到未知 query 参数时 400 并指向 `POST /api/projects/current`。倾向 ①（与其它域路由一致，`chat --project` CLI 已经是这个语义）。
+`gate_i_param_readers` 管的是函数参数，管不到 HTTP query——门禁能力边界（V146 同族），一并登记。
+基线脚本已改走 `POST /api/projects/current`，跑完改回原指针。
+
+<a id="u12"></a>
+## U12 · 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；拒绝前仍耗时 49.8s
+
+**现场**：同上。脚本把 `--budget 0.30` 均摊成每轮 `budgetUsd: 0.015` 传给 `/api/session/chat`。
+
+**证据**：
+
+```
+t1-protein-r3 r3: HTTP 200 墙钟 0.0s 调用 0 失败 0        ← 20 轮全部如此
+$ curl -w "%{http_code} %{time_total}s" -X POST .../api/session/chat -d '{"sessionId":"r6-manual-2",…,"budgetUsd":0.015}'
+200 49.837487s
+{"sessionId":"r6-manual-2","mode":"chat","projectSlug":"speed-probe","response":"[session r6-manual-2]\n[orchestrator] 本次调用被预算闸拒绝，未生成结果摘要。预算闸：本项目已知花费 $0.0148 + 在飞预留 $0.0000 + 本次估价 $0.0011 将超过上限 $0.01（已知下界口径…）。这次调用没有发出、没有新花费…","review":{"approved":true,"findings":[]}}
+$ tail -1 ~/.spark-research/projects/speed-probe/usage.jsonl     ← 时间戳仍是上一次成功调用的，本次零新增行
+```
+
+对照：新建零花费项目 `r6-probe`、`budgetUsd: 1.0` 同一句话 → 200 / 72.8s / 台账 3 行（plan、execute、summarize 各一次，
+每次 ~2000 输出 token）。
+
+**问题**：三件事叠在一起。
+① `budgetUsd` 的语义是**项目累计已知花费的上限**，不是「本次可花多少」——文档与 UI 的 `BudgetInput` 都没说清，调用方按「本次额度」传就必然被拒；
+② 被拒是 **HTTP 200**，`response` 里是一段人话，`review.approved` 还是 `true`——程序化调用方（脚本、SDK、MCP）没有任何结构化字段能分辨「拒绝」与「成功」，脚本把 20 次拒绝当成了 20 次「0 调用的成功」；
+③ 台账零新增：被拒的调用不落 `ok:false` 行，`usage` 里查不到「这个项目今天被预算闸拒了 20 次」。V79③ 只覆盖了任务面板的闸消息，没覆盖 chat 路由。
+
+**修改方向**：② 最紧要——被拒时响应加结构化字段（如 `gate: {kind:"budget", limitUsd, knownUsd, estimateUsd}`，或直接 402/422 + `ApiErrorBody`，与 V107 错误 envelope 统一时一起定）；`review` 不该在没有产出时标 `approved`。
+③ 台账落一行 `ok:false, errorKind:"budget"`（α-4 的 errorKind 枚举加一个值），让 `byErrorKind` 能看见闸。
+① 文档 + `BudgetInput` 文案改为「本项目累计上限」，或改语义为「本次增量上限」——改语义影响 CLI `--budget-usd`（V119），须裁定。
+
+**已核实（修复窗口，只读代码 + 对照实验）**：49.8s 不是模型在跑——plan 调用被闸拒后 `plan()` 退到 `defaultPlan()`，默认计划里的连接器任务（UniProt/PDB/AlphaFold 查询）真跑了 ~49s 网络 I/O（零 LLM），然后 summarize 再被拒一次。被拒的 plan 与 summarize 都不落台账。alpha.3：plan 被闸拒即抛 `BudgetGateError`，整轮到此为止，不再跑默认计划。
+
+<a id="u13"></a>
+## U13 · 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收
+
+**现场**：R6 基线，t2-sc-r3 第 1 轮。
+
+**证据**：
+
+```
+{"project":"t2-sc-r3","round":1,"wallMs":287193.37,"calls":1,"http":0}     ← fetch 抛错，HTTP 0
+{"project":"t2-sc-r3","round":2,"wallMs":56600,"calls":5,"http":200}       ← 下一轮多出 2 次调用 = 上一轮漏的
+backend/src/server/server.ts: export const SERVER_IDLE_TIMEOUT_S = 255;     // Bun 上限
+```
+
+**问题**：A5 把 `idleTimeout` 拉到 Bun 的上限 255s 是对的，但 chat 的同步路由在这个上限之上没有任何兜底：超过它，
+客户端收到的是连接重置（不是错误消息），服务端不知道没人在听，继续把 plan/execute/summarize 跑完、把钱花完。
+基线里 20 轮有 3 轮墙钟 >170s，逼近这个天花板；网络稍差就会撞上。
+
+**修改方向**：① 同步 `/api/session/chat` 超过阈值（如 200s）时改回 202 + 任务句柄（任务路由已有这套）；或 ② 把 UI 与脚本一律推到 `/stream`（SSE 有心跳，不受 idleTimeout 影响——需核实 Bun 对 SSE 的 idle 判定是否按帧刷新）；③ 无论哪条，server 端在客户端断开时应取消编排（`AbortSignal` 透传到 LLM 调用），别把钱花在没人要的结果上。
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合

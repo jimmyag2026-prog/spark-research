@@ -282,7 +282,27 @@
           "type": "array",
           "items": {}
         },
-        "reviewResult": {}
+        "reviewResult": {},
+        "failure": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "enum": [
+                "budget",
+                "llm"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "message"
+          ],
+          "description": "U12（v0.9）：本轮没有产出时的结构化原因（budget = 预算闸拒绝；llm = 上游调用失败）。成功时不出现。"
+        }
       },
       "additionalProperties": false,
       "required": [

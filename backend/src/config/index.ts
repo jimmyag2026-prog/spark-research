@@ -51,6 +51,8 @@ export interface SettingSpec {
   effect: string;
   // 凭据类：值永不出现在任何输出里。
   secret?: boolean;
+  /** U22（v0.9 R6）：数值下限（含）。写入时校验，两条写路径共用 validateSetting。 */
+  min?: number;
 }
 
 // 默认值刻意在这里重新声明而不是 import 各模块常量：config 层不该反向依赖 lab/simulation/llm
@@ -230,6 +232,7 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     envVar: "SPARK_RESEARCH_LLM_TIMEOUT_MS",
     legacyEnvVars: ["SPARK_LLM_TIMEOUT_MS"],
     defaultValue: 120_000,
+    min: 1000, // U22：500ms 这种值会把每一次调用都掐死；下限是产品判断，不是技术限制
     summary: "单次 LLM 调用的超时上限（毫秒）",
     effect:
       "超时按可见失败处理（`ok:false`），不会被当成模型产出。调小会让长文本生成（综述草稿）更容易被掐；调大则一次卡住的模型调用能挂住整条 orchestrator 流程更久。",
@@ -517,6 +520,7 @@ export function saveConfig(config: UserConfig, options: ConfigOptions = {}): str
   // 要显式 chmod 才会真的被收紧——这是 D-6 里最容易漏的一条路径。
   writeFileSync(path, JSON.stringify(config, null, 2) + "\n", { mode: CONFIG_FILE_MODE });
   chmodSync(path, CONFIG_FILE_MODE);
+  if ((options.env ?? process.env) === process.env) refreshBridgedEnv(config, options); // U15
   return path;
 }
 
@@ -539,7 +543,10 @@ export function resolveSetting(key: string, options: ConfigOptions = {}): Resolv
   const config = loadConfig(options);
   const warn = options.warn ?? ((m: string) => console.warn(m));
 
-  const envRaw = spec.envVar ? env[spec.envVar] : undefined;
+  // U15：我们自己从 config.json 桥进 process.env 的值不算「用户设了环境变量」——按文件实时读。
+  const bridged =
+    env === process.env && spec.envVar != null && bridgedEnvVars.has(spec.envVar) && bridgedRoot !== null && dataDir(options) === bridgedRoot;
+  const envRaw = spec.envVar && !bridged ? env[spec.envVar] : undefined;
   // V21（v0.8 起）：旧名读到即报错——不看新名设没设（设了新名还留着旧名，多半是复制粘贴的陈旧配置，
   // 同样该清掉）。错误消息点名旧名与新名，给下一步。
   for (const legacyVar of spec.legacyEnvVars ?? []) {
@@ -680,6 +687,16 @@ export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions
 // 而 connector 层在很多路径上拿不到 config 句柄。做法是**进程启动时把 config 的值
 // 补进 env（已有 env 则不动）**——一次性、显式、优先级不变。
 // 凭据不走这条路：secret 永远不进 env（AD-2）。
+//
+// U15（v0.9 R6 P0）：桥接进 env 的值**不能反过来遮住 config.json**。之前 resolveSetting 见到
+// env 有值就当「用户设了环境变量」，于是运行中的 server 对 config.json 的后续改动永久免疫、
+// `source` 误标成 env、nextStep 让用户去 unset 一个从不存在的变量——网页端换模型因此
+// 「文件写对了、进程不认」（T5 第 6 步，与 U10 同构）。修法：记住哪些 env 是我们自己桥的，
+// resolveSetting 对这些键仍按 config.json 实时读；config.json 一落盘就把桥接值刷新。
+const bridgedEnvVars = new Set<string>();
+// 桥接只对**进程自己的** dataDir 生效：测试与工具用 `{ root }` 指向临时目录时，既不按桥接读、也不去刷新 process.env。
+let bridgedRoot: string | null = null;
+
 export function applyConfigEnvDefaults(options: ConfigOptions = {}): string[] {
   const env = options.env ?? process.env;
   const config = loadConfig(options);
@@ -692,9 +709,32 @@ export function applyConfigEnvDefaults(options: ConfigOptions = {}): string[] {
     const value = config[spec.key];
     if (value === undefined || value === "") continue;
     env[spec.envVar] = String(value);
+    if (env === process.env) {
+      bridgedEnvVars.add(spec.envVar);
+      bridgedRoot = dataDir(options);
+    }
     applied.push(spec.envVar);
   }
   return applied;
+}
+
+/** 测试与工具用：某个环境变量是不是由 applyConfigEnvDefaults 从 config.json 桥过去的。 */
+export function isBridgedEnvVar(envVar: string): boolean {
+  return bridgedEnvVars.has(envVar);
+}
+
+/**
+ * config.json 落盘后刷新桥接值：桥过去的键按新文件重设（文件里删了就 delete），
+ * 用户自己设的环境变量一个不碰。saveConfig 调用，进程内所有只读 env 的读者立刻看到新值。
+ */
+function refreshBridgedEnv(config: UserConfig, options: ConfigOptions): void {
+  if (bridgedEnvVars.size === 0 || bridgedRoot === null || dataDir(options) !== bridgedRoot) return;
+  for (const spec of CONFIG_SETTINGS) {
+    if (!spec.envVar || !bridgedEnvVars.has(spec.envVar)) continue;
+    const value = config[spec.key];
+    if (value === undefined || value === "") delete process.env[spec.envVar];
+    else process.env[spec.envVar] = String(value);
+  }
 }
 
 
@@ -797,6 +837,12 @@ export function validateSetting(key: string, raw: unknown): string | number {
       throw new SettingValidationError(
         `'${key}' 必须是正整数，收到 ${value}`,
         `填一个大于 0 的毫秒数；想放宽超时就调大，不要填 0`,
+      );
+    }
+    if (spec.min !== undefined && value < spec.min) {
+      throw new SettingValidationError(
+        `'${key}' 不能小于 ${spec.min}，收到 ${value}`,
+        `填 ${spec.min} 以上的值（默认 ${spec.defaultValue ?? spec.min}）`,
       );
     }
     return value;

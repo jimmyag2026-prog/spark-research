@@ -389,7 +389,7 @@ describe("配置面 · CLI", () => {
     const root = tmpRoot();
     const bad = capture();
     expect(runConfigCommand(["set", "wetBackend", "nope"], { root, env: {}, out: bad.out, err: bad.out })).toBe(1);
-    expect(bad.lines.join("\n")).toContain("合法取值");
+    expect(bad.lines.join("\n")).toContain("只能是"); // R6 窗口起 CLI 与设置面共用 validateSetting 的措辞
 
     const unknown = capture();
     expect(runConfigCommand(["set", "nosuch", "x"], { root, env: {}, out: unknown.out, err: unknown.out })).toBe(1);

@@ -37,7 +37,8 @@ export const CHAT_HELP = `用法:
 
 选项:
   --model <name>        本次会话用哪个模型（不给则用 config.json 的 defaultModel）
-  --budget-usd <n>      本次会话的预算上限（美元）。超出则拒绝调用，不会静默继续
+  --budget-usd <n>      本项目**累计**已知花费的上限（美元），不是本次的额度：已知花费 + 本次估价
+                        超过它就拒绝调用（CLI 退出码 1），不会静默继续。查已花多少：spark-research usage
   --allow-unpriced      允许调用单价表里查不到价的模型（这些调用在 usage 里标 unpriced）
   --project <slug>      显式指定项目（并发多会话时务必带上：当前项目指针是全局的）
   --help, -h            显示本帮助（不产生任何模型调用）

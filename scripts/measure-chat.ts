@@ -95,14 +95,46 @@ const rows: Row[] = [];
 const rawAppend: string[] = [];
 const perRoundBudget = Math.max(0.005, budgetUsd / (projects.length * rounds));
 
+// 会话 → 项目的绑定走「当前项目」指针（UI 就是这么做的：POST /api/projects/current）。
+// `/api/session/chat?project=` **不被读取**（首跑时 20 轮全记进了 speed-probe，调用数一律 0）——
+// 已作为 U11 登记；这里先记住原来的当前项目，跑完改回去。
+const originalCurrent = await fetch(`${base}/api/projects/current`)
+  .then((r) => r.json() as Promise<{ project: { slug: string } }>)
+  .then((j) => j.project.slug)
+  .catch(() => null);
+async function setCurrent(slug: string): Promise<void> {
+  const r = await fetch(`${base}/api/projects/current`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  if (!r.ok) throw new Error(`切当前项目到 ${slug} 失败：HTTP ${r.status}`);
+}
+process.on("exit", () => {
+  if (originalCurrent) console.log(`（当前项目已改回 ${originalCurrent}）`);
+});
+
+// `budgetUsd` 是**项目累计已知花费**的上限（不是本次调用的额度）：已知花费 + 在飞预留 + 本次估价 > 上限就拒。
+// 课题项目上已经有几美分到几美元的历史花费，直接传 perRoundBudget 会 20 轮全被拒（HTTP 200、0 调用、0.0s）。
+// 所以每轮取「该项目当前已知花费 + 本轮额度」——总额度语义不变，仍是 --budget 均摊。
+async function knownCost(slug: string): Promise<number> {
+  const j = (await fetch(`${base}/api/usage?project=${encodeURIComponent(slug)}`).then((r) => r.json())) as {
+    totals?: { knownCostUsd?: number };
+    knownCostUsd?: number;
+  };
+  return j.totals?.knownCostUsd ?? j.knownCostUsd ?? 0;
+}
+
 for (const slug of projects) {
+  await setCurrent(slug);
   for (let r = 1; r <= rounds; r++) {
     const before = readUsage(slug);
+    const cap = (await knownCost(slug)) + perRoundBudget;
     const t0 = performance.now();
-    const res = await fetch(`${base}/api/session/chat?project=${encodeURIComponent(slug)}`, {
+    const res = await fetch(`${base}/api/session/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessionId: `r6-${slug}-${r}-${Date.now()}`, message: MESSAGE, mode: "chat", budgetUsd: perRoundBudget }),
+      body: JSON.stringify({ sessionId: `r6-${slug}-${r}-${Date.now()}`, message: MESSAGE, mode: "chat", budgetUsd: cap }),
     }).catch((e) => ({ status: 0, statusText: String(e) } as Response));
     const wallMs = performance.now() - t0;
     const after = readUsage(slug);
@@ -121,11 +153,24 @@ for (const slug of projects) {
         /* 残行不计 */
       }
     }
-    rows.push({ project: slug, round: r, wallMs, calls: added.length, failed, kinds, http: res.status });
+    let gated = false;
+    try {
+      const bodyText = await res.text();
+      gated = bodyText.includes("预算闸") && bodyText.includes("拒绝");
+      if (gated) console.log(`  ⚠️ 本轮被预算闸拒绝（HTTP 仍是 200）：${bodyText.slice(0, 160).replace(/\n/g, " ")}`);
+    } catch {
+      /* 读不到 body 不影响计数 */
+    }
+    rows.push({ project: slug, round: r, wallMs, calls: added.length, failed: failed + (gated ? 1 : 0), kinds: gated ? { ...kinds, "(预算闸拒绝)": 1 } : kinds, http: res.status });
     rawAppend.push(`### ${slug} · 第 ${r} 轮（HTTP ${res.status}，${(wallMs / 1000).toFixed(1)}s，新增 ${added.length} 行）`, "```json", ...added, "```", "");
     console.log(`${slug} r${r}: HTTP ${res.status} 墙钟 ${(wallMs / 1000).toFixed(1)}s 调用 ${added.length} 失败 ${failed}`);
+    // 每轮落盘一行（进程中途被杀——低内存、EPIPE——已经发生过一次，20 轮的墙钟全丢）：
+    // 汇总表可以从这份逐轮记录重算，钱不用再花第二遍。
+    if (out) appendFileSync(`${out}.rounds.jsonl`, JSON.stringify({ ts: new Date().toISOString(), ...rows[rows.length - 1] }) + "\n");
   }
 }
+
+if (originalCurrent) await setCurrent(originalCurrent).catch((e) => console.error(String(e)));
 
 // ---------- 汇总 ----------
 function pct(xs: number[], p: number): number {

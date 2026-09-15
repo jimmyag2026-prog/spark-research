@@ -100,7 +100,11 @@ describe("G-3 · usageTrackingLlm 预算闸", () => {
       expect(r3.error.message).toContain("下一步");
     }
     expect(inner.calls).toBe(2); // 第三次没发出去
-    expect(store.totals().calls).toBe(2); // 拒绝不入台账（不是 API 调用）
+    // v0.9 R6（U12 ③）改口径：被闸拒绝**也落一行**（ok:false / errorKind:budget / costUsd:0），
+    // 否则 usage 里查不到「今天被闸拒了多少次」。已知花费不受影响。
+    expect(store.totals().calls).toBe(3);
+    expect(store.totals().byErrorKind["budget"]).toBe(1);
+    expect(store.totals().knownCostUsd).toBeCloseTo(0.1582, 4);
   });
 
   test("跨进程累计：新 wrapper 读文件历史，直接拒绝", async () => {
