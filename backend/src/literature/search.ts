@@ -366,7 +366,12 @@ export class LiteratureSearcher {
     // γ-2（V161 + U58）：中文查询先抽主题词 + 英译，中英**双查**后合并。
     // 纯英文查询在 prepareQuery 里就 passthrough 了（queries === [query]），
     // 下面的 flatMap 退化成原来的 `sources.map(...)`，行为逐字节不变。
-    const prepared = await prepareQuery(query, { translate: this.translate });
+    // 收口（v0.10）：中文处理层（英译双查 + 相关性地板）只在调用方给了 `translate` 时启用——
+    // 生产入口（pipeline / CLI）都给；裸 `new LiteratureSearcher(registry)` 保持 v0.6 的
+    // 单查行为（V65 拆词/分词门禁钉的就是那条路径的调用次数）。
+    const prepared: PreparedQuery = this.translate
+      ? await prepareQuery(query, { translate: this.translate })
+      : { original: query.trim(), hasCJK: false, queries: [query.trim()], english: null, via: "passthrough", note: null };
 
     // 【与 lane α 的交叉点】这一行 α 也在改（并发/预筛）。γ 改的只有一件事：
     // 从 `sources.map(source => searchOne(source, query, ...))` 变成
