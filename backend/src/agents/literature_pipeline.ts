@@ -25,6 +25,8 @@ export type LiteraturePipelineMode = "search" | "review";
 
 export interface LiteraturePipelineDeps {
   llm: Pick<LLMRouter, "call">;
+  /** U50：精读卡与综述用的模型（不给 = llm 自己的默认）。 */
+  model?: string;
   project: Project;
   sessionId: string;
   /** 测试注入：不给则按凭据 + 内置连接器构造真 searcher。 */
@@ -161,6 +163,7 @@ export async function runLiteraturePipeline(
     const records = project.records();
     const generator = new ReadingCardGenerator({
       llm: deps.llm,
+      model: deps.model,
       library,
       records,
       projectContext: project.meta.description || undefined,
@@ -182,6 +185,7 @@ export async function runLiteraturePipeline(
     note(`综述（${cards.length} 张精读卡）`);
     const reviewer = new ReviewDraftGenerator({
       llm: deps.llm,
+      model: deps.model,
       library,
       records,
       artifacts: project.artifacts(),

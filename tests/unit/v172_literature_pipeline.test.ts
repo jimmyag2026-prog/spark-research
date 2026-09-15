@@ -43,9 +43,11 @@ class ScriptLlm {
   readonly prompts: string[] = [];
   private i = 0;
   constructor(private readonly replies: Array<string | ((prompt: string) => string)>) {}
-  async call(messages: ChatMessage[]): Promise<LlmResponse> {
+  readonly models: Array<string | undefined> = [];
+  async call(messages: ChatMessage[], options?: unknown): Promise<LlmResponse> {
     const prompt = messages.map((m) => m.content).join("\n");
     this.prompts.push(prompt);
+    this.models.push(typeof options === "string" ? options : (options as { model?: string } | undefined)?.model);
     const r = this.replies[Math.min(this.i++, this.replies.length - 1)]!;
     const content = typeof r === "function" ? r(prompt) : r;
     return { ok: true, content, provider: "kimi", model: "test", usage: { inputTokens: 1, outputTokens: 1 } } as unknown as LlmResponse;
@@ -151,5 +153,40 @@ describe("V172 · chat 的 skill 任务真执行", () => {
     expect(llm.prompts[0]).toContain('"skill":"literature-review"');
     expect(llm.prompts[0]).toContain("queries");
     expect(llm.prompts[0]).toContain("instead of connector tasks");
+  });
+});
+
+describe("U49 / U50 · 流程内进度推到界面；精读/综述用文献子代理模型", () => {
+  test("U49：文献流程的每个阶段都以 progress 事件推出（以前精读 8 篇期间界面像卡死）", async () => {
+    pm.create("lp-prog", { name: "x" });
+    pm.bindSession("s-prog", "lp-prog");
+    const llm = new ScriptLlm([
+      JSON.stringify([{ id: "t1", kind: "skill", description: "查文献", params: { skill: "literature-search", queries: ["rsi china"] } }]),
+      "汇总",
+    ]);
+    const orch = new OrchestratorAgent(new SparkResearchDaemon({ projects: pm }), { llm: llm as never, projects: pm, workspaceRoot: join(root, "ws"), literatureSearcher: fakeSearcher(2) });
+    const events: string[] = [];
+    await orch.processRequest("RSI", "s-prog", { onProgress: (e) => events.push(`${e.stage}|${e.message}`) });
+    expect(events.some((e) => e.startsWith("execute|") && e.includes("检索「rsi china」"))).toBe(true);
+    // 计数不变式：进度里的 complete 不超过 total
+    expect(events.every((e) => !/执行中 (\d+)\/(\d+)/.test(e) || Number(RegExp.$1) <= Number(RegExp.$2))).toBe(true);
+  });
+
+  test("U50：pipeline 把 model 透传给精读卡与综述的每次调用", async () => {
+    const project = pm.create("lp-model", { name: "x" });
+    const realKey = () => { const lib = new LibraryStore(project.paths.libraryDb); try { return libraryKeyIndex(lib.list()).keys[0] ?? "unknown"; } finally { lib.close(); } };
+    const llm = new ScriptLlm([CARD, () => `# 综述\n\n一句[@${realKey()}]。`]);
+    const r = await runLiteraturePipeline(
+      { llm, model: "deepseek-v4-flash", project, sessionId: "s-model", searcher: fakeSearcher(1), downloadPdf: async () => ({ ok: false }) },
+      { mode: "review", queries: ["rsi"], maxRead: 1 },
+    );
+    expect(r.ok).toBe(true);
+    expect(llm.models).toEqual(["deepseek-v4-flash", "deepseek-v4-flash"]);
+    project.close();
+  });
+
+  test("U50：编排层的模型选择顺序 = 会话覆盖 > subAgentModel_literature > 默认（源码级钉住接线）", async () => {
+    const src = await Bun.file(new URL("../../backend/src/agents/orchestrator.ts", import.meta.url)).text();
+    expect(src).toMatch(/model: this\.sessionModel\.get\(sessionId\) \?\? configuredSubAgentModel\("literature"/);
   });
 });

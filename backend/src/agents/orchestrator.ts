@@ -1,5 +1,6 @@
 import { searchPayloadProblem } from "../connectors/base";
 import { renderConnectorInventory } from "../connectors/registry";
+import { configuredSubAgentModel } from "../config";
 import { runLiteraturePipeline, type LiteraturePipelineMode } from "./literature_pipeline";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -80,7 +81,7 @@ import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 import { AgentRunLedger } from "./ledger";
-import { createProgressEmitter, type ProgressListener } from "./progress";
+import { createProgressEmitter, type ProgressEmitter, type ProgressListener } from "./progress";
 
 // export：F-a 新增的 planner-prompt/TASK_KINDS 同源测试要从外部读这张表，
 // 与 plan() 里手写的逐 kind 说明文字做双向比对（防止未来再出现「表里删了，
@@ -711,7 +712,7 @@ export class OrchestratorAgent {
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
-      execution.push(await this.executeTask(sessionId, task, external));
+      execution.push(await this.executeTask(sessionId, task, external, progress));
       progress.taskCompleted(task);
     }
 
@@ -734,7 +735,7 @@ export class OrchestratorAgent {
       const fixes = this.planCorrections(review);
       progress.repairing(fixes.length);
       for (const fix of fixes) {
-        execution.push(await this.executeTask(sessionId, fix, external));
+        execution.push(await this.executeTask(sessionId, fix, external, progress));
         progress.taskCompleted(fix);
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
@@ -901,6 +902,7 @@ export class OrchestratorAgent {
     sessionId: string,
     task: PlannedTask,
     external: ExternalMcpAttachment,
+    progress?: ProgressEmitter,
   ): Promise<ExecutionOutcome> {
     try {
       switch (task.kind) {
@@ -1081,7 +1083,13 @@ export class OrchestratorAgent {
                 llm: this.llmFor(sessionId),
                 project,
                 sessionId,
-                note: (m) => this.record(sessionId, "skill", name, m),
+                // U49：流程内阶段既进执行日志也推到界面（以前精读 8 篇期间界面像卡死）。
+                note: (m) => {
+                  this.record(sessionId, "skill", name, m);
+                  progress?.taskNote(m);
+                },
+                // U50：精读/综述优先用会话覆盖，其次 subAgentModel_literature，最后默认模型。
+                model: this.sessionModel.get(sessionId) ?? configuredSubAgentModel("literature", configuredModel(LLMRouter.DEFAULT_MODEL)),
                 searcher: this.literatureSearcher,
                 downloadPdf: this.literatureDownloadPdf,
               },
