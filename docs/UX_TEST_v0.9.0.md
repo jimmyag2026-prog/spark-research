@@ -51,6 +51,8 @@
 |---|---|---|---|
 | 09-15 20:31 | 「在 chat 里之后要设置为可以调用 skill 做任何任务」 | chat 的 `skill` 任务只 `return skillContextFor(name)`（`orchestrator.ts` `case "skill"`），从不执行；13 个成熟技能在对话里等于不存在 | **V172 已按此重写**（甲子代理路线 / 乙直调路线，倾向甲+乙混合；前置是技能执行入口盘点表）。v0.10 首批 |
 
+| 09-15 21:25 | 「现在是否调用了 skill？基础思路：关键词拆解 → AMiner 等平台检索取 DOI → connector 下载 → 读取确认 → 综述总结」 | 仍未调用：`case "skill"` 只加载上下文。五步在 CLI 里已齐（`lit search/add/pdf/read/review`），缺关键词拆解与接进 chat | **V172 验收口径已按此写定** |
+
 ## 五、总结（用完再填）
 
 - 最卡我的第一件事：
