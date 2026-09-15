@@ -5,6 +5,38 @@
 
 ---
 
+## [0.9.0-alpha.3] — 2026-09-15
+
+**R6 实证回环（零上下文，T1–T5 + 基线）的修复窗口。** 报告与原始输出：`docs/devlog/R6.md`，基线：`docs/devlog/R6-baseline.md`。
+
+### 如实交代
+
+- **基线数字很难看，这是第一次量出来**：一句「用三句话说明蛋白质二级结构」在四个课题项目上 P50 27–101s、每轮 3–5 次模型调用（plan / execute / summarize 各输出约 2000 token）。v0.9 DONE 第 2 条要压的就是它，本版**没有**压——本版只修了让它量不准的东西。
+- 单轮超过 255s 会被 server 掐断、编排在后台继续花钱（U13 → V156），本版未修，须先裁定方向。
+- T5 第 10 步（人为断网 < 30s 报错）验收者无关 Wi-Fi 权限，未验。T3 召回仍 0/8（AMiner 中文检索塌陷，V161）。
+- 其余 R6 发现 U14 U16–U19 U24–U27 登记为 V157–V166，本版不做。
+
+### 修复
+
+- **网页端改 `defaultModel` 后 server 仍用旧值（U15，T5 第 6 步 P0，与 U10 同构）**：启动时把 config.json 桥进 `process.env` 的键，`resolveSetting` 现在按文件实时读、`source` 正确标 config；config.json 一落盘桥接值即刷新。用户自己设的环境变量仍优先。
+- **`config set OPENROUTER_API_KEY <值>` 明文收凭据（U23，P0/安全）**：CLI 现在拒收并指向 `spark-research auth` / 环境变量；HTTP 侧本来就 403。
+- **预算闸拒绝对程序不可见（U12）**：chat 响应新增 `failure: {kind: "budget"|"llm", message}`；被拒时 `review.approved` 必为 false；被拒的调用落台账 `ok:false / errorKind:"budget" / costUsd:0`；plan 被拒即止，不再退到默认计划去跑 49s 连接器 I/O。
+- **`spark-research chat` 全失败/被闸拒时退出码仍 0（U21）**：现在 `failure` 存在即 exit 1。
+- **`llmTimeoutMs` 无下限（U22）**：`min: 1000`，CLI 与设置面共用 `validateSetting`（CLI 的 enum/数字校验措辞随之统一）。
+- **`/api/session/chat` 与 `/stream` 认 `?project=`（U11）**：与其它域路由同一惯例；不存在 → 404；不给仍按当前项目。
+- `--budget-usd` 帮助改为「本项目累计已知花费的上限」（U20 CLI 半边）。
+
+### 变更（对外可见）
+
+- 台账 `usage.jsonl` 会出现 `errorKind:"budget"` 的 `ok:false` 行，`calls` 因此包含被闸拒的尝试；`knownCostUsd` 不受影响。
+- `config set <secret>` 从「静默写盘」变为「退出码 1」。
+
+### 新增
+
+- `scripts/measure-chat.ts`：R6 基线测量（固定消息 × N 轮，P50/P90、每轮调用数、errorKind 分布，每轮落盘）。
+- `docs/devlog/R6.md`（1085 行验收记录）、`R6-baseline.md`、`R6-window-fixes.md`；`docs/USAGE_LOG.md` U11–U27。
+- 门禁 `tests/unit/r6_window.test.ts`（9 条），三条阴性对照实跑变红（见 `R6-window-fixes.md`）。
+
 ## [0.9.0-alpha.2] — 2026-09-15
 
 **v0.9 W9-1：五条 lane 全部合入，USAGE_LOG U1–U10 关九条半。** 对应 `docs/DEVELOPMENT_PLAN_v0.9.md` §三，

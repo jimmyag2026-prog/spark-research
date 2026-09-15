@@ -33,9 +33,23 @@
 | [U8](#u8) | server 启动日志打两遍，两处手写副本 | 低 | 整洁 | ✅ alpha.2（δ-4） |
 | [U9](#u9) | CLI `chat` 没有任何参数：无预算闸、无 `--model`、`--help` 会被当消息发出去 | **高** | 正确性 | ✅ alpha.2（β-2 `chat --model/--budget-usd/--project/--help`） |
 | [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | ✅ alpha.2（β-1 + 收口：`sessionModel` 进 `llmFor`；V145） |
-| [U11](#u11) | `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账 → 脚本 20 轮全记进 speed-probe | 中 | 契约一致性 | 待转 V（alpha.2 R6 基线发现） |
-| [U12](#u12) | 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；且拒绝前仍耗时 49.8s | **高** | 正确性 | 待转 V（alpha.2 R6 基线发现，耗时部分待核实） |
-| [U13](#u13) | 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收 | **高** | 正确性 | 待转 V（alpha.2 R6 基线发现） |
+| [U11](#u11) | `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账 → 脚本 20 轮全记进 speed-probe | 中 | 契约一致性 | ✅ alpha.3（`/api/session/chat|stream` 认 `?project=`/body.project，不存在 404） |
+| [U12](#u12) | 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；且拒绝前仍耗时 49.8s | **高** | 正确性 | ✅ alpha.3（`failure:{kind,message}` 结构化字段 + review 不 approved + 闸拒落台账 errorKind:budget + plan 被拒即止不跑默认计划；预算语义文案改 CLI 半边，前端 → V166） |
+| [U13](#u13) | 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收 | **高** | 正确性 | → V156（设计裁定：202+任务句柄 / 推到 stream / 断连即取消） |
+| [U14](devlog/R6.md#u14) | 验收/探针项目从没归档，工作台默认打开的就是一次性产物（正文在 R6.md） | 中 | 数据卫生 | → V157 |
+| [U15](devlog/R6.md#u15) | 启动时 config.json 灌进 `process.env`，运行中 server 永远用旧值、`source` 误标 env（T5 第 6 步 P0，U10 同构） | **高** | 正确性 | ✅ alpha.3（桥接键按文件实时读，落盘即刷新 env） |
+| [U16](devlog/R6.md#u16) | `doctor`「前端未构建」判的是 cwd 不是运行实例 | 低 | 运维 | → V162 |
+| [U17](devlog/R6.md#u17) | `config list` 截断长值不加省略号 | 低 | 体验 | → V163 |
+| [U18](devlog/R6.md#u18) | chat 执行段无计数进度，约 15s 空白 | 中 | 体验 | → V158 |
+| [U19](devlog/R6.md#u19) | 设置项被 422 拒时界面不显示错误 | 中 | 体验 | → V159 |
+| [U20](devlog/R6.md#u20) | `--budget-usd` 帮助说「本次会话」，实为「本项目累计」 | 中 | 文档 | ◐ alpha.3 CLI 文案已改；前端 BudgetInput → V166 |
+| [U21](devlog/R6.md#u21) | chat 全失败/被闸拒时 CLI 退出码仍 0 | 中 | 正确性 | ✅ alpha.3（`failure` 存在 → exit 1） |
+| [U22](devlog/R6.md#u22) | `llmTimeoutMs` 无下限，500 被接受 | 中 | 正确性 | ✅ alpha.3（spec.min=1000，两条写路径共用 validateSetting） |
+| [U23](devlog/R6.md#u23) | `config set <PROVIDER>_API_KEY <值>` 明文收凭据进 shell 历史 | **高** | 安全 | ✅ alpha.3（CLI 拒收并指向 `auth`） |
+| [U24](devlog/R6.md#u24) | `doctor` 只探写死的 4321 | 中 | 运维 | → V160 |
+| [U25](devlog/R6.md#u25) | server 无请求级日志，凭据「日志零命中」证明力弱 | 低 | 可观测性 | → V164 |
+| [U26](devlog/R6.md#u26) | AMiner 中文主题词检索基本无效 + 结果零摘要 | 中 | 检索 | → V161 |
+| [U27](devlog/R6.md#u27) | arxiv 持续 429 / biorxiv 空响应污染召回基线 | 低 | 检索 | → V165 |
 
 ### 方法缺陷
 
@@ -731,8 +745,7 @@ $ tail -1 ~/.spark-research/projects/speed-probe/usage.jsonl     ← 时间戳�
 ③ 台账落一行 `ok:false, errorKind:"budget"`（α-4 的 errorKind 枚举加一个值），让 `byErrorKind` 能看见闸。
 ① 文档 + `BudgetInput` 文案改为「本项目累计上限」，或改语义为「本次增量上限」——改语义影响 CLI `--budget-usd`（V119），须裁定。
 
-**待核实**：被拒那次为什么花了 49.8s 而台账零行——闸在 summarize 前才拒，前面 plan/execute 是否真的调了模型？
-若调了，行去了哪；若没调，49 秒花在哪（连接器 I/O？）。核实法：同样的请求打开 server 侧 α-3 progress 事件（`/stream`）看阶段时间线。
+**已核实（修复窗口，只读代码 + 对照实验）**：49.8s 不是模型在跑——plan 调用被闸拒后 `plan()` 退到 `defaultPlan()`，默认计划里的连接器任务（UniProt/PDB/AlphaFold 查询）真跑了 ~49s 网络 I/O（零 LLM），然后 summarize 再被拒一次。被拒的 plan 与 summarize 都不落台账。alpha.3：plan 被闸拒即抛 `BudgetGateError`，整轮到此为止，不再跑默认计划。
 
 <a id="u13"></a>
 ## U13 · 单轮 chat 超过 255s 时 server `idleTimeout` 掐断连接，编排在后台继续、结果无人接收
