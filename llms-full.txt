@@ -2343,6 +2343,8 @@ CLI 入口：`project` / `lit` / `idea` / `exp` / `lab` / `conclusion` / `report
 # Backlog
 
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
+> 📓 **上游**：真实使用中发现的问题先记进 [`docs/USAGE_LOG.md`](USAGE_LOG.md)（U 编号，原始现场），
+> 复核成立后再转入本文拿 V 号。本文仍是唯一的**已归口**登记处，这条不改变那个约定。
 > ℹ️ **编号说明（2026-09-11）**：V83–V91 = v0.7 R4/A6 归账；**V92–V103 = v0.6.0 外部 review 归账**（原分支 `docs/v0.6-external-review` 登记为 V83–V94，合入时改号 +9，真源 `docs/reviews/v0.6.0_external_review.md`）。
 > **v0.6.0 外部 review 归账（2026-09-11，真源 docs/reviews/v0.6.0_external_review.md）**：
 > 逐条实证核验后新登记 V92–V103；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
