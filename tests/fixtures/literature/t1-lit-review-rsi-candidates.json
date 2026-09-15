@@ -1,0 +1,66 @@
+{
+  "_source": "真实会话 workspaces/web_1789480157513 的 t1-lit-review-rsi.json（T1「recursive self-improvement」）。只抽出预筛门禁需要的字段：queries + 8 篇候选的标题/年份。原 artifact 里没有保存 abstract（downloads/cards 都不含该字段），故 abstract 为 null——门禁因此只验证「按标题也能把明显无关的剔掉」，不假装有摘要。",
+  "topic": "recursive self-improvement / 递归自我改进与超级智能",
+  "queries": [
+    "recursive self-improvement artificial intelligence",
+    "recursive superintelligence AI takeoff",
+    "self-evolving self-improving large language models",
+    "artificial superintelligence research progress",
+    "AI safety governance superintelligence China",
+    "national AI strategy frontier AI United States China comparison"
+  ],
+  "candidates": [
+    {
+      "title": "Instrumental succession: the gradual transfer of agency to AI",
+      "year": 2026,
+      "abstract": null
+    },
+    {
+      "title": "Explainable Artificial Intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI",
+      "year": 2019,
+      "abstract": null
+    },
+    {
+      "title": "Artificial intelligence in healthcare: past, present and future",
+      "year": 2017,
+      "abstract": null
+    },
+    {
+      "title": "Artificial Intelligence and Management: The Automation–Augmentation Paradox",
+      "year": 2021,
+      "abstract": null
+    },
+    {
+      "title": "Sparks of Artificial General Intelligence: Early experiments with GPT-4",
+      "year": 2023,
+      "abstract": null
+    },
+    {
+      "title": "Machine learning & artificial intelligence in the quantum domain: a review of recent progress",
+      "year": 2018,
+      "abstract": null
+    },
+    {
+      "title": "Artificial Intelligence and Business Value: a Literature Review",
+      "year": 2021,
+      "abstract": null
+    },
+    {
+      "title": "Application and theory gaps during the rise of Artificial Intelligence in Education",
+      "year": 2020,
+      "abstract": null
+    }
+  ],
+  "_expectDropped": [
+    "Explainable Artificial Intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI",
+    "Artificial intelligence in healthcare: past, present and future",
+    "Artificial Intelligence and Management: The Automation–Augmentation Paradox",
+    "Machine learning & artificial intelligence in the quantum domain: a review of recent progress",
+    "Artificial Intelligence and Business Value: a Literature Review",
+    "Application and theory gaps during the rise of Artificial Intelligence in Education"
+  ],
+  "_expectKept": [
+    "Instrumental succession: the gradual transfer of agency to AI",
+    "Sparks of Artificial General Intelligence: Early experiments with GPT-4"
+  ]
+}

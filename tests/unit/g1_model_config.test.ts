@@ -55,7 +55,11 @@ describe("G-1 · z-ai/glm-5.3-flash 登记", () => {
 
 class ModelCapturingLlm {
   readonly models: Array<string | undefined> = [];
-  call = async (messages: ChatMessage[], model?: string): Promise<LlmResponse> => {
+  // v0.10 α-3：调用方现在传 CallOptions（`{ model, maxTokens }`）而不只是模型名字符串。
+  // 本用例验的是**模型解析链**，与上限无关——这里把两种形态都归一成模型名，
+  // 断言的口径逐字不变（router.call 本来就同时接受这两种形态）。
+  call = async (messages: ChatMessage[], modelOrOptions?: string | { model?: string }): Promise<LlmResponse> => {
+    const model = typeof modelOrOptions === "string" ? modelOrOptions : modelOrOptions?.model;
     this.models.push(model);
     const title = messages.map((m) => m.content).join("\n").match(/标题: (.+)/)?.[1] ?? "未知";
     return {

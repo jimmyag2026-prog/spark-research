@@ -6,6 +6,7 @@ import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
 import { LLMRouter } from "../llm/router";
+import { DEFAULT_READ_CONCURRENCY } from "./limits";
 import { ProjectManager, ProjectError, type Project, openProjectResolved } from "../project/manager";
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
 import { explainCitationGap, LlmCitationJudge } from "../reviewer/citation_judge";
@@ -719,6 +720,13 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
                 : { ok: false, reason: "库内无 PDF（未下载或不可得）" }),
         });
 
+        // α-2（v0.10）：精读并行度。**给了 --budget-usd 就退回串行**——预算闸的
+        // 判据是「已结算花费 + 在飞预留」，在飞预留用的是发前估价；并发时 N 个调用
+        // 的估价误差会同时在飞，估价越偏、越线越多（本 lane 实测：G-3 的
+        // 「第 2 篇被闸拒」用例在并发下第 2 篇直接放行了）。速度让位于「别超预算」：
+        // 想要并行就别给预算，想要预算就接受串行。chat 侧的文献流程不走这条路径。
+        const readConcurrency = flags["budget-usd"] !== undefined ? 1 : DEFAULT_READ_CONCURRENCY;
+
         // V35：接 TaskRegistry（不是另起一套 CLI 进度机制——见 cli/progress.ts 文件头）。
         // 单篇精读只有一步，套任务只会多两行噪音；`--all` 才是外部验收撞到的那条
         // 「8 分钟零输出」路径，所以只有它走任务。
@@ -735,6 +743,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             run: (handle) => {
               handle.progress(0, targets.length, "开始生成精读卡");
               return generator.generateMany(targets.map((p) => p.id), {
+                concurrency: readConcurrency,
                 onProgress: ({ done, total, ok, title, paperId }) =>
                   handle.progress(done, total, `${ok ? "✅" : "❌"} ${title ?? paperId}`),
               });
@@ -748,7 +757,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
               cards: [] as Awaited<ReturnType<typeof generator.generateMany>>["cards"],
               failures: targets.map((p) => ({ paperId: p.id, error: "任务异常终止" })),
             })
-          : await generator.generateMany(targets.map((p) => p.id));
+          : await generator.generateMany(targets.map((p) => p.id), { concurrency: readConcurrency });
 
         if (flags.json === true) {
           out(JSON.stringify({ cards, failures }, null, 2));
