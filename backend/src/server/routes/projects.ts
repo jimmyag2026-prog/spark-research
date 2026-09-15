@@ -41,8 +41,13 @@ function summarize(ctx: ServerContext, project: Project): ProjectSummary {
 export function projectRoutes(ctx: ServerContext): Hono {
   const app = new Hono();
 
+  // U3：新开工作台时指针停在一个验收测试项目上，而 30 个项目里 20 多个是验收产物。
+  // 后端这一半是让「折叠已归档」有个明确的开关：`?includeArchived=0|1`，**默认 0**。
+  // 既有的 `?all=1` 保留为同义词——SDK 与既有测试在用它，改名是 breaking change，
+  // 而这里要的只是一个语义更清楚的名字，不值得为此打断调用方。
   app.get("/", (c) => {
-    const projects = ctx.projects.list({ includeArchived: queryBool(c, "all") });
+    const includeArchived = queryBool(c, "includeArchived") || queryBool(c, "all");
+    const projects = ctx.projects.list({ includeArchived });
     return c.json({ projects, current: ctx.projects.currentSlug() } satisfies ProjectListResponse);
   });
 
