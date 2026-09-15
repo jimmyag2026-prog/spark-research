@@ -7,12 +7,15 @@
 > （最后一次修改 `3e00f4a`「docs: register V148 + update H-8/H-6 status」）。
 > 所以这里**原样恢复原件**，而不是照着六条提交信息重写一份——重写出来的东西必然比原件少，
 > 而且会把当时真实的判断（尤其 H-6 那条「查了，决定不修」）替换成事后的猜测。
-> 正文以下逐字取自 `3e00f4a`，未做任何删改；lane δ 只在文末追加了一节「合入事实核对」。
+> 正文以下取自 `3e00f4a`；除下面这条编号替换外未做任何删改，lane δ 只在文末追加了一节「合入事实核对」。
 >
-> **两个必须知道的配套事实**（详见文末追加节）：
-> 1. 本文的 V144 / V145 / V146 与今天 `docs/BACKLOG.md` 里的 V144 / V145 / V146 **是不同的条目**——
->    两条工作线各自从 V143 往后编号，撞号了。
-> 2. 本文 §6 的流程图里 H-7 忘了标 `[done]`，但它其实已经做完并合入（`8521074`）。
+> **原分支登记为 V142–V147，因与 main 撞号于 2026-09-15 改为 V147–V152；对照表见文末。**
+> （同批从本分支登记的 **V148 一并顺延为 V153** —— 不动它的话，它会和新的 V148（原 V143）在本文内部再撞一次。
+> 顺延范围因此是 V142–V148 → V147–V153，比收口裁定多带一个号，理由与对照表都在文末。）
+> 裁定口径：main 上经 #110/#113 合入的 V142–V146 是正式编号；从未合入的本分支让号。
+> 本次**只改本文件**，`docs/BACKLOG.md` 不碰（收口会在 BACKLOG 头部补编号说明）。
+>
+> 另一个必须知道的事实：本文 §6 的流程图里 H-7 忘了标 `[done]`，但它其实已经做完并合入（`8521074`）。
 
 ---
 
@@ -63,13 +66,13 @@ These are small, independent, high-value fixes. Serial on the main worktree — 
 | H-5 | **V138** | `orchestrator.ts` `projectCache` grows unbounded in a long-running server | `orchestrator.ts:278` (`private projectCache = new Map<string, Project>()`), `:626-629` (`.get`/`.set` only — no `.delete` anywhere in the file). A long-lived HTTP/MCP server accumulates one entry per distinct `sessionId` forever. | Add eviction: either an LRU cap, or delete-on-session-end if session lifecycle is already tracked elsewhere (check `daemon/daemon.ts` for existing session teardown hooks before adding a new one). | Unit test: drive N distinct sessions through `projectForSession()`, assert cache size does not exceed the cap. |
 | H-6 | **V139** | `raw/sink.ts` busy-waits with `Bun.sleepSync(5)` and re-reads the file tail synchronously on every append | `raw/sink.ts:170` (`Bun.sleepSync(5)` inside a lock-wait loop), `readLastHash`/`readTail` (synchronous read on every append/verify). | **Investigated, not fixed — downgraded after finding a real architecture conflict, not implemented as originally scoped in this row.** `RawSink.append()` is *deliberately* synchronous per the file's own header comment (two of the four call sites are in `finally`/wrapper return paths; sync semantics make "was it recorded" independent of promise-settlement ordering) — making it non-blocking requires converting the whole interface to async, touching all 4 call sites, `MemoryRawSink`, and a lot of tests. That's a dedicated migration, not a Gate H item, and this plan does not attempt it. Separately, the "cache the tail offset" mitigation originally proposed here turned out to be wrong: the per-append disk re-read of the last hash is not an oversight — it is **the V91 fix** for multi-process hash-chain corruption (server + CLI appending to the same file), and removing it would reintroduce that bug. `Bun.sleepSync` is also already the correct blocking-sleep primitive (not a CPU-spinning loop), so there is no narrower fix that keeps the sync contract and avoids blocking during genuine lock contention. Practical severity is lower than the finding reads: JS's single-threadedness means two `append()` calls can never race *within* one process, so the lock/sleepSync path only fires under genuine cross-process contention — rare and brief in this product's actual usage pattern. Full writeup in `docs/BACKLOG.md` V139. | N/A — no code change made for this item. |
 | H-7 | **V140** | `PythonKernel` JSON.parse of kernel stdout line is unguarded | `kernels/manager.ts:195`: `const parsed = JSON.parse(line);` with no try/catch. Any native extension that writes to stdout out of protocol (not just malformed extensions — any print-debugging left in third-party code) throws an unhandled exception and desyncs the line protocol for the rest of the kernel's life. | Wrap in try/catch; on parse failure, treat as a protocol violation: log the offending line (truncated), and either resync (skip to next well-formed line) or kill+restart the kernel (reuse the existing `killAndReset()` path). | Unit test: feed a non-JSON line into the kernel's stdout mock → assert kernel recovers (via reset or resync) rather than crashing the caller. |
-| H-8 | **V141** | CI runs only `unit` + binary smoke; `concurrency`, `timeout`, `integration`, `e2e`, `sdk` suites never run in CI, and `package.json` has no `test:concurrency`/`test:timeout` scripts | `.github/workflows/ci.yml`: only `bun test tests/unit` and `bash scripts/smoke-binary.sh`. `package.json:28-36`: scripts exist for `test`, `test:integration`, `test:lab`, `test:py`, `test:e2e`, `test:sdk` — but no `test:concurrency` or `test:timeout`, and none of `integration`/`e2e`/`sdk`/concurrency/timeout are wired into the workflow. | **Done, but narrower than originally scoped — investigation changed the plan.** Added `test:concurrency`/`test:timeout` npm scripts and wired `concurrency`, `timeout`, `lab` (pytest, zero heavy deps), and `e2e` (Playwright, fixture-server-backed, no real credentials, ~21s locally) into CI. **Did not** wire in `test:sdk` (2 pre-existing, order-dependent failures found during this work — new item **V148**, would make every PR's CI red for a pre-existing bug unrelated to this plan), `test:integration` (`describe.skipIf(!RECORDING)` — always 0 executed assertions without real network credentials; wiring it in would be pure "green theater," not a real gate), or the full `test:py` (needs the heavyweight opentrons/scanpy/pydeseq2/cobra install, a dedicated CI-infra investment out of scope for a Gate H item — `tests/lab`, which needs none of that, is wired in instead). | CI green on the PR that adds it (verified locally: all four newly-wired suites pass — concurrency 33/33, timeout 4/4, lab 26/26, e2e 25/25). |
+| H-8 | **V141** | CI runs only `unit` + binary smoke; `concurrency`, `timeout`, `integration`, `e2e`, `sdk` suites never run in CI, and `package.json` has no `test:concurrency`/`test:timeout` scripts | `.github/workflows/ci.yml`: only `bun test tests/unit` and `bash scripts/smoke-binary.sh`. `package.json:28-36`: scripts exist for `test`, `test:integration`, `test:lab`, `test:py`, `test:e2e`, `test:sdk` — but no `test:concurrency` or `test:timeout`, and none of `integration`/`e2e`/`sdk`/concurrency/timeout are wired into the workflow. | **Done, but narrower than originally scoped — investigation changed the plan.** Added `test:concurrency`/`test:timeout` npm scripts and wired `concurrency`, `timeout`, `lab` (pytest, zero heavy deps), and `e2e` (Playwright, fixture-server-backed, no real credentials, ~21s locally) into CI. **Did not** wire in `test:sdk` (2 pre-existing, order-dependent failures found during this work — new item **V153**, would make every PR's CI red for a pre-existing bug unrelated to this plan), `test:integration` (`describe.skipIf(!RECORDING)` — always 0 executed assertions without real network credentials; wiring it in would be pure "green theater," not a real gate), or the full `test:py` (needs the heavyweight opentrons/scanpy/pydeseq2/cobra install, a dedicated CI-infra investment out of scope for a Gate H item — `tests/lab`, which needs none of that, is wired in instead). | CI green on the PR that adds it (verified locally: all four newly-wired suites pass — concurrency 33/33, timeout 4/4, lab 26/26, e2e 25/25). |
 
 **Exit criterion for Gate H**: seven of eight items merged to `main` (H-6/V139 investigated and deliberately not implemented — see its row above and `docs/BACKLOG.md` V139), six-suite baseline count only grows, tag `v0.8.1-alpha.1`, `gh release create` run before the tag per the standing v0.7.0-incident rule.
 
 ---
 
-## 3. Open decision required from the user — orchestrator dead code (V142)
+## 3. Open decision required from the user — orchestrator dead code (V147)
 
 **Do not resolve this in-plan; the review is explicit that it's a product call, not an engineering one.**
 
@@ -80,9 +83,9 @@ These are small, independent, high-value fixes. Serial on the main worktree — 
   2. **Delete `runResearchLoop`/`runReplanLoop` from the production module and downgrade the narrative.** Smaller, safer, immediately shippable in v0.8.1. Requires: removing the dead code, moving the design intent (if still wanted for later) from "implemented" to "considered, not built" language in `DESIGN.md`/`DEVELOPMENT_PLAN` history, and deleting the now-pointless unit tests that only exercise dead code (or keeping them if the code moves to an explicitly-labeled experimental module not claimed as production).
 - **This plan's recommendation** (non-binding): option 2 for v0.8.1, because it's the only one compatible with a patch-scope release; revisit option 1 as a deliberately-scoped v0.9 item if the contract-completion behavior is still wanted. But this is the user's call, not an engineering default.
 
-Register whichever direction is chosen as **V142** in `BACKLOG.md` with the decision date and rationale, per project convention (every backlog row needs a disposition, not just a description).
+Register whichever direction is chosen as **V147** in `BACKLOG.md` with the decision date and rationale, per project convention (every backlog row needs a disposition, not just a description).
 
-**Companion gate fix (V143)**, independent of the decision above: upgrade the AD-12 gate itself so this class of gap cannot recur silently. Today's file-level check should gain a symbol-level check: for a designated set of "must have a production caller" exports (starting with anything `DESIGN.md`/`CHANGELOG.md` describes as an implemented, shipped behavior), assert a static-analysis or runtime-coverage signal that the production entrypoint (`index.ts` → `chat`/HTTP routes → ...) actually reaches it. This does not need to be a general dead-code detector — scope it to the specific claim surface (files whose exports are referenced in `CHANGELOG.md`'s "done" language), matching the project's existing "capability claims must be checkable" pattern rather than building a generic tool.
+**Companion gate fix (V148)**, independent of the decision above: upgrade the AD-12 gate itself so this class of gap cannot recur silently. Today's file-level check should gain a symbol-level check: for a designated set of "must have a production caller" exports (starting with anything `DESIGN.md`/`CHANGELOG.md` describes as an implemented, shipped behavior), assert a static-analysis or runtime-coverage signal that the production entrypoint (`index.ts` → `chat`/HTTP routes → ...) actually reaches it. This does not need to be a general dead-code detector — scope it to the specific claim surface (files whose exports are referenced in `CHANGELOG.md`'s "done" language), matching the project's existing "capability claims must be checkable" pattern rather than building a generic tool.
 
 ---
 
@@ -92,15 +95,15 @@ Both items are pre-conditions for connecting a real Opentrons device — out of 
 
 | Backlog ID | Item | Evidence | Note |
 |---|---|---|---|
-| **V144** | `ControlRepl` is not a sandbox; `AD-2` ("kernel never gets credentials") is an API-discipline convention, not an isolation boundary | `kernels/control_repl.ts:3,28-69`: `new Function(...)` executes at the same UID as the host process. `makeRequire()` restricts only the `require()` shim to `ALLOWED_MODULES = [json, os, sys, pathlib, datetime, uuid]` (`control_repl.ts:3`) — it does **not** restrict `process`, `globalThis`, `Bun`, or `Function.constructor`, all of which are reachable from inside the sandbox closure and give same-UID code execution one line away from the module allowlist. | Two paths: (a) narrative correction now — state plainly in `DESIGN.md`/`SECURITY.md`-equivalent docs that AD-2 is a discipline, not a security boundary, so nothing downstream relies on a false isolation guarantee; (b) real isolation (container, separate UID, or a proper JS sandbox like `isolated-vm`) before any real Opentrons connection. (a) is cheap and should happen regardless; (b) is real work and belongs to the hardware-integration gate, not v0.8.1. |
-| **V145** | `Host` header is not validated; only `Origin` is, despite comments claiming both, and `Origin` allows any `localhost` port unconditionally | `server/app.ts:84-135` (Origin-only allowlist logic, deliberate per the inline rationale about browsers always sending `Origin` on cross-site writes) vs `:167-185`. The code's own design rationale for skipping `Host` is not written down next to the check — worth confirming the comment/doc claim ("Origin/Host dual check") is actually stale narrative rather than a missed check, and either implement the `Host` check or correct the doc to describe what's actually enforced. Low urgency: service binds to `127.0.0.1` only today. | Narrative-vs-implementation alignment, same genus as V142/V143 — cheap to fix in v0.8.1 as a doc correction; add the real `Host` check only if/when the server binds beyond loopback. |
-| **V146** (already partially tracked as V25/V59) | Wet-lab safety-gate coverage gap: `concentration_limit`/`biosafety` rules only match same-sentence phrasing, not cross-sentence references (the most common real phrasing) | Referenced in review §2.2 and §10.2 item 8; cross-check against existing `V25`/`V59` rows in `BACKLOG.md` before re-registering — if those already cover this exact gap, annotate them rather than duplicating. | Hard prerequisite before any real Opentrons connection, independent of v0.8.1. |
+| **V149** | `ControlRepl` is not a sandbox; `AD-2` ("kernel never gets credentials") is an API-discipline convention, not an isolation boundary | `kernels/control_repl.ts:3,28-69`: `new Function(...)` executes at the same UID as the host process. `makeRequire()` restricts only the `require()` shim to `ALLOWED_MODULES = [json, os, sys, pathlib, datetime, uuid]` (`control_repl.ts:3`) — it does **not** restrict `process`, `globalThis`, `Bun`, or `Function.constructor`, all of which are reachable from inside the sandbox closure and give same-UID code execution one line away from the module allowlist. | Two paths: (a) narrative correction now — state plainly in `DESIGN.md`/`SECURITY.md`-equivalent docs that AD-2 is a discipline, not a security boundary, so nothing downstream relies on a false isolation guarantee; (b) real isolation (container, separate UID, or a proper JS sandbox like `isolated-vm`) before any real Opentrons connection. (a) is cheap and should happen regardless; (b) is real work and belongs to the hardware-integration gate, not v0.8.1. |
+| **V150** | `Host` header is not validated; only `Origin` is, despite comments claiming both, and `Origin` allows any `localhost` port unconditionally | `server/app.ts:84-135` (Origin-only allowlist logic, deliberate per the inline rationale about browsers always sending `Origin` on cross-site writes) vs `:167-185`. The code's own design rationale for skipping `Host` is not written down next to the check — worth confirming the comment/doc claim ("Origin/Host dual check") is actually stale narrative rather than a missed check, and either implement the `Host` check or correct the doc to describe what's actually enforced. Low urgency: service binds to `127.0.0.1` only today. | Narrative-vs-implementation alignment, same genus as V147/V148 — cheap to fix in v0.8.1 as a doc correction; add the real `Host` check only if/when the server binds beyond loopback. |
+| **V151** (already partially tracked as V25/V59) | Wet-lab safety-gate coverage gap: `concentration_limit`/`biosafety` rules only match same-sentence phrasing, not cross-sentence references (the most common real phrasing) | Referenced in review §2.2 and §10.2 item 8; cross-check against existing `V25`/`V59` rows in `BACKLOG.md` before re-registering — if those already cover this exact gap, annotate them rather than duplicating. | Hard prerequisite before any real Opentrons connection, independent of v0.8.1. |
 
 ---
 
 ## 5. Ongoing / no action in v0.8.1
 
-- **V147** Retrieval recall (8/24 across T1–T4, R5 real-network run) — already tracked under V67/V86; no new registration, this plan just confirms the review's number matches the existing R5 record and doesn't indicate regression.
+- **V152** Retrieval recall (8/24 across T1–T4, R5 real-network run) — already tracked under V67/V86; no new registration, this plan just confirms the review's number matches the existing R5 record and doesn't indicate regression.
 - Remote compute (Modal contract-only, no real gateway) — unchanged, blocked on user-provided Modal token per existing backlog rows (V4).
 - Extension scaffolding covering 3 of 6 documented extension points — already an acknowledged gap (`scaffold/cli.ts:36` and the docs' own admission); no new finding, not re-registered.
 
@@ -119,17 +122,17 @@ main @ v0.8.0
    │        H-5 projectCache eviction                   [done]
    │        H-6 raw/sink async lock                     [investigated, not fixed — architecture conflict, see row above]
    │        H-7 PythonKernel JSON.parse guard
-   │        H-8 CI suite coverage + npm scripts         [done, narrower scope — see row above; new V148]
+   │        H-8 CI suite coverage + npm scripts         [done, narrower scope — see row above; new V153]
    │
-   ├─ User decision on V142 (orchestrator dead code) ─────► V142 disposition registered
-   │        + V143 AD-12 symbol-level gate (independent of the decision, do regardless)
+   ├─ User decision on V147 (orchestrator dead code) ─────► V147 disposition registered
+   │        + V148 AD-12 symbol-level gate (independent of the decision, do regardless)
    │
-   ├─ Narrative corrections (cheap, do in v0.8.1) ────────► V144(a), V145
+   ├─ Narrative corrections (cheap, do in v0.8.1) ────────► V149(a), V150
    │
    └─ release: v0.8.1 (patch — bug fixes + hardening only, per SemVer/trunk-based scheme)
 ```
 
-V144(b) (real ControlRepl isolation) and V146 (safety-gate cross-sentence coverage) move to the hardware-integration gate, not this release.
+V149(b) (real ControlRepl isolation) and V151 (safety-gate cross-sentence coverage) move to the hardware-integration gate, not this release.
 
 ---
 
@@ -160,21 +163,17 @@ V144(b) (real ControlRepl isolation) and V146 (safety-gate cross-sentence covera
 
 ## B. 两处需要收口处理的不一致
 
-**B-1 · V143–V146 撞号（要收口拍板）。** 本文在 §3/§4 里把外部评审的四条登记为 V143–V147；
-与此同时闸门 I 的盘点在 main 上**独立地**把另外四条登记成了 V143–V146。两边都从 V143 往后编，
-于是同一个号今天指两件事：
+**B-1 · V 号撞号（2026-09-15 已裁定，本文已按裁定改号）。**
 
-| 号 | 本文（v0.8.1 计划，2026-09-13） | 今天的 `docs/BACKLOG.md`（闸门 I 盘点，2026-09-14） |
-|---|---|---|
-| V142 | orchestrator 死代码的处置决定 | CI 自 v0.8.0 起就是红的（`v118_openmm_probe` 假设 `.venv/bin/python` 存在） |
-| V143 | AD-12 门禁升级到符号级 | `ProviderCapabilities` 三个布尔声明了无人消费 |
-| V144 | `ControlRepl` 不是沙箱，AD-2 是约定不是隔离边界 | `WetLabLoop.execute(options.note)` 声明了从未读（← lane δ 本轮已修） |
-| V145 | `Host` 头未校验 | `OrchestratorAgent.chat(req.model)` 主路径静默丢弃 |
-| V146 | 湿实验安全闸跨句覆盖缺口 | 闸门 I 形状② 的扫描面边界 |
+本文原稿在 §3/§4 把外部评审的条目登记为 **V142–V147**（`3e00f4a` 又追加了 **V148**）；
+与此同时闸门 I 的盘点在 main 上**独立地**把另外五条登记成了 **V142–V146**，
+经 PR #110 / #113 合入。两条工作线各自从 V142 往后编，于是同一个号指了两件事。
 
-根因是这份计划所在的分支没合进 main，`BACKLOG.md` 因此看不到它占掉的号段——
-正是「文档停在未合分支上」这件事本身造成的。**lane δ 不自行改号**：改号要动 `docs/BACKLOG.md`
-（收口文件）和一串引用了这些号的提交信息/注释，得由收口统一决定是给哪一侧重编号、还是加前缀区分。
+根因就是这份计划所在的分支没合进 main，`BACKLOG.md` 因此看不到它占掉的号段——
+正是「文档停在未合分支上」这件事本身造成的，和 §C 说的是同一件事。
+
+**裁定**：main 上已合入的 V142–V146 是正式编号；从未合入的本分支让号，整体顺延。
+对照表见文末「D. 旧号 → 新号对照」。本次只改本文件，`docs/BACKLOG.md` 不碰。
 
 **B-2 · §6 流程图漏标 H-7。** 正文 §6 的流程图里 H-1…H-6、H-8 都带状态标注，只有 H-7 那行没有
 `[done]`，但 H-7 实际已完成并合入（`8521074`）。原件原样保留，不在正文里改。
@@ -185,3 +184,33 @@ V137 的提交信息（以及其余五条）都写着「Gate H-x of docs/DEVELOP
 在这份文件缺席的情况下，那六条引用指向一个不存在的路径——任何人（含 agent）顺着提交信息去查
 「当时为什么这么定」，只会查到空。这正是 USAGE_LOG 里反复出现的那一类失效：
 **东西都在，只是没接上线**。
+
+## D. 旧号 → 新号对照（2026-09-15 改号）
+
+**裁定**：main 上经 PR #110 / #113 合入的 **V142–V146** 是正式编号；本文所在分支
+`docs/v0.8.1-plan-and-english-i18n` 从未合入，其登记的号整体顺延让路。
+**本表只作用于本文件**——`docs/BACKLOG.md` 本次一行未改（收口会在 BACKLOG 头部补一条编号说明）。
+
+| 本文旧号 | **本文新号** | 条目（本文） | 让给谁：main 上同号的正式条目 |
+|---|---|---|---|
+| V142 | **V147** | orchestrator 死代码（`runResearchLoop`/`runReplanLoop` 无生产调用方）的处置决定 | V142 = CI 自 v0.8.0 起就是红的（`v118_openmm_probe` 假设 `.venv/bin/python` 存在） |
+| V143 | **V148** | AD-12 门禁从文件级升级到符号级 | V143 = `ProviderCapabilities` 的 toolCalling / streaming / usageReported 声明了无人消费 |
+| V144 | **V149** | `ControlRepl` 不是沙箱，AD-2 是 API 约定不是隔离边界 | V144 = `WetLabLoop.execute(options.note)` 声明了从未读（**lane δ 本轮已修**） |
+| V145 | **V150** | `Host` 头未校验（只校验 `Origin`），与注释声称的双重校验不符 | V145 = `OrchestratorAgent.chat(req.model)` 主路径静默丢弃（= USAGE_LOG U10） |
+| V146 | **V151** | 湿实验安全闸 `concentration_limit`/`biosafety` 只匹配同句措辞，跨句引用漏判 | V146 = 闸门 I 形状② 的扫描面边界（跨文件 / 具名 type 不在扫描面） |
+| V147 | **V152** | 检索召回 8/24（R5 真实网络跑）——本就只是确认既有 V67/V86，不新登记 | （V147 在 main 上原本空着，由本表占用） |
+| V148 | **V153** | `test:sdk` 两条既有的顺序相关失败（H-8 调查时发现，故意不接进 CI） | （同上，V148 由本表的原 V143 占用） |
+
+### 为什么顺延到 V153，比裁定多带一个号
+
+收口的裁定写的是「V142–V147 → V147–V152」。但 `3e00f4a` 这次提交在同一条分支上还登记了
+**V148**（`test:sdk` 顺序相关失败，被 H-8 那一行引用）。如果只搬 V142–V147：
+原 V143 变成新 V148，而原 V148 原地不动——**本文内部立刻出现第二次撞号**，
+而且这次撞在同一个文件里，比原来的跨文件撞号更难发现。
+
+V148 与 V142–V147 同源（都出自这条从未合入的分支），按裁定的同一条口径（未合入的让号）
+它也该让，所以一并顺延为 V153。main 的 BACKLOG 目前最大号是 V146，V147–V153 整段是空的，
+顺延不与任何已合入条目相撞（已核对）。
+
+这一条是 lane δ 在执行裁定时自行扩了一个号的范围，**不是收口原话**，特此标明；
+若收口另有安排，改回来只需把本表最后一行与正文里的 V153 一起动。
