@@ -65,15 +65,15 @@ class CredentialDeleteResponse(TypedDict):
     item: SettingsItem
 
 
+class DeltaEvent(TypedDict):
+    chunk: str
+    target: str
+    revision: float
+
+
 class DependencyMapping(TypedDict):
     file: str
     versionId: str
-
-
-EdgeType = Literal["supports", "contradicts", "derives_from", "cites", "supersedes"]
-
-
-EvidenceLabel = Literal["observed", "sourced", "computed", "inferred"]
 
 
 class ExportManifest(TypedDict):
@@ -107,6 +107,62 @@ class LineageResponse(TypedDict):
 
 class ManifestTableCounts(TypedDict):
     pass
+
+
+class PartialCardPayload(TypedDict):
+    paperId: str
+    title: str
+    year: float | None
+    keyFinding: str | None
+    relevance: float | None
+    basis: str | None
+
+
+class _PartialEventRequired(TypedDict):
+    kind: Literal["papers", "search_source", "card"]
+    ts: float
+    payload: PartialCardPayload | PartialPapersPayload | PartialSearchSourcePayload
+
+class PartialEvent(_PartialEventRequired, total=False):
+    taskId: str
+
+
+class PartialPaper(TypedDict):
+    id: str
+    title: str
+    year: float | None
+    doi: str | None
+    sources: list[str]
+
+
+class PartialPapersPayload(TypedDict):
+    query: str
+    found: float
+    papers: list[PartialPaper]
+
+
+class _PartialSearchSourcePayloadRequired(TypedDict):
+    query: str
+    source: str
+    outcome: str
+    count: float | None
+    elapsedMs: float | None
+
+class PartialSearchSourcePayload(_PartialSearchSourcePayloadRequired, total=False):
+    error: str
+
+
+class _ProgressEventRequired(TypedDict):
+    stage: Literal["review", "plan", "execute", "summarize"]
+    complete: float
+    total: float
+    message: str
+    ts: float
+    elapsedMs: float
+
+class ProgressEvent(_ProgressEventRequired, total=False):
+    decision: Literal["ready", "continue", "repair", "await_user"]
+    etaMs: float
 
 
 class ProjectListResponse(TypedDict):
@@ -178,9 +234,6 @@ class RecordTimelinePage(TypedDict):
     types: list[Literal["idea", "decision", "experiment", "observation", "reading", "conclusion", "paper", "artifact", "agent_run"]]
 
 
-RecordType = Literal["idea", "decision", "experiment", "observation", "reading", "conclusion", "paper", "artifact", "agent_run"]
-
-
 class ResearchRecord(TypedDict):
     id: str
     project: str
@@ -221,12 +274,6 @@ class SettingsItem(_SettingsItemRequired, total=False):
     extra: dict[str, Any]
 
 
-SettingsItemKind = Literal["string", "number", "enum", "bool", "secret", "info", "action"]
-
-
-SettingsItemSource = Literal["env", "config", "default", "unset"]
-
-
 class _SettingsMetaRequired(TypedDict):
     level: Literal["full", "reduced", "readonly"]
     summary: str
@@ -234,9 +281,6 @@ class _SettingsMetaRequired(TypedDict):
 
 class SettingsMeta(_SettingsMetaRequired, total=False):
     extra: dict[str, Any]
-
-
-SettingsPanelId = Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
 
 
 class SettingsPanelResponse(TypedDict):
@@ -298,3 +342,39 @@ class TaskSnapshot(_TaskSnapshotRequired, total=False):
     pidStartedAt: str | None
     startTimeUnavailable: bool
     orphanReason: str | None
+
+
+DeltaTarget = str
+
+
+EdgeType = Literal["supports", "contradicts", "derives_from", "cites", "supersedes"]
+
+
+EvidenceLabel = Literal["observed", "sourced", "computed", "inferred"]
+
+
+PartialKind = Literal["papers", "search_source", "card"]
+
+
+PartialPayload = PartialCardPayload | PartialPapersPayload | PartialSearchSourcePayload
+
+
+ProgressDecision = Literal["ready", "continue", "repair", "await_user"]
+
+
+ProgressStage = Literal["review", "plan", "execute", "summarize"]
+
+
+RecordType = Literal["idea", "decision", "experiment", "observation", "reading", "conclusion", "paper", "artifact", "agent_run"]
+
+
+SettingsItemKind = Literal["string", "number", "enum", "bool", "secret", "info", "action"]
+
+
+SettingsItemSource = Literal["env", "config", "default", "unset"]
+
+
+SettingsPanelId = Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
+
+
+StreamEventName = Literal["progress", "result", "error", "start", "partial", "delta", "done"]

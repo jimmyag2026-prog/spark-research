@@ -1,10 +1,12 @@
 import type {
   ApiCallTotals,
   ArtifactVersion,
+  DeltaEventData,
   ComputeJobView,
   ConclusionAssessment,
   ConclusionCard,
   DryExperiment,
+  PartialEvent,
   IdeaCard,
   LibraryPaper,
   ReportCounts,
@@ -14,6 +16,7 @@ import type {
   RecordEdge,
   ResearchRecord,
   StateMachine,
+  StreamProgressEvent,
   TaskSnapshot,
   UsageTotals,
   WetExperiment,
@@ -24,12 +27,19 @@ import type {
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: unknown;
+  /**
+   * V159（v0.10 ε-2）：`nextStep` 除了拼进 `message`，**还单独留一份**。
+   * 设置面要把它贴在被拒的那一行旁边（「去哪做」和「为什么不行」分两行显示），
+   * 从一段拼好的字符串里再切回来既脆又蠢。
+   */
+  readonly nextStep: string | null;
 
-  constructor(status: number, message: string, detail: unknown = null) {
+  constructor(status: number, message: string, detail: unknown = null, nextStep: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.nextStep = nextStep;
   }
 }
 
@@ -54,7 +64,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         ? String((body as { nextStep: unknown }).nextStep ?? "").trim()
         : "";
     const message = nextStep ? `${base}\n下一步：${nextStep}` : base;
-    throw new ApiError(res.status, message, isJson ? (body as { detail?: unknown }).detail : body);
+    throw new ApiError(
+      res.status,
+      message,
+      isJson ? (body as { detail?: unknown }).detail : body,
+      nextStep || null,
+    );
   }
   return body as T;
 }
@@ -147,8 +162,13 @@ export interface StreamHandlers {
   // （权威回答走完整的 plan/execute/review 循环，预览只是一次独立的直接模型调用）。
   // 没配置 provider、或后端 fake LLM 不支持流式时，这个事件永远不会到达——UI 不能
   // 假设它一定会来。
-  onDelta?: (data: { chunk: string }) => void;
-  onProgress?: (data: { message: string }) => void;
+  // v0.10 β-3：补了 `target` / `revision` 两个字段（**只增不改**，老消费端读 chunk 不受影响）。
+  onDelta?: (data: DeltaEventData) => void;
+  // v0.10 β-1：`progress` 补了 ts / elapsedMs / etaMs?，并带着既有的 stage/complete/total。
+  // 这里放宽成完整事件体；只读 `message` 的老调用方原样可用。
+  onProgress?: (data: StreamProgressEvent) => void;
+  /** v0.10 β-2：中间产物（检索候选清单 / 每源结果 / 每张精读卡）。 */
+  onPartial?: (data: PartialEvent) => void;
   onResult?: (data: { response: string; review?: unknown; ideaRecordId?: string | null; artifacts?: Array<{ id: string; label: string }> }) => void;
   onError?: (data: { message: string }) => void;
 }
@@ -194,6 +214,7 @@ export async function streamChat(
       if (name === "start") handlers.onStart?.(data);
       else if (name === "delta") handlers.onDelta?.(data);
       else if (name === "progress") handlers.onProgress?.(data);
+      else if (name === "partial") handlers.onPartial?.(data);
       else if (name === "result") handlers.onResult?.(data);
       else if (name === "error") handlers.onError?.(data);
       else if (name === "done") return;
@@ -223,6 +244,16 @@ export const api = {
   },
 
   lit: {
+    /**
+     * ε-4（v0.10）：行内下载一篇的 PDF。路由早就有（`POST /api/lit/papers/:id/pdf`，
+     * 与 CLI `lit pdf` 同一个落地点），此前只有 CLI 走得到——界面上看得见「未下载」
+     * 却没有任何手段下载它。长任务口径与检索/精读一致（提交拿句柄 → 订阅 → 落定）。
+     *
+     * 「不可得」是**已知结果不是异常**：任务照样 succeeded，库里记 pdf_reason，
+     * 调用方读 `result.result.ok` 定文案（见 routes/literature.ts 里那条注释）。
+     */
+    pdf: (paperId: string, project?: string, onProgress?: (m: string) => void) =>
+      runTask(withProject(`/api/lit/papers/${paperId}/pdf`, project), {}, onProgress),
     /** U56：下载好的 PDF 在浏览器里直接打开（新标签）。 */
     pdfFileUrl: (paperId: string, project?: string) => withProject(`/api/lit/papers/${paperId}/pdf/file`, project),
     sources: () =>

@@ -11,9 +11,10 @@ import {
   type Paper,
   type RankMode,
 } from "./models";
-import { configuredSearchSources } from "../config";
+import { configuredSearchSources, configuredSearchLanguage } from "../config";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
 import { segmentQuery, type SegmentResult } from "./segment";
+import { applyRelevanceFloor, prepareQuery, type PreparedQuery, type QueryTranslator } from "./prepare_query";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
 //
@@ -34,6 +35,67 @@ export function configuredDefaultSources(): LiteratureSource[] {
   const known = new Set<string>(LITERATURE_SOURCES);
   const valid = configured.filter((id): id is LiteratureSource => known.has(id));
   return valid.length > 0 ? valid : DEFAULT_SEARCH_SOURCES;
+}
+
+/**
+ * γ-2：双查之后同一个源会有两条 `SourceStatus`（中文一条、英文一条），
+ * 但面板与 CLI 的口径是**一行一个源**。这里把同源的多条合成一条。
+ *
+ * 短路条件刻意写死：**一个源只有一条时原样返回那个对象**（不是「重建一个等值的」）。
+ * 单查询路径（纯英文、或英译失败）因此与 γ-2 之前逐字节一致——
+ * 这条短路是「passthrough 不改变既有行为」这句话的实现，不是优化。
+ */
+export function mergeStatusesBySource(
+  settled: Array<{ status: SourceStatus; papers: Paper[] }>,
+): Array<{ status: SourceStatus; papers: Paper[] }> {
+  const order: LiteratureSource[] = [];
+  const groups = new Map<LiteratureSource, Array<{ status: SourceStatus; papers: Paper[] }>>();
+  for (const entry of settled) {
+    const key = entry.status.source;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(entry);
+  }
+  return order.map((source) => {
+    const group = groups.get(source)!;
+    if (group.length === 1) return group[0]!;
+    const statuses = group.map((g) => g.status);
+    // 一次成功就算这个源参与了；全失败才算 failed；剩下的（全 skipped）才是 skipped。
+    const outcome: SourceOutcome = statuses.some((s) => s.outcome === "ok")
+      ? "ok"
+      : statuses.some((s) => s.outcome === "failed")
+        ? "failed"
+        : "skipped";
+    const notes = [...new Set(statuses.map((s) => s.note).filter((n): n is string => !!n))];
+    const errors = [...new Set(statuses.map((s) => s.error).filter((e): e is string => !!e))];
+    const merged: SourceStatus = {
+      source,
+      outcome,
+      count: statuses.reduce((sum, s) => sum + s.count, 0),
+      // 并发发出的，墙钟取最长的那条，不是求和——求和会凭空造出一个没发生过的耗时。
+      elapsedMs: Math.max(...statuses.map((s) => s.elapsedMs)),
+    };
+    if (notes.length > 0) merged.note = notes.join("；");
+    if (errors.length > 0) merged.error = errors.join("；");
+    return { status: merged, papers: group.flatMap((g) => g.papers) };
+  });
+}
+
+/**
+ * γ-2（U58 ②）：`searchLanguage` 语言过滤开关。
+ *
+ * **只对 OpenAlex 生效**，这不是偷懒：U58 的三个源里，OpenAlex 是唯一既索引中文期刊
+ * 又在 API 上提供 `filter=language:<code>` 的。Europe PMC / AMiner / CrossRef 没有
+ * 等价的过滤维度，给它们编一个只会让「已过滤」这句话变成假的。
+ *
+ * 默认空 = 不过滤（行为与 γ-2 之前一致）。
+ */
+export function searchLanguageParams(source: LiteratureSource): Record<string, string> {
+  if (source !== "openalex") return {};
+  const lang = configuredSearchLanguage();
+  return lang ? { filter: `language:${lang}` } : {};
 }
 
 export type SourceOutcome = "ok" | "failed" | "skipped";
@@ -61,6 +123,11 @@ export interface LiteratureSearchResult {
   // 那些无关测试跟着改——cli.ts 打印时按未设置处理即可，不影响它们各自测的行为。
   rank?: RankMode;
   rankNote?: string;
+  /**
+   * γ-2（U58）：中文查询处理的结果。纯英文查询时 `via === "passthrough"`。
+   * 可选的理由与 rank/rankNote 同款：手写 fixture 的既有测试不知道这个字段。
+   */
+  prepared?: PreparedQuery;
 }
 
 export interface LiteratureSearchOptions extends DedupeOptions {
@@ -253,11 +320,25 @@ export class LiteratureSearcher {
    * 只在生产入口（literature_pipeline / CLI）显式打开。
    */
   private readonly cooldownOn429: boolean;
+  /**
+   * γ-2（V161 + U58）：中文查询的英译器。**不给就没有 LLM 这条路**——退词典兜底。
+   * 刻意不在这里 `new LLMRouter()`：`LiteratureSearcher` 被 novelty / pipeline / CLI
+   * 三处构造，凭空给它一个会花钱的默认依赖，等于让三条路径都在不知情的情况下多付一次调用。
+   * 生产入口（`lit search` CLI、`literature_pipeline`）显式注入。
+   */
+  private readonly translate: QueryTranslator | undefined;
 
   constructor(
     registryOrOptions: ConnectorRegistry | ConnectorOptions = {},
-    options: { segmenter?: Segmenter; deepPool?: number; sourceTimeoutMs?: number; cooldownOn429?: boolean } = {},
+    options: {
+      segmenter?: Segmenter;
+      deepPool?: number;
+      sourceTimeoutMs?: number;
+      cooldownOn429?: boolean;
+      translate?: QueryTranslator;
+    } = {},
   ) {
+    this.translate = options.translate;
     this.sourceTimeoutMs = options.sourceTimeoutMs ?? DEFAULT_SOURCE_TIMEOUT_MS;
     this.cooldownOn429 = options.cooldownOn429 ?? false;
     this.registry =
@@ -282,13 +363,26 @@ export class LiteratureSearcher {
     const deepPoolApplied = options.perSource === undefined && rank === "blended";
     const perSource = options.perSource ?? (rank === "blended" ? this.deepPool : 10);
 
+    // γ-2（V161 + U58）：中文查询先抽主题词 + 英译，中英**双查**后合并。
+    // 纯英文查询在 prepareQuery 里就 passthrough 了（queries === [query]），
+    // 下面的 flatMap 退化成原来的 `sources.map(...)`，行为逐字节不变。
+    // 收口（v0.10）：中文处理层（英译双查 + 相关性地板）只在调用方给了 `translate` 时启用——
+    // 生产入口（pipeline / CLI）都给；裸 `new LiteratureSearcher(registry)` 保持 v0.6 的
+    // 单查行为（V65 拆词/分词门禁钉的就是那条路径的调用次数）。
+    const prepared: PreparedQuery = this.translate
+      ? await prepareQuery(query, { translate: this.translate })
+      : { original: query.trim(), hasCJK: false, queries: [query.trim()], english: null, via: "passthrough", note: null };
+
+    // 【与 lane α 的交叉点】这一行 α 也在改（并发/预筛）。γ 改的只有一件事：
+    // 从 `sources.map(source => searchOne(source, query, ...))` 变成
+    // `sources × prepared.queries` 的笛卡尔积。并发形态本身（Promise.all）未动。
     const settled = await Promise.all(
-      sources.map((source) => this.searchOne(source, query, perSource)),
+      sources.flatMap((source) => prepared.queries.map((q) => this.searchOne(source, q, perSource))),
     );
 
     const all: Paper[] = [];
     const statuses: SourceStatus[] = [];
-    for (const { status, papers } of settled) {
+    for (const { status, papers } of mergeStatusesBySource(settled)) {
       // 深池默认生效时如实标注在每个成功源上（AD-12：结果怎么来的要可见）；
       // skipped/failed 的源没有「抓了多少池子」这件事，不掺和进去。
       const note =
@@ -312,14 +406,22 @@ export class LiteratureSearcher {
     // DEFAULT_RANK_MODE 并显式传参），类级默认保持 v0.6 的 "hits"，不静默牵连其它调用方。
     // （`rank` 已在方法顶部算 perSource 时解出，这里直接复用，不重复 `options.rank ?? "hits"`。）
     const { papers: ranked, note: rankNote } = applyRank(merged, rank);
+    // γ-2 ⑤：查询被我们改写过时，加一条字面相关性地板。**在 limit 截断之前**——
+    // 截断之后再滤，等于把 6 条噪声滤成 2 条，用户看到的是「没什么文献」。
+    const floor = applyRelevanceFloor(ranked, prepared);
+    const relevant = floor.papers;
+    const preparedOut: PreparedQuery = floor.note
+      ? { ...prepared, note: prepared.note ? `${prepared.note}；${floor.note}` : floor.note }
+      : prepared;
     return {
       query,
-      papers: options.limit ? ranked.slice(0, options.limit) : ranked,
+      papers: options.limit ? relevant.slice(0, options.limit) : relevant,
       sources: statuses,
       totalBeforeDedupe: all.length,
       mergedCount,
       rank,
       rankNote,
+      prepared: preparedOut,
     };
   }
 
@@ -356,7 +458,8 @@ export class LiteratureSearcher {
     query: string,
     perSource: number,
   ): Promise<{ status: SourceStatus; papers: Paper[] }> {
-    const first = await this.run(source, () => this.registry.call(source, "search", { query, limit: perSource }));
+    const extra = searchLanguageParams(source);
+    const first = await this.run(source, () => this.registry.call(source, "search", { query, limit: perSource, ...extra }));
     // V65（R1-T3 → 主会话实测复核）：AMiner 的 title 检索是**词序列匹配**——查询串必须
     // 像标题里的连续片段（"brain computer interface" 命中 5 条，追加 "neural decoding"
     // 就 0 条；中文同理）。多概念查询（空白分隔）因此整体扑空，这正是 V8「中文召回
@@ -403,7 +506,7 @@ export class LiteratureSearcher {
     // 冻结基准量过：top-10 命中 0/3、top-20 命中 3/3），先取深池再按命中词数排序截断。
     const termPool = Math.max(perSource, 20);
     for (const term of useTerms) {
-      const r = await this.run(source, () => this.registry.call(source, "search", { query: term, limit: termPool }));
+      const r = await this.run(source, () => this.registry.call(source, "search", { query: term, limit: termPool, ...extra }));
       if (r.status.outcome !== "ok") {
         failedTerms.push(term);
         continue;

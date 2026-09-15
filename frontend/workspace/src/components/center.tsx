@@ -9,6 +9,14 @@ import {
   type JSX,
 } from "solid-js";
 import { api, streamChat } from "../lib/api";
+import {
+  STAGE_LABEL,
+  createStreamModel,
+  formatMs,
+  initialStreamState,
+  sectionLabel,
+  type StreamState,
+} from "../lib/stream_model";
 import type {
   ApiCallAgg,
   ComputeJobView,
@@ -26,6 +34,96 @@ import { Async, Badge, BudgetInput, KeyValues, Markdown, parseBudgetInput, Spinn
 
 const SESSION_ID = `web_${Date.now()}`;
 
+/**
+ * ε-1 ①：阶段条。六段（规划 → 检索 → 下载 → 精读 → 综述/复核 → 汇总），当前段高亮，
+ * 每段显示自己的耗时。耗时来自事件自带的 `ts`（β-1），不是浏览器收到的时刻。
+ *
+ * 没进过的段显示「—」而不是 0ms：**没跑过和跑了一瞬是两件事**。
+ */
+function StageBar(props: { state: StreamState }): JSX.Element {
+  return (
+    <div class="stage-bar" data-testid="stage-bar" role="list" aria-label="流程阶段">
+      <For each={props.state.stages}>
+        {(view) => (
+          <span
+            class="stage-chip"
+            role="listitem"
+            data-testid={`stage-${view.stage}`}
+            data-state={view.state}
+            aria-current={view.state === "active" ? "step" : undefined}
+          >
+            <span class="stage-chip__name">{STAGE_LABEL[view.stage]}</span>
+            <span class="stage-chip__ms" data-testid={`stage-${view.stage}-ms`}>
+              {view.elapsedMs === null ? "—" : formatMs(view.elapsedMs)}
+            </span>
+          </span>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/**
+ * ε-1 ②：实时日志。`progress` / `partial` 逐行追加，可折叠；
+ * `partial.papers` 的每条候选都是一个按钮，点开直接去文献库。
+ */
+function StreamLog(props: { state: StreamState; onOpenPapers: () => void }): JSX.Element {
+  return (
+    <details class="stream-log" data-testid="stream-log" open>
+      <summary class="faint" style={{ "font-size": "11.5px" }}>
+        实时日志（{props.state.logs.length} 行）
+      </summary>
+      <div class="stream-log__body">
+        <For each={props.state.logs}>
+          {(line) => (
+            <div class="stream-log__line" data-testid="stream-log-line" data-kind={line.kind}>
+              <span class="mono faint" style={{ "font-size": "11px" }}>
+                {new Date(line.at).toLocaleTimeString("zh-CN", { hour12: false })}
+              </span>{" "}
+              <Show
+                when={line.paperId && line.kind === "paper"}
+                fallback={<span>{line.text}</span>}
+              >
+                <button
+                  class="btn btn-sm"
+                  data-testid={`stream-log-paper-${line.paperId}`}
+                  title="到文献库看这一篇"
+                  onClick={props.onOpenPapers}
+                >
+                  {line.text}
+                </button>
+              </Show>
+            </div>
+          )}
+        </For>
+      </div>
+    </details>
+  );
+}
+
+/**
+ * ε-1 ③：正文区。`delta` 按 `target` 分区流式渲染；同一 target 的 `revision` 变了
+ * 就清空重画（清空在 `stream_model.ts` 里做，这里只负责画当前这一版）。
+ */
+function StreamSections(props: { state: StreamState; knownKeys: Set<string> }): JSX.Element {
+  return (
+    <For each={props.state.sections}>
+      {(section) => (
+        <section
+          class="stream-section"
+          data-testid={`stream-section-${section.target}`}
+          data-revision={section.revision}
+        >
+          <div class="faint" style={{ "font-size": "11.5px" }}>
+            {sectionLabel(section.target)} · 第 {section.revision} 版
+          </div>
+          <Markdown source={section.text} knownKeys={props.knownKeys} />
+        </section>
+      )}
+    </For>
+  );
+}
+
 function SessionStream(): JSX.Element {
   const ws = useWorkspace();
   const [mode, setMode] = createSignal<"chat" | "coexplore">("chat");
@@ -33,6 +131,18 @@ function SessionStream(): JSX.Element {
   const [sending, setSending] = createSignal(false);
   // V119：聊天/共探也是花钱操作，给一个与精读/综述同款的预算入口。
   const [chatBudget, setChatBudget] = createSignal("");
+  // ε-1：三段式进度的全部状态。推导在 lib/stream_model.ts（纯函数），这里只存一份快照。
+  const [stream, setStream] = createSignal<StreamState>(initialStreamState());
+  // ε-1：「停止」按钮关的是**这条 SSE 连接本身**（abort 掉 fetch），不是只把界面静音。
+  const [aborter, setAborter] = createSignal<AbortController | null>(null);
+
+  const stop = () => {
+    aborter()?.abort();
+    setAborter(null);
+  };
+
+  onCleanup(() => aborter()?.abort());
+
   let scroller: HTMLDivElement | undefined;
 
   const scrollToEnd = () => queueMicrotask(() => scroller?.scrollTo({ top: scroller.scrollHeight }));
@@ -53,19 +163,34 @@ function SessionStream(): JSX.Element {
     // 没有任何 delta 到达也完全正常（没配 provider / fake LLM 不支持流式），
     // 界面退化回「思考中…」占位，行为不变。
     let streamed = "";
+    // ε-1：每次发送都从零开始一条新的三段式进度（上一轮的日志与正文不残留）。
+    const model = createStreamModel(setStream);
+    const controller = new AbortController();
+    setAborter(controller);
+    setStream(initialStreamState());
     try {
       await streamChat(
         // V119：聊天/共探也有预算入口（与精读/综述/novelty 同一个 BudgetInput）。
         { sessionId: SESSION_ID, message: text, mode: mode(), budgetUsd: parseBudgetInput(chatBudget()) },
         {
           onDelta: (data) => {
-            streamed += data.chunk;
-            ws.updateMessage(placeholder, { text: streamed, pending: true });
+            model.delta(data);
+            // `summary` 仍然是这条消息本身的正文（W3-a 起的老行为，不变）；
+            // `review` / `card:*` 只进上面的正文分区，不往聊天气泡里灌。
+            if ((data.target ?? "summary") === "summary") {
+              streamed += data.chunk;
+              ws.updateMessage(placeholder, { text: streamed, pending: true });
+            }
             scrollToEnd();
           },
           onProgress: (data) => {
+            model.progress(data);
             // 只有还没收到任何增量时才用生命周期文案占位，避免覆盖正在流入的正文。
             if (!streamed) ws.updateMessage(placeholder, { text: data.message, pending: true });
+          },
+          onPartial: (data) => {
+            model.partial(data);
+            scrollToEnd();
           },
           onResult: (data) => {
             ws.updateMessage(placeholder, { text: data.response, pending: false, artifacts: data.artifacts });
@@ -77,9 +202,22 @@ function SessionStream(): JSX.Element {
             ws.updateMessage(placeholder, { role: "error", text: data.message, pending: false });
           },
         },
+        controller.signal,
       );
+    } catch (error) {
+      // 按了「停止」：abort 让 fetch / reader 抛，这不是故障，如实收尾就好。
+      // 别的异常照旧当错误报出去——**不要把两种都吞掉**（那才是 U43 那类「看不出发生了什么」）。
+      const aborted = controller.signal.aborted;
+      model.stop();
+      ws.updateMessage(placeholder, {
+        text: aborted ? streamed || "（已停止）" : streamed,
+        pending: false,
+        ...(aborted ? {} : { role: "error" as const }),
+      });
+      if (!aborted) throw error;
     } finally {
       setSending(false);
+      setAborter(null);
       scrollToEnd();
     }
   };
@@ -146,6 +284,47 @@ function SessionStream(): JSX.Element {
             )}
           </For>
         </Show>
+
+        {/* ε-1：三段式进度。阶段条 + 实时日志 + 按 target 分区的流式正文。
+            一条事件都没来过时整块不渲染——空框子比没有更吵。 */}
+        <Show when={stream().logs.length > 0 || stream().sections.length > 0}>
+          <div class="stream-progress" data-testid="stream-progress">
+            <StageBar state={stream()} />
+            <div class="row wrap" style={{ gap: "8px", "align-items": "center" }}>
+              {/* V158：执行段计数。β 的 progress 事件自带 complete/total，前端不重算。 */}
+              <span class="badge" data-testid="stream-counter">
+                执行 {stream().complete}/{stream().total}
+              </span>
+              <Show when={stream().etaMs !== null}>
+                <span class="faint" style={{ "font-size": "11.5px" }} data-testid="stream-eta">
+                  约剩 {formatMs(stream().etaMs!)}
+                </span>
+              </Show>
+              <span class="faint" style={{ "font-size": "11.5px" }} data-testid="stream-message">
+                {stream().message}
+              </span>
+              <span class="spacer" />
+              <Show when={sending() && !stream().stopped}>
+                <button class="btn btn-sm" data-testid="stream-stop" onClick={stop}>
+                  停止
+                </button>
+              </Show>
+              <Show when={stream().stopped}>
+                <span class="badge" data-testid="stream-stopped">
+                  已停止
+                </span>
+              </Show>
+            </div>
+            <StreamLog
+              state={stream()}
+              onOpenPapers={() => {
+                ws.setView({ kind: "papers" });
+                ws.refreshDomain("papers");
+              }}
+            />
+            <StreamSections state={stream()} knownKeys={ws.knownKeys()} />
+          </div>
+        </Show>
       </div>
 
       <div class="composer">
@@ -205,10 +384,53 @@ function SessionStream(): JSX.Element {
   );
 }
 
+/**
+ * ε-4：一句话关键词。取精读卡 `keyFindings` 的**首句**。
+ *
+ * 为什么是 keyFindings 而不是一个专门的 `keywords` 字段：与 lane γ 对过——
+ * γ 这一轮没有给精读卡加 `keywords`（`feat/W10-gamma` 的 diff 里没有这个字段），
+ * 所以这里不写一段永远走不到的分支，按任务书的退路走：卡里首句 → 没有卡就退回 tags。
+ */
+function firstSentence(text: string, max = 48): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  // 句号的坑：`GDT_TS 推到 92.4。` 里那个 ASCII 点是小数点，不是句末。
+  // 所以全角终止符直接算，ASCII 的 `.` / `!` / `?` / `;` 只在**后面是空白或结尾**时才算。
+  const head = (flat.match(/^.*?(?:[。！？；．]|[.!?;](?=\s|$))/)?.[0] ?? flat).trim();
+  return head.length > max ? `${head.slice(0, max - 1)}…` : head;
+}
+
 function PapersView(): JSX.Element {
   const ws = useWorkspace();
   const [query, setQuery] = createSignal("");
   const [progress, setProgress] = createSignal("");
+  // ε-4：正在下载 PDF 的那一篇（按钮变忙态，避免连点提交两个任务）。
+  const [pdfBusy, setPdfBusy] = createSignal<string | null>(null);
+
+  // paperId → 精读卡抽出来的一句话。卡是另一个资源，这里只做映射不重算任何内容。
+  const cardKeyword = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const card of ws.cards()?.cards ?? []) {
+      const first = card.keyFindings.find((f) => f.trim().length > 0);
+      if (first) map.set(card.paperId, firstSentence(first));
+    }
+    return map;
+  });
+
+  const downloadPdf = async (paperId: string) => {
+    setPdfBusy(paperId);
+    const task = await withBusy(ws, "下载 PDF", () => api.lit.pdf(paperId, ws.slug(), setProgress));
+    setPdfBusy(null);
+    setProgress("");
+    if (!task) return;
+    if (task.state === "failed") {
+      ws.notify(task.error?.message ?? "PDF 下载失败", "error");
+      return;
+    }
+    // 「不可得」是已知结果不是异常（后端照实记 pdf_reason），所以照实说，不弹错误。
+    const result = (task.result as { result?: { ok?: boolean; reason?: string } } | null)?.result;
+    ws.notify(result?.ok ? "PDF 已下载" : `PDF 不可得：${result?.reason ?? "未知原因"}`);
+    ws.refreshDomain("papers");
+  };
   // V79③：精读卡生成花模型钱，UI 此前没有预算入口——填了就按 --budget-usd 同一条闸走，
   // 不填（空字符串 → undefined）就是老行为（只计量、不设闸）。
   const [readBudget, setReadBudget] = createSignal("");
@@ -306,11 +528,46 @@ function PapersView(): JSX.Element {
                         {(paper.authors ?? []).slice(0, 3).map((a) => a.name).join("、") || "—"}
                         {(paper.authors ?? []).length > 3 ? " 等" : ""}
                       </td>
-                      <td class="faint" style={{ "font-size": "11.5px" }}>{(paper.tags ?? []).join(" · ") || "—"}</td>
+                      {/* ε-4：关键词优先用精读卡抽出的一句话（有卡 = 真读过这篇），
+                          没有卡才退回入库时打的 tags。`data-source` 把「这一格是哪来的」
+                          写在 DOM 上——同一列两种来源，不标出来就分不清。 */}
+                      <td
+                        class="faint"
+                        style={{ "font-size": "11.5px" }}
+                        data-testid={`paper-keywords-${paper.id}`}
+                        data-source={
+                          cardKeyword().has(paper.id) ? "card" : (paper.tags ?? []).length ? "tags" : "none"
+                        }
+                        title={cardKeyword().has(paper.id) ? "来自精读卡的关键发现首句" : "来自入库时打的标签"}
+                      >
+                        {cardKeyword().get(paper.id) ?? ((paper.tags ?? []).join(" · ") || "—")}
+                      </td>
                       <td class="mono">{paper.bibtexKey ?? "—"}</td>
                       <td>{paper.readingStatus}</td>
                       <td>
-                        <Show when={paper.pdfStatus === "downloaded"} fallback={paper.pdfStatus === "unavailable" ? "✗" : "—"}>
+                        {/* ε-4：没下载就给一个真能按的「下载」（POST /papers/:id/pdf，
+                            与 CLI `lit pdf` 同一个落地点）。此前这一格只是一个 — 或 ✗：
+                            界面告诉你「没有 PDF」，却不给任何把它弄来的手段。
+                            `unavailable` 仍然标 ✗（库里记着不可得），但按钮照给——
+                            源换了、网络好了，再试一次是合理动作。 */}
+                        <Show
+                          when={paper.pdfStatus === "downloaded"}
+                          fallback={
+                            <span class="row" style={{ gap: "4px", "align-items": "center" }}>
+                              <Show when={paper.pdfStatus === "unavailable"}>
+                                <span title="库里记着这篇不可得">✗</span>
+                              </Show>
+                              <button
+                                class="btn btn-sm"
+                                data-testid={`paper-pdf-download-${paper.id}`}
+                                disabled={ws.busy() !== null}
+                                onClick={() => void downloadPdf(paper.id)}
+                              >
+                                {pdfBusy() === paper.id ? "下载中…" : "下载"}
+                              </button>
+                            </span>
+                          }
+                        >
                           <a class="btn btn-sm" href={api.lit.pdfFileUrl(paper.id, ws.slug())} target="_blank" rel="noopener" title="在浏览器里打开下载好的 PDF" data-testid={`paper-pdf-open-${paper.id}`}>
                             打开
                           </a>

@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createResource, createSignal, type JSX, type Resource } from "solid-js";
 import type { SettingsItem, SettingsMeta, SettingsPanelResponse } from "../../lib/settings_api";
-import { useWorkspace, withBusy } from "../../state";
+import { ApiError } from "../../lib/api";
+import { useWorkspace } from "../../state";
 import { Async, Badge } from "../ui";
 import { SettingRow, matches } from "./common";
 import type { SettingsPanelProps, SettingsSearchEntry } from "./registry";
@@ -127,16 +128,49 @@ export function ItemControl(props: {
 }): JSX.Element {
   const ws = useWorkspace();
   const [draft, setDraft] = createSignal<string | null>(null);
+  // V159（ε-2）：写被拒时的行内失败。此前 `withBusy` 只把消息丢进 toast——
+  // toast 三秒就飘走，而且离「是哪一项被拒了」隔着半个屏幕；U19 的原话是
+  // 「设置项被 422 拒时界面不显示错误」。现在错在哪一行，就写在哪一行下面。
+  const [failure, setFailure] = createSignal<{ message: string; nextStep: string | null } | null>(null);
   const value = () => draft() ?? toInput(props.item.value);
 
   const commit = async (next: string) => {
     if (!props.write) return;
-    const done = await withBusy(ws, `保存 ${props.item.key}`, () => props.write!(props.item, next));
-    if (!done) return;
-    setDraft(null);
-    ws.notify(`${props.item.key} 已保存`);
-    props.onWritten?.();
+    setFailure(null);
+    ws.setBusy(`保存 ${props.item.key}`);
+    try {
+      await props.write(props.item, next);
+      setDraft(null);
+      ws.notify(`${props.item.key} 已保存`);
+      props.onWritten?.();
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      // `ApiError.message` 里已经把 nextStep 拼在第二行（api.ts 的既有口径，toast 靠它）；
+      // 行内要分两行显示，所以从 `ApiError.nextStep` 单独取，取不到才退回整段消息。
+      const nextStep = error instanceof ApiError ? error.nextStep : null;
+      setFailure({ message: nextStep ? raw.split("\n")[0]! : raw, nextStep });
+      // toast 照旧发：别的地方（右上角通知区）仍然靠它，行内显示是**多一处**不是换一处。
+      ws.notify(raw, "error");
+    } finally {
+      ws.setBusy(null);
+    }
   };
+
+  /** 行内失败条：为什么不行 + 去哪做。三种控件共用一份，不在每个分支各写一遍。 */
+  const failureBox = (): JSX.Element => (
+    <Show when={failure()}>
+      {(f) => (
+        <div class="settings-row__error" role="alert" data-testid={`setting-error-${props.item.key}`}>
+          <span>{f().message}</span>
+          <Show when={f().nextStep}>
+            <span class="faint" data-testid={`setting-error-next-${props.item.key}`}>
+              下一步：{f().nextStep}
+            </span>
+          </Show>
+        </div>
+      )}
+    </Show>
+  );
 
   // 不可写 = 不给控件。`nextStep` 是「那去哪做」，U6 点名批过只报状态不给下一步。
   if (!props.item.editable || !props.write) {
@@ -161,54 +195,63 @@ export function ItemControl(props: {
 
   if (props.item.kind === "bool") {
     return (
-      <label class="row" style={{ gap: "6px", "align-items": "center" }}>
-        <input
-          type="checkbox"
-          aria-label={props.item.key}
-          checked={value() === "true"}
-          onChange={(e) => void commit(e.currentTarget.checked ? "true" : "false")}
-        />
-        <span class="faint">{value() === "true" ? "开" : "关"}</span>
-      </label>
+      <>
+        <label class="row" style={{ gap: "6px", "align-items": "center" }}>
+          <input
+            type="checkbox"
+            aria-label={props.item.key}
+            checked={value() === "true"}
+            onChange={(e) => void commit(e.currentTarget.checked ? "true" : "false")}
+          />
+          <span class="faint">{value() === "true" ? "开" : "关"}</span>
+        </label>
+        {failureBox()}
+      </>
     );
   }
 
   if (props.item.kind === "enum" && props.item.allowed?.length) {
     return (
-      <div class="row wrap" style={{ gap: "6px" }}>
-        <select
-          class="select"
-          aria-label={props.item.key}
-          value={value()}
-          onChange={(e) => void commit(e.currentTarget.value)}
-        >
-          <option value="">（不设置）</option>
-          <For each={props.item.allowed}>{(option) => <option value={option}>{option}</option>}</For>
-        </select>
-        {props.extraActions}
-      </div>
+      <>
+        <div class="row wrap" style={{ gap: "6px" }}>
+          <select
+            class="select"
+            aria-label={props.item.key}
+            value={value()}
+            onChange={(e) => void commit(e.currentTarget.value)}
+          >
+            <option value="">（不设置）</option>
+            <For each={props.item.allowed}>{(option) => <option value={option}>{option}</option>}</For>
+          </select>
+          {props.extraActions}
+        </div>
+        {failureBox()}
+      </>
     );
   }
 
   return (
-    <div class="row wrap" style={{ gap: "6px" }}>
-      <input
-        class="input"
-        aria-label={props.item.key}
-        type={props.item.kind === "number" ? "number" : "text"}
-        value={value()}
-        onInput={(e) => setDraft(e.currentTarget.value)}
-        onKeyDown={(e) => e.key === "Enter" && void commit(value())}
-      />
-      <button
-        class="btn btn-sm btn-primary"
-        onClick={() => void commit(value())}
-        disabled={ws.busy() !== null}
-      >
-        保存
-      </button>
-      {props.extraActions}
-    </div>
+    <>
+      <div class="row wrap" style={{ gap: "6px" }}>
+        <input
+          class="input"
+          aria-label={props.item.key}
+          type={props.item.kind === "number" ? "number" : "text"}
+          value={value()}
+          onInput={(e) => setDraft(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && void commit(value())}
+        />
+        <button
+          class="btn btn-sm btn-primary"
+          onClick={() => void commit(value())}
+          disabled={ws.busy() !== null}
+        >
+          保存
+        </button>
+        {props.extraActions}
+      </div>
+      {failureBox()}
+    </>
   );
 }
 

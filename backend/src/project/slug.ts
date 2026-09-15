@@ -23,6 +23,31 @@ export function assertSlug(slug: string): string {
   return slug;
 }
 
+// δ-1（V157）：`project archive --pattern` 的 glob。
+//
+// 刻意只支持 `*`（任意个字符，含空）与 `?`（恰好一个字符），**不支持** `**`、`{a,b}`、
+// 字符类：这里匹配的是 slug（一段扁平标识符，不是路径），多一种语法就多一种「以为匹上了
+// 其实没匹上」的失误，而这个命令的后果是批量改状态。其余字符一律按字面量转义。
+//
+// 锚定：整串匹配（`^…$`）。`--pattern "r6"` 不会误伤 `r6-probe`——要匹前缀得显式写 `r6-*`。
+// 这是刻意的取舍：批量归档宁可漏，不可多。
+export function globToRegExp(pattern: string): RegExp {
+  // 一次扫描、按字符分支，不做「先换占位符再换回来」那套——上一版用 \u0000/\u0001
+  // 当占位符，结果真的把控制字符写进了源文件（git 直接把这个 .ts 当二进制文件处理）。
+  let body = "";
+  for (const ch of pattern) {
+    if (ch === "*") body += ".*";
+    else if (ch === "?") body += ".";
+    else if (/[.+^${}()|[\]\\]/.test(ch)) body += `\\${ch}`;
+    else body += ch;
+  }
+  return new RegExp(`^${body}$`);
+}
+
+export function slugMatchesGlob(slug: string, pattern: string): boolean {
+  return globToRegExp(pattern).test(slug);
+}
+
 // 把自由字符串归一化为合法 slug（用于旧 artifact 的 project 字段兼容）。
 export function slugify(raw: string): string | null {
   const s = raw

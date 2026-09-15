@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, dataDir, configuredComputeTarget, type ConfigOptions } from "../config";
@@ -6,6 +6,7 @@ import { loadConfig, dataDir, configuredComputeTarget, type ConfigOptions } from
 import { computeTargetViews, defaultComputeAdapters } from "../compute/cli";
 import { CredentialStore } from "../daemon/credentials";
 import { DEFAULT_FRONTEND_DIR } from "../server/app";
+import { frontendBuiltAt } from "../server/health";
 import { PROVIDER_API_KEY_ENV } from "../llm/providers/registry";
 import { resolvePython } from "../simulation/platform";
 import { SimulationRegistry } from "../simulation/registry";
@@ -83,6 +84,7 @@ export interface DoctorReport {
    * 字面量喂给 renderDoctor()，不知道这个新字段；`buildDoctorReport()` 始终会填。
    */
   runningInstances?: RunningInstanceScan;
+  /** doctor 自己 cwd 下的前端产物。**不等于**浏览器打开某个实例会看到什么——见 runningInstances[].frontendBuilt。 */
   frontendBuilt: boolean;
   frontendDir: string;
   dataDir: string;
@@ -120,6 +122,8 @@ export interface DoctorOptions extends ConfigOptions {
   probePython?: (python: string) => Promise<PythonStatus>;
   // δ-2：探端口这一步的注入点（测试起一个假 health server，或直接断言「无运行实例」）。
   probeRunningInstances?: (currentVersion: string, ports: number[]) => Promise<RunningInstanceScan>;
+  // δ-2（V160）：命令行 `--port` 追加的端口，并进默认 4321 与 config 的 serverPort。
+  ports?: number[];
   env?: Record<string, string | undefined>;
   now?: () => Date;
 }
@@ -268,12 +272,13 @@ export async function buildDoctorReport(options: DoctorOptions = {}): Promise<Do
   }));
 
   // δ-2：探本机运行实例。config 里若配了端口就一起探；探不到任何东西是常态，不是错误。
-  const ports = probePorts((config as Record<string, unknown>).serverPort);
+  const ports = probePorts((config as Record<string, unknown>).serverPort, options.ports ?? []);
   const scanRunning = options.probeRunningInstances ?? ((v: string, ps: number[]) => probeRunningInstances({ currentVersion: v, ports: ps }));
   const runningInstances = await scanRunning(PACKAGE_VERSION, ports);
 
   const frontendDir = options.frontendDir ?? DEFAULT_FRONTEND_DIR;
-  const frontendBuilt = existsSync(join(frontendDir, "index.html"));
+  // 判定复用 server 那一份（同一个函数，`/api/health` 也用它）——两处各判一次正是 V46 形状。
+  const frontendBuilt = frontendBuiltAt(frontendDir);
 
   return {
     version: PACKAGE_VERSION,

@@ -1071,3 +1071,96 @@ select {
     max-height: 34vh;
   }
 }
+
+/* ── v0.10 lane ε：会话流的三段式进度（阶段条 / 实时日志 / 流式正文）─────────── */
+
+.stream-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--pad);
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-sunken);
+}
+
+.stage-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: stretch;
+}
+
+.stage-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 88px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+/* 三态用颜色区分，但**不只靠颜色**：`data-state` 本身可读，耗时那一行也直接写着数。 */
+.stage-chip[data-state="active"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stage-chip[data-state="done"] {
+  border-color: var(--ok);
+  color: var(--text-soft);
+}
+
+.stage-chip__ms {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.stream-log__body {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stream-log__line {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-soft);
+}
+
+.stream-log__line[data-kind="search_source"] {
+  color: var(--text-faint);
+}
+
+.stream-section {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+}
+
+/* V159（lane ε-2）：设置项被拒时的行内失败条。toast 会飘走，这一条不会。 */
+.settings-row__error {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -1,6 +1,8 @@
 import { chmodSync } from "node:fs";
 import { Hono } from "hono";
-import { configPath, loadConfig, saveConfig, type ConfigOptions } from "../../../config";
+import { configPath, configuredSearchSources, loadConfig, saveConfig, type ConfigOptions } from "../../../config";
+import { DEFAULT_SEARCH_SOURCES, LITERATURE_SOURCES } from "../../../literature/models";
+import { participationNextStep } from "../../../literature/source_state";
 import { registerSecret, registerSecrets } from "../../../llm/types";
 import type { ServerContext } from "../../context";
 import {
@@ -101,6 +103,20 @@ function readFields(body: Record<string, unknown>, spec: CredentialSpec): Record
   return out;
 }
 
+/**
+ * γ-1：刚写完凭据的这个 id 如果是文献检索源、却不在 `searchSources` 里，给一句下一步。
+ *
+ * 不是检索源（LLM provider、算力 connector）一律返回 null——它们没有「勾选」这个概念，
+ * 硬套一句「去检索源面板勾选」只会把人指到一个根本没有这一行的面板。
+ */
+function searchSourceNextStep(id: string, opts: ConfigOptions): string | null {
+  if (!(LITERATURE_SOURCES as readonly string[]).includes(id)) return null;
+  const configured = configuredSearchSources(opts);
+  const selected = configured && configured.length > 0 ? configured : [...DEFAULT_SEARCH_SOURCES];
+  if (selected.includes(id)) return null;
+  return participationNextStep("configured_not_selected", id);
+}
+
 export function credentialsRoutes(ctx: ServerContext, options: SettingsRouteOptions = {}): Hono {
   const app = new Hono();
   const isLoopback = loopbackGuard(options);
@@ -165,7 +181,18 @@ export function credentialsRoutes(ctx: ServerContext, options: SettingsRouteOpti
     }
 
     const item = toItem(ctx, spec);
-    return written(c, "credentials", { ...item, extra: { ...item.extra, fileMode: mode } }, META);
+    // γ-1（V173 / U43 ②）：凭据写进去了，但这个源**不在检索清单里** → 回一句可执行的下一步。
+    //
+    // U43 现场就是这个形状：用户配了 AMiner 的 key，合理预期是「以后会用它」，
+    // 实际还要再去另一个面板勾一次，而没勾的后果（每次检索静默 skip）在任何界面上都看不出来。
+    // 写入成功时是唯一一个「用户此刻正想着这个源」的时刻，这句话必须出现在这里。
+    const nextStep = searchSourceNextStep(spec.id, configOptions(ctx));
+    return written(
+      c,
+      "credentials",
+      { ...item, ...(nextStep ? { nextStep } : {}), extra: { ...item.extra, fileMode: mode } },
+      META,
+    );
   });
 
   app.delete("/credentials/:id", (c) => {

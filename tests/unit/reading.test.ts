@@ -175,7 +175,11 @@ describe("ReadingCardGenerator", () => {
     const llm = new FakeLlm([cardJson(), "坏输出", "还是坏输出", cardJson(), cardJson()]);
     const generator = new ReadingCardGenerator({ llm, library, records: project.records() });
 
-    const { cards, failures } = await generator.generateMany(paperIds);
+    // v0.10 α-2：generateMany 默认并行 3。这个 FakeLlm 是**按序**发脚本回复的，
+    // 并行会打乱「第 n 次调用拿第 n 条回复」的对应关系（本用例要的是那个对应关系，
+    // 不是并发）→ 显式 concurrency:1 恢复 v0.9 的串行语义。并发本身另有门禁
+    // （tests/unit/w10_alpha_speed.test.ts 的 α-2 段）。
+    const { cards, failures } = await generator.generateMany(paperIds, { concurrency: 1 });
 
     expect(cards.length).toBe(2);
     expect(failures.length).toBe(1);

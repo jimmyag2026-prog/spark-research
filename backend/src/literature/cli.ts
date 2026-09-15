@@ -1,11 +1,12 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { configuredDefaultModel } from "../config";
+import { configuredDefaultModel, configuredReadConcurrency } from "../config";
 import { UsageStore, parseBudgetUsd, usageTrackingLlm } from "../usage/ledger";
 import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
 import type { HttpClient } from "../http/client";
 import { LLMRouter } from "../llm/router";
+import { DEFAULT_READ_CONCURRENCY } from "./limits";
 import { ProjectManager, ProjectError, type Project, openProjectResolved } from "../project/manager";
 import { CITATION_INTEGRITY_REVIEW_KIND, type CitationIntegrityReviewMetadata } from "../agents/contract";
 import { explainCitationGap, LlmCitationJudge } from "../reviewer/citation_judge";
@@ -31,6 +32,8 @@ import { extractPdfText } from "./pdf_text";
 import { ReadingCardGenerator, listReadingCards, renderReadingCard, retractOrphanRecords } from "./reading";
 import { ReviewDraftGenerator, baselinesFrom } from "./review";
 import { LiteratureSearcher, configuredDefaultSources } from "./search";
+import { llmQueryTranslator } from "./prepare_query";
+import { describeSourceState } from "./source_state";
 
 // `spark-research lit ...` 子命令。风格与 project/cli.ts 一致：
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
@@ -432,7 +435,13 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
     }
     return new LiteratureSearcher(
       new ConnectorRegistry({ http: deps.http, credentials, rawSink, command }).registerBuiltins(),
-      { cooldownOn429: deps.http === undefined }, // U55：只有走真网络时才开冷却（注入 http 的测试/回放不开）
+      {
+        cooldownOn429: deps.http === undefined, // U55：只有走真网络时才开冷却（注入 http 的测试/回放不开）
+        // γ-2（U58）：中文查询的英译器。**懒构造** LLMRouter：只有真的遇到中文查询时
+        // prepareQuery 才会调这个闭包，纯英文查询一次都不碰它——否则每条 `lit search`
+        // 都要为一件它不做的事付一个 router 的构造成本。
+        translate: (q) => llmQueryTranslator(deps.llm ?? new LLMRouter(), model)(q),
+      },
     );
   };
 
@@ -491,6 +500,8 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             JSON.stringify(
               {
                 query,
+                // γ-2：中文查询做了什么处理，JSON 口径也要能读到（前端与外部 agent 都靠它）。
+                prepared: result.prepared ?? null,
                 rank,
                 rankNote: result.rankNote ?? null,
                 totalBeforeDedupe: result.totalBeforeDedupe,
@@ -518,6 +529,9 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // rankNote 在真实 LiteratureSearcher 路径上必有；只有测试注入的旧 fixture
         // （非本 lane 所有权，见 search.ts 对 rank/rankNote 可选的说明）可能没设置。
         if (result.rankNote) out(result.rankNote);
+        // γ-2 / AD-12：查询被改写过就必须说出来。用户输的是中文，实际查的是中英两条串——
+        // 不写这一行，他看到的顺序和条数就无从解释。
+        if (result.prepared?.note) out(result.prepared.note);
         printSourceStatus(result.sources, out, caveatOf);
         out("");
         result.papers.forEach((paper, i) => printPaper(paper, i, out));
@@ -706,6 +720,14 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
                 : { ok: false, reason: "库内无 PDF（未下载或不可得）" }),
         });
 
+        // α-2（v0.10）：精读并行度。**给了 --budget-usd 就退回串行**——预算闸的
+        // 判据是「已结算花费 + 在飞预留」，在飞预留用的是发前估价；并发时 N 个调用
+        // 的估价误差会同时在飞，估价越偏、越线越多（本 lane 实测：G-3 的
+        // 「第 2 篇被闸拒」用例在并发下第 2 篇直接放行了）。速度让位于「别超预算」：
+        // 想要并行就别给预算，想要预算就接受串行。chat 侧的文献流程不走这条路径。
+        // 收口：不带预算时按配置项 readConcurrency（默认 3）；带预算固定串行（见 α-2）。
+        const readConcurrency = flags["budget-usd"] !== undefined ? 1 : configuredReadConcurrency(DEFAULT_READ_CONCURRENCY, { root: deps.root });
+
         // V35：接 TaskRegistry（不是另起一套 CLI 进度机制——见 cli/progress.ts 文件头）。
         // 单篇精读只有一步，套任务只会多两行噪音；`--all` 才是外部验收撞到的那条
         // 「8 分钟零输出」路径，所以只有它走任务。
@@ -722,6 +744,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
             run: (handle) => {
               handle.progress(0, targets.length, "开始生成精读卡");
               return generator.generateMany(targets.map((p) => p.id), {
+                concurrency: readConcurrency,
                 onProgress: ({ done, total, ok, title, paperId }) =>
                   handle.progress(done, total, `${ok ? "✅" : "❌"} ${title ?? paperId}`),
               });
@@ -735,7 +758,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
               cards: [] as Awaited<ReturnType<typeof generator.generateMany>>["cards"],
               failures: targets.map((p) => ({ paperId: p.id, error: "任务异常终止" })),
             })
-          : await generator.generateMany(targets.map((p) => p.id));
+          : await generator.generateMany(targets.map((p) => p.id), { concurrency: readConcurrency });
 
         if (flags.json === true) {
           out(JSON.stringify({ cards, failures }, null, 2));
@@ -1029,12 +1052,23 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
       case "sources": {
         const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
         const registry = new ConnectorRegistry({ http: deps.http, credentials }).registerBuiltins();
+        // γ-1（V173 / U43）：本次会不会真查，取决于「勾没勾」× 「有没有凭据」。
+        // 这一行此前不存在——于是「配了 AMiner 的 key 却从来没参与过检索」在 CLI 上
+        // 也一样看不出来（U43 的两条输出各说各的，合起来的那件事没人算）。
+        const selectedSources = new Set<string>(configuredDefaultSources());
         out("文献域连接器:");
         for (const entry of registry.listAll().filter((c) => c.domain === "literature")) {
           const needsKey = entry.metadata?.apiKeyRequired ?? false;
           // 只显示「是否已配置」，绝不显示凭据值本身（AD-2）。
           const keyMark = needsKey ? (credentials.has(entry.name) ? "凭据已配置" : "凭据未配置") : "免 key";
+          const state = describeSourceState(entry.name, {
+            selected: selectedSources.has(entry.name),
+            apiKeyRequired: needsKey,
+            credentialConfigured: credentials.has(entry.name),
+          });
           out(`  ${entry.name.padEnd(16)} ${keyMark.padEnd(12)} ${entry.description}`);
+          out(`  ${" ".repeat(16)} ${state.participation === "will_search" ? "✅" : "⏭️ "} ${state.participationLabel}`);
+          if (state.participationNextStep) out(`  ${" ".repeat(16)} 下一步: ${state.participationNextStep}`);
           out(`  ${" ".repeat(16)} 工具: ${entry.tools.map((t) => t.name).join(", ")}`);
           // V54：免 key/✅ 不等于「毫无保留」——bioRxiv 的 search 是模拟出来的复合工具，
           // 这条 caveat 之前只在 capabilities --json 里看得到，人类入口（这里）反而看不到。

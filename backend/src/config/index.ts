@@ -261,6 +261,27 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "**与 `mcpTimeoutMs` 是两回事，且必须一起调**：后者是 MCP 等待多久改走句柄，这里是任务本身多久被判超时失败。只调 mcpTimeoutMs 的话，任务仍会在这里被掐掉（v0.2.1 × P10 的语义漂移就是这么来的）。",
   },
   {
+    key: "chatSyncMaxMs",
+    type: "number",
+    envVar: "SPARK_RESEARCH_CHAT_SYNC_MAX_MS",
+    defaultValue: 200_000,
+    summary: "同步 POST /api/session/chat 最多等多久（毫秒），超过就改回 202 + 任务句柄",
+    effect:
+      "**上限是 Bun.serve 的 255s**（A5 定）：等过了头，连接被 server 自己掐断，编排还在后台跑完、结果没人接收，钱照花（V156 / R6 U13 的现场）。默认 200s 留 55s 余量。调大到 255s 以上等于关掉这条兜底。想要全程可见就别用同步路由，走 POST /api/session/stream。",
+  },
+  // v0.10 α-2（收口补登记）：精读卡并行度。默认 3 = W10-0 实测 3 路 × 20 次 0 次 429；
+  // 1 = 恢复 v0.9 串行。只改调度不改结算语义（逐篇独立结算、返回按输入顺序）。
+  {
+    key: "readConcurrency",
+    type: "number",
+    envVar: "SPARK_RESEARCH_READ_CONCURRENCY",
+    defaultValue: 3,
+    summary: "文献精读卡并行度（deep 档），1 = 串行",
+    effect:
+      "chat 的 literature-review deep 档与 `lit read`（不带 --budget-usd 时）按此并行生成精读卡。" +
+      "W10-0 基线：串行 3 卡 85.7s，3 路并行 0 次 429。给了 --budget-usd 的 CLI 路径固定串行（在飞预留估价误差会随并发叠加）。",
+  },
+  {
     key: "mcpTimeoutMs",
     type: "number",
     envVar: "SPARK_RESEARCH_MCP_TIMEOUT_MS",
@@ -438,6 +459,25 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
       "novelty 的「没查到相似工作」结论强度也跟着降。写入时校验每个 id 都在 connector " +
       "注册表的 literature 域里，未知 id 直接拒绝（422）而不是运行时静默跳过。" +
       "留空 = 退回内置默认集。",
+  },
+  // v0.10 lane γ-2（U58）：语言过滤开关。
+  //
+  // 现场：中文查询在 OpenAlex 上做的是松散匹配，"预防" 这种通用词会把任何中文
+  // 医学文献捞上来。想只看中文期刊（或只看英文）时，此前没有任何旋钮。
+  //
+  // 刻意只认 ISO 639-1 两字母码，且**只对 OpenAlex 生效**——三个中文可用源里
+  // 只有它在 API 上真有 `filter=language:<code>`。给别的源编一个等价物，就等于
+  // 让「已按语言过滤」这句话在那些源上是假的（AD-12）。
+  {
+    key: "searchLanguage",
+    type: "string",
+    envVar: "SPARK_RESEARCH_SEARCH_LANGUAGE",
+    defaultValue: "",
+    summary: "检索时按语言过滤（ISO 639-1 两字母码，如 zh / en）；留空 = 不过滤",
+    effect:
+      "只对 OpenAlex 生效（唯一提供 language 过滤的源）：设成 zh 时 OpenAlex 只回中文文献，" +
+      "设成 en 时只回英文。其余源不受影响——它们没有等价的过滤维度，" +
+      "所以开着这个开关也**不能**说「这次结果全是该语言的」。留空 = 行为与 v0.9 一致。",
   },
 ];
 
@@ -682,6 +722,19 @@ export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+// δ-4（V156 ①）：同步 chat 的等待上限。口径与上面两个一致（非正数/非数字 → fallback）。
+export function configuredReadConcurrency(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("readConcurrency", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}
+
+export function configuredChatSyncMaxMs(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("chatSyncMaxMs", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 
 // 礼貌头是唯一「配置必须变成 env」的地方：politeness.ts 从 v0.2 起就只读 env，
 // 而 connector 层在很多路径上拿不到 config 句柄。做法是**进程启动时把 config 的值
@@ -760,6 +813,20 @@ export function configuredSearchSources(options: ConfigOptions = {}): string[] |
   if (raw.trim() === "") return null;
   const ids = raw.split(",").map((s) => s.trim()).filter(Boolean);
   return ids.length > 0 ? ids : null;
+}
+
+/**
+ * v0.10 lane γ-2（U58）：语言过滤码。留空或形状不对时返回 null（= 不过滤）。
+ *
+ * 形状校验放在**读侧**而不是只放写侧：这个值也可以从环境变量来
+ * （`SPARK_RESEARCH_SEARCH_LANGUAGE`），env 那条路不经 `writeSetting`。
+ * 一个乱码拼进 `filter=language:???` 只会让 OpenAlex 回 400，而那时候
+ * 用户看到的是「openalex 失败」，根本对不回这个配置项上。
+ */
+export function configuredSearchLanguage(options: ConfigOptions = {}): string | null {
+  const raw = stringOr("searchLanguage", "", options).trim().toLowerCase();
+  if (raw === "") return null;
+  return /^[a-z]{2}$/.test(raw) ? raw : null;
 }
 
 // ── v0.9 lane γ（U6·A）：写入前校验 ─────────────────────────────────────────

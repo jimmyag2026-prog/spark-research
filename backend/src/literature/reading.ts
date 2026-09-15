@@ -1,8 +1,10 @@
 import { projectBackgroundBlock } from "../agents/prompts";
+import { cardTarget, type DeltaListener } from "../agents/progress";
 import type { LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
 import type { ResearchRecord } from "../project/models";
 import { libraryKeyIndex } from "./export";
+import { DEFAULT_READ_CONCURRENCY, STAGE_MAX_TOKENS, normalizeConcurrency } from "./limits";
 import type { LibraryPaper, LibraryStore } from "./library";
 
 // 精读卡 pipeline（DESIGN 域 A3 第 2 步）：库内论文 → 结构化卡片 → record。
@@ -234,6 +236,23 @@ export interface GenerateCardOptions {
   // 「一篇失败不影响其余」的结算语义（下面 generateMany 的注释）是这个类的职责，
   // 搬到调用方就会有第二份实现，早晚和这里漂移。回调只报告、不改变结算语义。
   onProgress?: (progress: { done: number; total: number; paperId: string; ok: boolean; title: string | null }) => void;
+  /**
+   * β-3（v0.10）：卡正文的**流式增量**。给了就把这次调用切成流式，每个片段回调一次，
+   * `target` 恒为 `card:<paperId>`，`revision` = 第几次尝试（schema 校验失败重试 → +1，
+   * 前端据此清空重画，而不是把两稿拼在一起）。
+   * 不给 = 不传 `onDelta` 给 router → provider 走非流式分支，行为与接线前一字不差。
+   */
+  onDelta?: DeltaListener;
+  /**
+   * α-2（v0.10）：`generateMany` 的并行度。默认 `DEFAULT_READ_CONCURRENCY`（=3，
+   * W10-0 实测 3 路 × 20 次 0 次 429）。1 = 恢复 v0.9 的串行行为。
+   *
+   * 只影响**调度**，不影响结算语义：仍然逐篇独立结算，一篇失败不影响其余；
+   * `onProgress` 的 `done` 仍然是单调递增的完成计数（不是下标），
+   * 返回的 `cards` / `failures` 按**输入顺序**重排，与串行时逐字节一致——
+   * 否则并发会让下游的「第 i 张卡」悄悄换一篇论文。
+   */
+  concurrency?: number;
 }
 
 export interface GenerateCardResult {
@@ -276,9 +295,15 @@ export class ReadingCardGenerator {
         });
       }
 
-      const response = model
-        ? await this.deps.llm.call(messages, model)
-        : await this.deps.llm.call(messages);
+      // β-3 × α-3（收口合并）：统一走 options 形式；要流式就带 onDelta，
+      // 第一次尝试带 STAGE_MAX_TOKENS.card 上限，重试不带（推理模型打满上限会空输出，见 α devlog）。
+      const response = await this.deps.llm.call(messages, {
+        ...(model ? { model } : {}),
+        ...(attempt === 1 ? { maxTokens: STAGE_MAX_TOKENS.card } : {}),
+        ...(options.onDelta
+          ? { onDelta: (chunk) => options.onDelta!({ chunk, target: cardTarget(paperId), revision: attempt }) }
+          : {}),
+      });
 
       if (!response.ok) {
         lastErrors = [`模型调用失败: ${response.error?.message ?? "未知原因"}`];
@@ -320,27 +345,49 @@ export class ReadingCardGenerator {
     paperIds: string[],
     options: GenerateCardOptions = {},
   ): Promise<{ cards: StoredReadingCard[]; failures: Array<{ paperId: string; error: string }> }> {
+    // α-2：并行度 N 的 worker 池。用共享游标而不是 chunk 切片——8 篇 / 3 路切片
+    // 会让最慢的一篇拖住它那一片的后两篇（尾部效应），游标池里谁先空谁取下一篇。
+    const concurrency = Math.min(normalizeConcurrency(options.concurrency), Math.max(1, paperIds.length));
+    const slots: Array<{ card?: StoredReadingCard; failure?: { paperId: string; error: string } }> = new Array(paperIds.length);
+    let next = 0;
+    let done = 0;
+
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next++;
+        if (i >= paperIds.length) return;
+        const id = paperIds[i]!;
+        let ok = true;
+        let title: string | null = this.deps.library.get(id)?.title ?? null;
+        try {
+          const card = (await this.generate(id, options)).card;
+          slots[i] = { card };
+          title = card.title;
+        } catch (error) {
+          ok = false;
+          slots[i] = { failure: { paperId: id, error: error instanceof Error ? error.message : String(error) } };
+        }
+        done++;
+        // 进度**在成功和失败两条路径上都发**——只在成功时发进度，等于让一串失败在
+        // 终端上看起来和「卡住了」一模一样，那正是 V35 要修的症状。
+        // 并发下 `done` 是完成计数而不是下标（乱序完成时它仍单调递增到 total）。
+        options.onProgress?.({ done, total: paperIds.length, paperId: id, ok, title });
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+    // 按输入顺序重排：下游（pipeline 的 cards、综述的白名单）依赖这个顺序。
     const cards: StoredReadingCard[] = [];
     const failures: Array<{ paperId: string; error: string }> = [];
-    let done = 0;
-    for (const id of paperIds) {
-      let ok = true;
-      let title: string | null = this.deps.library.get(id)?.title ?? null;
-      try {
-        const card = (await this.generate(id, options)).card;
-        cards.push(card);
-        title = card.title;
-      } catch (error) {
-        ok = false;
-        failures.push({ paperId: id, error: error instanceof Error ? error.message : String(error) });
-      }
-      done++;
-      // 进度**在成功和失败两条路径上都发**——只在成功时发进度，等于让一串失败在
-      // 终端上看起来和「卡住了」一模一样，那正是 V35 要修的症状。
-      options.onProgress?.({ done, total: paperIds.length, paperId: id, ok, title });
+    for (const slot of slots) {
+      if (slot?.card) cards.push(slot.card);
+      else if (slot?.failure) failures.push(slot.failure);
     }
     return { cards, failures };
   }
+
+  /** 本实例的默认并行度（给调用方与门禁读的，避免第二份 3）。 */
+  static readonly DEFAULT_CONCURRENCY = DEFAULT_READ_CONCURRENCY;
 
   private keyFor(paperId: string): string {
     return libraryKeyIndex(this.deps.library.list()).byId.get(paperId) ?? paperId;

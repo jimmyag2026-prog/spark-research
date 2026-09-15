@@ -1,11 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DeltaListener } from "../agents/progress";
 import type { ArtifactStore } from "../artifacts/store";
 import type { LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
 import { citedKeys } from "../reviewer/rules";
 import { libraryKeyIndex } from "./export";
+import { STAGE_MAX_TOKENS } from "./limits";
 import type { LibraryStore } from "./library";
 import { cardBaselineText, type StoredReadingCard } from "./reading";
 
@@ -56,6 +58,13 @@ export interface GenerateDraftOptions {
   filename?: string;
   // true 时不因越界 key 报错（只给对抗测试与「先出草稿再由检查器兜底」的场景用）。
   allowUnknownKeys?: boolean;
+  /**
+   * β-3（v0.10）：综述正文的**流式增量**。`target` 恒为 `"review"`，`revision` = 第几稿——
+   * 越界 key 触发的重写是**另一稿**，不是同一稿的后续：不区分的话前端会把两稿首尾相接，
+   * 拼出一篇「前半引用被 veto 的 key、后半改过」的四不像。
+   * 不给 = 不开流式，行为与接线前一字不差。
+   */
+  onDelta?: DeltaListener;
 }
 
 export interface ReviewDraftResult {
@@ -98,8 +107,57 @@ export function buildReviewPrompt(cards: StoredReadingCard[], topic?: string): s
   ].join("\n");
 }
 
+// α-1（v0.10）：quick 档的「摘要条目」——与精读卡走**同一套引用语法与白名单机制**，
+// 只是材料级别从「全文/摘要精读卡」降到「库内摘要」。提示词里必须把这件事说死，
+// 否则模型会把摘要写成全文级结论（V98 在精读卡那边已经踩过一次）。
+export interface AbstractEntry {
+  paperId: string;
+  bibtexKey: string;
+  title: string;
+  year: number | null;
+  venue: string | null;
+  abstract: string | null;
+}
+
+export function buildQuickReviewPrompt(entries: AbstractEntry[], topic?: string): string {
+  const allow = entries.map((e) => `- [@${e.bibtexKey}] ${e.title}`).join("\n");
+  const bodies = entries
+    .map((e) =>
+      [
+        `### [@${e.bibtexKey}] ${e.title}`,
+        `年份: ${e.year ?? "未知"} · venue: ${e.venue ?? "未知"}`,
+        `摘要: ${e.abstract?.replace(/\s+/g, " ").trim() || "（库内无摘要，只有标题——不要为它编造结论）"}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+  return [
+    `综述主题：${topic?.trim() || "本项目文献库的整体研究现状"}`,
+    "",
+    "材料级别：**仅摘要**（quick 档）。只能写摘要层面的结论，不要写成全文细节，",
+    "不要给出摘要里没有的数字、样本量、baseline 名称；确实需要全文才能下的判断写「需精读确认」。",
+    "",
+    `可用引用 key 白名单（共 ${entries.length} 条，只能用这些）：`,
+    allow,
+    "",
+    "摘要条目：",
+    bodies,
+  ].join("\n");
+}
+
+/** quick 档的核验基准：对照文本就是摘要本身（没有精读卡可对照时，这是唯一诚实的基准）。 */
+export function baselinesFromAbstracts(entries: AbstractEntry[]): Map<string, { key: string; title: string; summary: string }> {
+  return new Map(
+    entries.map((e) => [
+      e.bibtexKey,
+      { key: e.bibtexKey, title: e.title, summary: `依据: 仅摘要（quick 档，未精读）\n摘要: ${e.abstract?.trim() || "（库内无摘要）"}` },
+    ]),
+  );
+}
+
 // 参考文献区：由库内真实条目生成，key 与正文引用一一对应（读者能逐条核对）。
-export function renderReferences(cards: StoredReadingCard[], library: LibraryStore): string {
+// α-1：参数放宽到「有 paperId / bibtexKey / title 的东西」——`StoredReadingCard` 与
+// `AbstractEntry` 都是它的子类型，两档共用同一份渲染（不另起一套编号规则）。
+export function renderReferences(cards: Array<Pick<StoredReadingCard, "paperId" | "bibtexKey" | "title">>, library: LibraryStore): string {
   const lines = cards.map((card) => {
     const paper = library.get(card.paperId);
     if (!paper) return `- [@${card.bibtexKey}] ${card.title}`;
@@ -119,15 +177,49 @@ export class ReviewDraftGenerator {
       throw new ReviewDraftError("没有可用的精读卡；先跑 spark-research lit read <paper-id> 生成精读卡");
     }
     const allowed = new Set(cards.map((c) => c.bibtexKey));
-    // 白名单以**当前库**为准：卡片 key 已由 listReadingCards 重算过，这里再核一遍防漂移。
+    this.assertKeysInLibrary(allowed, "精读卡");
+
+    const drafted = await this.draft(buildReviewPrompt(cards, options.topic), allowed, options);
+    const full = `${drafted.markdown}\n\n${renderReferences(cards, this.deps.library)}\n`;
+    const persisted = this.persist(full, cards, drafted.keys, drafted.model, options);
+    return { markdown: full, citedKeys: drafted.keys, unknownKeys: drafted.unknown, attempts: drafted.attempts, ...persisted };
+  }
+
+  /**
+   * α-1（v0.10）：**quick 档**——把全部候选的摘要一次性交给模型出综述，不建精读卡。
+   * 与 `generate()` 共用：同一个系统提示的引用规则、同一份白名单校验、同一个重试
+   * 循环、同一份参考文献渲染、同一条落盘路径。**不要另起一套引用语法**（任务书明写）。
+   */
+  async generateQuick(entries: AbstractEntry[], options: GenerateDraftOptions = {}): Promise<ReviewDraftResult> {
+    if (entries.length === 0) {
+      throw new ReviewDraftError("没有可用的摘要条目；quick 档至少需要一篇库内论文");
+    }
+    const allowed = new Set(entries.map((e) => e.bibtexKey));
+    this.assertKeysInLibrary(allowed, "摘要条目");
+
+    const drafted = await this.draft(buildQuickReviewPrompt(entries, options.topic), allowed, options);
+    const full = `${drafted.markdown}\n\n${renderReferences(entries, this.deps.library)}\n`;
+    const persisted = this.persist(full, entries, drafted.keys, drafted.model, options, "quick");
+    return { markdown: full, citedKeys: drafted.keys, unknownKeys: drafted.unknown, attempts: drafted.attempts, ...persisted };
+  }
+
+  // 白名单以**当前库**为准：key 已由上游重算过，这里再核一遍防漂移。
+  private assertKeysInLibrary(allowed: Set<string>, what: string): void {
     const libraryKeys = new Set(libraryKeyIndex(this.deps.library.list()).keys);
     for (const key of allowed) {
       if (!libraryKeys.has(key)) {
-        throw new ReviewDraftError(`精读卡的 key '${key}' 已不在库内（论文可能被删除），请重新生成精读卡`, [key]);
+        throw new ReviewDraftError(`${what}的 key '${key}' 已不在库内（论文可能被删除），请重新生成`, [key]);
       }
     }
+  }
 
-    const userPrompt = buildReviewPrompt(cards, options.topic);
+  // 两档共用的生成 + 重试循环。抽出来是因为「越界 key 带着原因重试一次、仍越界就抛错
+  // 不落 artifact」这条纪律只能有一份实现——两份早晚漂移，而漂移的那一份会放行假引用。
+  private async draft(
+    userPrompt: string,
+    allowed: Set<string>,
+    options: GenerateDraftOptions,
+  ): Promise<{ markdown: string; keys: string[]; unknown: string[]; attempts: number; model: string }> {
     let lastMarkdown = "";
     let lastUnknown: string[] = [];
     let lastError = "";
@@ -148,9 +240,14 @@ export class ReviewDraftGenerator {
         });
       }
 
-      const response = this.deps.model
-        ? await this.deps.llm.call(messages, this.deps.model)
-        : await this.deps.llm.call(messages);
+      // β-3 × α-3（收口合并）：统一 options 形式；流式带 onDelta；首次尝试带 STAGE_MAX_TOKENS.review。
+      const response = await this.deps.llm.call(messages, {
+        ...(this.deps.model ? { model: this.deps.model } : {}),
+        ...(attempt === 1 ? { maxTokens: STAGE_MAX_TOKENS.review } : {}),
+        ...(options.onDelta
+          ? { onDelta: (chunk) => options.onDelta!({ chunk, target: "review", revision: attempt }) }
+          : {}),
+      });
       if (!response.ok) {
         lastError = `模型调用失败: ${response.error?.message ?? "未知原因"}`;
         lastUnknown = [];
@@ -177,9 +274,7 @@ export class ReviewDraftGenerator {
         continue;
       }
 
-      const full = `${markdown}\n\n${renderReferences(cards, this.deps.library)}\n`;
-      const persisted = this.persist(full, cards, keys, response.model, options);
-      return { markdown: full, citedKeys: keys, unknownKeys: unknown, attempts: attempt, ...persisted };
+      return { markdown, keys, unknown, attempts: attempt, model: response.model };
     }
 
     throw new ReviewDraftError(
@@ -192,10 +287,11 @@ export class ReviewDraftGenerator {
 
   private persist(
     markdown: string,
-    cards: StoredReadingCard[],
+    cards: Array<{ recordId?: string; bibtexKey: string }>,
     keys: string[],
     model: string,
     options: GenerateDraftOptions,
+    depth: "quick" | "deep" = "deep",
   ): { path: string | null; artifactId: string | null; recordId: string | null } {
     const filename = options.filename ?? `review-draft-${new Date().toISOString().slice(0, 10)}.md`;
     const dir = this.deps.workDir ?? tmpdir();
@@ -226,6 +322,9 @@ export class ReviewDraftGenerator {
       metadata: {
         kind: REVIEW_DRAFT_KIND,
         topic: options.topic ?? null,
+        // α-1：quick 档的综述**材料级别是摘要**，落 record 时必须留痕——
+        // 否则三个月后没人分得出哪份综述是精读出来的、哪份只是摘要拼的。
+        depth,
         citedKeys: keys,
         cardRecordIds: cards.map((c) => c.recordId).filter(Boolean),
         model,

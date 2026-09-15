@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.9.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.10.0-alpha.1，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -164,6 +164,8 @@ spark-research mcp    # stdio 传输
 - `llmTimeoutMs`（默认 120000，env `SPARK_RESEARCH_LLM_TIMEOUT_MS`）：单次 LLM 调用的超时上限（毫秒）
 - `kernelTimeoutMs`（默认 120000，env `SPARK_RESEARCH_KERNEL_TIMEOUT_MS`）：单次 Python kernel execute 的超时上限（毫秒）
 - `taskTimeoutMs`（默认 600000，env `SPARK_RESEARCH_TASK_TIMEOUT_MS`）：server 长任务整个生命周期的超时上限（毫秒）
+- `chatSyncMaxMs`（默认 200000，env `SPARK_RESEARCH_CHAT_SYNC_MAX_MS`）：同步 POST /api/session/chat 最多等多久（毫秒），超过就改回 202 + 任务句柄
+- `readConcurrency`（默认 3，env `SPARK_RESEARCH_READ_CONCURRENCY`）：文献精读卡并行度（deep 档），1 = 串行
 - `mcpTimeoutMs`（默认 300000，env `SPARK_RESEARCH_MCP_TIMEOUT_MS`）：MCP 工具同步等待长任务的超时上限（毫秒）
 - `KIMI_API_KEY`（默认 （凭据），env `KIMI_API_KEY`）：Kimi（Moonshot）API key
 - `OPENROUTER_API_KEY`（默认 （凭据），env `OPENROUTER_API_KEY`）：OpenRouter API key（默认模型走这条路）
@@ -183,6 +185,7 @@ spark-research mcp    # stdio 传输
 - `rawLlm`（默认 on，env `SPARK_RESEARCH_RAW_LLM`）：是否把每次 LLM 调用的 prompt 与响应原文落进项目 raw/llm/（永久保留）
 - `rawUpstreamInline`（默认 off，env `SPARK_RESEARCH_RAW_UPSTREAM_INLINE`）：凭据协议源（AMiner/CNKI/万方）的原始响应体是否 inline 存进 raw/connector/
 - `searchSources`（默认 openalex,crossref,europepmc,semanticscholar,arxiv,pubmed,biorxiv，env `SPARK_RESEARCH_SEARCH_SOURCES`）：不给 `--sources` 时默认查哪些文献源（逗号分隔的 connector id）
+- `searchLanguage`（默认 ，env `SPARK_RESEARCH_SEARCH_LANGUAGE`）：检索时按语言过滤（ISO 639-1 两字母码，如 zh / en）；留空 = 不过滤
 
 ## 用这个工作台时必须知道的几条
 

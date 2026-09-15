@@ -40,6 +40,11 @@ const READERS: Record<string, ReaderEvidence> = {
   llmTimeoutMs: { helper: "configuredLlmTimeoutMs" },
   kernelTimeoutMs: { helper: "configuredKernelTimeoutMs" },
   taskTimeoutMs: { helper: "configuredTaskTimeoutMs" },
+  // v0.10 lane δ-4（V156）：读者是 server/chat_sync.ts 的 chatSyncMaxMs()，
+  // 它包 configuredChatSyncMaxMs()；路由那一行（session.ts）是收口专属，见 devlog 收口 diff 段。
+  chatSyncMaxMs: { helper: "configuredChatSyncMaxMs" },
+  // v0.10 α-2（收口）：读者是 agents/literature_pipeline.ts 的 generateMany concurrency 兜底。
+  readConcurrency: { helper: "configuredReadConcurrency" },
   mcpTimeoutMs: { helper: "configuredMcpTimeoutMs" },
   // 凭据类：key 本身就是 env 变量名，读者是 router 的 ADAPTERS envKey / local 端点常量。
   KIMI_API_KEY: { text: "KIMI_API_KEY" },
@@ -57,6 +62,8 @@ const READERS: Record<string, ReaderEvidence> = {
   // v0.9 lane γ（U6）：读者是 literature/search.ts 的 configuredDefaultSources()，
   // 它在 `search()` 里替掉了原先写死的 DEFAULT_SEARCH_SOURCES。
   searchSources: { helper: "configuredSearchSources" },
+  // v0.10 lane γ（U58 ②）：读者是 literature/search.ts 的 searchLanguageParams()（只对 OpenAlex 加 filter=language）。
+  searchLanguage: { helper: "configuredSearchLanguage" },
 };
 
 // 动态 key 族：`subAgentModel_<type>` 由 subAgentModelSettingKey() 生成，
