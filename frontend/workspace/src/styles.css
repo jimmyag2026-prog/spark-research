@@ -1148,3 +1148,19 @@ select {
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
 }
+
+/* V159（lane ε-2）：设置项被拒时的行内失败条。toast 会飘走，这一条不会。 */
+.settings-row__error {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.5;
+}

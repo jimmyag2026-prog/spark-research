@@ -27,12 +27,19 @@ import type {
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: unknown;
+  /**
+   * V159（v0.10 ε-2）：`nextStep` 除了拼进 `message`，**还单独留一份**。
+   * 设置面要把它贴在被拒的那一行旁边（「去哪做」和「为什么不行」分两行显示），
+   * 从一段拼好的字符串里再切回来既脆又蠢。
+   */
+  readonly nextStep: string | null;
 
-  constructor(status: number, message: string, detail: unknown = null) {
+  constructor(status: number, message: string, detail: unknown = null, nextStep: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.nextStep = nextStep;
   }
 }
 
@@ -57,7 +64,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         ? String((body as { nextStep: unknown }).nextStep ?? "").trim()
         : "";
     const message = nextStep ? `${base}\n下一步：${nextStep}` : base;
-    throw new ApiError(res.status, message, isJson ? (body as { detail?: unknown }).detail : body);
+    throw new ApiError(
+      res.status,
+      message,
+      isJson ? (body as { detail?: unknown }).detail : body,
+      nextStep || null,
+    );
   }
   return body as T;
 }
