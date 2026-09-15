@@ -121,6 +121,19 @@ describe("OrchestratorAgent.processRequest", () => {
 });
 
 describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () => {
+  // v0.9.0 A8 U29 起：plan 调用失败即止（不再退 defaultPlan 去跑任务）。要测 execute / summarize
+  // 的失败路径，得让第一次调用（plan）成功、之后的调用失败。
+  const planOkThenFailingLlm = () => {
+    let n = 0;
+    return {
+      call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+        n++;
+        if (n === 1) return { ok: true, content: JSON.stringify([{ id: "t1", kind: "analysis", description: "x" }]), provider: "kimi", model, usage: { inputTokens: 1, outputTokens: 1 } } as unknown as LlmResponse;
+        return llmFailure({ provider: "kimi", model, kind: "upstream", message: "[error] simulated upstream failure — should never leak into summary" });
+      },
+      listModels: mockLlm.listModels,
+    };
+  };
   // 模拟 router 无 key / 网络挂了时的真实返回形状：ok:false，content 是路由层
   // 拼出来的错误文本（不是模型产出）。
   const failingLlm = {
@@ -129,7 +142,7 @@ describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () 
   };
 
   test("summarize 失败时 summary 不包含错误文本，且明确标注是 LLM 调用失败", async () => {
-    const { orch } = createOrchestrator({ llm: failingLlm });
+    const { orch } = createOrchestrator({ llm: planOkThenFailingLlm() });
     const result = await orch.processRequest("分析数据集", "sess_llm_fail_summary");
 
     expect(result.summary).not.toContain("simulated upstream failure");
@@ -137,13 +150,15 @@ describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () 
     expect(result.summary).toContain("LLM 调用失败");
   });
 
-  test("plan 失败时落到 defaultPlan，且执行日志里能看到 plan-llm-failed（可见，不是静默）", async () => {
+  test("plan 调用失败即止（U29）：plan 空、failure.kind=llm、执行日志里能看到 plan-llm-failed（可见，不是静默）", async () => {
     const { daemon, orch } = createOrchestrator({ llm: failingLlm });
     const result = await orch.processRequest("分析数据集", "sess_llm_fail_plan");
 
-    // defaultPlan()：单个 analysis 任务。
-    expect(result.plan).toHaveLength(1);
-    expect(result.plan[0]?.kind).toBe("analysis");
+    // v0.9.0 起不再退 defaultPlan()：没有模型就没有真答案，第一次失败就把 errorKind 交给用户。
+    expect(result.plan).toHaveLength(0);
+    expect(result.execution).toHaveLength(0);
+    expect(result.failure?.kind).toBe("llm");
+    expect(result.review.approved).toBe(false);
 
     const entries = (daemon.executionLog as unknown as { entries: Array<Record<string, unknown>> }).entries;
     const planFailed = entries.find((e) => e.action === "plan-llm-failed");
@@ -151,7 +166,7 @@ describe("OrchestratorAgent D-4：LLM 调用失败不再被静默当成功", () 
   });
 
   test("analysis task 的 LLM 调用失败：ExecutionOutcome.ok=false，output 明确标注非模型产出", async () => {
-    const { orch } = createOrchestrator({ llm: failingLlm });
+    const { orch } = createOrchestrator({ llm: planOkThenFailingLlm() });
     const result = await orch.processRequest("分析数据集", "sess_llm_fail_analysis");
 
     const analysisOutcome = result.execution.find((e) => e.kind === "analysis");
@@ -270,6 +285,19 @@ describe("LLMRouter", () => {
 // 往执行日志里记一个永远是空串的"诊断"。这里验证这四处已经改读 `res.error.message`：
 // 失败原因不再从执行日志里凭空消失。
 describe("OrchestratorAgent F-2：诊断信息不再是恒为空串的 res.content", () => {
+  // v0.9.0 A8 U29 起：plan 调用失败即止（不再退 defaultPlan 去跑任务）。要测 execute / summarize
+  // 的失败路径，得让第一次调用（plan）成功、之后的调用失败。
+  const planOkThenFailingLlm = () => {
+    let n = 0;
+    return {
+      call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> => {
+        n++;
+        if (n === 1) return { ok: true, content: JSON.stringify([{ id: "t1", kind: "analysis", description: "x" }]), provider: "kimi", model, usage: { inputTokens: 1, outputTokens: 1 } } as unknown as LlmResponse;
+        return llmFailure({ provider: "kimi", model, kind: "upstream", message: "[error] simulated upstream failure — should never leak into summary" });
+      },
+      listModels: mockLlm.listModels,
+    };
+  };
   const failingLlm = {
     call: async (_messages: ChatMessage[], model = LLMRouter.DEFAULT_MODEL): Promise<LlmResponse> =>
       llmFailure({ provider: "kimi", model, kind: "upstream", message: "[error] simulated upstream failure — should never leak into summary" }),
@@ -289,7 +317,7 @@ describe("OrchestratorAgent F-2：诊断信息不再是恒为空串的 res.conte
   });
 
   test("explore（analysis 任务）的 llm-failed 日志携带真实错误信息", async () => {
-    const { daemon, orch } = createOrchestrator({ llm: failingLlm });
+    const { daemon, orch } = createOrchestrator({ llm: planOkThenFailingLlm() });
     await orch.processRequest("分析数据集", "sess_f2_analysis");
     const entry = entries(daemon).find((e) => e.action === "llm-failed" && e.actor === "explore");
     expect(entry).toBeDefined();
@@ -297,7 +325,7 @@ describe("OrchestratorAgent F-2：诊断信息不再是恒为空串的 res.conte
   });
 
   test("summarize-llm-failed 日志携带真实错误信息", async () => {
-    const { daemon, orch } = createOrchestrator({ llm: failingLlm });
+    const { daemon, orch } = createOrchestrator({ llm: planOkThenFailingLlm() });
     await orch.processRequest("分析数据集", "sess_f2_summarize");
     const entry = entries(daemon).find((e) => e.action === "summarize-llm-failed");
     expect(entry).toBeDefined();
