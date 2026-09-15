@@ -18,6 +18,7 @@
 | # | 时间 | 做了什么 | 期望 | 实际 | 感受 / 问题编号 |
 |---|---|---|---|---|---|
 | 1 | 09-15 11:31 | 网页端 chat：「帮我下载关于 mRNA 最新的研究综述论文吗？和 AI 主题相关的更好」（项目 `spark`，session `web_1789471590880`） | 拿到几篇综述 + PDF | **0 篇 0 PDF**。模型拆成 7 步手搓 connector：PubMed 30s 超时、arXiv 429、Europe PMC 返回空壳、两个 code 步骤读不到前一步产物、子代理崩 TypeError。用时约 46s，2 次 LLM 调用 | 模型的交代是诚实的（没编论文），但**平台把三次连接器失败都记成了 ok**。→ U38 U39 U40 U41 U42 |
+| 2b | 09-15 20:0x | 问：查论文时会不会用到 AMiner | 会 | **不会**。`searchSources` 里没有 aminer（虽然它的凭据已配）；清单里的 semanticscholar 反而没凭据。显式 `--sources aminer` 能查，但 9 条结果没一篇与 mRNA 有关 | 配置面把「配凭据」和「勾选源」当成两件无关的事 → U43 |
 | 2 | 09-15 19:5x | 对照：CLI `lit search "mRNA vaccine machine learning review" --project spark --limit 5` | 同上 | **26s 出 5 篇，全部有 OA PDF**，零 LLM 调用；如实标注 biorxiv 空响应失败 | 同一需求，成熟管线一条命令就成了 → U42 |
 
 ## 三、建议走一遍的路径（不必全做，做了就记）
@@ -37,6 +38,7 @@
 | 11:32:11 | spark | 连接器 arxiv **429** | 已登记 U27 / V165（arxiv 持续限流），本次复现 |
 | 11:32:13 | spark | 连接器 europepmc 200 但空壳 | 模型的查询语法（`SRC:MED OR SRC:PPR` + `sort`）让 EPMC 返回 `{"version":"6.9"}`，无 hitCount → U40 |
 | 11:31–11:32 | spark | 2 次 LLM 调用（plan 3504 tok / summarize 883 tok），$0.0009 | 无失败、无闸拒 |
+| 09-16 | — | **U38 U39 U40 已修并带门禁**（`tests/unit/ux_window.test.ts` 10 条，四条阴性对照实跑变红） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
 
 ## 五、总结（用完再填）
 

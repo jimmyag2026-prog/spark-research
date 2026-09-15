@@ -60,11 +60,12 @@
 | [U35](devlog/A8.md#u35) | `data import` 文案说「空项目」，实际要求「项目不存在」 | 低 | 文案 | → V169 |
 | [U36](devlog/A8.md#u36) | 工作台默认视图躺着约 40 个历史验收产物（= U14） | 低 | 数据卫生 | → V157 |
 | [U37](devlog/A8.md#u37) | T5 第 13 步引用的 `/api/config/*` 端点已不存在（文档漂移） | 低 | 文档 | → V170（T5 已冻结，下版修） |
-| [U38](#u38) | `connector` 任务失败被记成 `ok: true`——三次连接器失败（超时/429/空壳）在执行摘要里全是「ok」 | **高** | 正确性 | 待转 V |
-| [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | 待转 V |
-| [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | 待转 V |
-| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | 待转 V |
-| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | 待转 V |
+| [U38](#u38) | `connector` 任务失败被记成 `ok: true`——三次连接器失败（超时/429/空壳）在执行摘要里全是「ok」 | **高** | 正确性 | ✅ 本地已修（`connectorFailureOf` 解包信封；`ok:false` → 任务 failed） |
+| [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | ✅ 本地已修（`normalizeSubAgentType` 运行期校验 + `buildSubAgentSpec` 入口拦；并删掉 `SUB_AGENT_TYPES` 副本） |
+| [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | ✅ 本地已修（`assertSearchPayload`：无计数也无结果容器 → 失败并给下一步） |
+| [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | → V171（步骤间落盘约定，须裁定） |
+| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
+| [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
 
 ### 方法缺陷
 
@@ -877,6 +878,39 @@ $ bun backend/src/index.ts lit search "mRNA vaccine machine learning review" --p
 **问题**：`lit search` 是被六轮验收打磨过的管线——多源并行、按 DOI/标题去重、blended 排序、OA 判定、失败源如实标注、入库、可接 PDF 下载与 SHA256 血缘。chat 模式的 plan 提示词却只告诉模型有 `connector` 这种原始任务类型（`params.server/tool/args`），**没有告诉它平台已经有一条文献检索管线**。于是模型每次都从零手搓 esearch 参数、手写去重代码、手写 PDF 下载代码——把一条测过的路重新发明一遍，还发明错了。
 
 **修改方向**：给 plan 增加一种任务类型（如 `kind: "literature"`，params 只有 `query/limit/sources`），直接调 `LiteratureSearcher`；并在 plan 提示词里把它排在 `connector` 之前，`connector` 的描述改成「只在没有现成管线时用的低层出口」。同族问题值得盘一遍：**还有哪些成熟 CLI 能力没有出现在 plan 的任务类型表里**（精读、综述、novelty check、data export…）——这正是 P1「对比看能力不看接线」的形状，只是这次缺口在「模型知不知道我们有什么」。
+
+
+<a id="u43"></a>
+## U43 · AMiner 凭据配了却从不参与检索；勾了的 semanticscholar 反而没凭据
+
+**现场**：2026-09-15 晚，用户问「请求查找论文时，现在会使用到 AMiner 么」。
+
+**证据**：
+
+```
+$ spark-research config get searchSources
+  当前值: openalex,crossref,europepmc,semanticscholar,arxiv,pubmed,biorxiv      ← 没有 aminer
+
+$ spark-research lit sources
+  semanticscholar  凭据未配置   ⚠️ 匿名调用持续 429……未配置时统一检索把它标为 skipped
+  aminer           凭据已配置   ⚠️ 未配置时统一检索把它标为 skipped，其余源照常返回
+```
+
+也就是说：**配了凭据的源不在检索清单里，在检索清单里的源没有凭据。** 两件事各自都「没报错」。
+
+显式指定时 AMiner 确实能用，但结果与查询主题基本无关（U26 / V161 的复现）：
+
+```
+$ spark-research lit search "mRNA vaccine artificial intelligence" --sources aminer --limit 3
+  ✅ aminer: 9 条（原查询 0 命中（AMiner 按词序列匹配）；已按 4 词拆分查询、按命中词数合并；只取 ≥2 词同时命中）
+ 1. Artificial Intelligence and Games …
+ 2. Artificial Intelligence in Services …
+ 3. Explainable Artificial Intelligence (XAI) …        ← 没有一篇与 mRNA 有关
+```
+
+**问题**：两层。① **配置面没有把「凭据」与「检索源勾选」这两件事关联起来**——用户配了一个源的 key，合理预期是「以后会用它」，实际要再去另一个面板勾上；反过来，勾了但没 key 的源每次都被 skip，用户也看不出来。② 设置面板的检索源列表没有显示「这个源有没有凭据、这次会不会真被查」。
+
+**修改方向**：① 检索源面板每行显示凭据状态与「本次会不会参与」（已勾 + 有凭据 = 参与；已勾 + 缺凭据 = 跳过并给 `auth --connector <id>`；未勾 + 有凭据 = 提示「已配置但未启用，要不要勾上」）。② 凭据写入成功后，如果该源不在 `searchSources` 里，回一句可执行的下一步。③ AMiner 本身的检索质量问题归 V161，本条只管「会不会被用到」。
 
 
 <a id="p1"></a>
