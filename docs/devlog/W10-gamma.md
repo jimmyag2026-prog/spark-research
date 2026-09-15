@@ -252,7 +252,21 @@ arXiv 是 Atom **字符串**，判据单列在「非对象响应」分支之前�
 | ⑤ | 面板不算三态（`selected` 恒 false、不铺 `...state`） | 2 红：面板两条接线断言 |
 | ⑥ | 凭据写入不给 `nextStep` | 1 红：「写 aminer 的 key → 去检索源面板勾选」 |
 | ⑦ | `upstreamErrorOf` 退回 U45 的通用三键（显式表作废） | 4 红：openalex / crossref / semanticscholar / aminer |
-| ⑧ | arXiv 字符串判据不接线 | 整文件红（编译不过） |
+| ⑧ | arXiv 字符串判据不接线（`arxiv` 恒 null） | 1 红：「arxiv · Atom 错误信封」 |
+
+### 自己踩的坑（写下来，比结论有用）
+
+⑦⑧ 第一次做的时候，两条都以 `git checkout -- backend/src/connectors/base.ts` 收尾，
+而**那时 γ-3 的源码改动还没 commit**——于是被一并还原。紧接着那个叫「γ-3」的 commit 里
+只有测试文件，没有实现。
+
+为什么没当场发现：还原发生在 `bun test` 之后，那一刻是绿的；`git status` 只剩一行
+`?? tests/...`（源码不再是 modified），我把它读成「干净」，其实那正是改动没了的信号。
+最后是 `npx tsc --noEmit` 报 `upstreamErrorOf 未导出` 才抓出来。
+
+这正是 `_COMMON` §纪律 2「**先 commit 再做阴性对照**」要防的事，本地窗口踩过一次，
+这里又踩了一次。补充一条可操作的：**阴性对照复原之后，跑一次 `tsc --noEmit` 再跑测试**——
+`bun test` 剥掉类型，认不出「函数没了」这种形状；上面 ⑦⑧ 已按这条重做，结果如表。
 
 回归（一次只跑一个套件）：`v172_literature_pipeline` 10✅ · `literature` 84✅ ·
 `config` + `config_search_sources` 50✅ · `settings_credentials` 19✅ ·
@@ -264,3 +278,6 @@ arXiv 是 Atom **字符串**，判据单列在「非对象响应」分支之前�
 - 相关性地板与 α-1 语义预筛的叠加效果未实测。
 - arXiv 的 200-带错形状未能实探（IP 被封）。
 - `searchLanguage` 只在单测里验过，**没有在真实 OpenAlex 请求上跑过 `filter=language:zh`**。
+- γ-3 的实现有过一次「被自己的阴性对照冲掉」的事故（见上），已修并复跑；
+  但这说明本 lane 的 commit 粒度还不够细——源码与门禁应当同一个 commit 落，
+  而不是「写源码 → 写门禁 → 做对照 → 一起 commit」。
