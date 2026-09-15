@@ -323,12 +323,10 @@ const warnedKeywordModels = new Set<string>();
  *   ③ lane γ 的设置面 HTTP 路由——网页端写入前（γ import 本函数，不另写一份判据）。
  */
 export function assertKnownModel(model: string): KnownModel {
-  if (LOCAL_MODEL_PREFIX.test(model)) return { kind: "local" };
-  for (const [provider, models] of Object.entries(MODELS_BY_PROVIDER) as Array<[Provider, readonly string[]]>) {
-    if (models.includes(model)) return { kind: "registered", provider };
-  }
-  const guess = keywordProviderFor(model);
-  if (guess) {
+  const known = resolveModelName(model);
+  if (!known) throw unknownModelError(model);
+  if (known.kind === "keyword") {
+    const guess = known.provider;
     if (!warnedKeywordModels.has(model)) {
       warnedKeywordModels.add(model);
       console.warn(
@@ -336,9 +334,23 @@ export function assertKnownModel(model: string): KnownModel {
           `路由与计价都可能不对，建议在 llm/providers/registry.ts 的单价表里登记它。`,
       );
     }
-    return { kind: "keyword", provider: guess };
   }
-  throw unknownModelError(model);
+  return known;
+}
+
+/**
+ * `assertKnownModel` 的**不抛版本**：认不出返回 null，也不打警告。
+ * 给「只是想知道这个模型名属于哪一家、认不出也得继续干活」的调用方用——
+ * 典型是 `usage/ledger.ts` 的记账：模型名没登记就是查不到单价（`priceFor` 本来就返回 null），
+ * 不该因此把一次已经发生的调用记不进台账，更不该让记账层抛异常打断业务流。
+ */
+export function resolveModelName(model: string): KnownModel | null {
+  if (LOCAL_MODEL_PREFIX.test(model)) return { kind: "local" };
+  for (const [provider, models] of Object.entries(MODELS_BY_PROVIDER) as Array<[Provider, readonly string[]]>) {
+    if (models.includes(model)) return { kind: "registered", provider };
+  }
+  const guess = keywordProviderFor(model);
+  return guess ? { kind: "keyword", provider: guess } : null;
 }
 
 /**
