@@ -174,3 +174,94 @@ bun test v1.3.14 (0d9b296a)
  16 expect() calls
 Ran 4 tests across 1 file. [690.00ms]
 ```
+
+---
+
+## β-2 · `chat` 子命令补旗标（U9）
+
+### 做了什么
+
+`backend/src/cli/chat_args.ts`（新，**纯解析，不碰 I/O**）：`parseChatArgs(argv)` →
+`{ help, message, model?, budgetUsd?, allowUnpriced?, project?, error? }` + `CHAT_HELP`。
+三条硬规则：① `--help`/`-h` 优先，返回后调用方只打印帮助；② `--` 之后全部当消息；
+③ **未识别的 `--xxx` 报错**而不是塞进消息——U9 的根因就是「认不出的东西默认当消息」。
+另支持 `--name=value` 写法，`--budget-usd` 非数字/负数直接报错。
+
+接线（`index.ts` 的 `case "chat"` + `chatOnce`）是枢纽文件，归收口；模块已按纪律登记进
+`tests/unit/narrative_parity.test.ts` 的 `ALLOWED_ORPHANS`（「等收口接 β-2 diff」）。
+
+### 门禁 `tests/unit/gate_help_no_llm.test.ts`
+
+命令清单**从 `contract` 枚举**（真源 = `contract/cli_registry.ts` 的 `CLI_COMMANDS`
++ 从各模块 HELP 文本提取的子命令），共 96 条命令/子命令，每条起一个真进程跑
+`<cmd> [sub] --help`，用 `bun --preload` 在子进程里把 `LLMRouter.prototype.call` 换成
+记录器（写 marker 并抛错），断言 marker 为空。**为什么不是手写清单**：V128 修过同名问题
+却漏了 `chat`，靠人记不住；新增命令会自动进入这条门禁。
+
+两张必须带理由的登记表，都有陈旧检查：
+- `SKIP_NON_TERMINATING`（cli / mcp / server / init / demo）：常驻进程或交互式向导，
+  「起进程等它自己退出」这条判据对它们不适用，**不是豁免**。每条都核实是真实命令。
+- `HELP_LLM_PENDING`（当前只有 `chat`）：修复在禁止文件里，**自退役**——「登记不许陈旧」
+  那条断言要求登记的命令此刻**必须真的还在调模型**；收口接上之后它会红，逼着删登记。
+
+子进程 env 里放了占位 `KIMI_API_KEY`：没有 key 时 `chatOnce` 会提前 return，那样即使
+没修好也「碰巧」不调模型——**那是假绿**，必须堵掉。
+
+### 阴性对照（真跑）
+
+| 改法 | 结果 |
+|---|---|
+| `parseChatArgs` 去掉 `--help`/`-h` 判据 | 🔴 1 fail：`--help / -h 优先：只返回 help，消息为空` |
+| 收口 diff 应用后（临时验证） | 🔴 1 fail：`登记不许陈旧：HELP_LLM_PENDING 里的命令此刻必须真的还在调模型`——即门禁翻面，`chat --help` 不再调模型 |
+| 交付态 | 🟢 13 pass / 0 fail（8.09s，96 个子进程） |
+
+### V16 顺带确认
+
+`subAgentModel_*` 五个配置项确实有真实读者：`backend/src/agents/sub_agent.ts:254`
+调 `configuredSubAgentModel(type, globalDefault, configOptions)`，且
+`tests/unit/config_reader_parity.test.ts:62` 把动态 key 族 `subAgentModel_<type>` 钉到了
+这个 helper 上。**不新做**，另外 β-3 把 `config set subAgentModel_*` 也纳入了模型名校验。
+
+---
+
+## 收口 diff 的实测验证（重要）
+
+三份收口 diff（router.ts / orchestrator.ts / index.ts）**临时应用后实跑过**，
+随后原样 revert，交付树里这三个文件与基线逐字节一致
+（`git diff integration/v0.9-base -- <三个文件>` 为空）。
+
+应用后 `bun test tests/unit` = **2514 pass / 5 fail**，5 条红**全部**是「接了就该删」的
+自退役登记，没有一条是真回归：
+
+| 红的断言 | 收口同一个 commit 里要做的事 |
+|---|---|
+| `GATE_I_ALLOWLIST 不许陈旧` | 删 `agents/orchestrator.ts::OrchestratorAgent.chat::req.model`（V145 = U10） |
+| `ALLOWED_ORPHANS ... 已不再是孤儿` | 删 `backend/src/cli/chat_args.ts` 一条 |
+| `HELP_LLM_PENDING 里的命令此刻必须真的还在调模型` | 删 `chat` 一条 |
+| `登记不许陈旧：两张表里的每一条都必须确实还是差集` | 删 `PRICED_ONLY_MODELS` 4 条 + `PROVIDER_ONLY_MODELS` 4 条 |
+| `U5 现状复现（收口后必须改）` | 改成 `expect(() => providerForModel("z-ai/glm-6-preview")).toThrow(UnknownModelError)` |
+
+验证过程中抓到并解决的两个真问题（都不是登记表，是代码）：
+
+1. **import 成环**：`registry → router`（`providerApiKeyEnv`）与 `router → registry`
+   （`MODELS_BY_PROVIDER`）两条运行期边成环，先被求值的一侧会踩 TDZ。
+   两头都改：registry 的 `PROVIDER_API_KEY_ENV` 改惰性 Proxy（已在本 lane 落地），
+   router 侧用 **re-export（live binding）** 而不是 `const X = MODELS_BY_PROVIDER`，
+   并把 `static readonly PROVIDER_MODELS` 改成 `static get`（静态字段是模块求值期执行的）。
+   第一版直接 `export const PROVIDER_MODELS = MODELS_BY_PROVIDER` **实测炸**：
+   `ReferenceError: Cannot access 'MODELS_BY_PROVIDER' before initialization`。
+2. **记账层被抛错打断**：`usage/ledger.ts:270` 在每次调用前 `providerForModel(requestedModel)`
+   只为查 provider 计价；改抛错后 `tests/unit/g1_model_config.test.ts` 的
+   「`--model flag-wins` 覆盖 defaultModel」当场红（一个编出来的模型名）。
+   补了不抛的 `resolveModelName()`，ledger 两行改动进收口 diff（`usage/**` 是 α 的足迹）。
+   另在 `LLMRouter.call()` 里把 `UnknownModelError` 翻译成 `ok:false / kind:"unsupported"`
+   ——AD-13 要求 LLM 的失败以响应回到调用方，不是异常穿透。
+
+## 环境坑（会影响所有 lane 报数）
+
+这台机器的 shell 里有 `http_proxy` / `https_proxy` / `all_proxy`（`127.0.0.1:1108x`）。
+Bun 的 `fetch` 会把**指向 127.0.0.1 的请求也走代理**，于是所有起本地 server 的用例
+（server.test.ts / http_*.test.ts / ui_cli_parity 等）拿到空响应，
+`bun test tests/unit` 在基线 f921bf0 上就有 **164 fail**——**与代码无关**。
+已用 `git stash` 在干净基线上复现确认。**报数一律加 `no_proxy="*" NO_PROXY="*"`**，
+加了之后基线与本 lane 都是 0 fail。
