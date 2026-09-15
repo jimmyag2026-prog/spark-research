@@ -11,6 +11,7 @@ import { ProjectManager } from "./project/manager";
 import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
 import { runUsageCommand } from "./cli/usage";
+import { CHAT_HELP, parseChatArgs, type ChatArgs } from "./cli/chat_args";
 import { runIdeaCommand } from "./ideation/cli";
 import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
@@ -424,7 +425,7 @@ async function interactive() {
   daemon.kernelManager.dispose();
 }
 
-async function chatOnce(message: string) {
+async function chatOnce(args: ChatArgs) {
   const auth = getApiKey();
   if (!auth) {
     console.log("❌ 未配置 API Key。运行 spark-research auth 进行配置。");
@@ -436,8 +437,15 @@ async function chatOnce(message: string) {
   const daemon = new SparkResearchDaemon({ projects });
   const orch = new OrchestratorAgent(daemon, { projects, externalMcp: externalMcpFor(daemon) });
   const sessionId = `oneshot_${Date.now()}`;
+  if (args.project) projects.bindSession(sessionId, args.project);
   try {
-    const result = await orch.chat({ sessionId, message });
+    const result = await orch.chat({
+      sessionId,
+      message: args.message,
+      model: args.model,
+      budgetUsd: args.budgetUsd,
+      allowUnpriced: args.allowUnpriced,
+    });
     console.log(result.response);
     if (result.review && !result.review.approved) {
       console.log(`\n⚠️  Reviewer vetoed: ${result.review.findings.length} finding(s)`);
@@ -487,13 +495,12 @@ function main() {
       break;
     }
     case "chat": {
-      const msg = process.argv.slice(3).join(" ");
-      if (!msg) {
-        console.log("用法: spark-research chat <消息>");
-        process.exitCode = 1;
-        break;
-      }
-      chatOnce(msg);
+      // U9（v0.9 β-2）：先解析旗标——`--help` 不再被当成消息发给模型。
+      const chatArgs = parseChatArgs(process.argv.slice(3));
+      if (chatArgs.help) { console.log(CHAT_HELP); break; }
+      if (chatArgs.error) { console.error(`❌ ${chatArgs.error}`); console.log(CHAT_HELP); process.exitCode = 2; break; }
+      if (!chatArgs.message) { console.log(CHAT_HELP); process.exitCode = 1; break; }
+      chatOnce(chatArgs);
       break;
     }
     case "project": {
@@ -682,9 +689,8 @@ function main() {
       if (!existsSync(join(resolveFrontendDir(), "index.html"))) {
         console.log("⚠️  工作台前端尚未构建，Web UI 不可用（API 正常）。先跑一次：bun run build:web");
       }
-      const server = startServer(port);
-      console.log(`Spark Research server listening at http://127.0.0.1:${server.port}`);
-      console.log("Press Ctrl+C to stop");
+      // U8（v0.9 δ-4）：启动日志只由 startServer() 打一份；这里原来手写的副本硬编码 127.0.0.1。
+      startServer(port);
       break;
     }
     case "help":

@@ -4,7 +4,8 @@ import { configuredRawLlm, type ConfigOptions } from "../config";
 import { USER_OWNED_LICENSE } from "../provenance/policy";
 import { redactLlmOptions, type RawSink } from "../raw";
 import { BudgetLedger, estimateCallCostUsd } from "../llm/budget";
-import { DEFAULT_MODEL, providerForModel } from "../llm/router";
+import { DEFAULT_MODEL } from "../llm/router";
+import { resolveModelName } from "../llm/providers/registry";
 import { failure } from "../llm/providers/types";
 import { redactSecrets } from "../llm/types";
 import type { CallOptions, ChatMessage, LlmErrorKind, LlmResponse, ProviderCapabilities } from "../llm/types";
@@ -335,7 +336,8 @@ export function usageTrackingLlm(options: UsageTrackingOptions): UsageTrackingLl
     async call(messages: ChatMessage[], modelOrOptions: string | CallOptions = {}): Promise<LlmResponse> {
       const callOptions: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
       const requestedModel = callOptions.model ?? DEFAULT_MODEL;
-      const provider = providerForModel(requestedModel);
+      const known = resolveModelName(requestedModel); // β（v0.9）：不抛版本——记账层不能被未登记名打断
+      const provider = known ? (known.kind === "local" ? "local" : known.provider) : "(unknown)";
       // V93：发前估价。查不到单价 → 预留 0（闸仍按已结算+在飞判，未定价模型的拒绝由 G-4 负责）。
       const estimated = estimateUsd(messages, callOptions, { provider, model: requestedModel });
       const unpriced = estimated === null;

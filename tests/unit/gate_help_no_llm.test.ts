@@ -43,7 +43,6 @@ const SKIP_NON_TERMINATING: Record<string, string> = {
  * 要求登记的命令此刻必须真的调了模型；收口把它修好之后这条会红，逼着把登记删掉。
  */
 const HELP_LLM_PENDING: Record<string, string> = {
-  chat: "U9 本体。修复在 backend/src/index.ts（枢纽文件，归收口）：case \"chat\" 改调 backend/src/cli/chat_args.ts 的 parseChatArgs()。收口应用 β-2 diff 后必须删除本条",
 };
 
 const dirs: string[] = [];

@@ -34,18 +34,12 @@ import {
 
 /** 单价表里有、`PROVIDER_MODELS` 里没有的模型名（U5 实测差集）。登记必须写清为什么。 */
 const PRICED_ONLY_MODELS: Record<string, string> = {
-  "deepseek:deepseek-v4-flash": "单价表按官方页当前在售型号定价；PROVIDER_MODELS 还停在 deepseek-chat/reasoner 两个旧别名——靠关键词兜底侥幸落对 provider",
-  "deepseek:deepseek-v4-pro": "同上",
-  "kimi:kimi-k2.6": "单价表按 Moonshot 当前在售型号定价；PROVIDER_MODELS.kimi 的三个名字已于 2026-08-31 全部退役（见 registry.ts 顶部注释）",
-  "kimi:kimi-k3": "同上",
+  // v0.9 收口：PROVIDER_MODELS 已改为 import MODELS_BY_PROVIDER，差集为空（陈旧检查钉住）
 };
 
 /** `PROVIDER_MODELS` 里有、单价表里没有的模型名。 */
 const PROVIDER_ONLY_MODELS: Record<string, string> = {
-  "kimi:kimi-k2": "已于 2026-08-31 被 Moonshot 退役（现在请求 404），给死名字编报价没有意义，单价表不收录",
-  "kimi:moonshot-v1-32k": "同上（已退役）",
-  "kimi:moonshot-v1-8k": "同上（已退役）",
-  "qwen:qwen3": "不是可计价的具体 SKU（DashScope 拆成 qwen3-235b-a22b / qwen3-32b / … 一堆型号，还分 thinking 档），查不到单一价格就不收录",
+  // 同上
 };
 
 function pairsOf(table: Readonly<Record<string, readonly string[]>>): Set<string> {
@@ -164,8 +158,9 @@ describe("β-3 ③ 认不出的模型名：抛错，不静默当 Kimi（U5 证�
   });
 
   // ── U5 现状复现：收口应用 β-3 diff 后，本条必须改成 `expect(() => …).toThrow()` ──
-  test("U5 现状复现（收口后必须改）：stock providerForModel 对认不出的名字仍然静默返回 kimi", () => {
-    expect(providerForModel("z-ai/glm-6-preview")).toBe("kimi");
+  test("U5 已根治（收口后）：stock providerForModel 对认不出的名字抛 UnknownModelError（kind unsupported），不再静默当 kimi", () => {
+    expect(() => providerForModel("z-ai/glm-6-preview")).toThrow(UnknownModelError);
+    try { providerForModel("z-ai/glm-6-preview"); } catch (e) { expect((e as UnknownModelError).kind).toBe("unsupported"); }
   });
 });
 

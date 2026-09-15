@@ -114,16 +114,10 @@ const ALLOWED_ORPHANS: Record<string, string> = {
   // 所以它们必然先以孤儿形态落盘，接线以 ≤10 行 diff 交收口（见 docs/devlog/W9-alpha.md
   // 「收口 diff」段）。**接上后必须按对称检查删除这两条**，否则本门禁会以「在册但已
   // 不是孤儿」的方向变红——忘接会红，接了不删也会红。
-  "backend/src/llm/watchdog.ts":
-    "等收口接线：α-1 输出看门狗，接入点是 LLMRouter.call() 的流式分支（backend/src/llm/router.ts，收口专属）。接上后删除本条",
-  "backend/src/agents/progress.ts":
-    "等收口接线：α-3 三段结构化进度，接入点是 orchestrator.ts 的 plan/executeTask/summarize/reviewSession 与 routes/session.ts:95（均为收口专属）。接上后删除本条",
   // v0.9 lane β-2（USAGE_LOG U9）：`chat` 子命令的旗标解析。等收口接线——
   // 接线点是 `backend/src/index.ts` 的 `case "chat"`（枢纽文件，归收口）：
   // 改调 parseChatArgs() 并把 model / budgetUsd / allowUnpriced / project 透传给
-  // chatOnce → orch.chat()。收口接上后按对称检查删除本条。
-  "backend/src/cli/chat_args.ts":
-    "等收口接线：index.ts 的 case \"chat\" 改调 parseChatArgs（β-2 收口 diff），接上后删除本条",
+  // chatOnce → orch.chat()。收口接上后按对称检查删除本条。chat\" 改调 parseChatArgs（β-2 收口 diff），接上后删除本条",
 
   // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
   // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，

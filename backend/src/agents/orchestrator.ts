@@ -76,6 +76,7 @@ import { LibraryStore } from "../literature/library";
 import { CoExploreSession, type GroundingReport } from "../ideation/coexplore";
 import type { IdeaCard, StoredIdeaCard } from "../ideation/models";
 import { AgentRunLedger } from "./ledger";
+import { createProgressEmitter, type ProgressListener } from "./progress";
 
 // export：F-a 新增的 planner-prompt/TASK_KINDS 同源测试要从外部读这张表，
 // 与 plan() 里手写的逐 kind 说明文字做双向比对（防止未来再出现「表里删了，
@@ -458,12 +459,19 @@ export class OrchestratorAgent {
   // V119（v0.8）：聊天式 co-explore / chat 的预算闸——UI「预算 $」透传到这里，按会话记住，
   // 每次 llmFor 都带上（同一次 chat() 内的多次模型调用共用一个闸）。
   private readonly sessionBudget = new Map<string, { budgetUsd?: number; allowUnpriced?: boolean }>();
+  // V145（= USAGE_LOG U10，v0.9 β-1）：chat(req.model) 按会话记住，llmFor 用它覆盖各调用点的默认模型。
+  private readonly sessionModel = new Map<string, string>();
 
   private llmFor(sessionId: string | null): Pick<LLMRouter, "call"> {
     const project = sessionId ? this.projectForSession(sessionId) : null;
-    if (!project) return this.llm;
+    const model = sessionId ? this.sessionModel.get(sessionId) : undefined;
+    const withModel = (o: string | CallOptions = {}): CallOptions => {
+      const c: CallOptions = typeof o === "string" ? { model: o } : o;
+      return model ? { ...c, model } : c;
+    };
+    if (!project) return { call: (msgs, o) => this.llm.call(msgs, withModel(o)) };
     const budget = sessionId ? this.sessionBudget.get(sessionId) : undefined;
-    return usageTrackingLlm({
+    const tracked = usageTrackingLlm({
       llm: this.llm,
       store: new UsageStore(join(project.paths.root, "usage.jsonl")),
       command: "chat",
@@ -473,6 +481,7 @@ export class OrchestratorAgent {
       project: project.slug,
       sessionId,
     });
+    return { call: (msgs, o) => tracked.call(msgs, withModel(o)) };
   }
 
   private recordExecution(
@@ -543,7 +552,7 @@ export class OrchestratorAgent {
   async processRequest(
     userMessage: string,
     sessionId: string,
-    options: { onDelta?: (chunk: string) => void } = {},
+    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } = {},
   ): Promise<OrchestrationResult> {
     this.record(sessionId, "orchestrator", "start", `request received: ${userMessage.slice(0, 80)}`);
     mkdirSync(join(this.workspaceRoot, sessionId), { recursive: true });
@@ -577,31 +586,39 @@ export class OrchestratorAgent {
     sessionId: string,
     project: Project | null,
     external: ExternalMcpAttachment,
-    options: { onDelta?: (chunk: string) => void } = {},
+    options: { onDelta?: (chunk: string) => void; onProgress?: ProgressListener } = {},
   ): Promise<OrchestrationResult> {
+    const progress = createProgressEmitter(options.onProgress);
     const skills = this.identifySkills(userMessage);
     const skillContext = this.loadSkillContext(skills);
+    progress.planStarted();
     const plan = await this.plan(sessionId, userMessage, skills, skillContext);
+    progress.planned(plan.length);
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
       execution.push(await this.executeTask(sessionId, task, external));
+      progress.taskCompleted(task);
     }
 
     // onDelta 只接到 summarize()——它是唯一产出「用户最终会看到的正文」的调用点
     // （result.summary 直接就是 chat() 返回的 response）。plan() 产出的是 JSON 任务数组，
     // 把它的增量当"预览文本"流给用户只会看到破碎的 JSON 片段，那不是根治 W2-d 的问题，
     // 是换一种方式制造同一个问题——见 docs/devlog/W3-a.md「onDelta 怎么接」一节。
+    progress.summarizing();
     let summary = await this.summarize(sessionId, userMessage, plan, execution, options.onDelta);
     let review = await this.reviewSession(sessionId);
+    progress.reviewed({ approved: review.approved, hardFindings: review.findings.filter((f) => f.severity === "hard").length });
     let reviewRounds = 1;
 
     while (this.hasHardFindings(review) && reviewRounds < this.maxReviewRounds) {
       const hard = review.findings.filter((f) => f.severity === "hard").length;
       this.record(sessionId, "reviewer", "correct", `${hard} hard finding(s); planning corrections`);
       const fixes = this.planCorrections(review);
+      progress.repairing(fixes.length);
       for (const fix of fixes) {
         execution.push(await this.executeTask(sessionId, fix, external));
+        progress.taskCompleted(fix);
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
       // 已知的、如实记录的简化，见 devlog（根治需要一个「本轮作废，重新开始」的边界信号，
@@ -1088,10 +1105,15 @@ export class OrchestratorAgent {
     // （CoExploreSession 的 prompt/grounding 装配在 ideation/coexplore.ts，不在本
     // 文件所有权内，本 lane 没有替它接 onDelta；见 docs/devlog/W3-a.md）。
     onDelta?: (chunk: string) => void;
+    /** α-3（v0.9）：三段结构化进度（plan / execute / summarize / review），事件形状见 agents/progress.ts。 */
+    onProgress?: ProgressListener;
     /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
     budgetUsd?: number;
     allowUnpriced?: boolean;
   }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null }> {
+    // V145 / U10：本次会话的模型覆盖；不传 = 回到默认（不粘连）。
+    if (req.model) this.sessionModel.set(req.sessionId, req.model);
+    else this.sessionModel.delete(req.sessionId);
     if (req.budgetUsd !== undefined || req.allowUnpriced !== undefined) {
       this.sessionBudget.set(req.sessionId, { budgetUsd: req.budgetUsd, allowUnpriced: req.allowUnpriced });
     } else {
@@ -1104,7 +1126,7 @@ export class OrchestratorAgent {
         ideaRecordId: result.stored?.recordId ?? null,
       };
     }
-    const result = await this.processRequest(req.message, req.sessionId, { onDelta: req.onDelta });
+    const result = await this.processRequest(req.message, req.sessionId, { onDelta: req.onDelta, onProgress: req.onProgress });
     return {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,

@@ -85,41 +85,10 @@ type ChatReq = Parameters<OrchestratorAgent["chat"]>[0];
 type LlmLike = Pick<LLMRouter, "call">;
 
 /** 收口 diff（orchestrator.ts）的逐行等价补丁——见文件头注释。 */
-function applyBeta1Collar(orch: OrchestratorAgent, opts: { readSessionModel?: boolean } = {}): void {
-  const read = opts.readSessionModel !== false;
-  const sessionModel = new Map<string, string>();
-  const inner = orch as unknown as {
-    chat: (req: ChatReq) => Promise<unknown>;
-    llmFor: (sessionId: string | null) => LlmLike;
-  };
-  const origChat = inner.chat.bind(orch);
-  const origLlmFor = inner.llmFor.bind(orch);
-
-  // diff ①：chat() 开头——传了就记住，没传就忘掉（与紧邻的 sessionBudget 同一个套路）。
-  inner.chat = (req: ChatReq) => {
-    if (req.model) sessionModel.set(req.sessionId, req.model);
-    else sessionModel.delete(req.sessionId);
-    return origChat(req);
-  };
-
-  // diff ②：llmFor() 返回的 call 用会话模型覆盖调用点传来的默认模型。
-  // 改这一处就覆盖 plan / execute / summarize / review 全部调用点（它们都经 llmFor）。
-  inner.llmFor = (sessionId: string | null): LlmLike => {
-    const base = origLlmFor(sessionId);
-    const model = read && sessionId ? sessionModel.get(sessionId) : undefined;
-    return {
-      call: (messages: ChatMessage[], modelOrOptions: string | CallOptions = {}) => {
-        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
-        return base.call(messages, model ? { ...options, model } : options);
-      },
-    };
-  };
-}
 
 describe("闸门 · chat(req.model) 必须真的改变发出去的那次调用（U10）", () => {
-  test("覆盖生效：chat({ model: 'qwen-max' }) → 每一次出站请求带的都是 qwen-max，不是配置默认模型", async () => {
+  test("覆盖生效：chat({ model: 'z-ai/glm-5.3-flash' }) → 每一次出站请求带的都是 qwen-max，不是配置默认模型", async () => {
     const { orch, outbound, daemon } = fixture();
-    applyBeta1Collar(orch);
     try {
       await orch.chat({ sessionId: "probe-qwen", message: "跑一个最小请求" });
       const defaultModel = configuredModel(LLMRouter.DEFAULT_MODEL);
@@ -127,10 +96,10 @@ describe("闸门 · chat(req.model) 必须真的改变发出去的那次调用�
       expect(new Set(outbound.map((o) => o.model))).toEqual(new Set([defaultModel]));
 
       outbound.length = 0;
-      await orch.chat({ sessionId: "probe-qwen-2", message: "跑一个最小请求", model: "qwen-max" });
+      await orch.chat({ sessionId: "probe-qwen-2", message: "跑一个最小请求", model: "z-ai/glm-5.3-flash" });
       expect(outbound.length).toBeGreaterThan(0);
       // U10 的核心断言：**一次都不许**再用默认模型发请求。
-      expect(new Set(outbound.map((o) => o.model))).toEqual(new Set(["qwen-max"]));
+      expect(new Set(outbound.map((o) => o.model))).toEqual(new Set(["z-ai/glm-5.3-flash"]));
     } finally {
       daemon.kernelManager.dispose();
     }
@@ -138,7 +107,6 @@ describe("闸门 · chat(req.model) 必须真的改变发出去的那次调用�
 
   test("覆盖生效的硬判据：指定一个拿不到 key 的模型 → 调用必须失败（kind=auth），不许静默照常回答", async () => {
     const { orch, responses, daemon } = fixture();
-    applyBeta1Collar(orch);
     try {
       // 同一套配置下不带覆盖：照常成功（这是对照基线，证明失败不是因为环境坏了）。
       await orch.chat({ sessionId: "probe-baseline", message: "跑一个最小请求" });
@@ -164,10 +132,9 @@ describe("闸门 · chat(req.model) 必须真的改变发出去的那次调用�
 
   test("不粘连：同一会话第二次 chat() 不传 model → 回到默认模型", async () => {
     const { orch, outbound, daemon } = fixture();
-    applyBeta1Collar(orch);
     try {
-      await orch.chat({ sessionId: "sticky", message: "第一次", model: "qwen-max" });
-      expect(new Set(outbound.map((o) => o.model))).toEqual(new Set(["qwen-max"]));
+      await orch.chat({ sessionId: "sticky", message: "第一次", model: "z-ai/glm-5.3-flash" });
+      expect(new Set(outbound.map((o) => o.model))).toEqual(new Set(["z-ai/glm-5.3-flash"]));
 
       outbound.length = 0;
       await orch.chat({ sessionId: "sticky", message: "第二次" });
@@ -177,21 +144,26 @@ describe("闸门 · chat(req.model) 必须真的改变发出去的那次调用�
     }
   });
 
-  // ── U10 现场的另一半：为什么「无 key 的 qwen-max 照常回答」不能只怪 chat() ──
+  // ── U10 现场的另一半（V154，收口已根治）：模型所属 provider 没 key 时曾隐式回退到别家 ──
   // `LLMRouter.resolve()` 在模型所属 provider 没配 key 时会**隐式回退**到任何一个已配置的
   // provider（capabilities/index.ts 的注释已经点名这个行为）。所以即使模型覆盖完全生效，
   // `qwen-max` 在只有 OPENROUTER_API_KEY 的环境里也不会因为缺 key 而失败——它会带着
-  // "qwen-max" 这个模型名被发给 OpenRouter。这不是本 lane 的足迹（router.ts 归收口），
+  // "z-ai/glm-5.3-flash" 这个模型名被发给 OpenRouter。这不是本 lane 的足迹（router.ts 归收口），
   // 但它是「无 key 照常回答」的第二个成因，本用例把它钉成**当前行为的快照**：
   // 谁改了回退策略，这条会红，届时按新行为更新并在 CHANGELOG 记一笔。
-  test("已知残余：模型所属 provider 没 key 时 router 会隐式回退到已配置的 provider（记录当前行为）", async () => {
-    const { orch, outbound, responses, daemon } = fixture();
-    applyBeta1Collar(orch);
+  test("V154（收口裁定）：模型所属 provider 没 key → fail-closed（kind=auth，消息点名该配哪把 key），不再隐式回退到别家", async () => {
+    const { orch, outbound, responses, daemon } = fixture(); // 只有 OPENROUTER_API_KEY
     try {
-      await orch.chat({ sessionId: "fallback", message: "跑一个最小请求", model: "qwen-max" });
-      expect(outbound.every((o) => o.model === "qwen-max")).toBe(true);
-      expect(outbound.every((o) => o.url.includes("openrouter.ai"))).toBe(true);
-      expect(responses.every((r) => r.ok)).toBe(true);
+      await orch.chat({ sessionId: "fail-closed", message: "跑一个最小请求", model: "qwen-max" });
+      // 零出站：qwen-max 属于 qwen，qwen 没 key，不许带着 "qwen-max" 去敲 OpenRouter
+      expect(outbound.length).toBe(0);
+      expect(responses.length).toBeGreaterThan(0);
+      expect(responses.every((r) => !r.ok)).toBe(true);
+      const first = responses[0]!;
+      if (!first.ok) {
+        expect(first.error.kind).toBe("auth");
+        expect(first.error.message).toContain("QWEN_API_KEY");
+      }
     } finally {
       daemon.kernelManager.dispose();
     }

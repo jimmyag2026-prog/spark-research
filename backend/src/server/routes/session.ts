@@ -92,7 +92,7 @@ export function sessionRoutes(ctx: ServerContext): Hono {
         sender.send("start", { sessionId, mode, at: new Date().toISOString() });
         void (async () => {
           try {
-            sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" });
+            sender.send("progress", { message: mode === "coexplore" ? "共探中" : "规划与执行中" }); // 首帧占位；α-3 之后各阶段由 onProgress 续发
             const result = await ctx.agent.chat({
               sessionId,
               message,
@@ -103,6 +103,8 @@ export function sessionRoutes(ctx: ServerContext): Hono {
               allowUnpriced: optionalBool(body, "allowUnpriced"),
               // 权威答案的流式增量。provider 不支持流式、或注入的 fake LLM 不调 onDelta 时，
               // 这里就是从不触发——SSE 退化成「只有 result」，与接线前行为一致，不报错。
+              // α-3（v0.9）：结构化进度按阶段续发；前端 onProgress 只读 message，多出的字段被忽略。
+              onProgress: (event) => { if (!sender.closed) sender.send("progress", event); },
               onDelta: (chunk: string) => {
                 if (!sender.closed) sender.send("delta", { chunk });
               },

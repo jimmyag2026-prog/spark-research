@@ -34,8 +34,8 @@ const REAL_CLOCK: WatchdogClock = {
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 };
 
-export const IDLE_TIMEOUT_LABEL = "静默超时";
-export const TOTAL_TIMEOUT_LABEL = "总时长超时";
+export const IDLE_TIMEOUT_LABEL = "静默超时（上游未返回任何内容增量）";
+export const TOTAL_TIMEOUT_LABEL = "总时长超时（上游未返回完整响应）";
 
 export function idleTimeoutMessage(ms: number): string {
   // 措辞里不出现 TOTAL_TIMEOUT_LABEL：两条 message 靠「各自只含自己的标签」区分，
