@@ -36,7 +36,8 @@ const paperOf = (title: string, i: number, year: number | null) => ({
   venue: "J Test",
   doi: `10.1000/t1.${i}`,
   ids: { doi: `10.1000/t1.${i}` },
-  abstract: null,
+  // 收口：γ-2（U58 ③）零摘要且无 PDF 的论文不精读——夹具给一句占位摘要，让 α 的门禁仍走精读路径。
+  abstract: `Abstract stub for ${title}`,
   url: null,
   pdfUrl: null,
   citedByCount: 10,

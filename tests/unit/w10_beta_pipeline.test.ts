@@ -104,7 +104,7 @@ describe("β-2 · partial 事件（papers / search_source / card）", () => {
         emitPartial: (e) => events.push(e),
         taskId: "t1",
       },
-      { mode: "review", queries: ["rsi"], topic: "中美 RSI", maxRead: 3 },
+      { mode: "review", depth: "deep", queries: ["rsi"], topic: "中美 RSI", maxRead: 3 },
     );
     expect(r.ok).toBe(true);
 
@@ -143,7 +143,7 @@ describe("β-2 · partial 事件（papers / search_source / card）", () => {
     const events: PartialEvent[] = [];
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s-card", searcher: fakeSearcher(3), downloadPdf: async () => ({ ok: false }), emitPartial: (e) => events.push(e) },
-      { mode: "review", queries: ["rsi"], maxRead: 3 },
+      { mode: "review", depth: "deep", queries: ["rsi"], maxRead: 3 },
     );
     const cards = events.filter((e) => e.kind === "card").map((e) => e.payload as PartialCardPayload);
     expect(r.cards).toHaveLength(3);
@@ -163,7 +163,7 @@ describe("β-2 · partial 事件（papers / search_source / card）", () => {
     const llm = new StreamingScriptLlm([CARD, () => `# 综述\n\n一句[@${keyOf(project)}]。`]);
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s-noop", searcher: fakeSearcher(1), downloadPdf: async () => ({ ok: false }) },
-      { mode: "review", queries: ["rsi"], maxRead: 1 },
+      { mode: "review", depth: "deep", queries: ["rsi"], maxRead: 1 },
     );
     expect(r.ok).toBe(true);
     expect(r.cards).toHaveLength(1);
@@ -181,7 +181,7 @@ describe("β-2 · partial 事件（papers / search_source / card）", () => {
         note: (m) => notes.push(m),
         emitPartial: () => { throw new Error("SSE 已关闭"); },
       },
-      { mode: "review", queries: ["rsi"], maxRead: 1 },
+      { mode: "review", depth: "deep", queries: ["rsi"], maxRead: 1 },
     );
     expect(r.ok).toBe(true);
     expect(notes.join("\n")).toContain("推送失败");
@@ -196,7 +196,7 @@ describe("β-3 · delta 的 target / revision", () => {
     const deltas: DeltaEvent[] = [];
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s-delta", searcher: fakeSearcher(2), downloadPdf: async () => ({ ok: false }), onDelta: (d) => deltas.push(d) },
-      { mode: "review", queries: ["rsi"], maxRead: 2 },
+      { mode: "review", depth: "deep", queries: ["rsi"], maxRead: 2 },
     );
     expect(r.review).not.toBeNull();
     const review = deltas.filter((d) => d.target === "review");
@@ -227,7 +227,7 @@ describe("β-3 · delta 的 target / revision", () => {
     const deltas: DeltaEvent[] = [];
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s-rev", searcher: fakeSearcher(1), downloadPdf: async () => ({ ok: false }), onDelta: (d) => deltas.push(d) },
-      { mode: "review", queries: ["rsi"], maxRead: 1 },
+      { mode: "review", depth: "deep", queries: ["rsi"], maxRead: 1 },
     );
     expect(r.review).not.toBeNull();
     const revisions = [...new Set(deltas.filter((d) => d.target === "review").map((d) => d.revision))];

@@ -331,7 +331,7 @@ describe("γ-2 ⑥ AMiner 零摘要：abstract=null 且没拿到 PDF → 精读�
     const llm = new EchoLlm(() => firstLibraryKey(project.paths.libraryDb));
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s", searcher, downloadPdf: async () => ({ ok: false, reason: "no OA" }) },
-      { mode: "review", queries: ["零摘要探针"], maxRead: 2 },
+      { mode: "review", depth: "deep", queries: ["零摘要探针"], maxRead: 2 },
     );
     const skipped = r.failures.filter((f) => f.includes("跳过精读"));
     expect(skipped).toHaveLength(1);
@@ -356,7 +356,7 @@ describe("γ-2 ⑥ AMiner 零摘要：abstract=null 且没拿到 PDF → 精读�
     const llm = new EchoLlm(() => firstLibraryKey(project.paths.libraryDb));
     const r = await runLiteraturePipeline(
       { llm, project, sessionId: "s", searcher, downloadPdf: async () => ({ ok: true }) },
-      { mode: "review", queries: ["零摘要但有 PDF"], maxRead: 1 },
+      { mode: "review", depth: "deep", queries: ["零摘要但有 PDF"], maxRead: 1 },
     );
     expect(r.failures.filter((f) => f.includes("跳过精读"))).toHaveLength(0);
     expect(llm.prompts.join("\n")).toContain("Zero abstract probe 3");

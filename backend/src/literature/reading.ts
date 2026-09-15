@@ -243,6 +243,7 @@ export interface GenerateCardOptions {
    * 不给 = 不传 `onDelta` 给 router → provider 走非流式分支，行为与接线前一字不差。
    */
   onDelta?: DeltaListener;
+  /**
    * α-2（v0.10）：`generateMany` 的并行度。默认 `DEFAULT_READ_CONCURRENCY`（=3，
    * W10-0 实测 3 路 × 20 次 0 次 429）。1 = 恢复 v0.9 的串行行为。
    *
