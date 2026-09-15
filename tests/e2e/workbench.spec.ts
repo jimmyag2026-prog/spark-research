@@ -1356,7 +1356,8 @@ test("㉓ general 面板：行数 == GET 的 items 数；改一个值刷新后�
   await expect(rows).toHaveCount(items.length);
 
   // 凭据类 key 在这条路由上不给输入框——渲染一个注定 403 的控件就是死按钮。
-  const secretRow = rows.filter({ hasText: "KIMI_API_KEY" });
+  // 按 data-key 精确取行：真后端里 OPENAI_API_KEY 的说明文字也提到 KIMI_API_KEY，hasText 会多筛一行。
+  const secretRow = page.locator('.settings-main__body[data-panel="general"] .settings-row[data-key="KIMI_API_KEY"]');
   await expect(secretRow).toHaveCount(1);
   await expect(secretRow.locator("input")).toHaveCount(0);
 

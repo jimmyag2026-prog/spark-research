@@ -121,6 +121,9 @@ async function buildItems(ctx: ServerContext, probe: boolean): Promise<SettingsI
         isDefault: platform.isDefault,
         reason: platform.reason,
         probeCache: platform.probeCache ?? null,
+        // 真探过才有 `probe`：前端（ε）只在这个键存在时显示「探通了 / 没探通」徽标；
+        // 静态清单不放它——静态清单说「可用」不等于探过（AD-12）。
+        probe: probe ? { ok: platform.availability === "available", note: platform.reason } : null,
       },
     });
   }
@@ -134,7 +137,12 @@ async function buildItems(ctx: ServerContext, probe: boolean): Promise<SettingsI
       editable: false,
       summary: backend.description,
       nextStep: backend.availability === "available" ? null : backend.reason,
-      extra: { category: "wetBackend", isDefault: backend.isDefault, reason: backend.reason },
+      extra: {
+        category: "wetBackend",
+        isDefault: backend.isDefault,
+        reason: backend.reason,
+        probe: probe ? { ok: backend.availability === "available", note: backend.reason } : null,
+      },
     });
   }
 
