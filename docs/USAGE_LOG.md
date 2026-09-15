@@ -33,6 +33,8 @@
 | [U8](#u8) | server 启动日志打两遍，两处手写副本 | 低 | 整洁 | ✅ alpha.2（δ-4） |
 | [U9](#u9) | CLI `chat` 没有任何参数：无预算闸、无 `--model`、`--help` 会被当消息发出去 | **高** | 正确性 | ✅ alpha.2（β-2 `chat --model/--budget-usd/--project/--help`） |
 | [U10](#u10) | `model` 覆盖声明了但从不读取，换模型静默无效、记账记成默认模型 | **高** | 正确性 | ✅ alpha.2（β-1 + 收口：`sessionModel` 进 `llmFor`；V145） |
+| [U11](#u11) | `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账 → 脚本 20 轮全记进 speed-probe | 中 | 契约一致性 | 待转 V（alpha.2 R6 基线发现） |
+| [U12](#u12) | 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；且拒绝前仍耗时 49.8s | **高** | 正确性 | 待转 V（alpha.2 R6 基线发现，耗时部分待核实） |
 
 ### 方法缺陷
 
@@ -672,6 +674,64 @@ async function chatOnce(message: string) {
 
 > 上面的 U 系列是**产品**的问题。这一段记**发现问题的方法**本身的问题——
 > 为什么这些东西没有被更早发现。用 `P` 前缀（Process），和 U、V 都不冲突。
+
+<a id="u11"></a>
+## U11 · `/api/session/chat` 不读 `?project=`，会话按「当前项目」指针入账
+
+**现场**：2026-09-15 跑 R6 基线脚本（`scripts/measure-chat.ts`，v0.9.0-alpha.2 server @4321）。脚本按仓库其它域路由的惯例
+（`/api/lit`、`/api/usage` 等都认 `?project=<slug>`）给 `POST /api/session/chat?project=t1-protein-r3` 发消息，
+跑前后比对该项目 `usage.jsonl` 行数差。
+
+**证据**：
+
+```
+t1-protein-r3 r1: HTTP 200 墙钟 54.4s 调用 0 失败 0
+$ ls -t ~/.spark-research/projects/*/usage.jsonl | head -1
+/Users/jimmyclaw/.spark-research/projects/speed-probe/usage.jsonl      ← 那 54 秒的三次模型调用记在这里
+$ grep -n "project" backend/src/server/routes/session.ts | head
+61:      projectSlug: ctx.agent.projectForSession(sessionId)?.slug ?? null,   ← 只按 sessionId 反查，query 一个字不读
+```
+
+`projectForSession()` 对未绑定的 sessionId 落到 `state.json` 的 `currentProject`——当时正是 U3 里那个「指针停在测试项目」的 `speed-probe`。
+
+**问题**：同一套 HTTP 面上，其它域路由认 `?project=`，聊天路由静默忽略它。写脚本/SDK 的人按惯例传了参数、
+拿到 200、台账落进另一个项目，没有任何一处报错。这是 U10 的形状（声明了/传了、静默丢弃），只是这次丢的是路径参数。
+网页端不受影响（它先 `POST /api/projects/current` 再聊天），所以六轮验收没撞到。
+
+**修改方向**：二选一，须裁定——① `/api/session/chat` 与 `/stream` 认 `?project=`（或 body `project`），首次出现的 sessionId 据此 `bindSession`；
+② 明确不认，但收到未知 query 参数时 400 并指向 `POST /api/projects/current`。倾向 ①（与其它域路由一致，`chat --project` CLI 已经是这个语义）。
+`gate_i_param_readers` 管的是函数参数，管不到 HTTP query——门禁能力边界（V146 同族），一并登记。
+基线脚本已改走 `POST /api/projects/current`，跑完改回原指针。
+
+<a id="u12"></a>
+## U12 · 预算闸拒绝返回 HTTP 200 + `review.approved: true`，台账无痕；拒绝前仍耗时 49.8s
+
+**现场**：同上。脚本把 `--budget 0.30` 均摊成每轮 `budgetUsd: 0.015` 传给 `/api/session/chat`。
+
+**证据**：
+
+```
+t1-protein-r3 r3: HTTP 200 墙钟 0.0s 调用 0 失败 0        ← 20 轮全部如此
+$ curl -w "%{http_code} %{time_total}s" -X POST .../api/session/chat -d '{"sessionId":"r6-manual-2",…,"budgetUsd":0.015}'
+200 49.837487s
+{"sessionId":"r6-manual-2","mode":"chat","projectSlug":"speed-probe","response":"[session r6-manual-2]\n[orchestrator] 本次调用被预算闸拒绝，未生成结果摘要。预算闸：本项目已知花费 $0.0148 + 在飞预留 $0.0000 + 本次估价 $0.0011 将超过上限 $0.01（已知下界口径…）。这次调用没有发出、没有新花费…","review":{"approved":true,"findings":[]}}
+$ tail -1 ~/.spark-research/projects/speed-probe/usage.jsonl     ← 时间戳仍是上一次成功调用的，本次零新增行
+```
+
+对照：新建零花费项目 `r6-probe`、`budgetUsd: 1.0` 同一句话 → 200 / 72.8s / 台账 3 行（plan、execute、summarize 各一次，
+每次 ~2000 输出 token）。
+
+**问题**：三件事叠在一起。
+① `budgetUsd` 的语义是**项目累计已知花费的上限**，不是「本次可花多少」——文档与 UI 的 `BudgetInput` 都没说清，调用方按「本次额度」传就必然被拒；
+② 被拒是 **HTTP 200**，`response` 里是一段人话，`review.approved` 还是 `true`——程序化调用方（脚本、SDK、MCP）没有任何结构化字段能分辨「拒绝」与「成功」，脚本把 20 次拒绝当成了 20 次「0 调用的成功」；
+③ 台账零新增：被拒的调用不落 `ok:false` 行，`usage` 里查不到「这个项目今天被预算闸拒了 20 次」。V79③ 只覆盖了任务面板的闸消息，没覆盖 chat 路由。
+
+**修改方向**：② 最紧要——被拒时响应加结构化字段（如 `gate: {kind:"budget", limitUsd, knownUsd, estimateUsd}`，或直接 402/422 + `ApiErrorBody`，与 V107 错误 envelope 统一时一起定）；`review` 不该在没有产出时标 `approved`。
+③ 台账落一行 `ok:false, errorKind:"budget"`（α-4 的 errorKind 枚举加一个值），让 `byErrorKind` 能看见闸。
+① 文档 + `BudgetInput` 文案改为「本项目累计上限」，或改语义为「本次增量上限」——改语义影响 CLI `--budget-usd`（V119），须裁定。
+
+**待核实**：被拒那次为什么花了 49.8s 而台账零行——闸在 summarize 前才拒，前面 plan/execute 是否真的调了模型？
+若调了，行去了哪；若没调，49 秒花在哪（连接器 I/O？）。核实法：同样的请求打开 server 侧 α-3 progress 事件（`/stream`）看阶段时间线。
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合
