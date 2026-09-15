@@ -3,6 +3,7 @@
 > 唯一登记处：范围外/待定项都记这里，不散落在 devlog。
 > 📓 **上游**：真实使用中发现的问题先记进 [`docs/USAGE_LOG.md`](USAGE_LOG.md)（U 编号，原始现场），
 > 复核成立后再转入本文拿 V 号。本文仍是唯一的**已归口**登记处，这条不改变那个约定。
+> ℹ️ **编号说明（2026-09-14）**：V142 在 `fix/V142-v118-probe-ci`（PR #110）登记；V143–V146 = 闸门 I 首跑盘点。**远端最大 V 号因网络未复核**，按本地已知 V142 续编；合入时若撞号按本文头部惯例改号。
 > ℹ️ **编号说明（2026-09-11）**：V83–V91 = v0.7 R4/A6 归账；**V92–V103 = v0.6.0 外部 review 归账**（原分支 `docs/v0.6-external-review` 登记为 V83–V94，合入时改号 +9，真源 `docs/reviews/v0.6.0_external_review.md`）。
 > **v0.6.0 外部 review 归账（2026-09-11，真源 docs/reviews/v0.6.0_external_review.md）**：
 > 逐条实证核验后新登记 V92–V103；已被 v0.7 W7 处置的不重复登记（P0-1 指针半=#74、P2-4=#69、
@@ -238,6 +239,10 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V132 | **契约漏声明 `budgetUsd`/`allowUnpriced`（A7 High-2，A7 判断正确）** | 路由接受这两个字段（V119），但 `server/types.ts` 的 `ChatRequest` 没声明；契约 HTTP schema 从 TS 接口生成 → `contract --json` 与 SDK 都看不见，契约以遗漏的方式说谎。<br>✅ **v0.8 A7 窗口已修**：`ChatRequest` 补两字段并重新生成 schemas。**残余**：契约门禁只对撞路由集合，不对撞「路由实际读了哪些 body 字段」→ V133 |
 | V133 | 契约门禁不对撞「路由实际读取的 body 字段」（V132 残余） | 加路由参数时若忘了同步 `server/types.ts`，现有门禁察觉不到。修：从路由源码提取 `optionalString(body,"x")`/`requireString(body,"x")` 调用，与对应请求类型的属性集合对撞。去向：v0.9 |
 | V142 | **CI 在 v0.8.0 起就是红的：`v118_openmm_probe.test.ts` 假设 `.venv/bin/python` 存在** | 2026-09-14 合 PR #109 时发现 CI `test-and-smoke` 红，追到 main@644cccd（v0.8.0）与 ddad14e 两次 run 同样 `failure`——**v0.8.0 是在 CI 红的状态下发布的**，此前无人看 CI 结论。根因：测试第 22 行 `Bun.spawnSync(".venv/bin/python")`，runner 上没有 venv → ENOENT 先于「没装 openmm 则 skip」抛出，skip 分支不可达（与 F-5「守卫存在但不可达」同形状）。修：spawn 前 `existsSync` 守卫，缺 venv 与缺 openmm 同档跳过并说明。**教训**：发布前 DONE 里要有「CI 结论 = success」这一条，本地六套件绿不算。 |
+| V143 | **`ProviderCapabilities` 的 toolCalling / streaming / usageReported 声明了无人消费**（闸门 I 形状③ 首跑抓到） | `router.ts:123` 构造这三个布尔并返回，backend/src 里零读取点——能力声明了，没有任何逻辑据此改变行为。去向：**v0.9 lane α** 接线 `streaming`（看门狗只对流式生效）与 `usageReported`（α-4 区分「上游没返 usage」与「无单价」）；`toolCalling` 归收口在 `sub_agent.ts` 提供工具前核一次。三者在 `gate_i_switch_readers` ALLOWLIST 里带原因登记，alpha.2 前移除（陈旧检查会逼）。 |
+| V144 | **`WetLabLoop.execute(options)` 的 `note` 声明了从未读**（闸门 I 形状② 首跑抓到） | 参数类型里有 `note?: string`，函数体一处不读——调用方传了备注，静默丢弃。去向：**v0.9 lane δ** 把 note 落进 execute 产生的 observation record。ALLOWLIST 登记，δ 合入时移除。 |
+| V145 | **`OrchestratorAgent.chat(req)` 的 `model` 只在 coexplore 分支转发时被读，主路径静默丢弃**（= USAGE_LOG **U10** 转入） | HTTP `/chat` 与 `/stream` 都传了 `body.model`，`chat()` 自己读了 sessionId/message/mode/onDelta/budgetUsd/allowUnpriced 六个属性唯独不读 model；只有 `if (mode==="coexplore")` 里 `this.coexplore(req)` 才读到。决定性实验：指定 `qwen-max`（无 key）照常回答，台账记成默认模型。去向：**v0.9 lane β-1**（存 `sessionModel`、`llmFor` 读它、门禁「无 key provider 必失败」）。ALLOWLIST 登记，β 合入时移除。**与 V40 / V137 同族第三例，闸门 I（AD-17）因此建立。** |
+| V146 | 闸门 I 形状② 的扫描面边界：跨文件 / 同文件具名 `type` 的参数不在扫描面 | 首版只解析**内联对象类型字面量**参数；`chat(req: ChatRequest)` 这种具名类型要走 TypeChecker 解析属性，未做。登记为门禁能力边界待办；同时形状③ 会把同名字段的解构算成读者（`retryable` 在 v0.8.0 上因此漏报）。 |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
