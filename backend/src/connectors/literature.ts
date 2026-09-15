@@ -300,6 +300,32 @@ export function parsePubmedAbstractXml(xmlText: string, requestedId: string): Pu
   };
 }
 
+/**
+ * U40（v0.9.1）：一次检索至少要能看出「查到了多少」。
+ *
+ * 现场：Europe PMC 对一条语法不合法的查询返回 `{"version":"6.9"}`——HTTP 200、既没有 `hitCount`
+ * 也没有 `errCode`、更没有结果数组。于是「查询写错了」「查到 0 篇」「查成功了」三件事在平台里
+ * 长得一模一样，编排层照样记成 ok（U38 是另一半）。
+ *
+ * 判据刻意只查**计数或结果容器在不在**，不查「是不是 0 条」——0 条是合法结果，语法错不是。
+ */
+export function assertSearchPayload(connector: string, payload: unknown): void {
+  if (payload === null || typeof payload !== "object") {
+    throw new Error(
+      `连接器 "${connector}" 的 search 返回了非对象响应。下一步：检查查询语法，或换一个源重试。`,
+    );
+  }
+  const p = payload as Record<string, unknown>;
+  const COUNTERS = ["hitCount", "esearchresult", "meta", "message", "total", "totalResults", "data", "resultList", "entries", "result"];
+  if (COUNTERS.some((k) => p[k] !== undefined)) return;
+  const keys = Object.keys(p);
+  throw new Error(
+    `连接器 "${connector}" 的 search 返回里既没有结果也没有计数字段（只有 ${keys.join(", ") || "空对象"}）——` +
+      `多半是查询语法不被上游接受（它用 HTTP 200 回了一个空壳）。` +
+      `下一步：简化查询（先去掉字段限定与排序参数）再试，或换一个源。`,
+  );
+}
+
 export class PubMedConnector extends HttpConnector {
   constructor(options: ConnectorOptions = {}) {
     super("pubmed", pubmedConfig, options);
@@ -697,7 +723,9 @@ export class EuropePMCConnector extends HttpConnector {
     mapped.format ??= "json";
     // core 结果集才带 abstract 与 fullTextUrlList（PDF 下载管线依赖它）。
     mapped.resultType ??= "core";
-    return this.requestRaw("search", mapped);
+    const payload = await this.requestRaw("search", mapped);
+    assertSearchPayload("europepmc", payload); // U40
+    return payload;
   }
 
   async getPaper(params: { id?: string } & Record<string, unknown>): Promise<unknown> {

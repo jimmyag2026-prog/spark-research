@@ -41,7 +41,9 @@ import { DEFAULT_PROMPT_DIR as PROMPT_DIR, readPromptText } from "./prompts";
 // SUB_AGENT_DEFAULTS（见下）是唯一真源：legacy 的 `SubAgentFactory.create()` 与新的
 // `buildSubAgentSpec()` 共享同一张表，grants/permission 不可能两处漂移。
 
-export type SubAgentType = "explore" | "execute" | "review" | "lab" | "literature";
+/** 合法的子代理类型。**运行期校验用这张表**——`SubAgentType` 只是编译期联合类型，挡不住模型写来的字符串（U39）。 */
+export const SUB_AGENT_TYPES = ["explore", "execute", "review", "lab", "literature"] as const;
+export type SubAgentType = (typeof SUB_AGENT_TYPES)[number];
 
 // ── 新 API：SubAgentSpec + 真 tool loop ─────────────────────────────────────
 
@@ -260,6 +262,13 @@ export function buildSubAgentSpec(
   overrides: SubAgentSpecOverrides = {},
 ): SubAgentSpec {
   const defaults = SUB_AGENT_DEFAULTS[type];
+  // U39：调用方可能是 `as SubAgentType` 断言过来的运行期字符串。认不出就在这里抛一个**带下一步**的错误，
+  // 而不是让 `defaults.grants` 报 `undefined is not an object` —— 那句话对使用者毫无意义。
+  if (!defaults) {
+    throw new Error(
+      `未知子代理类型 '${String(type)}'（可用：${SUB_AGENT_TYPES.join(" / ")}）。下一步：改成其中之一（大小写敏感，全小写）。`,
+    );
+  }
   const name = overrides.name ?? type;
   const grants = overrides.grants ?? [...defaults.grants];
   const spec: SubAgentSpec = {

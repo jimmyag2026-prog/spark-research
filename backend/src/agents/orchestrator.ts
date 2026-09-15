@@ -13,6 +13,7 @@ import {
   runSubAgentOfType,
   SubAgentFactory,
   type SubAgentDeps,
+  SUB_AGENT_TYPES,
   type SubAgentType,
 } from "./sub_agent";
 // 值导入（不是 `import type`）：getToolRunner() 要在运行期真的 `new` 它。这与
@@ -286,6 +287,25 @@ function normalizeTask(raw: unknown, index: number): PlannedTask | null {
   const description = typeof obj.description === "string" ? obj.description : `task ${index + 1}`;
   const params = obj.params && typeof obj.params === "object" ? (obj.params as Record<string, unknown>) : {};
   return { id: typeof obj.id === "string" ? obj.id : `t_${index + 1}`, kind, description, params };
+}
+
+/**
+ * U38（v0.9.1）：连接器信封里的失败判据。只有一份，供 `executeTask` 的 connector 分支用。
+ *
+ * `mcp_call` 成功返回 ≠ 连接器调用成功：失败时它回 `{ok:false, server, tool, error}`。
+ * 判据刻意只看 `ok === false`——不去猜「结果是不是空的」，那是连接器层自己的事（U40）。
+ */
+export function connectorFailureOf(res: unknown): string | null {
+  if (res === null || typeof res !== "object") return null;
+  const env = res as { ok?: unknown; error?: unknown };
+  if (env.ok !== false) return null;
+  return typeof env.error === "string" && env.error !== "" ? env.error : "连接器调用失败（信封里没有 error 文本）";
+}
+
+/** U39（v0.9.1）：模型写的子代理类型 → 合法枚举值；认不出返回 null（大小写与首尾空白不敏感）。 */
+export function normalizeSubAgentType(raw: unknown): SubAgentType | null {
+  const name = String(raw ?? "execute").trim().toLowerCase();
+  return (SUB_AGENT_TYPES as readonly string[]).includes(name) ? (name as SubAgentType) : null;
 }
 
 export class OrchestratorAgent {
@@ -875,7 +895,15 @@ export class OrchestratorAgent {
               tool: String(task.params?.tool ?? "search"),
               args: task.params?.args ?? {},
             });
-            this.record(sessionId, "connector", "call", JSON.stringify(res).slice(0, 200));
+            // U38（v0.9.1）：`mcp_call` 对连接器失败**不抛异常**，而是返回 `{ok:false, error}` 信封。
+            // 以前这里无条件 `ok: true`，于是「PubMed 超时」「arXiv 429」全都成了**成功的任务**——
+            // 2026-09-15 的 mRNA 检索里三次连接器失败在执行摘要里写着 ok，只有模型自己去读 JSON 正文才看出不对。
+            // ExecutionOutcome.ok 是证据图、review 层与 repairing 判定的输入，不能由「没抛异常」代劳。
+            const failure = connectorFailureOf(res);
+            this.record(sessionId, "connector", failure ? "error" : "call", JSON.stringify(res).slice(0, 200));
+            if (failure) {
+              return { taskId: task.id, kind: task.kind, ok: false, output: JSON.stringify(res) };
+            }
             return { taskId: task.id, kind: task.kind, ok: true, output: JSON.stringify(res) };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -884,7 +912,18 @@ export class OrchestratorAgent {
           }
         }
         case "subagent": {
-          const type = (task.params?.subagent ?? "execute") as SubAgentType;
+          // U39（v0.9.1）：计划是模型写的，**计划本身就是不可信输入**。以前这里只有一个 `as SubAgentType`
+          // 类型断言——模型写 `"Review"`（大写）就让 `SUB_AGENT_DEFAULTS[type]` 成了 undefined，
+          // 用户看到的是 `undefined is not an object (evaluating 'defaults.grants')` 这句 JS 内部错误。
+          const type = normalizeSubAgentType(task.params?.subagent);
+          if (type === null) {
+            const given = String(task.params?.subagent);
+            const msg =
+              `未知子代理类型 '${given}'（可用：${SUB_AGENT_TYPES.join(" / ")}）。` +
+              `下一步：把 params.subagent 改成其中之一；大小写不敏感。`;
+            this.record(sessionId, "orchestrator", "subagent-unknown-type", msg);
+            return { taskId: task.id, kind: task.kind, ok: false, output: `[subagent error: ${msg}]` };
+          }
           // V45 ③：连上了外部扩展就拿到带外部工具路由的 runner，否则原样走既有缓存。
           const runner = await this.runnerFor(external);
           if (runner) {
@@ -1486,7 +1525,9 @@ export class OrchestratorAgent {
 
 // 与 sub_agent.ts 的 `SubAgentType` 联合类型手工保持同步（5 个值，联合类型改动会在
 // buildSubAgentSpec()/runSubAgentOfType() 的调用点触发编译错误，属于低风险手工表）。
-const SUB_AGENT_TYPES: readonly SubAgentType[] = ["explore", "execute", "review", "lab", "literature"];
+// U39（v0.9.1）：这里原本有一份**同名同内容的副本**——`runReplanLoop()` 的契约校验（下方 `SUB_AGENT_TYPES.includes`）
+// 一直在用它，而 `executeTask()` 的 subagent 分支只有一个 `as SubAgentType` 断言。两份清单、一处校验，
+// 于是研究循环挡得住的东西 chat 路径挡不住。副本已删，统一用 sub_agent.ts 导出的那一份（判据只有一份）。
 
 // 安全阀，独立于 contract 的三条停机条件之外——与 sub_agent.ts 的 DEFAULT_MAX_ROUNDS
 // 同一类考量，命中时 runReplanLoop() 报 "budget"。
