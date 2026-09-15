@@ -21,6 +21,12 @@
       "CredentialDeleteResponse": {
         "$ref": "#/definitions/CredentialDeleteResponse"
       },
+      "DeltaEvent": {
+        "$ref": "#/definitions/DeltaEvent"
+      },
+      "DeltaTarget": {
+        "$ref": "#/definitions/DeltaTarget"
+      },
       "EdgeType": {
         "$ref": "#/definitions/EdgeType"
       },
@@ -29,6 +35,36 @@
       },
       "LineageResponse": {
         "$ref": "#/definitions/LineageResponse"
+      },
+      "PartialCardPayload": {
+        "$ref": "#/definitions/PartialCardPayload"
+      },
+      "PartialEvent": {
+        "$ref": "#/definitions/PartialEvent"
+      },
+      "PartialKind": {
+        "$ref": "#/definitions/PartialKind"
+      },
+      "PartialPaper": {
+        "$ref": "#/definitions/PartialPaper"
+      },
+      "PartialPapersPayload": {
+        "$ref": "#/definitions/PartialPapersPayload"
+      },
+      "PartialPayload": {
+        "$ref": "#/definitions/PartialPayload"
+      },
+      "PartialSearchSourcePayload": {
+        "$ref": "#/definitions/PartialSearchSourcePayload"
+      },
+      "ProgressDecision": {
+        "$ref": "#/definitions/ProgressDecision"
+      },
+      "ProgressEvent": {
+        "$ref": "#/definitions/ProgressEvent"
+      },
+      "ProgressStage": {
+        "$ref": "#/definitions/ProgressStage"
       },
       "ProjectListResponse": {
         "$ref": "#/definitions/ProjectListResponse"
@@ -74,6 +110,9 @@
       },
       "SettingsWriteResponse": {
         "$ref": "#/definitions/SettingsWriteResponse"
+      },
+      "StreamEventName": {
+        "$ref": "#/definitions/StreamEventName"
       },
       "TaskResponse": {
         "$ref": "#/definitions/TaskResponse"
@@ -352,6 +391,30 @@
         "note",
         "item"
       ]
+    },
+    "DeltaEvent": {
+      "type": "object",
+      "properties": {
+        "chunk": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "number",
+          "description": "同一个 target 的第几版，从 1 开始。**重试 / 修正轮会 +1**，前端据此清空重画——\n不然第二轮的增量会接在第一轮后面，拼出一段两个版本混合的正文\n（W3-a 的注释里已经预告过这个坑：多轮 summarize 的增量会依次到达）。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "chunk",
+        "target",
+        "revision"
+      ]
+    },
+    "DeltaTarget": {
+      "type": "string"
     },
     "DependencyMapping": {
       "type": "object",
@@ -731,6 +794,312 @@
       "additionalProperties": {
         "type": "number"
       }
+    },
+    "PartialCardPayload": {
+      "type": "object",
+      "properties": {
+        "paperId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "keyFinding": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "一句话关键发现。卡里没有可用句子时为 null（不编）。"
+        },
+        "relevance": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "相关性分 0–1。管线目前不产出分数时为 null（`basis` 仍给，说明卡是全文还是摘要级）。"
+        },
+        "basis": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "paperId",
+        "title",
+        "year",
+        "keyFinding",
+        "relevance",
+        "basis"
+      ]
+    },
+    "PartialEvent": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "papers",
+            "search_source",
+            "card"
+          ]
+        },
+        "taskId": {
+          "type": "string",
+          "description": "产生它的任务 id（chat 的 plan 任务）。管线被直接调用（CLI / 测试）时没有。"
+        },
+        "ts": {
+          "type": "number"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PartialCardPayload"
+            },
+            {
+              "$ref": "#/definitions/PartialPapersPayload"
+            },
+            {
+              "$ref": "#/definitions/PartialSearchSourcePayload"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ts",
+        "payload"
+      ]
+    },
+    "PartialKind": {
+      "enum": [
+        "papers",
+        "search_source",
+        "card"
+      ]
+    },
+    "PartialPaper": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "doi": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "命中它的检索源（多源命中时是合并后的列表）。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "year",
+        "doi",
+        "sources"
+      ]
+    },
+    "PartialPapersPayload": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "found": {
+          "type": "number",
+          "description": "本次检索命中的总条数（可能 > papers.length，清单被截到 20 条）。"
+        },
+        "papers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PartialPaper"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "found",
+        "papers"
+      ]
+    },
+    "PartialPayload": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PartialCardPayload"
+        },
+        {
+          "$ref": "#/definitions/PartialPapersPayload"
+        },
+        {
+          "$ref": "#/definitions/PartialSearchSourcePayload"
+        }
+      ]
+    },
+    "PartialSearchSourcePayload": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "count": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "elapsedMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "error": {
+          "type": "string",
+          "description": "失败原因（截断）。ok 时不出现——**不填空串冒充「没有错误」**。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "source",
+        "outcome",
+        "count",
+        "elapsedMs"
+      ]
+    },
+    "ProgressDecision": {
+      "enum": [
+        "ready",
+        "continue",
+        "repair",
+        "await_user"
+      ]
+    },
+    "ProgressEvent": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "enum": [
+            "review",
+            "plan",
+            "execute",
+            "summarize"
+          ]
+        },
+        "complete": {
+          "type": "number",
+          "description": "已完成的任务数。**恒 ≤ total**。"
+        },
+        "total": {
+          "type": "number",
+          "description": "本轮任务总数。plan 落地前是 0；进修正轮时加上修正任务数。"
+        },
+        "decision": {
+          "enum": [
+            "ready",
+            "continue",
+            "repair",
+            "await_user"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "人读文案。**前端唯一消费的字段**，必须自足（不依赖其它字段也能读懂）。"
+        },
+        "ts": {
+          "type": "number",
+          "description": "β-1（v0.10）：事件发出时刻（epoch ms）。\n前端此前只能用「收到的时刻」当时间戳——SSE 缓冲、页面卡顿、断线重连都会让它偏；\n而「这一阶段跑了多久」正是 v0.10 要上屏的东西，所以时间戳由产生事件的那一端给。"
+        },
+        "elapsedMs": {
+          "type": "number",
+          "description": "β-1：自 emitter 创建（= 本次请求开始）以来的毫秒数。**单调不减**。"
+        },
+        "etaMs": {
+          "type": "number",
+          "description": "β-1：预计剩余毫秒。**拿不准就没有这个字段**（任务书原话：eta 拿不准就不给字段）。\n唯一给得出的场景：execute 阶段、已完成 ≥ 1 个任务、且还有任务没完成——\n此时按「本会话内已完成任务的平均耗时 × 剩余任务数」外推。plan / summarize / review\n三段没有可外推的样本（每段只跑一次，且时长与任务数无关），一律不给。"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "complete",
+        "total",
+        "message",
+        "ts",
+        "elapsedMs"
+      ]
+    },
+    "ProgressStage": {
+      "enum": [
+        "review",
+        "plan",
+        "execute",
+        "summarize"
+      ]
     },
     "ProjectListResponse": {
       "type": "object",
@@ -1549,6 +1918,17 @@
         "panel",
         "item",
         "meta"
+      ]
+    },
+    "StreamEventName": {
+      "enum": [
+        "progress",
+        "result",
+        "error",
+        "start",
+        "partial",
+        "delta",
+        "done"
       ]
     },
     "TaskEvent": {
