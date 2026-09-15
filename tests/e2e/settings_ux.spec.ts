@@ -40,7 +40,9 @@ async function openSettings(page: Page, panelTitle: string): Promise<void> {
   await page.getByRole("button", { name: new RegExp(panelTitle) }).click();
 }
 
-test.describe.configure({ mode: "serial" });
+// **不配 serial**：每条用例各自 route 自己的端点，互不依赖。serial 会在第一条红之后把后面的全部 skip，
+// 阴性对照时就看不出「破坏 A 到底钉红了哪几条」——那正是这些门禁存在的意义。
+// （playwright.config.ts 里 workers=1，本来就不会并行跑。）
 
 test("ε-2 V159：设置项被 422 拒时，原因与下一步显示在**那一行**上，不只是一个会飘走的 toast", async ({
   page,
@@ -85,4 +87,50 @@ test("ε-2 V166：预算输入框旁边写明这是「本项目累计已知花�
   // 会话栏的预算入口（另外三个 BudgetInput 共用同一个组件，说明只有一份）。
   await expect(page.getByTestId("chat-budget-hint")).toHaveText("本项目累计已知花费上限");
   await expect(page.locator("#chat-budget")).toHaveAttribute("aria-describedby", "chat-budget-hint");
+});
+
+test("ε-3 V168：权限面板的有效令牌数会自己变新（重读令牌文件），不是挂载时取一次就钉死", async ({
+  page,
+}) => {
+  // 后端每次请求都现数一遍令牌文件，所以这里让同一个端点先后给两个数——
+  // 模拟「面板开着的这段时间里，终端消费掉了一枚令牌」。
+  let calls = 0;
+  await page.route("**/api/settings/permissions", (route) => {
+    calls += 1;
+    const lab = calls <= 1 ? 2 : 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        panel: "permissions",
+        items: [
+          {
+            key: "tokens:demo",
+            label: "demo",
+            kind: "info",
+            value: lab,
+            editable: false,
+            summary: `有效审批令牌：算力 0 · 湿实验 ${lab}`,
+            nextStep: "令牌 10 分钟后自动失效；用掉一次即作废，不需要手动清理",
+            extra: { category: "token", compute: 0, lab },
+          },
+        ],
+        meta: { level: "readonly", summary: "谁被授了什么", notes: [] },
+      }),
+    });
+  });
+
+  await openSettings(page, "权限");
+  const row = page.locator('.settings-row[data-key="demo"]');
+  await expect(row).toContainText("湿实验 2");
+
+  // 一枚被消费掉之后：**不刷新页面、不重开面板**，面板自己重读。
+  await expect(row).toContainText("湿实验 1", { timeout: 15_000 });
+  expect(calls).toBeGreaterThanOrEqual(2);
+  await expect(page.getByTestId("permissions-read-at")).toContainText("上次重读");
+
+  // 手动「刷新」也要真的再打一次端点（自动轮询挂了的时候，人还有手动那条路）。
+  const before = calls;
+  await page.getByTestId("permissions-refresh").click();
+  await expect.poll(() => calls, { timeout: 5_000 }).toBeGreaterThan(before);
 });
