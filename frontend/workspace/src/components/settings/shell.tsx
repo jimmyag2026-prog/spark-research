@@ -132,16 +132,9 @@ export function SettingsShell(props: { onClose: () => void }): JSX.Element {
       <div class="settings-main">
         <header class="settings-main__head">
           <span class="settings-main__title">{current().title}</span>
-          {/* 分级如实标在标题旁：`reduced` 的面板必须说清少了哪一块，不许含糊过去。 */}
-          <span class="badge" classList={{ "badge-warn": current().parity === "reduced" }}>
-            {current().parity === "same" ? "能力对齐" : "减配"}
-          </span>
         </header>
-        <Show when={current().gap}>
-          <p class="settings-main__gap" role="note">
-            {current().gap}
-          </p>
-        </Show>
+        {/* 能力分级（全功能 / 减配 / 只读）与「少了哪一块」由面板自己从 API 的
+            `meta` 里渲染（panel_kit 的 PanelMeta）——壳不存第二份分级。 */}
         <div class="settings-main__body" data-panel={current().id}>
           <Suspense fallback={<Spinner label="载入面板…" />}>
             <Dynamic component={current().component} query={query()} register={register(current().id)} />

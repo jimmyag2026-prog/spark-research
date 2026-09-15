@@ -4,25 +4,31 @@ import { join } from "node:path";
 import { CONFIG_SETTINGS } from "../../backend/src/config";
 import {
   DEFAULT_PANEL,
-  SETTINGS_PANELS,
   SETTINGS_PANEL_IDS,
+  SETTINGS_PANEL_INFO,
   SETTINGS_SECTIONS,
-  preloadPanel,
-} from "../../frontend/workspace/src/components/settings/registry";
+} from "../../frontend/workspace/src/components/settings/registry_table";
 
 // W9-ε：设置面注册表的门禁。
 //
-// 这张表是「网页端有哪些设置面板」的真源。它管两件事，两件都是 AD-12 的直接落点：
-//   ① 表本身自洽（id 唯一、section 在四组里、每个面板真的能加载）；
-//   ② 表里**不许有没底子的面板**，尤其是 `sandbox`——上游 12 个面板里有它，我们没有
+// 这张表是「网页端有哪些设置面板」的真源。它管四件事，每件都是 AD-12 的直接落点：
+//   ① 表本身自洽（id 唯一、section 在四组里、清单与明细一一对应）；
+//   ② 每个面板真的绑到了一个存在的实现文件（正反两向核，不许有孤儿绑定）；
+//   ③ 面板源码里不许出现 `CONFIG_SETTINGS` 任何一条说明的原文——U6 的修改方向明写
+//      「每个键的说明文字 config list 里已经有了，直接用，不要另写一份」；前端再抄一份，
+//      两份就会分家，而分家的那天没有任何测试会红，除了这一条；
+//   ④ 表里**不许有没底子的面板**，尤其是 `sandbox`——上游 12 个面板里有它，我们没有
 //      那个底子（V42：local network 声明不强制）。放一个「未实现」的占位面板等于在 UI
 //      里声称一个不存在的能力。
 //
-// 外加一条只能用 grep 做的：面板源码里不许出现 `CONFIG_SETTINGS` 任何一条说明的原文。
-// U6 的修改方向明写「每个键的说明文字 config list 里已经有了，直接用，不要另写一份」；
-// 前端再抄一份，两份就会分家，而分家的那天没有任何测试会红——除了这一条。
+// **为什么 import 的是 `registry_table.ts` 而不是 `registry.ts`**：后者有
+// `lazy(() => import("./General"))`，会把一个 `.tsx` 拽进 program，而仓库根的
+// tsconfig（`include: tests/**/*.ts`）没开 `jsx`，`bun run typecheck` 会报
+// TS6142。真源清单因此单独拆成一个只有数据的模块；两边的一致性由 ② 核对，
+// 不靠自觉。
 
 const SETTINGS_DIR = join(import.meta.dir, "../../frontend/workspace/src/components/settings");
+const REGISTRY = readFileSync(join(SETTINGS_DIR, "registry.ts"), "utf8");
 
 function panelSources(): Array<{ file: string; text: string }> {
   return readdirSync(SETTINGS_DIR)
@@ -30,32 +36,32 @@ function panelSources(): Array<{ file: string; text: string }> {
     .map((file) => ({ file, text: readFileSync(join(SETTINGS_DIR, file), "utf8") }));
 }
 
+/** registry.ts 里所有 `<id>: lazy(() => import("./X"))` 绑定，从源码读出来。 */
+function bindings(): Map<string, string> {
+  const found = new Map<string, string>();
+  const pattern = /(?:"([a-z-]+)"|([A-Za-z][A-Za-z0-9]*)):\s*lazy\(\(\) => import\("\.\/([A-Za-z]+)"\)\)/g;
+  for (const match of REGISTRY.matchAll(pattern)) {
+    found.set(match[1] ?? match[2]!, `${match[3]}.tsx`);
+  }
+  return found;
+}
+
 describe("设置面板注册表", () => {
-  test("① 面板 id 唯一，section ∈ 四组，且与 SETTINGS_PANEL_IDS 一一对应", () => {
-    const ids = SETTINGS_PANELS.map((p) => p.id);
+  test("① 面板 id 唯一，section ∈ 四组，清单与明细一一对应", () => {
+    const ids = SETTINGS_PANEL_INFO.map((p) => p.id);
     expect(new Set(ids).size).toBe(ids.length);
 
     const sections = new Set(SETTINGS_SECTIONS.map((s) => s.id));
     expect(sections).toEqual(new Set(["inference", "capabilities", "runtime", "app"]));
-    for (const panel of SETTINGS_PANELS) {
+    for (const panel of SETTINGS_PANEL_INFO) {
       expect(sections.has(panel.section)).toBe(true);
+      expect(panel.title.trim()).not.toBe("");
+      expect(panel.glyph.trim()).not.toBe("");
     }
 
-    // 真源清单与实际注册表必须是同一个集合：不存在「悄悄多一个面板」或
-    // 「清单里写了但没人注册」。
+    // 不存在「悄悄多一个面板」或「清单里写了但没人注册」。
     expect(new Set(ids)).toEqual(new Set(SETTINGS_PANEL_IDS));
-    expect(SETTINGS_PANEL_IDS).toContain(DEFAULT_PANEL);
-  });
-
-  test("① 减配面板必须写清少了哪一块（gap 非空）", () => {
-    for (const panel of SETTINGS_PANELS) {
-      if (panel.parity === "reduced") {
-        expect(panel.gap ?? "").not.toBe("");
-      } else {
-        // 标成「能力对齐」就不许再挂一条「其实还少点什么」的尾巴。
-        expect(panel.gap).toBeUndefined();
-      }
-    }
+    expect(SETTINGS_PANEL_IDS as readonly string[]).toContain(DEFAULT_PANEL);
   });
 
   // ② 「每个面板的 component 可懒加载」。
@@ -68,20 +74,24 @@ describe("设置面板注册表", () => {
   // 那个模块没有这个导出的事实。）
   //
   // 所以这一条拆成两半，两半都不靠自觉：
-  //   - 静态半：`lazy()` 真的产出了一个组件函数，且它 import 的路径在磁盘上真有文件、
-  //     文件里真有 `export default`。路径是从 registry.ts 源码里读出来的，不是测试里
-  //     手抄的第二份映射——写错一个字母这里就红。
+  //   - 静态半：清单里每个 id 在 registry.ts 里都有一条 `lazy(import)` 绑定，绑定的
+  //     文件真的存在、真的有 `export default`；**反向**也核——registry.ts 里不许有
+  //     清单之外的绑定。绑定关系是从源码里读出来的，不是测试里手抄的第二份映射。
   //   - 运行半：每个面板在 tests/e2e/workbench.spec.ts 里都有一条用例，在真浏览器里
   //     点开它并断言内容。懒加载真的能加载，是那边证的。
-  test("② 每个面板的 component 是 lazy 组件，且 import 的文件真实存在、有默认导出", async () => {
-    for (const panel of SETTINGS_PANELS) {
-      expect(typeof panel.component).toBe("function");
-      await preloadPanel(panel.id).catch(() => undefined);
+  test("② 每个面板都绑到一个真实存在、有默认导出的实现文件（正反两向）", () => {
+    const bound = bindings();
+    const files = new Set(readdirSync(SETTINGS_DIR));
 
-      const file = join(SETTINGS_DIR, sourceFileFor(panel.id));
-      const source = readFileSync(file, "utf8");
-      expect(source).toContain("export default");
+    for (const id of SETTINGS_PANEL_IDS) {
+      const file = bound.get(id);
+      expect(file, `registry.ts 里没有面板 ${id} 的 lazy import 绑定`).toBeDefined();
+      expect(files.has(file!), `${file} 不存在`).toBe(true);
+      expect(readFileSync(join(SETTINGS_DIR, file!), "utf8")).toContain("export default");
     }
+
+    // 反向：绑定表里不许有清单外的面板（删了清单项却忘了删绑定 → 红）。
+    expect([...bound.keys()].sort()).toEqual([...SETTINGS_PANEL_IDS].sort());
   });
 
   test("③ 面板源码里不得出现任何 CONFIG_SETTINGS 说明的原文（说明只有一份，来自 API）", () => {
@@ -103,21 +113,22 @@ describe("设置面板注册表", () => {
     expect(offenders).toEqual([]);
   });
 
+  test("③b 前端不存第二份能力分级（分级只来自 API 的 meta.level）", () => {
+    // 面板「全功能 / 减配 / 只读」的判断是后端给的。注册表里一旦又长出一个
+    // `parity` / `level` / `gap` 字段，就有了第二个真源，且两边分家时没人会红。
+    for (const forbidden of ["parity", "gap:", "level:"]) {
+      expect(
+        REGISTRY.includes(forbidden),
+        `registry.ts 里出现了 ${forbidden}——能力分级只能来自 API 的 meta.level`,
+      ).toBe(false);
+    }
+  });
+
   test("④ 没有 sandbox 面板，也没有 sandbox 占位文件", () => {
     expect(SETTINGS_PANEL_IDS as readonly string[]).not.toContain("sandbox");
-    expect(SETTINGS_PANELS.map((p) => p.id as string)).not.toContain("sandbox");
+    expect(bindings().has("sandbox")).toBe(false);
 
     const files = readdirSync(SETTINGS_DIR).map((f) => f.toLowerCase());
     expect(files.some((f) => f.startsWith("sandbox."))).toBe(false);
   });
 });
-
-// 面板 id → 源文件名。注册表里是 `lazy(() => import("./X"))`，字符串在闭包里拿不到，
-// 所以从 registry.ts 源码里把这一对关系读出来，而不是在测试里手抄第二份映射。
-function sourceFileFor(id: string): string {
-  const registry = readFileSync(join(SETTINGS_DIR, "registry.ts"), "utf8");
-  const pattern = new RegExp(`id:\\s*"${id}"[\\s\\S]*?import\\("\\./([A-Za-z]+)"\\)`);
-  const match = registry.match(pattern);
-  if (!match) throw new Error(`registry.ts 里找不到面板 ${id} 的 import`);
-  return `${match[1]}.tsx`;
-}

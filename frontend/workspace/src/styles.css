@@ -965,12 +965,46 @@ select {
   padding: 4px 16px 16px;
 }
 
+/* 面板抬头：能力分级 + 一句话说明 + 注意事项，全部来自 API 的 meta。 */
+.settings-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.settings-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
 .settings-group {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.settings-group + .settings-group {
+.settings-group + /* 面板抬头：能力分级 + 一句话说明 + 注意事项，全部来自 API 的 meta。 */
+.settings-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.settings-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.settings-group {
   margin-top: 18px;
 }
 

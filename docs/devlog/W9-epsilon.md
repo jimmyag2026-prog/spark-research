@@ -112,3 +112,53 @@ Received: false
 **注册表随交付长出来**：一个面板的实现文件真的存在、真的接了后端之后，它的 id 才进
 `SETTINGS_PANEL_IDS`。先把 12 个 id 写全、文件慢慢补，中间态就是一批点开是空的面板
 ——那是「放占位」的另一种写法。
+
+### 步骤 3 · γ 契约到了，按它重做客户端 + 十一个面板一次性长齐
+
+`feat/W9-gamma` 的 `d2fa8d4`（骨架 + 响应 schema，返回 fixture）出现后，读
+`git show feat/W9-gamma:backend/src/server/routes/settings/types.ts` 与十个路由文件，
+按真契约重写了 `lib/settings_api.ts`。
+
+**契约比我按任务书猜的形状好得多**：γ 把所有面板的条目统一成一个 `SettingsItem`
+（`{ key, label, kind, value, editable, summary, nextStep, fields, fieldsSet, extra }`），
+`meta` 统一成 `{ level, summary, notes }`。于是十一个面板的共同部分只写一遍
+（`panel_kit.tsx`：取数 → 登记搜索索引 → 按 query 过滤 → 按 `kind` 渲染控件 → 写回刷新），
+各面板只剩自己那点特殊长相。我按猜测写的那版一面板一套类型全部作废，删掉重来。
+
+三处因为读了真契约而改掉的决定：
+
+1. **能力分级不再存在前端**。我原先在注册表里给每个面板写了 `parity: "same" | "reduced"`
+   加一段 `gap` 文案——那是第二份真源。γ 的 `meta.level`（`full` / `reduced` / `readonly`）
+   与 `meta.notes` 是后端如实标注的，面板抬头直接渲染它。注册表里的 `parity` / `gap` 全部
+   删掉，并加了门禁 ③b：`registry.ts` 里出现 `parity` / `gap:` / `level:` 就红。
+2. **不可写的条目不给控件**。契约里每条都有 `editable`，不可写时 `nextStep` 必非空。
+   引擎据此在 `editable === false` 时渲染「去哪做」而不是一个点下去必然 403 的输入框。
+   凭据面板、权限面板、算力面板的只读部分全走这一条，不用各写一遍。
+3. **`registry.ts` 拆成 `registry_table.ts` + 绑定**。单测 import 注册表时，
+   `lazy(() => import("./General"))` 会把 `.tsx` 拽进 program，而仓库根 tsconfig
+   （`include: tests/**/*.ts`）没开 `jsx` → `TS6142`。真源清单拆成只有数据的
+   `registry_table.ts`，绑定留在 `registry.ts`；两边一致性由门禁 ② **正反两向**核对
+   （清单里每个 id 都有绑定 + 绑定表里不许有清单外的 id），绑定关系从源码读出来，
+   不是测试里手抄的第二份映射。
+
+面板与后端路由的对应（前端 12 个 ↔ 后端 10 条 GET）：
+
+| 前端面板 | 后端 | 说明 |
+|---|---|---|
+| general | `GET/PUT/DELETE /general` | 32 键投影 |
+| models | `GET /models` · `PUT /models/default` · `PUT /models/subagent/:kind` | 按条目分流两条写路径 |
+| local-models | `GET/PUT /local` | 探测结果来自 `extra.probe` |
+| credentials | `GET/PUT/DELETE /credentials/:id` | 见下 |
+| sources | `GET /scientific-tools` 的 `searchSources` 条 + `PUT /sources` | 上游没有这一块 |
+| scientific-tools | `GET /scientific-tools[?probe=1]` | 过滤掉 `searchSources`，免得同一设置两处控件 |
+| connectors | `GET /extensions` 的 `category ∈ {mcp, connector}` + `POST/DELETE` | |
+| skills | `GET /extensions` 的 `category === "skill"` | 只读 |
+| compute | `GET /compute` · `PUT /compute/target` | 只有改默认执行地一个写动作 |
+| network | `GET/PUT /network` | general 的投影 |
+| storage | `GET/PUT /storage` · `POST /storage/export` | |
+| permissions | `GET /permissions` | 只读，不传 `write` |
+
+**凭据面板「值永不回显」的三道**（一道靠契约、一道靠代码、一道靠测试）：
+① 契约层面 `SettingsItem.value` 在 `kind === "secret"` 时恒为 null，GET 只给 `fieldsSet`
+——前端连回显的材料都拿不到；② 保存**无论成败**都立刻清空本地草稿，不把刚填的值留在
+内存里等某次重渲染画回输入框；③ e2e 用 `page.on("response")` 盯住所有响应体。
