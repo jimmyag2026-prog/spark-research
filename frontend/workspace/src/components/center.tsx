@@ -68,7 +68,7 @@ function SessionStream(): JSX.Element {
             if (!streamed) ws.updateMessage(placeholder, { text: data.message, pending: true });
           },
           onResult: (data) => {
-            ws.updateMessage(placeholder, { text: data.response, pending: false });
+            ws.updateMessage(placeholder, { text: data.response, pending: false, artifacts: data.artifacts });
             // co-explore 落了卡就把思路库与时间线刷一下。
             if (data.ideaRecordId) ws.refreshDomain("ideas");
             else ws.refreshDomain("artifacts");
@@ -118,6 +118,27 @@ function SessionStream(): JSX.Element {
                   </Show>
                   <Show when={message.text}>
                     <Markdown source={message.text} knownKeys={ws.knownKeys()} />
+                    {/* U53：本轮落库的产物直接给链接，不用去右栏/产物页翻。 */}
+                    <Show when={message.artifacts?.length}>
+                      <div class="row wrap" style={{ gap: "6px", "margin-top": "6px" }}>
+                        <For each={message.artifacts}>
+                          {(a) => (
+                            <button
+                              class="btn btn-sm"
+                              data-testid={`chat-artifact-${a.id}`}
+                              title={a.id}
+                              onClick={() => {
+                                ws.setView({ kind: "artifacts" });
+                                ws.refreshDomain("artifacts");
+                                ws.notify(`已切到产物视图：${a.label}（${a.id.slice(0, 8)}）`);
+                              }}
+                            >
+                              📄 {a.label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </Show>
                   </Show>
                 </div>
               </div>

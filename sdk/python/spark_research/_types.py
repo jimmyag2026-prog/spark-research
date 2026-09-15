@@ -52,7 +52,7 @@ class _ChatResponseRequired(TypedDict):
     response: str
 
 class ChatResponse(_ChatResponseRequired, total=False):
-    artifacts: list[Any]
+    artifacts: list[dict[str, Any]]
     reviewResult: Any
     failure: dict[str, Any]
 

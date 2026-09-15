@@ -118,6 +118,13 @@ export interface ExecutionOutcome {
   kind: string;
   ok: boolean;
   output: string;
+  /** U53（v0.9.1）：这一步落库的产物，给聊天框渲染成可点的链接。 */
+  artifacts?: ChatArtifactLink[];
+}
+
+export interface ChatArtifactLink {
+  id: string;
+  label: string;
 }
 
 export interface OrchestrationResult {
@@ -136,6 +143,8 @@ export interface OrchestrationResult {
    * 不用去 grep 「预算闸」三个字。有它时 `review.approved` 必为 false。
    */
   failure?: OrchestrationFailure;
+  /** U53：本轮产出的产物链接（综述草稿等），聊天框直接渲染。 */
+  artifacts?: ChatArtifactLink[];
 }
 
 export interface OrchestrationFailure {
@@ -765,6 +774,7 @@ export class OrchestratorAgent {
       review,
       reviewRounds,
       ...(summarized.failure ? { failure: summarized.failure } : {}),
+      ...(execution.some((e) => e.artifacts?.length) ? { artifacts: execution.flatMap((e) => e.artifacts ?? []) } : {}),
     };
   }
 
@@ -1103,7 +1113,10 @@ export class OrchestratorAgent {
             );
             const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);
             try { writeFileSync(savedTo, JSON.stringify(pipeline, null, 2)); } catch { /* 落盘失败不影响返回 */ }
-            return { taskId: task.id, kind: task.kind, ok: pipeline.ok, output: `${pipeline.digest}\n(full result: ${savedTo})` };
+            const artifacts: ChatArtifactLink[] = pipeline.review?.artifactId
+              ? [{ id: pipeline.review.artifactId, label: `综述草稿${task.params?.topic ? `：${String(task.params.topic)}` : ""}` }]
+              : [];
+            return { taskId: task.id, kind: task.kind, ok: pipeline.ok, output: `${pipeline.digest}\n(full result: ${savedTo})`, ...(artifacts.length ? { artifacts } : {}) };
           }
           this.record(sessionId, "skill", name, "context loaded");
           return { taskId: task.id, kind: task.kind, ok: true, output: this.skillContextFor(name) };
@@ -1324,7 +1337,7 @@ export class OrchestratorAgent {
     /** V119：本次 chat 的预算闸（会话绑定了项目才生效；不给 = 只记账不设闸）。 */
     budgetUsd?: number;
     allowUnpriced?: boolean;
-  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null; failure?: OrchestrationFailure }> {
+  }): Promise<{ response: string; review?: ReviewResult; ideaRecordId?: string | null; failure?: OrchestrationFailure; artifacts?: ChatArtifactLink[] }> {
     // V145 / U10：本次会话的模型覆盖；不传 = 回到默认（不粘连）。
     if (req.model) this.sessionModel.set(req.sessionId, req.model);
     else this.sessionModel.delete(req.sessionId);
@@ -1345,6 +1358,7 @@ export class OrchestratorAgent {
       response: `[session ${req.sessionId}]\n${result.summary}`,
       review: result.review,
       ...(result.failure ? { failure: result.failure } : {}),
+      ...(result.artifacts?.length ? { artifacts: result.artifacts } : {}),
     };
   }
 

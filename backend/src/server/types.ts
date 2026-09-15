@@ -22,7 +22,8 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   response: string;
-  artifacts?: unknown[];
+  /** U53（v0.9.1）：本轮落库的产物（如综述草稿），前端在聊天框里渲染成可点链接。此前声明为 unknown[] 且无人填写（AD-17 形状）。 */
+  artifacts?: Array<{ id: string; label: string }>;
   reviewResult?: unknown;
   /** U12（v0.9）：本轮没有产出时的结构化原因（budget = 预算闸拒绝；llm = 上游调用失败）。成功时不出现。 */
   failure?: { kind: "budget" | "llm"; message: string };
