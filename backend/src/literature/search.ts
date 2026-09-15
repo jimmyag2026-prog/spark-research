@@ -14,7 +14,7 @@ import {
 import { configuredSearchSources, configuredSearchLanguage } from "../config";
 import { SHAPE_SOURCES, classifyIdentifier } from "./cli";
 import { segmentQuery, type SegmentResult } from "./segment";
-import { prepareQuery, type PreparedQuery, type QueryTranslator } from "./prepare_query";
+import { applyRelevanceFloor, prepareQuery, type PreparedQuery, type QueryTranslator } from "./prepare_query";
 
 // 跨源统一检索（DESIGN 域 A1）：并发查询 → 归一化 → 去重合并 → 排序。
 //
@@ -401,15 +401,22 @@ export class LiteratureSearcher {
     // DEFAULT_RANK_MODE 并显式传参），类级默认保持 v0.6 的 "hits"，不静默牵连其它调用方。
     // （`rank` 已在方法顶部算 perSource 时解出，这里直接复用，不重复 `options.rank ?? "hits"`。）
     const { papers: ranked, note: rankNote } = applyRank(merged, rank);
+    // γ-2 ⑤：查询被我们改写过时，加一条字面相关性地板。**在 limit 截断之前**——
+    // 截断之后再滤，等于把 6 条噪声滤成 2 条，用户看到的是「没什么文献」。
+    const floor = applyRelevanceFloor(ranked, prepared);
+    const relevant = floor.papers;
+    const preparedOut: PreparedQuery = floor.note
+      ? { ...prepared, note: prepared.note ? `${prepared.note}；${floor.note}` : floor.note }
+      : prepared;
     return {
       query,
-      papers: options.limit ? ranked.slice(0, options.limit) : ranked,
+      papers: options.limit ? relevant.slice(0, options.limit) : relevant,
       sources: statuses,
       totalBeforeDedupe: all.length,
       mergedCount,
       rank,
       rankNote,
-      prepared,
+      prepared: preparedOut,
     };
   }
 

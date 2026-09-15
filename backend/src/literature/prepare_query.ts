@@ -10,9 +10,11 @@
 //      医学文献捞上来；
 //   ③ 三个源里真正索引中文期刊的只有 OpenAlex，**但没有相关性保障**。
 //
-// 这一层做的事**只有一件**：把中文查询变成「主题词 + 英译」，让上面三个源拿到它们
-// 真正擅长的输入。它不做排序、不做过滤、不判断相关性——那些各有归属
-// （排序 V67、预筛 α-1、语言过滤见 search.ts 的 searchLanguage）。
+// 这一层做两件事，第二件是第一件的实测残余（见本文件末尾「译后相关性地板」）：
+//   ① 把中文查询变成「主题词 + 英译」，让上面三个源拿到它们真正擅长的输入；
+//   ② 查询被我们改写过时，对合并池加一条**字面相关性地板**（译文 ≥2 个词命中）。
+// 它**不排序**——顺序仍归 V67 的 rank；语义级预筛归 α-1；语言过滤见 search.ts 的
+// searchLanguage。
 //
 // 刻意的边界：
 //   · 纯英文查询**一个字节都不碰**（`via: "passthrough"`，`queries` 就是原查询本身）；
@@ -233,4 +235,89 @@ function dedupe(values: string[]): string[] {
     out.push(v.trim());
   }
   return out;
+}
+
+// ── γ-2 ⑤：译后相关性地板 ────────────────────────────────────────────────
+//
+// 第一次实测（英译落地之后）：译文正确，但 top-6 仍是 0–2/6。原因不是翻译，是**池子**：
+// 中英双查把池子从 75 条撑到 165 条，而 blended 档按「命中源数 × 被引 × 年份」排序，
+// **没有任何相关性信号**——于是 2016 欧洲心血管预防指南（被引 6550）这类论文只要被
+// "prevention" 这个通用词松散匹配上，就稳稳压过真正对题但被引三位数的论文。
+//
+// 这条地板做的事，和 AMiner 拆词兜底里那句「只取 ≥2 词同时命中」是同一条纪律，
+// 只是从单源扩到合并池：**译文查询的多个词里，至少要有 2 个不同的词出现在
+// 标题/摘要/期刊名里**，这篇才算跟这次查询有关系。
+//
+// 三条刻意的边界：
+//   · 只在**查询被改写过**时生效（`via !== "passthrough"`）。用户自己打的英文查询
+//     不该被我们二次判定相关性——他知道自己在找什么。
+//   · 过滤后**一条都不剩就整体作废**，退回未过滤的结果并如实说明。宁可给噪声，
+//     不给空白（空白会被当成「这个方向没有文献」，比噪声更误导）。
+//   · 它**不排序**。顺序仍由 V67 的 rank 决定，这里只做「进不进这个池子」。
+
+const RELEVANCE_MIN_TERM_HITS = 2;
+
+/** 译文查询里用来判相关性的词：去标点、小写、去掉 1–2 字母的碎词。 */
+export function relevanceTerms(english: string): string[] {
+  const seen = new Set<string>();
+  for (const raw of english.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3) continue;
+    seen.add(raw.replace(/(ies|es|s)$/, ""));
+  }
+  return [...seen];
+}
+
+/** 一篇论文命中了多少个不同的词（标题 + 摘要 + 期刊名）。 */
+export function countTermHits(
+  paper: { title?: string | null; abstract?: string | null; venue?: string | null },
+  terms: string[],
+): number {
+  const hay = `${paper.title ?? ""} ${paper.abstract ?? ""} ${paper.venue ?? ""}`.toLowerCase();
+  let hits = 0;
+  for (const term of terms) {
+    // 词干 + 至多 3 个字母的后缀（worker/workers、prevent/prevention 这类都算命中），
+    // 但仍要求从词首开始——substring 匹配会让 "injury" 命中 "perjury"。
+    if (new RegExp(`\\b${term}[a-z]{0,3}\\b`).test(hay)) hits += 1;
+    if (hits >= terms.length) break;
+  }
+  return hits;
+}
+
+export interface RelevanceFloorResult<T> {
+  papers: T[];
+  /** 过滤真的生效了吗（false = 未改写的查询，或过滤后为空已整体作废）。 */
+  applied: boolean;
+  dropped: number;
+  note: string | null;
+}
+
+export function applyRelevanceFloor<T extends { title?: string | null; abstract?: string | null; venue?: string | null }>(
+  papers: T[],
+  prepared: PreparedQuery,
+  minHits = RELEVANCE_MIN_TERM_HITS,
+): RelevanceFloorResult<T> {
+  if (prepared.via === "passthrough" || !prepared.english) {
+    return { papers, applied: false, dropped: 0, note: null };
+  }
+  const terms = relevanceTerms(prepared.english);
+  if (terms.length < minHits) return { papers, applied: false, dropped: 0, note: null };
+  const kept = papers.filter((p) => countTermHits(p, terms) >= minHits);
+  if (kept.length === 0) {
+    return {
+      papers,
+      applied: false,
+      dropped: 0,
+      note: `相关性地板（译文 ≥${minHits} 词命中）过滤后一条不剩，已整体作废并退回未过滤结果——这批结果与查询的字面关联很弱，请人工复核`,
+    };
+  }
+  const dropped = papers.length - kept.length;
+  return {
+    papers: kept,
+    applied: true,
+    dropped,
+    note:
+      dropped > 0
+        ? `相关性地板：译文 ${terms.length} 个主题词里至少命中 ${minHits} 个才留下，滤掉 ${dropped} 条（中英双查把池子撑大，blended 排序本身没有相关性信号）`
+        : null,
+  };
 }

@@ -7,6 +7,7 @@ import {
   PREPARE_QUERY_MAX_TOKENS,
 } from "../../backend/src/literature/prepare_query";
 import { LiteratureSearcher, mergeStatusesBySource, searchLanguageParams } from "../../backend/src/literature/search";
+import { applyRelevanceFloor, countTermHits, relevanceTerms } from "../../backend/src/literature/prepare_query";
 import { ConnectorRegistry } from "../../backend/src/connectors/registry";
 
 // v0.10 lane γ-2（V161 + U58）门禁。
@@ -191,6 +192,68 @@ describe("γ-2 ⑤ 同源多条状态合并", () => {
     ]);
     expect(merged[0]!.status.outcome).toBe("skipped");
     expect(merged[0]!.status.note).toBe("未配置凭据");
+  });
+});
+
+// ── γ-2 ⑦ 译后相关性地板（实测残余：译文对了，池子仍是噪声）───────────────
+
+const FLOOR_PREPARED = {
+  original: "重复性劳损 预防 办公人群",
+  hasCJK: true,
+  queries: ["重复性劳损 预防 办公人群", "repetitive strain injury prevention office workers"],
+  english: "repetitive strain injury prevention office workers",
+  via: "llm" as const,
+  note: null,
+};
+
+describe("γ-2 ⑦ 相关性地板", () => {
+  const relevant = { title: "Ergonomic interventions for preventing musculoskeletal disorders among office workers", abstract: null, venue: null };
+  // U58 现场原样：被引 6550 的心血管指南，只被 "prevention" 一个通用词捞上来。
+  const noise = { title: "2016 European Guidelines on cardiovascular disease prevention in clinical practice", abstract: null, venue: null };
+
+  test("词干化：workers/worker、prevention/preventing 都算命中", () => {
+    const terms = relevanceTerms("repetitive strain injury prevention office workers");
+    expect(terms).toContain("worker");
+    expect(countTermHits(relevant, terms)).toBeGreaterThanOrEqual(2);
+  });
+
+  test("只命中一个通用词的高被引噪声被滤掉（U58 现场原样）", () => {
+    const terms = relevanceTerms("repetitive strain injury prevention office workers");
+    expect(countTermHits(noise, terms)).toBe(1);
+    const r = applyRelevanceFloor([noise, relevant], FLOOR_PREPARED);
+    expect(r.applied).toBe(true);
+    expect(r.papers).toEqual([relevant]);
+    expect(r.note).toContain("滤掉 1 条");
+  });
+
+  test("词首匹配：injury 不该命中 perjury（substring 匹配会）", () => {
+    expect(countTermHits({ title: "A study of perjury in court" }, ["injury"])).toBe(0);
+  });
+
+  test("passthrough（用户自己打的英文查询）不被二次判定相关性", () => {
+    const r = applyRelevanceFloor([noise], { ...FLOOR_PREPARED, via: "passthrough", english: null, hasCJK: false });
+    expect(r.applied).toBe(false);
+    expect(r.papers).toEqual([noise]);
+  });
+
+  test("滤完一条不剩 → 整体作废并如实说明（宁可给噪声，不给空白）", () => {
+    const r = applyRelevanceFloor([noise], FLOOR_PREPARED);
+    expect(r.applied).toBe(false);
+    expect(r.papers).toEqual([noise]);
+    expect(r.note).toContain("整体作废");
+  });
+
+  test("接线：地板在 limit 截断**之前**生效（否则 6 条噪声会被滤成 2 条）", async () => {
+    const registry = new ConnectorRegistry({}).registerBuiltins();
+    const mk = (title: string, doi: string) => ({ id: `https://openalex.org/W${doi}`, doi: `https://doi.org/${doi}`, display_name: title, publication_year: 2020, cited_by_count: 1, authorships: [] });
+    (registry as unknown as { call: unknown }).call = async (_s: string, _t: string, params: Record<string, unknown>) =>
+      String(params.query).startsWith("repetitive")
+        ? { results: [mk(noise.title, "10.1/a"), mk(relevant.title, "10.1/b")], meta: { count: 2 } }
+        : { results: [], meta: { count: 0 } };
+    const searcher = new LiteratureSearcher(registry, { translate: async () => FLOOR_PREPARED.english });
+    const r = await searcher.search("重复性劳损 预防 办公人群", { sources: ["openalex"], limit: 2 });
+    expect(r.papers.map((p) => p.title)).toEqual([relevant.title]);
+    expect(r.prepared?.note).toContain("相关性地板");
   });
 });
 
