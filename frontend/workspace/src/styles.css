@@ -876,3 +876,198 @@ select {
   background: var(--danger-soft);
   color: var(--danger);
 }
+
+/* ── 设置面（W9-ε）────────────────────────────────────────────────────────────
+   壳的布局：左导航（分组 + 搜索）+ 右面板。弹窗语义复用 .modal（焦点陷阱 / Esc /
+   点背景关闭都在 ui.tsx 的 Modal 里），这里只放尺寸与分栏。 */
+
+.modal.modal-wide {
+  width: min(920px, 100%);
+  max-height: 88vh;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  min-height: 0;
+  max-height: calc(88vh - 46px);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 10px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-sunken);
+  overflow-y: auto;
+}
+.settings-nav__section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.settings-nav__label {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 0 8px 3px;
+}
+.settings-nav__item {
+  gap: 7px;
+}
+.settings-nav__glyph {
+  width: 13px;
+  text-align: center;
+  color: var(--text-faint);
+}
+/* 本次还没打开过的面板：搜索索引里没有它的设置项，所以「没匹配到」说明不了什么。
+   降一档显示而不是藏起来——藏掉就是在 UI 里做一个兑现不了的承诺。 */
+.settings-nav__item[data-state="unindexed"] {
+  opacity: 0.55;
+}
+.settings-nav__foot {
+  margin: auto 0 0;
+  font-size: 10.5px;
+  padding: 0 8px;
+}
+
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+.settings-main__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 8px;
+}
+.settings-main__title {
+  font-weight: 650;
+  font-size: 14px;
+}
+.settings-main__gap {
+  margin: 0 16px 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warn);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11.5px;
+}
+.settings-main__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 16px 16px;
+}
+
+/* 面板抬头：能力分级 + 一句话说明 + 注意事项，全部来自 API 的 meta。 */
+.settings-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.settings-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-group + /* 面板抬头：能力分级 + 一句话说明 + 注意事项，全部来自 API 的 meta。 */
+.settings-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+.settings-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.settings-group {
+  margin-top: 18px;
+}
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-row__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.settings-row__key {
+  font-weight: 600;
+  font-size: 12px;
+}
+.settings-row__summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.settings-row__effect summary {
+  cursor: pointer;
+  font-size: 11px;
+}
+.settings-row__effect p {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.settings-row__control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.settings-row__control .input,
+.settings-row__control .select {
+  max-width: 320px;
+}
+.settings-row__footer {
+  font-size: 11.5px;
+}
+
+.settings-terminal {
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-sunken);
+}
+
+@media (max-width: 720px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .settings-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 34vh;
+  }
+}
