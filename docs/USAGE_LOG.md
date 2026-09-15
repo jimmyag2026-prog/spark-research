@@ -15,7 +15,7 @@
 > **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
 > 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
 >
-> 最后更新：2026-09-14
+> 最后更新：2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
 
 ---
 
@@ -66,7 +66,9 @@
 | [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | → V171（步骤间落盘约定，须裁定） |
 | [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
 | [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
-| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 20 倍 | **高** | 成本/性能 | 待转 V |
+| [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 20 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
+| [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
+| [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
 
 ### 方法缺陷
 
@@ -952,6 +954,76 @@ $ spark-research lit search "mRNA vaccine artificial intelligence" --sources ami
 
 **修改方向**：① 给 `lit_search` 写 `present()`：只回「每源 outcome + 命中数 + 前 N 条的标题/DOI/年份/OA 标记」，完整结果留在 artifact 里并把 artifact id 告诉模型（要细节就去取）。② 给工具返回定一条**通用上限**（如 8 KB），超了自动截断并注明「已截断，完整结果见 artifact <id>」——这条要放在 tool loop 的统一出口，不是每个工具各写一份。③ 台账加一条可观测：单次调用输入 token 超阈值时在 `usage --json` 里打标，便于事后归因（本次是靠监控脚本的 COST 分支才看见的）。
 
+**已修（v0.9.1 本地窗口，`c099342` + `6979f1f`）**：修的是上面的 ②——`sub_agent.ts` 的 `toolResultContent()` 在工具返回进消息历史之前先瘦身：认得出「检索结果」形状（`{query, sources[], papers[]}`）的按字段瘦身（保留每源 outcome/计数与前 10 篇的 title/year/venue/doi/isOpenAccess/citedByCount/sources，摘要截到 200 字，砍掉 authors/ids/url/pdfUrl/references，并在 `_compacted.droppedFields`/`note` 里写明砍了什么、怎么取回完整字段）；认不出形状的按 `TOOL_RESULT_MAX_CHARS = 8000` 截断，并在 `_truncated`/`_note` 里**明说被截断**——静默截断会让模型以为自己看到了全部，比截断本身更危险。门禁 `ux_window` U44 ×3。
+
+**残余** → **V174**：① `lit_search` 自己的 `present()` 钩子仍未写（现在是在 tool loop 统一出口瘦身，不是在工具侧）；③ 台账「单次输入 token 超阈值打标」未做。另：本次瘦身**只认得检索结果这一种形状**，其余工具一律走通用截断。
+
+
+<a id="u45"></a>
+## U45 · PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被静默覆盖成空串
+
+**现场**：2026-09-16，网页端 chat 问「rsi 领域最近中国和美国有怎样的进展」（项目 `spark0915`，session `web_1789475371793`）。计划里 t2、t3 两次 PubMed 检索全部空转，模型拿不到任何一条结果。
+
+**证据**（执行摘要原文）：
+
+```
+{"ok":true,...,"result":{"esearchresult":{"ERROR":"Empty term and query_key - nothing todo"}}}
+```
+
+修前 `backend/src/connectors/literature.ts` `PubMedConnector.search`：
+
+```ts
+const term = typeof params.query === "string" ? params.query : "";   // 只认 query
+const rest = { ...params };                                          // rest 里还留着调用方的 term
+await this.requestRaw("search", { ...rest, term, db: "pubmed", ... });  // 空串覆盖掉它
+```
+
+对照：同一个文件里 arXiv 的写法有守卫 `!("search_query" in params)`（`literature.ts:518`），**只有 PubMed 漏了**。
+
+实测（经 `daemon.dispatch("mcp_call")` 同一条路）：
+
+```
+修前  {term}  → ERROR=Empty term and query_key - nothing todo
+修前  {query} → 2 条
+修后  {term}  → 2 条
+修后  {query} → 2 条
+```
+
+**问题**：两层。
+
+① **参数名**：NCBI 自己的参数名就是 `term`，平台的统一名是 `query`。模型用的是官方文档上的名字，怪不到它头上。更糟的是调用方明明写了 `term`，它先被 `...rest` 带进去、又被算出来的空串覆盖——不是「不认识」，是**认识了还被抹掉**。
+
+② **判据**：上游用 HTTP 200 回业务错误（NCBI 是 `esearchresult.ERROR`）。U40 那条原判据只看「`esearchresult` 这个键在不在」，而 `esearchresult` 正好在 `SEARCH_RESULT_KEYS` 里——一个错误信封因此被当成合法空结果放行。
+
+**已修（v0.9.1 本地窗口，`d1f8a23`）**：① `term` 与 `query` 两个名字都认，`query` 优先（平台口径），`rest` 里两个都删掉；② 检索词为空当场抛带下一步的错误，**不向上游发空检索词**；③ `base.ts` 新增 `upstreamErrorOf()`（认 NCBI `esearchresult.ERROR` 与 REST 源的 `errCode`/`errMsg`/`error`），在 `searchPayloadProblem()` 里**排在「有没有结果容器」之前**。门禁 `ux_window` U45 ×4。
+
+**残余** → **V175**：`upstreamErrorOf` 的错误码清单只覆盖 NCBI 一家加通用三个键（`errCode`/`errMsg`/`error`），其余源的「200 带错」形状没有盘过。
+
+<a id="u46"></a>
+## U46 · `status: "placeholder"` 的连接器仍会真发网络请求，把上游噪声丢给 agent
+
+**现场**：同一 session（`web_1789475371793`）的 t4、t5。
+
+**证据**：
+
+```
+t4  cnki    → ERR_TLS_CERT_ALTNAME_INVALID（https://kns.cnki.net/kns8s/brief/grid）
+t5  wanfang → HTTP 404
+```
+
+而这两个连接器在 `backend/src/connectors/china.ts` 里**自己就标着**：
+
+```ts
+status: "placeholder",
+caveat: "占位实现：无公开 API 渠道，调用会失败。中文文献主路径请用 aminer",          // cnki
+caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中文文献主路径请用 aminer",   // wanfang
+```
+
+**问题**：`HttpConnector.call()` 从不读 `metadata.status`，照发请求。平台明明知道这条路不通，却让计划白花两个步骤，再把 TLS 证书错、404 这类上游噪声原样丢给模型——模型还得自己猜是网络问题还是参数写错了。声明写了没有读者，是 AD-17 的又一例。
+
+**已修（v0.9.1 本地窗口，`c099342`）**：`base.ts` 的 `call()` 开头判 `metadata.status === "placeholder"` → 抛「占位实现 + caveat 原文 + 下一步（换用已可用的源，`spark-research lit sources` 看哪些免 key / 已配凭据）」，**一次 HTTP 都不发**。门禁 `ux_window` U46 ×2（含一条非 placeholder 源不受影响的回归防护）。
+
+**残余** → **V176**：CNKI / 万方的真实可用渠道（官方 API 或机构订阅）仍未接通——这是老 D3，本条只把「调用即失败」变得诚实。**注意**：将来真接通了渠道，记得同时把 `status` 从 `placeholder` 改掉，否则新渠道会被这道闸挡在门外。
 
 <a id="p1"></a>
 ## P1 · 三道防线的盲区恰好在同一处重合
