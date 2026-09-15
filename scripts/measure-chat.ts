@@ -42,10 +42,12 @@ if (args.has("pipeline")) {
   const llm = usageTrackingLlm({ llm: new LLMRouter(), store: new UsageStore(pjoin(project.paths.root, "usage.jsonl")), command: "chat", budgetUsd: (Number(args.get("budget")) || 0.3) + 5, project: slug, sessionId: `measure-pipeline-${Date.now()}` });
   const t0 = Date.now();
   const r = await runLiteraturePipeline({ llm, project, sessionId: `measure-pipeline-${Date.now()}`, note: (m) => console.log("  ·", m) },
-    { mode: "review", queries: ["repetitive strain injury office workers prevention"], topic: "RSI 预防", limit: 6, maxRead: 3 });
+    { mode: "review", queries: ["repetitive strain injury office workers prevention"], topic: "RSI 预防", limit: 6, maxRead: 3,
+      // v0.10 α：`--depth quick|deep`（默认 quick，与 chat 一致）；R7 复测 deep 档用 `--depth deep`。
+      depth: args.get("depth") === "deep" ? "deep" : "quick" });
   const t = r.timings;
-  const lines = [`# 文献流程基线 · ${new Date().toISOString()}`, "", `server 无关（进程内）· 1 查询 · limit 6 · maxRead 3 · ok=${r.ok}`, "",
-    "| 阶段 | 耗时 |", "|---|---:|", `| search | ${(t.search/1000).toFixed(1)}s |`, `| download | ${(t.download/1000).toFixed(1)}s |`, `| read（${r.cards.length} 卡）| ${(t.read/1000).toFixed(1)}s |`, `| review | ${(t.review/1000).toFixed(1)}s |`, `| **total** | **${((Date.now()-t0)/1000).toFixed(1)}s** |`, "",
+  const lines = [`# 文献流程基线 · ${new Date().toISOString()}`, "", `server 无关（进程内）· ${r.depth} 档 · 1 查询 · limit 6 · maxRead 3 · ok=${r.ok}`, "",
+    "| 阶段 | 耗时 |", "|---|---:|", `| search | ${(t.search/1000).toFixed(1)}s |`, `| prescreen | ${(t.prescreen/1000).toFixed(1)}s |`, `| download | ${(t.download/1000).toFixed(1)}s |`, `| read（${r.cards.length} 卡）| ${(t.read/1000).toFixed(1)}s |`, `| review | ${(t.review/1000).toFixed(1)}s |`, `| **total** | **${((Date.now()-t0)/1000).toFixed(1)}s** |`, "",
     `PDF ${r.downloads.filter((d) => d.ok).length}/${r.downloads.length} · 失败/缺口 ${r.failures.length}`, ...r.failures.slice(0,4).map((f) => `- ${f}`)];
   console.log(lines.join("\n"));
   const outPath = args.get("out"); if (outPath) { appendFileSync(outPath, lines.join("\n") + "\n\n"); console.log("已追加", outPath); }

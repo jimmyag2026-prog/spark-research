@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { configuredDefaultModel } from "../config";
+import { configuredDefaultModel, configuredReadConcurrency } from "../config";
 import { UsageStore, parseBudgetUsd, usageTrackingLlm } from "../usage/ledger";
 import { CredentialStore } from "../daemon/credentials";
 import { ConnectorRegistry } from "../connectors/registry";
@@ -725,7 +725,8 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // 的估价误差会同时在飞，估价越偏、越线越多（本 lane 实测：G-3 的
         // 「第 2 篇被闸拒」用例在并发下第 2 篇直接放行了）。速度让位于「别超预算」：
         // 想要并行就别给预算，想要预算就接受串行。chat 侧的文献流程不走这条路径。
-        const readConcurrency = flags["budget-usd"] !== undefined ? 1 : DEFAULT_READ_CONCURRENCY;
+        // 收口：不带预算时按配置项 readConcurrency（默认 3）；带预算固定串行（见 α-2）。
+        const readConcurrency = flags["budget-usd"] !== undefined ? 1 : configuredReadConcurrency(DEFAULT_READ_CONCURRENCY, { root: deps.root });
 
         // V35：接 TaskRegistry（不是另起一套 CLI 进度机制——见 cli/progress.ts 文件头）。
         // 单篇精读只有一步，套任务只会多两行噪音；`--all` 才是外部验收撞到的那条

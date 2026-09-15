@@ -14,7 +14,8 @@ import { PdfDownloader } from "../literature/pdf";
 import { ReadingCardGenerator, listReadingCards, type StoredReadingCard } from "../literature/reading";
 import { ReviewDraftGenerator, baselinesFrom, baselinesFromAbstracts, type AbstractEntry } from "../literature/review";
 import { prescreenCandidates } from "../literature/prescreen";
-import { normalizeConcurrency } from "../literature/limits";
+import { DEFAULT_READ_CONCURRENCY, normalizeConcurrency } from "../literature/limits";
+import { configuredReadConcurrency } from "../config";
 import { libraryKeyIndex } from "../literature/export";
 import { citationIntegrity } from "../reviewer/rules";
 import { explainCitationGap } from "../reviewer/citation_judge";
@@ -401,7 +402,8 @@ export async function runLiteraturePipeline(
       // β-3：精读卡正文的增量（target = `card:<paperId>`，在 reading.ts 里拼）。
       ...(deps.onDelta ? { onDelta: deps.onDelta } : {}),
       // α-2：并行 3（W10-0 实测 0 次 429）。串行时这一段占基线 181.5s 里的 85.7s。
-      concurrency: normalizeConcurrency(options.readConcurrency),
+      // 入参 > 配置项 readConcurrency > limits.ts 默认值。
+      concurrency: normalizeConcurrency(options.readConcurrency ?? configuredReadConcurrency(DEFAULT_READ_CONCURRENCY)),
     });
     result.cardFailures = gen.failures;
     const cards: StoredReadingCard[] = listReadingCards(records, library).filter((c) => readable.some((t) => t.id === c.paperId));

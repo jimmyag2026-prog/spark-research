@@ -10,6 +10,7 @@ import { OrchestratorAgent } from "../../backend/src/agents/orchestrator";
 import { LLMRouter, type CallOptions, type ChatMessage, type LlmResponse } from "../../backend/src/llm/router";
 import { isReasoningModel } from "../../backend/src/llm/providers/registry";
 import { STAGE_MAX_TOKENS } from "../../backend/src/literature/limits";
+import { configuredReadConcurrency } from "../../backend/src/config";
 import type { LiteratureSearchResult } from "../../backend/src/literature/search";
 import type { PartialEvent } from "../../backend/src/agents/progress";
 import { makeServer } from "../helpers/server_scenario";
@@ -171,5 +172,13 @@ describe("收口 · δ-2 /api/health 带 frontendBuilt（app.ts 接线）", () =
     } finally {
       await fx.stop();
     }
+  });
+});
+
+describe("收口 · α-2 readConcurrency 进配置", () => {
+  test("configuredReadConcurrency：env 覆盖生效、非法值回退、最小 1", () => {
+    expect(configuredReadConcurrency(3, { env: { SPARK_RESEARCH_READ_CONCURRENCY: "1" }, root: root })).toBe(1);
+    expect(configuredReadConcurrency(3, { env: { SPARK_RESEARCH_READ_CONCURRENCY: "abc" }, root: root })).toBe(3);
+    expect(configuredReadConcurrency(3, { env: { SPARK_RESEARCH_READ_CONCURRENCY: "0" }, root: root })).toBe(3);
   });
 });

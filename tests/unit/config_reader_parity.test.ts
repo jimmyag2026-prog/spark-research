@@ -43,6 +43,8 @@ const READERS: Record<string, ReaderEvidence> = {
   // v0.10 lane δ-4（V156）：读者是 server/chat_sync.ts 的 chatSyncMaxMs()，
   // 它包 configuredChatSyncMaxMs()；路由那一行（session.ts）是收口专属，见 devlog 收口 diff 段。
   chatSyncMaxMs: { helper: "configuredChatSyncMaxMs" },
+  // v0.10 α-2（收口）：读者是 agents/literature_pipeline.ts 的 generateMany concurrency 兜底。
+  readConcurrency: { helper: "configuredReadConcurrency" },
   mcpTimeoutMs: { helper: "configuredMcpTimeoutMs" },
   // 凭据类：key 本身就是 env 变量名，读者是 router 的 ADAPTERS envKey / local 端点常量。
   KIMI_API_KEY: { text: "KIMI_API_KEY" },

@@ -269,6 +269,18 @@ export const CONFIG_SETTINGS: readonly SettingSpec[] = [
     effect:
       "**上限是 Bun.serve 的 255s**（A5 定）：等过了头，连接被 server 自己掐断，编排还在后台跑完、结果没人接收，钱照花（V156 / R6 U13 的现场）。默认 200s 留 55s 余量。调大到 255s 以上等于关掉这条兜底。想要全程可见就别用同步路由，走 POST /api/session/stream。",
   },
+  // v0.10 α-2（收口补登记）：精读卡并行度。默认 3 = W10-0 实测 3 路 × 20 次 0 次 429；
+  // 1 = 恢复 v0.9 串行。只改调度不改结算语义（逐篇独立结算、返回按输入顺序）。
+  {
+    key: "readConcurrency",
+    type: "number",
+    envVar: "SPARK_RESEARCH_READ_CONCURRENCY",
+    defaultValue: 3,
+    summary: "文献精读卡并行度（deep 档），1 = 串行",
+    effect:
+      "chat 的 literature-review deep 档与 `lit read`（不带 --budget-usd 时）按此并行生成精读卡。" +
+      "W10-0 基线：串行 3 卡 85.7s，3 路并行 0 次 429。给了 --budget-usd 的 CLI 路径固定串行（在飞预留估价误差会随并发叠加）。",
+  },
   {
     key: "mcpTimeoutMs",
     type: "number",
@@ -711,6 +723,12 @@ export function configuredTaskTimeoutMs(fallback: number, options: ConfigOptions
 }
 
 // δ-4（V156 ①）：同步 chat 的等待上限。口径与上面两个一致（非正数/非数字 → fallback）。
+export function configuredReadConcurrency(fallback: number, options: ConfigOptions = {}): number {
+  const resolved = resolveSetting("readConcurrency", options);
+  const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
+  return Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback;
+}
+
 export function configuredChatSyncMaxMs(fallback: number, options: ConfigOptions = {}): number {
   const resolved = resolveSetting("chatSyncMaxMs", options);
   const value = typeof resolved.value === "number" ? resolved.value : Number(resolved.value);
