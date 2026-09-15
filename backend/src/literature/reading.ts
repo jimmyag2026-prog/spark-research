@@ -1,4 +1,5 @@
 import { projectBackgroundBlock } from "../agents/prompts";
+import { cardTarget, type DeltaListener } from "../agents/progress";
 import type { LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
 import type { ResearchRecord } from "../project/models";
@@ -234,6 +235,13 @@ export interface GenerateCardOptions {
   // 「一篇失败不影响其余」的结算语义（下面 generateMany 的注释）是这个类的职责，
   // 搬到调用方就会有第二份实现，早晚和这里漂移。回调只报告、不改变结算语义。
   onProgress?: (progress: { done: number; total: number; paperId: string; ok: boolean; title: string | null }) => void;
+  /**
+   * β-3（v0.10）：卡正文的**流式增量**。给了就把这次调用切成流式，每个片段回调一次，
+   * `target` 恒为 `card:<paperId>`，`revision` = 第几次尝试（schema 校验失败重试 → +1，
+   * 前端据此清空重画，而不是把两稿拼在一起）。
+   * 不给 = 不传 `onDelta` 给 router → provider 走非流式分支，行为与接线前一字不差。
+   */
+  onDelta?: DeltaListener;
 }
 
 export interface GenerateCardResult {
@@ -276,9 +284,16 @@ export class ReadingCardGenerator {
         });
       }
 
-      const response = model
-        ? await this.deps.llm.call(messages, model)
-        : await this.deps.llm.call(messages);
+      // β-3：只有调用方要流式时才改成 options 形式调用——不给 onDelta 的路径
+      // （CLI、既有测试）仍旧走原来那两行，连参数形状都不变。
+      const response = options.onDelta
+        ? await this.deps.llm.call(messages, {
+            ...(model ? { model } : {}),
+            onDelta: (chunk) => options.onDelta!({ chunk, target: cardTarget(paperId), revision: attempt }),
+          })
+        : model
+          ? await this.deps.llm.call(messages, model)
+          : await this.deps.llm.call(messages);
 
       if (!response.ok) {
         lastErrors = [`模型调用失败: ${response.error?.message ?? "未知原因"}`];

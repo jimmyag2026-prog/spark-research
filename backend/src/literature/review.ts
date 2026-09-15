@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DeltaListener } from "../agents/progress";
 import type { ArtifactStore } from "../artifacts/store";
 import type { LLMRouter } from "../llm/router";
 import type { RecordStore } from "../project/records";
@@ -56,6 +57,13 @@ export interface GenerateDraftOptions {
   filename?: string;
   // true 时不因越界 key 报错（只给对抗测试与「先出草稿再由检查器兜底」的场景用）。
   allowUnknownKeys?: boolean;
+  /**
+   * β-3（v0.10）：综述正文的**流式增量**。`target` 恒为 `"review"`，`revision` = 第几稿——
+   * 越界 key 触发的重写是**另一稿**，不是同一稿的后续：不区分的话前端会把两稿首尾相接，
+   * 拼出一篇「前半引用被 veto 的 key、后半改过」的四不像。
+   * 不给 = 不开流式，行为与接线前一字不差。
+   */
+  onDelta?: DeltaListener;
 }
 
 export interface ReviewDraftResult {
@@ -148,9 +156,15 @@ export class ReviewDraftGenerator {
         });
       }
 
-      const response = this.deps.model
-        ? await this.deps.llm.call(messages, this.deps.model)
-        : await this.deps.llm.call(messages);
+      // β-3：要流式才改成 options 形式（同 reading.ts 的口径）。
+      const response = options.onDelta
+        ? await this.deps.llm.call(messages, {
+            ...(this.deps.model ? { model: this.deps.model } : {}),
+            onDelta: (chunk) => options.onDelta!({ chunk, target: "review", revision: attempt }),
+          })
+        : this.deps.model
+          ? await this.deps.llm.call(messages, this.deps.model)
+          : await this.deps.llm.call(messages);
       if (!response.ok) {
         lastError = `模型调用失败: ${response.error?.message ?? "未知原因"}`;
         lastUnknown = [];
