@@ -120,3 +120,28 @@ export type {
   SettingsTaskResponse,
   SettingsWriteResponse,
 } from "./routes/settings/types";
+
+// ── v0.10 lane β · 流式事件协议（`POST /api/session/stream` 的 SSE 事件体）────
+//
+// 协议**只增不改**：`start / progress / delta / result / done / error` 六种保留，
+// 新增 `partial`。真源在 `agents/progress.ts`（产生端），这里只转出来——
+// 理由与上面设置面那段一字不差：`gen-contract-schemas.ts` 的 `SCHEMA_SOURCES`
+// 只扫本文件与 `data/manifest.ts`，不转出来 `contract --json` 里就没有这些事件的形状，
+// lane ε 的前端与外部 SDK 只能靠猜（AD-12：契约必须反映真实接口）。
+export type {
+  DeltaEvent,
+  DeltaTarget,
+  PartialCardPayload,
+  PartialEvent,
+  PartialKind,
+  PartialPaper,
+  PartialPapersPayload,
+  PartialPayload,
+  PartialSearchSourcePayload,
+  ProgressDecision,
+  ProgressEvent,
+  ProgressStage,
+} from "../agents/progress";
+
+/** SSE 事件名的全集。新增只能往后加，既有六个一个不许改名。 */
+export type StreamEventName = "start" | "progress" | "partial" | "delta" | "result" | "done" | "error";

@@ -65,6 +65,15 @@ class CredentialDeleteResponse(TypedDict):
     item: SettingsItem
 
 
+class DeltaEvent(TypedDict):
+    chunk: str
+    target: str
+    revision: float
+
+
+DeltaTarget = str
+
+
 class DependencyMapping(TypedDict):
     file: str
     versionId: str
@@ -107,6 +116,74 @@ class LineageResponse(TypedDict):
 
 class ManifestTableCounts(TypedDict):
     pass
+
+
+class PartialCardPayload(TypedDict):
+    paperId: str
+    title: str
+    year: float | None
+    keyFinding: str | None
+    relevance: float | None
+    basis: str | None
+
+
+class _PartialEventRequired(TypedDict):
+    kind: Literal["papers", "search_source", "card"]
+    ts: float
+    payload: PartialCardPayload | PartialPapersPayload | PartialSearchSourcePayload
+
+class PartialEvent(_PartialEventRequired, total=False):
+    taskId: str
+
+
+PartialKind = Literal["papers", "search_source", "card"]
+
+
+class PartialPaper(TypedDict):
+    id: str
+    title: str
+    year: float | None
+    doi: str | None
+    sources: list[str]
+
+
+class PartialPapersPayload(TypedDict):
+    query: str
+    found: float
+    papers: list[PartialPaper]
+
+
+PartialPayload = PartialCardPayload | PartialPapersPayload | PartialSearchSourcePayload
+
+
+class _PartialSearchSourcePayloadRequired(TypedDict):
+    query: str
+    source: str
+    outcome: str
+    count: float | None
+    elapsedMs: float | None
+
+class PartialSearchSourcePayload(_PartialSearchSourcePayloadRequired, total=False):
+    error: str
+
+
+ProgressDecision = Literal["ready", "continue", "repair", "await_user"]
+
+
+class _ProgressEventRequired(TypedDict):
+    stage: Literal["review", "plan", "execute", "summarize"]
+    complete: float
+    total: float
+    message: str
+    ts: float
+    elapsedMs: float
+
+class ProgressEvent(_ProgressEventRequired, total=False):
+    decision: Literal["ready", "continue", "repair", "await_user"]
+    etaMs: float
+
+
+ProgressStage = Literal["review", "plan", "execute", "summarize"]
 
 
 class ProjectListResponse(TypedDict):
@@ -254,6 +331,9 @@ class SettingsWriteResponse(TypedDict):
     panel: Literal["credentials", "general", "models", "local", "scientific-tools", "extensions", "compute", "network", "storage", "permissions"]
     item: SettingsItem
     meta: SettingsMeta
+
+
+StreamEventName = Literal["progress", "result", "error", "start", "partial", "delta", "done"]
 
 
 class TaskEvent(TypedDict):
