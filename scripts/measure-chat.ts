@@ -164,6 +164,9 @@ for (const slug of projects) {
     rows.push({ project: slug, round: r, wallMs, calls: added.length, failed: failed + (gated ? 1 : 0), kinds: gated ? { ...kinds, "(预算闸拒绝)": 1 } : kinds, http: res.status });
     rawAppend.push(`### ${slug} · 第 ${r} 轮（HTTP ${res.status}，${(wallMs / 1000).toFixed(1)}s，新增 ${added.length} 行）`, "```json", ...added, "```", "");
     console.log(`${slug} r${r}: HTTP ${res.status} 墙钟 ${(wallMs / 1000).toFixed(1)}s 调用 ${added.length} 失败 ${failed}`);
+    // 每轮落盘一行（进程中途被杀——低内存、EPIPE——已经发生过一次，20 轮的墙钟全丢）：
+    // 汇总表可以从这份逐轮记录重算，钱不用再花第二遍。
+    if (out) appendFileSync(`${out}.rounds.jsonl`, JSON.stringify({ ts: new Date().toISOString(), ...rows[rows.length - 1] }) + "\n");
   }
 }
 
