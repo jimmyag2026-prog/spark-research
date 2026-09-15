@@ -30,7 +30,7 @@ import { PdfDownloader } from "./pdf";
 import { extractPdfText } from "./pdf_text";
 import { ReadingCardGenerator, listReadingCards, renderReadingCard, retractOrphanRecords } from "./reading";
 import { ReviewDraftGenerator, baselinesFrom } from "./review";
-import { LiteratureSearcher } from "./search";
+import { LiteratureSearcher, configuredDefaultSources } from "./search";
 
 // `spark-research lit ...` 子命令。风格与 project/cli.ts 一致：
 // 返回退出码 + 输出走注入的 out/err，便于单测；不直接 process.exit。
@@ -189,7 +189,7 @@ function flagString(value: string | true | undefined): string | undefined {
 }
 
 function parseSources(raw: string | undefined): LiteratureSource[] {
-  if (!raw) return DEFAULT_SEARCH_SOURCES;
+  if (!raw) return configuredDefaultSources(); // γ-5：未显式给 --sources 时用设置面勾选的源
   const names = raw.split(",").map((s) => s.trim()).filter(Boolean);
   const invalid = names.filter((n) => !LITERATURE_SOURCES.includes(n as LiteratureSource));
   if (invalid.length > 0) {

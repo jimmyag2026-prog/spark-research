@@ -110,13 +110,8 @@ const ALLOWED_ORPHANS: Record<string, string> = {
 
   "backend/src/index.ts": "CLI 入口点，由 package.json 的 bin 直接执行，天然无仓库内引用者",
 
-  // v0.9 lane γ（W9-1）：两条「等接线」。两个枢纽文件都归收口（DEVELOPMENT_PLAN_v0.9.md §六
-  // 足迹表），lane 不许改，所以这两个模块在 γ 分支上必然零引用者。
-  // **收口接上之后按对称检查删除这两条**——接了不删会红。
-  "backend/src/server/routes/settings/index.ts":
-    "等收口接：app.ts 里加 `app.route(\"/api/settings\", settingsRoutes(ctx))` 一行（app.ts 是枢纽文件，归收口）",
-  "backend/src/cli/auth_connector.ts":
-    "等收口接：index.ts 的 `case \"auth\"` 里加 `--connector` 分支（index.ts 是枢纽文件，归收口）",
+  // v0.9 lane γ 曾在此登记 settings/index.ts 与 cli/auth_connector.ts 两条「等接线」——
+  // 收口已接（app.ts 挂 /api/settings；index.ts `auth --connector`），按对称检查删除。
 
   // W5-1-e（V27）：`.d.ts` 是 ambient 声明文件，**按语言规则**就不该有 import 边——
   // 它给 `import X from "./x.sql" with { type: "text" }` 这类非 TS 资产提供类型，

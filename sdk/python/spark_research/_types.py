@@ -205,7 +205,7 @@ class _SettingsItemRequired(TypedDict):
     key: str
     label: str
     kind: Literal["string", "number", "enum", "bool", "secret", "info", "action"]
-    value: str | float | Literal[false] | Literal[true] | None
+    value: str | float | Literal[False] | Literal[True] | None
     editable: bool
     summary: str
 

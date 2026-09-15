@@ -23,6 +23,8 @@ import { proteinRoutes } from "./routes/proteins";
 import { chemRoutes } from "./routes/chem";
 import { computeRoutes } from "./routes/compute";
 import { usageRoutes } from "./routes/usage";
+import { settingsRoutes } from "./routes/settings";
+import { registerExistingSecrets } from "./routes/settings/credentials";
 import type { ArtifactListResponse, ChatRequest, ChatResponse, LineageResponse } from "./types";
 import { PACKAGE_VERSION } from "../version";
 
@@ -285,6 +287,11 @@ export function createApp(deps: ServerDeps = {}): Hono {
   app.route("/api/tasks", taskRoutes(ctx));
   // W6-1 α/β：用量面板契约（G-3 的 usage.jsonl + lane α 的 api_calls.jsonl 只读出口）。
   app.route("/api/usage", usageRoutes(ctx));
+  // v0.9 W9-1 γ（AD-18）：设置面。凭据只写不读、只认 loopback，规则见 routes/settings/shared.ts。
+  app.route("/api/settings", settingsRoutes(ctx));
+  // AD-18 ④ 的另一半：进程启动时把盘上已有的 connector 凭据登记进脱敏集合，
+  // 否则「上次填的 key」出现在下一条上游错误消息里时不会被打掉。
+  registerExistingSecrets(ctx);
 
   // v0.1 遗留：按 session 取 artifact / 取 lineage。新代码用 /api/artifacts?session=。
   app.get("/api/artifacts/:sessionId", async (c) => {

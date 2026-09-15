@@ -310,6 +310,106 @@ class GeneratedClient:
         """POST /api/session/stream"""
         return self.request("POST", f"/api/session/stream", body=body)
 
+    def settings_get_settings_compute(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/compute"""
+        return self.request("GET", f"/api/settings/compute", params=params)
+
+    def settings_put_settings_compute_target(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/compute/target"""
+        return self.request("PUT", f"/api/settings/compute/target", body=body)
+
+    def settings_get_settings_credentials(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/credentials"""
+        return self.request("GET", f"/api/settings/credentials", params=params)
+
+    def settings_delete_settings_credentials_by_id(self, id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """DELETE /api/settings/credentials/:id"""
+        return self.request("DELETE", f"/api/settings/credentials/{quote(str(id), safe='')}", body=body)
+
+    def settings_put_settings_credentials_by_id(self, id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/credentials/:id"""
+        return self.request("PUT", f"/api/settings/credentials/{quote(str(id), safe='')}", body=body)
+
+    def settings_get_settings_extensions(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/extensions"""
+        return self.request("GET", f"/api/settings/extensions", params=params)
+
+    def settings_delete_settings_extensions_by_name(self, name: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """DELETE /api/settings/extensions/:name"""
+        return self.request("DELETE", f"/api/settings/extensions/{quote(str(name), safe='')}", body=body)
+
+    def settings_post_settings_extensions_by_name_verify(self, name: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """POST /api/settings/extensions/:name/verify"""
+        return self.request("POST", f"/api/settings/extensions/{quote(str(name), safe='')}/verify", body=body)
+
+    def settings_post_settings_extensions_mcp(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """POST /api/settings/extensions/mcp"""
+        return self.request("POST", f"/api/settings/extensions/mcp", body=body)
+
+    def settings_get_settings_general(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/general"""
+        return self.request("GET", f"/api/settings/general", params=params)
+
+    def settings_delete_settings_general_by_key(self, key: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """DELETE /api/settings/general/:key"""
+        return self.request("DELETE", f"/api/settings/general/{quote(str(key), safe='')}", body=body)
+
+    def settings_put_settings_general_by_key(self, key: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/general/:key"""
+        return self.request("PUT", f"/api/settings/general/{quote(str(key), safe='')}", body=body)
+
+    def settings_get_settings_local(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/local"""
+        return self.request("GET", f"/api/settings/local", params=params)
+
+    def settings_put_settings_local(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/local"""
+        return self.request("PUT", f"/api/settings/local", body=body)
+
+    def settings_get_settings_models(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/models"""
+        return self.request("GET", f"/api/settings/models", params=params)
+
+    def settings_put_settings_models_default(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/models/default"""
+        return self.request("PUT", f"/api/settings/models/default", body=body)
+
+    def settings_put_settings_models_subagent_by_kind(self, kind: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/models/subagent/:kind"""
+        return self.request("PUT", f"/api/settings/models/subagent/{quote(str(kind), safe='')}", body=body)
+
+    def settings_get_settings_network(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/network"""
+        return self.request("GET", f"/api/settings/network", params=params)
+
+    def settings_put_settings_network_by_key(self, key: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/network/:key"""
+        return self.request("PUT", f"/api/settings/network/{quote(str(key), safe='')}", body=body)
+
+    def settings_get_settings_permissions(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/permissions"""
+        return self.request("GET", f"/api/settings/permissions", params=params)
+
+    def settings_get_settings_scientific_tools(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/scientific-tools"""
+        return self.request("GET", f"/api/settings/scientific-tools", params=params)
+
+    def settings_put_settings_sources(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/sources"""
+        return self.request("PUT", f"/api/settings/sources", body=body)
+
+    def settings_get_settings_storage(self, **params: Any) -> dict[str, Any]:
+        """GET /api/settings/storage"""
+        return self.request("GET", f"/api/settings/storage", params=params)
+
+    def settings_put_settings_storage_by_key(self, key: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """PUT /api/settings/storage/:key"""
+        return self.request("PUT", f"/api/settings/storage/{quote(str(key), safe='')}", body=body)
+
+    def settings_post_settings_storage_export(self, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        """POST /api/settings/storage/export"""
+        return self.request("POST", f"/api/settings/storage/export", body=body)
+
     def tasks_get_tasks(self, **params: Any) -> dict[str, Any]:
         """GET /api/tasks"""
         return self.request("GET", f"/api/tasks", params=params)

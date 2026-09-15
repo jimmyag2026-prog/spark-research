@@ -1,15 +1,16 @@
 import { SettingValidationError } from "../../../config";
 import { PROVIDER_MODELS } from "../../../llm/router";
-import { PRICING, PROVIDER_API_KEY_ENV, priceFor } from "../../../llm/providers/registry";
+import {
+  PRICING,
+  PROVIDER_API_KEY_ENV,
+  UnknownModelError,
+  assertKnownModel as registryAssertKnownModel,
+  priceFor,
+} from "../../../llm/providers/registry";
 
 // 模型名的写入前校验（U5 第三点 / U6 修改方向 A 的「校验」条）。
 //
-// **这是一个临时收口点**：任务书要求写入经 lane β 导出的 `assertKnownModel`
-// （β-3 从单价表派生 `MODELS_BY_PROVIDER`）。β 尚未落地，按名字 import 会让
-// `bun run typecheck` 直接红——所以这里按同一语义先实现一份，**收口时替换成
-// β 的 `assertKnownModel` 并删掉本文件的 `assertKnownModel`**（其余导出仍有用）。
-// 判据取的是 `PROVIDER_MODELS`（router 真正认的注册表），不是单价表——
-// 「已登记」的意思是 router 调得动它，而不是「我们知道它多少钱」。
+// 已收口：写入判据取 β-3 的 `registry.assertKnownModel`（见下方），本文件其余导出给设置面读侧用。
 
 export function modelsByProvider(): Record<string, string[]> {
   const out: Record<string, string[]> = {};
@@ -48,17 +49,19 @@ export function hasPricing(model: string): boolean {
  *
  * 为什么要在**写入时**拦：U5 的第三点——不拦的话，用户在网页端填一个拼错的模型名，
  * 配置写进去、一切正常，直到下一次真的要调模型时才在一个完全无关的地方炸。
- * 本地端点（`local/<model>` / `local:<model>`）是显式 opt-in 的路径，按前缀放行。
+ *
+ * 判据只有一份：β-3 的 `registry.assertKnownModel()`（router / `config set` / 这里三处共用），
+ * 本函数只把它的 `UnknownModelError` 翻成设置面的 422。本地端点前缀与关键词兜底都由它管。
  */
 export function assertKnownModel(model: string): void {
   const name = model.trim();
   if (name === "") {
     throw new SettingValidationError("模型名不能为空", "从 GET /api/settings/models 的 allowed 里挑一个");
   }
-  if (name.startsWith("local/") || name.startsWith("local:")) {
-    return; // 本地端点的模型名由那台服务器自己定，注册表管不着，也不该管。
-  }
-  if (providerOf(name) === null) {
+  try {
+    registryAssertKnownModel(name);
+  } catch (error) {
+    if (!(error instanceof UnknownModelError)) throw error;
     const known = knownModels();
     throw new SettingValidationError(
       `模型 '${name}' 没有登记过`,

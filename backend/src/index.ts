@@ -12,6 +12,7 @@ import { runProjectCommand } from "./project/cli";
 import { runLitCommand } from "./literature/cli";
 import { runUsageCommand } from "./cli/usage";
 import { CHAT_HELP, parseChatArgs, type ChatArgs } from "./cli/chat_args";
+import { runAuthConnector } from "./cli/auth_connector";
 import { runIdeaCommand } from "./ideation/cli";
 import { runExpCommand } from "./experiment/cli";
 import { runLabCommand } from "./lab/cli";
@@ -481,7 +482,16 @@ function main() {
       break;
     case "auth": {
       // A7 Medium：`auth --help` 之前直接进交互录入流程。帮助永远不该有副作用。
-      if (process.argv.slice(3).some((a) => a === "--help" || a === "-h" || a === "help")) {
+      const authArgv = process.argv.slice(3);
+      // v0.9 γ-6：`auth --connector <id>` 录入 connector 凭据（与 HTTP 写入路径共用同一个 CredentialStore）。
+      // 帮助由 runAuthConnector 自己处理（`auth --connector --help` 打的是 connector 那份帮助）。
+      if (authArgv.includes("--connector")) {
+        void runAuthConnector(authArgv).then((code) => {
+          process.exitCode = code;
+        });
+        break;
+      }
+      if (authArgv.some((a) => a === "--help" || a === "-h" || a === "help")) {
         console.log(AUTH_HELP);
         break;
       }

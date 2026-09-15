@@ -23,6 +23,8 @@ function emptyTotals(): UsageTotals {
     knownCostUsd: 0,
     unknownCostCalls: 0,
     unpricedCalls: 0,
+    noUsageCalls: 0,
+    byErrorKind: {},
     byCommand: {},
     byModel: {},
   };
@@ -65,6 +67,10 @@ function aggregateAll(ctx: ServerContext): { totals: UsageTotals; projects: stri
     totals.knownCostUsd += t.knownCostUsd;
     totals.unknownCostCalls += t.unknownCostCalls;
     totals.unpricedCalls += t.unpricedCalls;
+    totals.noUsageCalls += t.noUsageCalls;
+    for (const [kind, n] of Object.entries(t.byErrorKind)) {
+      totals.byErrorKind[kind] = (totals.byErrorKind[kind] ?? 0) + n;
+    }
     mergeBuckets(totals.byCommand, t.byCommand);
     mergeBuckets(totals.byModel, t.byModel);
     corruptLines += store.corruptLines();

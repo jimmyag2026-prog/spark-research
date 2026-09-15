@@ -53,8 +53,9 @@ export function parseAuthConnectorArgs(argv: string[]): AuthConnectorArgs {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg === "--help" || arg === "-h" || arg === "help") args.help = true;
-    else if (arg === "--connector" && argv[i + 1]) args.connector = argv[++i]!;
-    else if (arg === "--field" && argv[i + 1]) args.fields.push(argv[++i]!);
+    // 值不能是另一个旗标：`auth --connector --help` 要打帮助，不是把 `--help` 当 id。
+    else if (arg === "--connector" && argv[i + 1] && !argv[i + 1]!.startsWith("-")) args.connector = argv[++i]!;
+    else if (arg === "--field" && argv[i + 1] && !argv[i + 1]!.startsWith("-")) args.fields.push(argv[++i]!);
   }
   if (args.fields.length === 0) args.fields = [DEFAULT_CREDENTIAL_FIELD];
   return args;

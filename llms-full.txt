@@ -182,6 +182,7 @@ spark-research mcp    # stdio 传输
 - `subAgentModel_review`（默认 —，env `SPARK_SUBAGENT_MODEL_REVIEW`）：子代理类型 'review' 的独立模型覆盖（不填则退回 defaultModel）
 - `rawLlm`（默认 on，env `SPARK_RESEARCH_RAW_LLM`）：是否把每次 LLM 调用的 prompt 与响应原文落进项目 raw/llm/（永久保留）
 - `rawUpstreamInline`（默认 off，env `SPARK_RESEARCH_RAW_UPSTREAM_INLINE`）：凭据协议源（AMiner/CNKI/万方）的原始响应体是否 inline 存进 raw/connector/
+- `searchSources`（默认 openalex,crossref,europepmc,semanticscholar,arxiv,pubmed,biorxiv，env `SPARK_RESEARCH_SEARCH_SOURCES`）：不给 `--sources` 时默认查哪些文献源（逗号分隔的 connector id）
 
 ## 用这个工作台时必须知道的几条
 

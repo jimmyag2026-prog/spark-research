@@ -57,7 +57,8 @@ export function getContract(): RuntimeContract {
 
 function pyLiteral(v: unknown): string {
   if (typeof v === "string") return JSON.stringify(v);
-  if (typeof v === "number" || typeof v === "boolean") return JSON.stringify(v);
+  if (typeof v === "boolean") return v ? "True" : "False"; // JSON 的 true/false 在 Python 里是 NameError
+  if (typeof v === "number") return JSON.stringify(v);
   return JSON.stringify(String(v));
 }
 
@@ -168,7 +169,9 @@ function buildMethodName(route: ContractRoute): string {
   const segs = afterApi
     .split("/")
     .filter(Boolean)
-    .map((seg) => (seg.startsWith(":") ? `by_${seg.slice(1)}` : seg));
+    .map((seg) => (seg.startsWith(":") ? `by_${seg.slice(1)}` : seg))
+    // 路径段可以带 `-`（如 /api/settings/scientific-tools），Python 标识符不行。
+    .map((seg) => seg.replace(/[^A-Za-z0-9_]/g, "_"));
   return [route.group, route.method.toLowerCase(), ...segs].join("_");
 }
 
