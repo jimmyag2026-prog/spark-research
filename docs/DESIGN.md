@@ -388,7 +388,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | # | 决策 | 理由 |
 |---|------|------|
 | AD-1 | Project 为持久层根，session 挂在 project 下 | 科研单位是课题；差异化主张 §3.1 |
-| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt。P1 落地口径：daemon 的 `credentials` 方法只回「是否已配置 + 字段名」，值本体不出 daemon；无该 permit 的 kernel 连元数据都拿不到 |
+| AD-2 | 凭据只在 daemon，kernel 走 `mcp_call` 代访问 | AMiner 调研教训；凭据永不进沙箱/env/prompt。P1 落地口径：daemon 的 `credentials` 方法只回「是否已配置 + 字段名」，值本体不出 daemon；无该 permit 的 kernel 连元数据都拿不到。**v0.9 修订**：进入 daemon 的路径多一条——loopback-only 的 HTTP 写路由（AD-18），「只在 daemon、值本体不出 daemon」仍是硬约束 |
 | AD-3 | Record 与 Artifact 同图不同表，id 互链 | 复用已验证的 lineage 机制，避免双图不一致。P1 落地：`records.artifact_id` → `artifacts.id`，且 `artifacts.project_slug` 指向真实 project |
 | AD-4 | Simulation adapter 独立于 connector | connector 是数据读取（幂等），仿真是长任务生命周期（prepare/submit/poll/collect），契约不同 |
 | AD-5 | 技能少而深：每个技能必须有配套 e2e 验证才算完成 | 对 OpenScience 313 技能「质量参差」的差异化回应 |
@@ -400,6 +400,7 @@ P8 落地口径（`backend/src/conclusion/` + `backend/src/reviewer/conclusion_r
 | AD-15 | **原始层只追加不改；证据图是派生层**（v0.7 方案新增，落地在 W7-D0/D1，设计见 `DEVELOPMENT_PLAN_v0.7_DATA_LAYER.md`） | 三次外部验收与 B2 三轮实证跑完后发现：connector 原始响应在 `JSON.parse` 前被丢弃、LLM 原文只剩 hash、`RecordStore.update()` 覆写不留旧值——归一化逻辑一改旧结果无法重算，研究过程数据不可追溯。可变投影（状态机需要）之下必须有不可变日志；L0 raw + records_journal 满足审计与恢复，不做全量事件重放（9 处状态机调用方不重写） |
 | AD-16 | **`provenanceClass = upstream` 的数据永不进入任何共享集合**（v0.7 方案新增，门禁 G6） | 上游镜像（尤其带凭据协议的 AMiner/CNKI/万方与带非商业条款的公共 API）不是可售卖标的；只有 derived / user_authored / model_generated 且 license 允许的才可导出 for-sharing。上游节点在导出里以 stub 保边不保内容。AD-13/14 的编号说明见 `DEVELOPMENT_PLAN_v0.4.md` |
 | AD-17 | **声明即须有读者**（v0.9 闸门 I 新增，门禁在 `tests/unit/gate_i_param_readers.test.ts` 与 `gate_i_switch_readers.test.ts`，配置项那一形状仍由 `config_reader_parity.test.ts` 负责） | AD-12 保证「声称的能力存在」，本条保证「声称的能力接线了」。同一个病在三个部位反复出现：可写入的配置项没有读者（V40 `defaultProvider`）、类型上的行为开关字段没有读者（V137 `retryable` / `maxRetries`，整个代码库零重试）、公开函数的对象参数属性没有读者（U10 `chat()` 的 `model`，传什么模型都静默无效）。三者共同点：能编译、测试全绿、调用方老实传了值，值在某一层被静默丢弃——**而且每一次都是在真实使用中撞出来的，而不是被门禁抓到的**。本条的门禁用 TypeScript 编译器 API 解析函数体（不靠 grep），同类内 `this.m(param)` 转发一跳可追、按条件位置分桶（U10 的精确形状是「主路径不读、只在某个分支的转发里读」）；故意留空的必须进 allowlist 并带原因，allowlist 两向检查（未登记的孤儿红、已有读者的陈旧登记也红）。已知边界写在测试头注释里：文本级判据会把同名字段的解构算成读者（`retryable` 在 v0.8.0 上因此漏报，由 `maxRetries` 承担历史对照）；非同类整体转发视为全读，两跳丢弃抓不到。 |
+| AD-18 | **凭据可经 loopback-only HTTP 写路由进入 daemon，但只写不读**（v0.9 方案「乙」，用户 2026-09-14 拍板；落地在 `backend/src/server/routes/settings/credentials.ts`，门禁在 `tests/unit/settings_credentials.test.ts`） | USAGE_LOG U6：网页端零配置入口，凭据只能去终端敲 `auth`——对普通用户这就是「不能用」。AD-2 的原意是凭据不进沙箱/env/prompt，不是不能经本机 HTTP 写入。六条硬约束：① **write-only**——任何响应、日志、raw、record、usage 永不出现值，读路由只回「已设字段名」；② **只认 loopback**——远端地址只取传输层（`getConnInfo`），不读 `X-Forwarded-For`/`Host`，且**不受 `originAllowlist` 影响**（allowlist 是给浏览器 Origin 的，把它当凭据门禁等于把门交给请求方填）；取不到远端地址 → 403 fail-closed（宁可可见地坏，不要静默放行）；③ 永不进 `process.env`；④ 写入即登记进脱敏集合（`registerSecret`），进程启动把盘上已有值一并登记——形状匹配挡不住长得像普通十六进制的 key；⑤ 文件 0600；⑥ 删除只删本机保存的值并明说。形状来源 OpenScience `routes/settings/credentials.ts`。**不做**：把 LLM provider key 也搬进这条路（router 走 env 读，AD-2 原路径不动） |
 
 ### 5.3 技能目录（v0.2 首批，共 10 个）
 
