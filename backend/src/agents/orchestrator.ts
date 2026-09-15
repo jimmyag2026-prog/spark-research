@@ -854,7 +854,9 @@ export class OrchestratorAgent {
           // V172：文献类需求走真流程，别再手搓 connector。关键词拆解（①）在这里发生。
           `FOR ANY LITERATURE NEED (find papers / survey / review / recent progress / compare countries), emit ONE skill task instead of connector tasks: ` +
           `{"kind":"skill","params":{"skill":"literature-review","queries":["<3-6 decomposed keyword queries in English>"],"topic":"<one line>","limit":15,"maxRead":8}} ` +
-          `("literature-search" if the user only wants a candidate list). It runs search → library → PDF → reading cards → review with citation checks. ` +
+          `("literature-search" if the user only wants a candidate list). It runs search → library → PDF → reading cards → review with citation checks, ` +
+          // U57：综述已经由技能产出（artifact），再排一个 analysis「综合」任务只会拿到空结果。
+          `and its output ALREADY CONTAINS the synthesized review as an artifact — do NOT add a separate "analysis" synthesis task after it. ` +
           `Use "connector" only for non-literature databases (proteins, genes, compounds). No markdown, no prose, only JSON. ` +
           // V171：步骤间的落盘约定。没有这句，模型只能按常识去 /workspace 找上一步的产物。
           `Every connector task's full JSON result is saved to ${join(this.workspaceRoot, sessionId)}/<taskId>.json ` +
@@ -1148,9 +1150,12 @@ export class OrchestratorAgent {
       .map((e) => {
         // U48：connector 的成功结果按形状摘要（条数 + 前几条标题 + 落盘路径），其余截 600 字符。
         const digest = e.kind === "connector" && e.ok ? connectorSearchDigest(e.output) : null;
+        // U57：skill（文献流程）的产出本身就是一份 ≤1500 字符的结构化摘要（含命中样例 / 精读卡数 / 综述 artifact id），
+        // 之前按 600 字符一刀切，把最要紧的后半段（artifact id）切掉了——模型于是如实汇报「未记录任何工件 ID」。
+        const cap = e.kind === "skill" ? 2000 : 600;
         const body = digest
           ? `${digest} (full result: ${join(this.workspaceRoot, sessionId, `${e.taskId}.json`)})`
-          : e.output.slice(0, 600);
+          : e.output.slice(0, cap);
         return `- [${e.kind}] ${e.taskId}: ${e.ok ? "ok" : "failed"} — ${body}`;
       })
       .join("\n");

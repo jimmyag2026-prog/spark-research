@@ -190,3 +190,31 @@ describe("U49 / U50 · 流程内进度推到界面；精读/综述用文献子�
     expect(src).toMatch(/model: this\.sessionModel\.get\(sessionId\) \?\? configuredSubAgentModel\("literature"/);
   });
 });
+
+describe("U57 · skill 的结构化摘要完整到达 summarize（不被 600 字符上限切掉）", () => {
+  test("6 条查询 × 多篇命中 → summarize 看到「命中样例」与末尾行，而不是只看到前几条查询", async () => {
+    pm.create("lp-u57", { name: "x" });
+    pm.bindSession("s-u57", "lp-u57");
+    const searcher = fakeSearcher(8);
+    const queries = Array.from({ length: 6 }, (_, i) => `query number ${i} about recursive self improvement`);
+    const llm = new ScriptLlm([
+      JSON.stringify([{ id: "t1", kind: "skill", description: "查文献", params: { skill: "literature-search", queries } }]),
+      "汇总",
+    ]);
+    const orch = new OrchestratorAgent(new SparkResearchDaemon({ projects: pm }), { llm: llm as never, projects: pm, workspaceRoot: join(root, "ws"), literatureSearcher: searcher });
+    const result = await orch.processRequest("RSI", "s-u57");
+    const digest = result.execution.find((e) => e.taskId === "t1")!.output;
+    expect(digest.length).toBeGreaterThan(700); // 现场：1500 字符
+    const summ = llm.prompts[llm.prompts.length - 1]!;
+    expect(summ).toContain("命中样例");           // 在第 600 字符之后
+    expect(summ).toContain("Paper 0 on repetitive strain injury");
+  });
+
+  test("规划提示词明说：literature-review 已含综述 artifact，不要再排 analysis 综合任务", async () => {
+    pm.create("lp-u57b", { name: "x" }); pm.bindSession("s-u57b", "lp-u57b");
+    const llm = new ScriptLlm([JSON.stringify([{ id: "t1", kind: "analysis", description: "x" }]), "汇总"]);
+    const orch = new OrchestratorAgent(new SparkResearchDaemon({ projects: pm }), { llm: llm as never, projects: pm, workspaceRoot: join(root, "ws") });
+    await orch.processRequest("q", "s-u57b");
+    expect(llm.prompts[0]).toContain("do NOT add a separate");
+  });
+});
