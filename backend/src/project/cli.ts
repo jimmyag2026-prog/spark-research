@@ -11,6 +11,11 @@ export const PROJECT_HELP = `用法:
                                                                     SPARK_RESEARCH_SESSION——没设置这个
                                                                     环境变量时退化为改全局指针（会提示）
   spark-research project archive <slug>                          归档项目
+  spark-research project archive --pattern <glob> [--dry-run]    批量归档（glob 整串匹配，
+                                                                    只认 * 与 ?；--dry-run 只列
+                                                                    不改）。当前项目指针落在被
+                                                                    归档的项目上时，自动跳到最近
+                                                                    活动的未归档项目
 `;
 
 export interface ProjectCliDeps {
@@ -152,13 +157,51 @@ export function runProjectCommand(args: string[], deps: ProjectCliDeps = {}): nu
         return 0;
       }
       case "archive": {
+        // δ-1（V157）：批量归档。`--pattern` 与 <slug> 互斥——两个都给就说不清该听谁的，
+        // 而这个命令会批量改状态，宁可让用户重敲一次。
+        const pattern = flagString(flags.pattern);
         const slug = positional[0];
-        if (!slug) {
-          err("用法: spark-research project archive <slug>");
+        if (pattern && slug) {
+          err("❌ --pattern 与 <slug> 不能同时给：要么指名一个项目，要么给一个模式");
           return 1;
         }
+        if (pattern) {
+          const before = manager.currentSlug();
+          const matched = manager.matchActive(pattern);
+          if (matched.length === 0) {
+            out(`没有未归档的项目匹配 '${pattern}'（glob 整串匹配，前缀要显式写成 '${pattern}-*'）`);
+            return 0;
+          }
+          if (flags["dry-run"] === true) {
+            out(`将归档 ${matched.length} 个项目（--dry-run，未改动任何状态）：`);
+            for (const meta of matched) out(`  ${meta.slug}`);
+            return 0;
+          }
+          const archived = manager.archiveMatching(pattern);
+          out(`✅ 已归档 ${archived.length} 个项目：`);
+          for (const meta of archived) out(`  ${meta.slug}`);
+          const after = manager.currentSlug();
+          if (before !== after) {
+            out("");
+            out(
+              after === null
+                ? `⚠️ 当前项目 '${before}' 被归档，且已无未归档项目可切——下一条命令会落进按需新建的 'default'`
+                : `当前项目 '${before}' 被归档 → 已自动切到最近活动的未归档项目 '${after}'`,
+            );
+          }
+          return 0;
+        }
+        if (!slug) {
+          err("用法: spark-research project archive <slug> | --pattern <glob> [--dry-run]");
+          return 1;
+        }
+        const before = manager.currentSlug();
         const meta = manager.archive(slug);
         out(`✅ 项目 '${meta.slug}' 已归档`);
+        const after = manager.currentSlug();
+        if (before !== after && after !== null) {
+          out(`当前项目 '${before}' 被归档 → 已自动切到最近活动的未归档项目 '${after}'`);
+        }
         return 0;
       }
       case undefined:
