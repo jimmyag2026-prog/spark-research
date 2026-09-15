@@ -134,7 +134,7 @@ describe("auth --connector 与 HTTP 写入路径共用同一份存储", () => {
     });
 
     const app = new Hono();
-    app.route("/api/settings", settingsRoutes(new ServerContext({ root })));
+    app.route("/api/settings", settingsRoutes(new ServerContext({ root }), { assumeLoopback: true }));
     const res = await app.fetch(new Request("http://127.0.0.1/api/settings/credentials"));
     const text = await res.text();
     expect(text).not.toContain(SECRET);
@@ -146,7 +146,7 @@ describe("auth --connector 与 HTTP 写入路径共用同一份存储", () => {
   test("面板写进去的，CLI 侧的 CredentialStore 也读得到", async () => {
     const root = workspace();
     const app = new Hono();
-    app.route("/api/settings", settingsRoutes(new ServerContext({ root })));
+    app.route("/api/settings", settingsRoutes(new ServerContext({ root }), { assumeLoopback: true }));
     await app.fetch(
       new Request("http://127.0.0.1/api/settings/credentials/aminer", {
         method: "PUT",

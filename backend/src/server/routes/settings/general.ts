@@ -15,9 +15,8 @@ import { assertKnownModel } from "./model_guard";
 import {
   BAD_BODY,
   LOOPBACK_REJECTION,
-  defaultRemoteAddress,
   fail,
-  isLoopbackRequest,
+  loopbackGuard,
   panel,
   settingsBody,
   written,
@@ -149,7 +148,7 @@ export async function handleSettingWrite(
 
 export function generalRoutes(ctx: ServerContext, options: SettingsRouteOptions = {}): Hono {
   const app = new Hono();
-  const remoteAddress = options.remoteAddress ?? defaultRemoteAddress;
+  const isLoopback = loopbackGuard(options);
 
   app.get("/general", (c) =>
     panel(
@@ -165,7 +164,7 @@ export function generalRoutes(ctx: ServerContext, options: SettingsRouteOptions 
     // AD-18 ②：凭据键在这条路径上一律 403（下面 writeSetting 也会拒，但那是 config 层的
     // 结构性拒绝；这里先按「凭据路径」处理，连 loopback 都要求，口径与凭据面板一致）。
     if (settingSpec(key)?.secret) {
-      if (!isLoopbackRequest(remoteAddress(c))) {
+      if (!isLoopback(c)) {
         return fail(c, 403, LOOPBACK_REJECTION.error, LOOPBACK_REJECTION.nextStep);
       }
       return fail(
@@ -180,7 +179,7 @@ export function generalRoutes(ctx: ServerContext, options: SettingsRouteOptions 
 
   app.delete("/general/:key", (c) => {
     const key = c.req.param("key");
-    if (settingSpec(key)?.secret && !isLoopbackRequest(remoteAddress(c))) {
+    if (settingSpec(key)?.secret && !isLoopback(c)) {
       return fail(c, 403, LOOPBACK_REJECTION.error, LOOPBACK_REJECTION.nextStep);
     }
     try {

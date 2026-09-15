@@ -14,9 +14,8 @@ import {
 import {
   BAD_BODY,
   LOOPBACK_REJECTION,
-  defaultRemoteAddress,
   fail,
-  isLoopbackRequest,
+  loopbackGuard,
   panel,
   settingsBody,
   written,
@@ -29,8 +28,8 @@ import type { CredentialDeleteResponse, SettingsItem, SettingsMeta } from "./typ
 // 六条硬约束，缺一条不许合。每一条在下面都能指到具体那一行：
 //   ① write-only —— `toItem()` 只产出字段**名**（`fields` / `fieldsSet`），
 //      `value` 恒为 null；本文件里没有任何一处把凭据值放进响应或日志。
-//   ② loopback 硬限 —— 每个写路由第一件事就是 `isLoopbackRequest()`，
-//      且那个函数**不查 `originAllowlist`**（见 shared.ts 上的判定注释）。
+//   ② loopback 硬限 —— 每个写路由第一件事就是 `isLoopback(c)`，且它**不查
+//      `originAllowlist`**、**取不到地址也拒绝**（fail-closed，见 shared.ts 的判定注释）。
 //   ③ 永不进 `process.env` —— 写入只经 `CredentialStore.set` / `saveConfig`；
 //      本文件不 import `process`，也没有任何 `env[...] = ...`。
 //   ④ 脱敏登记 —— 写入成功立刻 `registerSecret()`，此后任何经 `redactSecrets`
@@ -104,7 +103,7 @@ function readFields(body: Record<string, unknown>, spec: CredentialSpec): Record
 
 export function credentialsRoutes(ctx: ServerContext, options: SettingsRouteOptions = {}): Hono {
   const app = new Hono();
-  const remoteAddress = options.remoteAddress ?? defaultRemoteAddress;
+  const isLoopback = loopbackGuard(options);
 
   app.get("/credentials", (c) =>
     panel(
@@ -117,7 +116,7 @@ export function credentialsRoutes(ctx: ServerContext, options: SettingsRouteOpti
 
   app.put("/credentials/:id", async (c) => {
     // AD-18 ②：第一道闸，先于解析请求体——非 loopback 的请求连 body 都不该被读。
-    if (!isLoopbackRequest(remoteAddress(c))) {
+    if (!isLoopback(c)) {
       return fail(c, 403, LOOPBACK_REJECTION.error, LOOPBACK_REJECTION.nextStep);
     }
     const id = c.req.param("id");
@@ -170,7 +169,7 @@ export function credentialsRoutes(ctx: ServerContext, options: SettingsRouteOpti
   });
 
   app.delete("/credentials/:id", (c) => {
-    if (!isLoopbackRequest(remoteAddress(c))) {
+    if (!isLoopback(c)) {
       return fail(c, 403, LOOPBACK_REJECTION.error, LOOPBACK_REJECTION.nextStep);
     }
     const id = c.req.param("id");

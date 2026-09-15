@@ -25,10 +25,28 @@ const realLog = console.log;
 const realWarn = console.warn;
 const realError = console.error;
 
+/**
+ * 进程内的 `app.fetch` 拿不到传输层地址，而 loopback 闸是 **fail-closed** 的——
+ * 所以单测必须显式注入。两种注入各有用处：
+ *   · 不传参 → `assumeLoopback: true`（构造参数，请求方拿不到）：测正常路径；
+ *   · 传 resolver → 伪造一个远端地址：测②的拒绝路径。
+ * `makeRawApp()` 两个都不给，用来测「取不到地址时是不是真的拒绝」。
+ */
 function makeApp(remoteAddress?: RemoteAddressResolver): Hono {
   const ctx = new ServerContext({ root });
   const app = new Hono();
-  app.route("/api/settings", settingsRoutes(ctx, remoteAddress ? { remoteAddress } : {}));
+  app.route(
+    "/api/settings",
+    settingsRoutes(ctx, remoteAddress ? { remoteAddress } : { assumeLoopback: true }),
+  );
+  return app;
+}
+
+/** 完全不注入：等价于生产挂载点在一个拿不到连接信息的运行时上跑。 */
+function makeRawApp(): Hono {
+  const ctx = new ServerContext({ root });
+  const app = new Hono();
+  app.route("/api/settings", settingsRoutes(ctx));
   return app;
 }
 
@@ -125,6 +143,48 @@ describe("AD-18 ② loopback 硬限，且不受 originAllowlist 影响", () => {
     expect(res.status).toBe(403);
     // 而且值一个字都没写进去。
     expect(() => statSync(join(root, CREDENTIALS_FILE))).toThrow();
+  });
+
+  test("取不到远端地址（且无注入）→ 403，不放行", async () => {
+    // fail-closed：「解析不出来就放行」本身就是一条隐性放开路径。一旦某个部署形态
+    // 让 getConnInfo 拿不到地址，这条硬限会静默失效——而且失效时没有任何信号。
+    const app = makeRawApp();
+    const res = await app.fetch(
+      new Request(`http://127.0.0.1/api/settings/credentials/${CONNECTOR_ID}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fields: { api_key: SECRET } }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(() => statSync(join(root, CREDENTIALS_FILE))).toThrow();
+
+    const del = await app.fetch(
+      new Request(`http://127.0.0.1/api/settings/credentials/${CONNECTOR_ID}`, { method: "DELETE" }),
+    );
+    expect(del.status).toBe(403);
+  });
+
+  test("assumeLoopback 是构造参数：请求方发什么头都拿不到它", async () => {
+    // 不是「NODE_ENV=test 时认某个请求头」——那种开关一旦生产 NODE_ENV 被设错，
+    // 就变成一个人人可发的绕过头。这里试着用最像的几个头去绕，全部应当仍是 403。
+    const app = makeRawApp();
+    const probes: Array<Record<string, string>> = [
+      { "x-spark-test-loopback": "1" },
+      { "x-forwarded-for": "127.0.0.1" },
+      { host: "127.0.0.1" },
+      { "assume-loopback": "true" },
+    ];
+    for (const headers of probes) {
+      const res = await app.fetch(
+        new Request(`http://127.0.0.1/api/settings/credentials/${CONNECTOR_ID}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json", ...headers },
+          body: JSON.stringify({ fields: { api_key: SECRET } }),
+        }),
+      );
+      expect(res.status).toBe(403);
+    }
   });
 
   test("loopback 地址（含 IPv6 与 IPv4-mapped）放行", async () => {
