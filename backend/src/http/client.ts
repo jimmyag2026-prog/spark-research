@@ -29,7 +29,11 @@ export interface HttpClient {
   request(url: string, init?: HttpRequestInit): Promise<HttpResponse>;
 }
 
-const KEPT_RESPONSE_HEADERS = ["content-type", "content-length", "content-disposition"];
+// α-5（v0.10）：加 `retry-after`。**它此前不在白名单里**——`http/ratelimit.ts` 想按
+// 上游给的 Retry-After 冷却，可 NativeHttp 在这一步就把这个头丢了，真实网络下永远读到
+// undefined，冷却逻辑等于没装（这正是 U40/U47「判据存在但没被读到」的形状）。
+// 仍然不透传 set-cookie 之类：白名单只加这一个可核实、无隐私风险的头。
+const KEPT_RESPONSE_HEADERS = ["content-type", "content-length", "content-disposition", "retry-after"];
 
 export function pickHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};

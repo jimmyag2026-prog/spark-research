@@ -54,12 +54,30 @@ allowed-tools: [Bash, Read]
 
 两个教训：① **「标了 OA」≠「能下到」**，OpenAlex 的 OA 标记偏乐观；② `not_a_pdf` 多半不是付费墙，是**链接给错了一层**。
 
-## 目前刻意不做的两跳（已登记 USAGE_LOG U51，归 v0.10）
+## 两跳兜底（v0.10 α-4 已落地）
 
-- 落地页不再解析一跳（多数出版社页面有 `citation_pdf_url` 元标签，顺着走一步能拿到真 PDF）。
-- `pdfUrl` 失败后没有按 DOI 的兜底（Unpaywall 查真正的 OA 副本）。
+拿不到 PDF 时下载器现在会多走两步，**每步只试一次**（纪律不变：不退避轰炸、不猜 URL 拼接）：
 
-在这两跳落地之前，遇到 `not_a_pdf` 的正确做法是把 `attempts` 里的落地页 URL 交给用户手动打开，不要自己猜 URL 拼接。
+1. **落地页一跳**：响应不是 PDF 时，读页面里的 `citation_pdf_url` 元标签或
+   `<link rel="alternate" type="application/pdf">`，顺着它取一次。相对链接按落地页 URL 解析。
+   这两个标记是页面自己写明的，不是我们猜的——页面没写就不跳，如实记 `not_a_pdf`。
+   派生出来的那一跳**不再派生**（没有第二层）。
+2. **Unpaywall 兜底**：全部直链都失败且论文有 DOI 时，按 DOI 问一次
+   `https://api.unpaywall.org/v2/<doi>?email=<contactEmail>`（免 key），
+   用它给出的 `best_oa_location.url_for_pdf` 再取一次。
+   **`contactEmail` 没配置（还是占位邮箱）时不发这个请求**，并在 `attempts` 里记一条
+   `skipped: contactEmail 未配置`——拿占位邮箱敲免费接口是失礼，也会被限。
+
+结果里的 `origin` 会如实标成 `landing_meta` / `unpaywall`，`attempts` 逐跳可查。
+
+### OA 标记的可信度
+
+没拿到 PDF 时，结果里的 `oaSource` 标成 `openalex(optimistic)`：
+「这篇是 OA」目前只有 OpenAlex 的标记支持，而上表实测它偏乐观。
+**不要把它当「确认可得」**往下游报告里写。拿到 PDF 后 `oaSource` 才是真源
+（`arxiv` / `europepmc` / `landing_meta` / `unpaywall`）。
+
+两跳都走完仍拿不到，正确做法仍是把 `attempts` 里的落地页 URL 交给用户手动打开。
 
 ## 用法
 

@@ -28,7 +28,7 @@ import { ClinVarConnector, clinvarConfig } from "./clinvar";
 import { BioRxivConnector, biorxivConfig } from "./biorxiv";
 import { ReactomeConnector, reactomeConfig } from "./reactome";
 import { StringDBConnector, stringDbConfig } from "./string-db";
-import { rateLimitedHttp } from "../http/ratelimit";
+import { sharedRateLimitedHttp } from "../http/ratelimit";
 
 const alphafoldConfig: HttpConnectorConfig = {
   baseUrl: "https://alphafold.ebi.ac.uk/api",
@@ -162,7 +162,10 @@ export class ConnectorRegistry {
   // 不受影响）。阴性对照②：把这一行删掉/还原成 `options.http`（不给默认值），
   // 同主机并发测试必须红——见 docs/devlog/W5-2-c.md。
   constructor(options: ConnectorOptions = {}) {
-    this.options = { ...options, http: options.http ?? rateLimitedHttp() };
+    // α-5（v0.10）：默认值从「每个 registry 一个新装饰器」改成**进程内共享实例**。
+    // 各自 new 一个，桶状态就各算各的——同一进程里两个 registry（或 registry 与
+    // PdfDownloader）打同一台主机时，按 host 分桶的意义就被稀释了。
+    this.options = { ...options, http: options.http ?? sharedRateLimitedHttp() };
   }
 
   registerBuiltins(options?: ConnectorOptions): this {
