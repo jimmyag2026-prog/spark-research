@@ -134,6 +134,9 @@ export interface WetExperimentMeta {
   consumedApproval: ApprovalRecordMeta | null;
   runId: string | null;
   runDir: string | null;
+  // V144：execute() 的 `options.note` 落这里（execute 本身不产出 observation，
+  // analyze() 在没有自己的 note 时回落读取它，最终写进 observation 正文）。
+  executionNote: string | null;
   attempts: number;
   iteration: number;
   parentExperimentId: string | null;
