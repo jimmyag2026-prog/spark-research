@@ -3,9 +3,10 @@
 分支 `feat/W10-delta`，基于 `integration/v0.10-base` = ff077ea。
 任务书 `docs/taskbooks/v0.10/LANE_delta.md`（δ-1..δ-5）。
 
-> **push 状态**：这台机器到 GitHub 的 https 连接本轮**全程被 reset**
+> **push 状态**：过程中每一小步的 push 都被 reset
 > （`fatal: unable to access 'https://github.com/…': Recv failure: Connection reset by peer`，
-> 每一小步各重试 3 次）。**分支未推上远端**，全部提交只在本地 worktree。
+> 各重试 3 次均失败），于是先继续干活。收尾时再试**成功**：
+> `git ls-remote origin feat/W10-delta` → `77d26f8241408bfad4787c283bf22816f89df202`。
 
 ---
 
@@ -517,7 +518,7 @@ Ran 2728 tests across 221 files. [158.17s]
 
 ## 没做 / 拿不准
 
-- **分支未推上远端**（https 连接全程被 reset，每步重试 3 次）。
+- push 过程中一直被 reset，收尾时重试成功（远端 ref 已核对，见文首）。
 - **足迹越界两处，都如实记在上面 δ-3 那段**：`backend/src/config/cli.ts` 与
   `backend/src/config/index.ts` 归 γ，本 lane 因为 δ-3（V163）与 δ-4（chatSyncMaxMs 注册）
   动了它们；改动都是加法，收口时若冲突以 γ 为准。
