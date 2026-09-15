@@ -46,7 +46,7 @@
 | 09-15 20:34 | spark0915 | 监控脚本自身崩了（f-string 转义） | 真出错时反而不报——已重写并实跑验证；教训：监控的失败分支必须先跑一遍 |
 | 09-15 21:13 | spark0915 | LONG ×2：主路径 chat 单次输出 6704 / 7040 token（glm-5.3-flash） | 都在 plan/summarize 阶段；正是基线里「墙钟七成花在生成输出」的现象。不是缺陷，归 v0.10「各阶段设 maxTokens」（BACKLOG V172 同批） |
 | 09-15 21:46 | r6-probe | **V172 review 模式真冒烟**：1 条查询 → 6 篇入库 → PDF 0/3（无 OA）→ 3 张精读卡（按摘要）→ 综述 artifact `b3243824…`，引用 3 条全在库内、库外 0 | 用时 614s（4 次 LLM 调用 + 检索 45s）。**如实交代**：blended 排序把两篇心血管指南混进「prevention」命中，精读卡没挡住、综述照引——④「确认哪些有用」目前只产卡不筛卡，下一步让 `relationToProject` 判无关即剔除 |
-| 09-16 | — | **U38–U40 · U44–U47 已修并带门禁**（`tests/unit/ux_window.test.ts` 7 describe / 25 条；十一条阴性对照实跑变红，其中一条反过来抓出门禁自身只钉内容不钉接线） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
+| 09-16 | — | **U38–U40 · U44–U47 已修并带门禁**（`ux_window.test.ts` 8 describe / 29 条 · `ux_window2.test.ts` 3/5 · `v172_literature_pipeline.test.ts` 3/8；阴性对照累计 20 条实跑变红，其中两条反过来抓出门禁自身只钉内容不钉接线（U40、U47）） | 见 `docs/devlog/UX-window-fixes.md`；U41 U42 U43 登记为 V171–V173，不在本窗口做 |
 
 ## 四·补 · 使用中提出的需求（原话记录）
 
@@ -59,6 +59,8 @@
 | 09-15 22:10 | 「设计一下怎样提升回复速度，并且要把中间过程流式输出在屏幕上」 | 实测：检索等最慢源（arXiv 30s）、精读逐篇串行、SSE 只六种事件且 delta 只接汇总、前端一个 spinner、全链路无 maxTokens | **`docs/DEVELOPMENT_PLAN_v0.10.md` 草案**（八条杠杆 + 事件协议 + 分批 DONE + 先测再改） |
 
 | 09-15 22:29 | 「右侧选一篇文献打开后没法关掉回总览；生成结果的链接要放进 chat 对话框」 | 详情无关闭控件；`ChatResponse.artifacts` 声明了无人填 | ✅ U52 U53 已修并重启 |
+
+| 09-15 22:52 | 「回复先结论和附件再过程校对；arXiv 为什么 failed；文献列表加作者/关键词与一键打开 PDF」 | arXiv 直连探针：3s 间隔第二次即 429（IP 级）；summarize 提示词无结构约束；列表无作者/关键词、PDF 只有 ✓ | ✅ U54 U55 U56 已修并重启；S4 提前落地 |
 
 ## 五、总结（用完再填）
 

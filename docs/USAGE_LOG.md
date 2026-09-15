@@ -15,7 +15,7 @@
 > **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
 > 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
 >
-> 最后更新：2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
+> 最后更新：2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
 
 ---
 
@@ -64,17 +64,21 @@
 | [U39](#u39) | `subagent` 任务的 type 不校验：模型写 `"Review"`（大写）→ `TypeError: undefined is not an object` 冒给用户 | **高** | 正确性 | ✅ 本地已修（`normalizeSubAgentType` 运行期校验 + `buildSubAgentSpec` 入口拦；并删掉 `SUB_AGENT_TYPES` 副本） |
 | [U40](#u40) | Europe PMC 查询语法不合法时返回 `{"version":"6.9"}` 空壳、HTTP 200，平台层当成功 | 中 | 正确性 | ✅ 本地已修（`searchPayloadProblem` 在编排层、只对 search：无计数也无结果容器 → 任务 failed 并给下一步） |
 | [U41](#u41) | chat 的多步计划里 `code` 任务读 `/workspace/artifacts/tN_*.json`，但 `connector` 任务产出从不落盘 → 计划必然断链 | **高** | 设计 | ✅ 本地已修（V171 路线①：connector 产出落盘 `<workspace>/<sessionId>/<taskId>.json`，plan 提示词写明绝对路径，code 任务不再 glob cwd） |
-| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | → V172（plan 增加 `literature` 任务类型，别让模型手搓 connector） |
+| [U42](#u42) | chat 模式绕开成熟的 `lit search` 管线，让模型手搓 connector 调用 —— 同一需求 CLI 一条命令 26s 出 5 篇带 OA PDF | **高** | 设计 | ◐ V172 前半已做（`case "skill"` 对 literature-search/review 真执行五步流程，不是新增任务类型；其余 11 技能待盘点） |
 | [U43](#u43) | AMiner 凭据配了却从不参与检索——它不在 `searchSources` 里；而勾在里面的 `semanticscholar` 反而没凭据 | 中 | 配置 | → V173 |
 | [U44](#u44) | `lit_search` 工具返回整份 JSON 进对话历史：一次子代理调用 **129,865 输入 token / $0.058**，是同轮其它调用的 40 倍 | **高** | 成本/性能 | ✅ 本地已修（`sub_agent.ts` `toolResultContent` 认识检索结果形状就瘦身，其余按 8 KB 截断并明说被截断）；残余 → V174（`lit_search` 自己的 `present()`、台账超阈值打标） |
 | [U45](#u45) | PubMed 只认 `query`，模型按 NCBI 官方文档写的 `term` 被空串静默覆盖 → 200 + `esearchresult.ERROR`，两次检索空转 | **高** | 正确性 | ✅ 本地已修（`term`/`query` 两个名字都认、`query` 优先；空检索词当场失败不发上游；`searchPayloadProblem` 新增 `upstreamErrorOf` 并排在结果容器判据之前）；残余 → V175 |
 | [U46](#u46) | `status: "placeholder"` 的连接器（cnki / wanfang）仍真发网络请求，把 TLS 证书错与 404 丢给 agent | 中 | 体验 | ✅ 本地已修（`HttpConnector.call()` 开头判 placeholder → 抛「占位实现 + caveat 原文 + 下一步」，一次 HTTP 都不发）；残余 → V176 |
+| [U47](#u47) | 规划器没有能力清单：猜出不存在的 `pubmed.esearch`、把 placeholder 的 cnki/wanfang 排进计划（三次会话同一根因） | **高** | 设计 | ✅ 本地已修（plan 注入 906 字符真实清单：精确工具名 + 需凭据标注 + 死源黑名单；门禁钉住「清单真进了 prompt」） |
 | [U48](#u48) | summarize 只看每步输出前 200 字符——连接器成功了，模型只见到 `meta.count`，如实汇报「只留下命中计数」 | **高** | 正确性 | ✅ 本地已修（形状摘要：条数 + 前 5 条标题 + 落盘路径；其余截 600） |
 | [U49](#u49) | 文献流程精读 8 篇期间界面无任何进度（阶段只进执行日志，没推 SSE），用户以为卡死 | 中 | 体验 | ✅ 本地已修（`progress.taskNote`，每阶段推「执行中 i/n：检索/下载/精读/综述」） |
 | [U50](#u50) | 精读卡/综述没读 `subAgentModel_literature`，跟着聊天选择器的模型走（选了 kimi 就 8 篇全 kimi，每篇 ~50s） | 中 | 配置 | ✅ 本地已修（顺序：会话覆盖 > `subAgentModel_literature` > 默认） |
-| [U51](#u51) | OA 全文命中率低（8 篇标 OA 只拿到 2）：`pdfUrl` 常是落地页而下载器不再解析一跳；`pdfUrl` 失败后没有按 DOI 的 Unpaywall 兜底 | 中 | 功能缺口 | → v0.10 S9 一起做（技能文档已如实写明目前不做） |
+| [U51](#u51) | OA 全文命中率低（8 篇标 OA 只拿到 2）：`pdfUrl` 常是落地页而下载器不再解析一跳；`pdfUrl` 失败后没有按 DOI 的 Unpaywall 兜底 | 中 | 功能缺口 | → v0.10 **S10**（与 S9 同批；技能文档已如实写明目前不做） |
 | [U52](#u52) | 右侧打开一条记录/文献后没有关闭按钮回总览（只能回时间线再点一次同一条） | 中 | 体验 | ✅ 本地已修（详情头部「← 返回总览」） |
 | [U53](#u53) | 生成的产物（综述草稿）只以纯文字 id 出现在回复里，聊天框没有可点链接 | 中 | 体验 | ✅ 本地已修（结果带 `artifacts[]`，聊天框渲染成按钮切到产物视图；`ChatResponse.artifacts` 此前是无人填写的 `unknown[]`） |
+| [U54](#u54) | 回复把过程校对放在最前，结论与产物在最后，读者得翻到底 | 中 | 体验 | ✅ 本地已修（summarize 约束「结论 → 附件 → 过程校对」；产物按钮移到正文之上） |
+| [U55](#u55) | arXiv 对本机 IP 级限流：礼貌 UA + 3s 间隔第二次仍 429；一条查询连打 6–7 次，每次等满 30s 超时拖住整条检索 | **高** | 稳定性 | ✅ 本地已修（每源独立 8s deadline；被 429 的源冷却 10min 内 skipped）；根因在上游，登记 V165 同族 |
+| [U56](#u56) | 文献库列表没有作者/关键词，下载好的 PDF 无法从界面打开 | 中 | 体验 | ✅ 本地已修（列表加作者/关键词列；`GET /api/lit/papers/:id/pdf/file` 直开） |
 
 ### 方法缺陷
 
@@ -1099,6 +1103,43 @@ caveat: "占位实现：官方 Web API 需企业授权，调用会失败。中�
 **证据**：`result` 事件只有 `response` 文本；`server/types.ts` 的 `ChatResponse.artifacts?: unknown[]` 声明了但**没有任何代码填它**（AD-17 形状）；文献流程的综述 `artifactId` 只在 digest 里当纯文字。
 
 **修改方向（已做）**：`ExecutionOutcome.artifacts[]` → `OrchestrationResult.artifacts[]` → `chat()` → SSE `result.artifacts[]`；前端消息渲染成「📄 综述草稿」按钮，点了切到产物视图。类型收成 `Array<{id,label}>` 并重生成契约。
+
+
+<a id="u47"></a>
+## U47 · 规划器没有能力清单，只能猜工具名、排死源
+
+**现场**：三次真实会话（`web_1789471590880` / `web_1789475371793` / `web_1789476710763`）同一根因。第三次最典型：T5 写成 `pubmed.esearch`（真名 `search`；连接器描述里「esearch 取 id 列表」把它带偏），T3/T4 再次排进 `cnki`/`wanfang`（`status:"placeholder"`，模型看不见这个字段）。
+
+**证据**：`plan()` 的提示词只有 `Available skills for this request:` + 技能描述，没有任何 server/tool 清单；执行摘要原文 `{"ok":false,"server":"pubmed","tool":"esearch","error":"Unknown tool \"esearch\" for connector \"pubmed\". Available: search, getPaper, getAbstract"}`。
+
+**修改方向（已做）**：`connectors/registry.ts` 新增 `connectorPlanningInventory()` / `renderConnectorInventory()`（纯数据、零网络、906 字符）：20 个连接器的精确工具名、需凭据标注、`placeholder` 黑名单，注入 plan 提示词。门禁 `ux_window` U47 ×5；第一版只钉清单内容、把清单从 prompt 删掉仍全绿（AD-17 形状），补钉「规划器真的看见了它」后红。
+
+<a id="u54"></a>
+## U54 · 回复顺序：过程在前、结论在后
+
+**现场**：用户原话「回复时，先把研究结论和附件放到最前面，然后是后面的研究过程和已执行步骤等部分的校对」。
+
+**证据**：summarize 的 system 提示词只有一句 `Synthesize the observable execution records into a result summary with evidence labels.`，模型按执行日志顺序写，先逐步校对再给结论；聊天框里产物按钮渲染在正文之下。
+
+**修改方向（已做）**：提示词约束固定结构 `## 结论` → `## 附件` → `## 过程校对`，并明写 never put process before conclusion；前端产物按钮移到正文之上。
+
+<a id="u55"></a>
+## U55 · arXiv 对本机 IP 级限流，一条查询被它拖住 30s × N
+
+**现场**：第五、六次会话 arXiv 13 次调用 0 次成功（429 ×9、timeout ×4）。
+
+**证据**：直连探针，礼貌 UA `spark-research/0.9 (mailto:…)`、间隔 3s：第一次 HTTP/2 200，第二次 HTTP/2 429——**IP 级限流**，不是参数问题。`LiteratureSearcher.search` 用 `Promise.all` 等全部源，arXiv 每次等满 `httpTimeoutMs=30000` 才失败，整条查询跟着等；一条会话 6 条查询 = arXiv 6 次 429/超时 = 检索阶段 137–151s。
+
+**修改方向（已做）**：① 每源独立 deadline（默认 8s，`sourceTimeoutMs` 可配）——S4 提前落地；② 被 429 的源进入 10 分钟冷却，期间 `skipped` 并写明剩余秒数，不再发请求。**未做**：按 host 的 3s 令牌桶与 Retry-After 尊重（`http/ratelimit.ts` 已有桶，arXiv 策略待核）；arXiv PDF 直链下载走同一 IP 限流，S10 一起看。
+
+<a id="u56"></a>
+## U56 · 文献库列表缺作者/关键词，PDF 无法从界面打开
+
+**现场**：用户原话「文献库前端打开的列表里，加上一个跳转链接一键用浏览器打开下载好的 pdf，列表里的内容也保留标题 年份 作者 关键词」。
+
+**证据**：`PapersView` 表头只有 标题/年份/key/阅读/PDF，PDF 列是 ✓/✗ 文本；后端只有 `POST /papers/:id/pdf`（触发下载），没有读文件的 GET。
+
+**修改方向（已做）**：`GET /api/lit/papers/:id/pdf/file`（只服务库内 `pdfPath`，`application/pdf` inline；未下载 404 带下一步）；列表加「作者」（前 3 位）「关键词」（库内 tags）两列，PDF 列变「打开」链接（新标签）。**如实交代**：库里没有独立的 keywords 字段，「关键词」列显示的是检索入库时打的 tags；要真关键词需在精读卡里抽。
 
 
 <a id="p1"></a>
