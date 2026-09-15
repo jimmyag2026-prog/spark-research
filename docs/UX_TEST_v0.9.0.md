@@ -56,6 +56,8 @@
 
 | 09-15 21:25 | 「现在是否调用了 skill？基础思路：关键词拆解 → AMiner 等平台检索取 DOI → connector 下载 → 读取确认 → 综述总结」 | 仍未调用：`case "skill"` 只加载上下文。五步在 CLI 里已齐（`lit search/add/pdf/read/review`），缺关键词拆解与接进 chat | **V172 验收口径已按此写定** |
 
+| 09-15 22:10 | 「设计一下怎样提升回复速度，并且要把中间过程流式输出在屏幕上」 | 实测：检索等最慢源（arXiv 30s）、精读逐篇串行、SSE 只六种事件且 delta 只接汇总、前端一个 spinner、全链路无 maxTokens | **`docs/DEVELOPMENT_PLAN_v0.10.md` 草案**（八条杠杆 + 事件协议 + 分批 DONE + 先测再改） |
+
 ## 五、总结（用完再填）
 
 - 最卡我的第一件事：
