@@ -74,6 +74,30 @@ spark-research usage --project my-topic                             # 这个课�
 一个课题（10–34 篇文献全流程）：**$0.03–0.07**。$2 预算闸从未被真实课题触发过，
 它防的是失控循环，不是正常使用。
 
+## 6.5 脚本化调用：长对话走 `/stream`，不要走同步 chat（δ-4 / V156）
+
+`POST /api/session/chat` 是**同步**路由，它有一条硬上限：Bun.serve 的 `idleTimeout` 最多
+255s，超过就由 server 自己掐断连接——客户端拿到的是 HTTP 0（不是超时错误，是什么都没有），
+而编排在后台照样跑完，**钱花了，结果没人接收**。R6 基线 20 轮里就有一轮 287s 这样丢掉了。
+
+所以：
+
+- **要全程可见（阶段进度 + 正文逐字）**：用 `POST /api/session/stream`（SSE，事件
+  `start / progress / delta / result / done / error`）。这是推荐的默认路径，UI 走的就是它。
+- **只想要个最终结果**：`POST /api/session/chat` 照旧能用。它现在最多同步等
+  `chatSyncMaxMs`（默认 200s，`spark-research config set chatSyncMaxMs <ms>` 可调，
+  刻意低于 255s 上限）；等不到就返回 **202 + `taskId`**，任务继续在后台跑，
+  用 `GET /api/tasks/:id` 轮询或 `GET /api/tasks/:id/stream` 订阅接回结果。
+  **所以脚本要处理 202**：只判 `resp.ok` 会把一个正常的 202 当成成功，然后在返回体里
+  找不到 `summary`。
+
+```bash
+# 推荐：全程可见
+curl -N -X POST http://127.0.0.1:4321/api/session/stream \
+  -H 'content-type: application/json' \
+  -d '{"sessionId":"s1","message":"..."}'
+```
+
 ## 7. 出问题了
 
 - 任何报错都会给「下一步」建议——照着做通常就好了
