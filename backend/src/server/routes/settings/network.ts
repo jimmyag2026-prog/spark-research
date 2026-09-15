@@ -1,12 +1,18 @@
 import { Hono } from "hono";
+import { resolveSetting } from "../../../config";
 import type { ServerContext } from "../../context";
-import { BAD_BODY, fail, panel, settingsBody, written, type SettingsRouteOptions } from "./shared";
-import type { SettingsItem, SettingsMeta } from "./types";
+import { configOptions, handleSettingWrite, toItem } from "./general";
+import { panel, type SettingsRouteOptions } from "./shared";
+import type { SettingsMeta } from "./types";
 
 // network 面板：`originAllowlist` · `httpTimeoutMs` · `llmTimeoutMs` · `contactEmail` · `userAgent`。
 //
-// **这条路由只是 general 的投影，不另存一份**——同一批键，同一个 config.json，
-// 同一套校验。分出来只是因为 ε 的面板是按用途分的，用户不该为了改超时去 32 键里翻。
+// **这条路由只是 general 的投影，不另存一份**——同一批键、同一个 config.json、
+// 同一套校验（写入直接复用 general 的 `handleSettingWrite`）。分出来只是因为 ε 的面板
+// 是按用途分的：用户要调一个超时，不该先在 32 个键里翻。
+//
+// 两份键清单会漂移吗？不会：下面这张表里的每个名字都会被 `resolveSetting` 拿去解析，
+// 拼错一个立刻抛「未知配置项」，`settings_panels.test.ts` 的 GET 断言当场红。
 
 export const NETWORK_KEYS = [
   "originAllowlist",
@@ -25,31 +31,21 @@ const META: SettingsMeta = {
   ],
 };
 
-const FIXTURE: SettingsItem[] = [
-  {
-    key: "httpTimeoutMs",
-    label: "httpTimeoutMs",
-    kind: "number",
-    value: 30_000,
-    source: "default",
-    configured: false,
-    allowed: null,
-    editable: true,
-    summary: "单次 connector HTTP 请求的超时上限（毫秒）",
-    nextStep: null,
-  },
-];
-
-export function networkRoutes(_ctx: ServerContext, _options: SettingsRouteOptions = {}): Hono {
+export function networkRoutes(ctx: ServerContext, _options: SettingsRouteOptions = {}): Hono {
   const app = new Hono();
 
-  app.get("/network", (c) => panel(c, "network", FIXTURE, META));
+  app.get("/network", (c) =>
+    panel(
+      c,
+      "network",
+      NETWORK_KEYS.map((key) => toItem(resolveSetting(key, configOptions(ctx)))),
+      META,
+    ),
+  );
 
-  app.put("/network/:key", async (c) => {
-    const body = await settingsBody(c);
-    if (body === null) return fail(c, 400, BAD_BODY.error, BAD_BODY.nextStep);
-    return written(c, "network", FIXTURE[0]!, META);
-  });
+  app.put("/network/:key", (c) =>
+    handleSettingWrite(c, ctx, "network", c.req.param("key"), META, NETWORK_KEYS),
+  );
 
   return app;
 }

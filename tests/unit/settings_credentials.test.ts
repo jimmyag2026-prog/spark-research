@@ -32,7 +32,7 @@ function makeApp(remoteAddress?: RemoteAddressResolver): Hono {
   return app;
 }
 
-function put(app: Hono, id: string, fields: Record<string, string>): Promise<Response> {
+async function put(app: Hono, id: string, fields: Record<string, string>): Promise<Response> {
   return app.fetch(
     new Request(`http://127.0.0.1/api/settings/credentials/${id}`, {
       method: "PUT",
