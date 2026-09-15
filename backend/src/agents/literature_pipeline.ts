@@ -18,6 +18,14 @@ import { explainCitationGap } from "../reviewer/citation_judge";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import type { LiteratureSource } from "../literature/models";
+import {
+  type DeltaListener,
+  type PartialCardPayload,
+  type PartialKind,
+  type PartialListener,
+  type PartialPaper,
+  type PartialPayload,
+} from "./progress";
 import type { LLMRouter } from "../llm/router";
 import type { Project } from "../project/manager";
 
@@ -35,6 +43,22 @@ export interface LiteraturePipelineDeps {
   downloadPdf?: (library: LibraryStore, paperId: string) => Promise<{ ok: boolean; reason?: string }>;
   /** 阶段进度（写进执行日志 / progress 事件）。 */
   note?: (message: string) => void;
+  /**
+   * β-2（v0.10）：**中间产物出口**——检索候选清单 / 每源结果 / 每张精读卡完成即推。
+   * 与 `note` 同级：`note` 推的是「现在在干什么」（一句人话），这条推的是
+   * 「刚刚产出了什么」（结构化）。不给 = 完全空操作，CLI 与既有测试逐字节不变。
+   *
+   * **本 lane 只加回调与事件出口，不改流程逻辑**（流程内部的并行/预筛归 lane α，
+   * 它同期在改同一个文件）。所以下面每个调用点都紧贴着已有的那一行，不移动任何语句。
+   */
+  emitPartial?: PartialListener;
+  /** β-2：产生这些事件的 plan 任务 id（chat 路径给；CLI / 测试不给）。 */
+  taskId?: string;
+  /**
+   * β-3（v0.10）：正文增量出口。综述走 `target:"review"`，精读卡走 `card:<paperId>`。
+   * 不给 = 不开流式（provider 侧不走 SSE 分支，行为与接线前一致）。
+   */
+  onDelta?: DeltaListener;
 }
 
 export interface LiteraturePipelineOptions {
@@ -79,6 +103,16 @@ export async function runLiteraturePipeline(
   options: LiteraturePipelineOptions,
 ): Promise<LiteraturePipelineResult> {
   const note = deps.note ?? (() => {});
+  // β-2：事件出口。**观察者抛异常不许弄死管线**——但也不许静默吞掉，
+  // 所以落进执行日志（note）而不是 `catch {}`（自动化降级必须留痕）。
+  const partial = (kind: PartialKind, payload: PartialPayload): void => {
+    if (!deps.emitPartial) return;
+    try {
+      deps.emitPartial({ kind, ...(deps.taskId ? { taskId: deps.taskId } : {}), ts: Date.now(), payload });
+    } catch (e) {
+      note(`partial(${kind}) 推送失败：${(e instanceof Error ? e.message : String(e)).slice(0, 80)}`);
+    }
+  };
   const queries = options.queries.map((q) => q.trim()).filter(Boolean);
   const failures: string[] = [];
   const result: LiteraturePipelineResult = {
@@ -129,13 +163,38 @@ export async function runLiteraturePipeline(
         continue;
       }
       result.searches.push({ query, sources: r.sources, found: r.papers.length });
+      // β-2：每源一条 —— ok / failed / timeout / skipped + 条数。**失败与成功同样推**，
+      // 不然「某源静默没出结果」在界面上和「这个源没被查」长得一模一样（U43 的病）。
+      for (const s of r.sources) {
+        partial("search_source", {
+          query,
+          source: s.source,
+          outcome: s.outcome,
+          count: s.count ?? null,
+          elapsedMs: s.elapsedMs ?? null,
+          ...(s.error ? { error: s.error.slice(0, 160) } : {}),
+        });
+      }
       for (const s of r.sources) if (s.outcome === "failed") failures.push(`源 ${s.source}（「${query}」）失败：${(s.error ?? "").slice(0, 120)}`);
       // ③ 入库（按 DOI / 标题合并，LibraryStore 自己去重）
+      const hits: PartialPaper[] = [];
       for (const paper of r.papers) {
         const added = library.add(paper, { tags: ["chat"] });
         added.merged ? result.merged++ : result.added++;
         if (!collected.some((p) => p.id === added.paper.id)) collected.push(added.paper);
+        if (hits.length < 20) {
+          hits.push({
+            id: added.paper.id,
+            title: added.paper.title,
+            year: added.paper.year ?? null,
+            doi: added.paper.doi ?? null,
+            sources: Array.isArray(added.paper.sources) ? [...added.paper.sources] : [],
+          });
+        }
       }
+      // β-2：检索一回来就把候选清单推上屏（≤ 20 条）——在下载与精读开跑**之前**，
+      // 这是「检索完成 ≤ 10s 页面出现论文标题」那条 DONE 的产生端。
+      partial("papers", { query, found: r.papers.length, papers: hits });
     }
     library.rebuildCitations();
     result.library = library.list().length;
@@ -181,7 +240,31 @@ export async function runLiteraturePipeline(
       fullTextFor: async (p) => (p.pdfPath ? extractPdfText(p.pdfPath) : { ok: false, reason: "库内无 PDF（未下载或不可得）" }),
     });
     note(`精读 ${targets.length} 篇`);
-    const gen = await generator.generateMany(targets.map((p) => p.id), { sessionId: deps.sessionId });
+    const gen = await generator.generateMany(targets.map((p) => p.id), {
+      sessionId: deps.sessionId,
+      // β-2：**每张卡完成即推一条**（不是等 8 张全好了一起给）——精读是全流程最慢的一段，
+      // 这条事件就是「精读每完成一张页面多一行」那条 DONE 的产生端。
+      // 失败那篇不推 card 事件（没有内容可推），它由 cardFailures 与 note 如实交代。
+      onProgress: ({ paperId, ok }) => {
+        if (!deps.emitPartial || !ok) return;
+        const card = listReadingCards(records, library).find((c) => c.paperId === paperId);
+        if (!card) return;
+        const payload: PartialCardPayload = {
+          paperId,
+          title: card.title,
+          year: library.get(paperId)?.year ?? null,
+          // 一句话关键发现 = 卡里的第一条 keyFindings（schema 保证至少 1 条）。取不到就 null，不编。
+          keyFinding: card.keyFindings[0] ?? null,
+          // 相关性分：预筛（lane α-1）落地后由它填；现在管线不产出分数 → null 而不是 0
+          // （0 会被读成「判定为不相关」，那是另一件事）。
+          relevance: null,
+          basis: (card as { basis?: string }).basis ?? null,
+        };
+        partial("card", payload);
+      },
+      // β-3：精读卡正文的增量（target = `card:<paperId>`，在 reading.ts 里拼）。
+      ...(deps.onDelta ? { onDelta: deps.onDelta } : {}),
+    });
     result.cardFailures = gen.failures;
     const cards: StoredReadingCard[] = listReadingCards(records, library).filter((c) => targets.some((t) => t.id === c.paperId));
     result.cards = cards.map((c) => ({ paperId: c.paperId, title: library.get(c.paperId)?.title ?? "", year: library.get(c.paperId)?.year ?? null, basis: (c as { basis?: string }).basis ?? null }));
@@ -204,7 +287,12 @@ export async function runLiteraturePipeline(
       artifacts: project.artifacts(),
       workDir: project.paths.artifactsDir,
     });
-    const draft = await reviewer.generate(cards, { topic: options.topic, sessionId: deps.sessionId });
+    // β-3：综述正文逐块到达（target = "review"，重试时 revision +1，都在 review.ts 里定）。
+    const draft = await reviewer.generate(cards, {
+      topic: options.topic,
+      sessionId: deps.sessionId,
+      ...(deps.onDelta ? { onDelta: deps.onDelta } : {}),
+    });
     const knownKeys = libraryKeyIndex(library.list()).keys;
     const check = await citationIntegrity({
       draft: draft.markdown,
