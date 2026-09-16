@@ -15,7 +15,7 @@
 > **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
 > 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
 >
-> 最后更新：2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
+> 最后更新：2026-09-16（R7 零上下文验收：新增 U59–U70，正文在 `devlog/R7.md`）；2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
 
 ---
 
@@ -81,6 +81,18 @@
 | [U56](#u56) | 文献库列表没有作者/关键词，下载好的 PDF 无法从界面打开 | 中 | 体验 | ✅ 本地已修（列表加作者/关键词列；`GET /api/lit/papers/:id/pdf/file` 直开） |
 | [U57](#u57) | 文献流程生成了 8 张精读卡和综述 artifact，汇总模型却说「未记录任何工件 ID」——skill 摘要被 U48 的 600 字符上限切掉后半段 | **高** | 正确性 | ✅ 本地已修（skill 摘要按 2000 进 summarize；规划提示词不再排多余的 analysis 综合任务） |
 | [U58](#u58) | 中文检索词能命中（74 条）但查准率接近零：三源对中文 token 松散匹配，AMiner 退回单词命中；CNKI/万方是占位 | **高** | 检索 | → v0.10 γ-2（V161 扩为「中文查询处理」：先英译/主题词抽取再查 + 中文期刊过滤） |
+| [U59](devlog/R7.md#u59) | DONE 第 1 条写的是「P50 ≤ 20s（**S1**+S2）」，而 §三 五条 lane 没有任何一条认领 S1 直答路径——代码里零命中（R7 · 正文在 R7.md） | **高** | 计划/施工范围 | R7 新登记 |
+| [U60](devlog/R7.md#u60) | `STAGE_MAX_TOKENS` 是上限不是目标：t3/t4 的 summarize 8/10 轮顶满 1200 token，两个本来最快的项目反而比 R6 慢 14–15% | 中 | 性能 | R7 新登记 |
+| [U61](devlog/R7.md#u61) | quick 档的 prescreen 段 28.5s，比它要省的综述（25.3s）还贵，占 quick 总时长 46% | 低 | 性能 | R7 新登记 |
+| [U62](devlog/R7.md#u62) | `measure-chat --pipeline` 把 `limit 6 / maxRead 3` 写死，DONE 的「deep 档（**8 篇**）≤ 3 min」与 α-2 的「8 篇 ≤ 150s」在这条工具链上不可判定 | 中 | 方法/工具 | R7 新登记 |
+| [U63](devlog/R7.md#u63) | `scripts/measure-chat.ts` 把输出标题写死成「R6 基线」，R7 复测出来的文件首行仍自称 R6 | 低 | 整洁 | R7 新登记 |
+| [U64](devlog/R7.md#u64) | α-4 的 Unpaywall 兜底对主流出版商结构性空转（它返回的就是已经 403 / not_a_pdf 的同一条直链）；同一批 8 篇标 OA 实拿 **1 篇** | **高** | 功能缺口 | R7 新登记（DONE 第 3 条 ❌） |
+| [U65](devlog/R7.md#u65) | `lit pdf` 不打印 attempts 明细，α-4 的「两跳到底发生了没有」在命令行上不可见 | 低 | 可观测性 | R7 新登记 |
+| [U66](devlog/R7.md#u66) | **规划调用被 `STAGE_MAX_TOKENS.plan=600` 吃光/截断 → `parsePlan` 返回 null → 静默退 `defaultPlan()`**：真实会话里 chat 永远只跑一条 `explore and analyze the request`，技能与文献流程一次都触发不了 | **Blocker** | 正确性 | R7 新登记（DONE 第 2/6 条 ❌ 的共同根因） |
+| [U67](devlog/R7.md#u67) | **`/api/session/stream` 的正文全丢**：summarize 顶满 1200 token 但 `content` 为空，`result.response` 只剩 `[session <id>]\n`，`delta` 事件 0 条；同一消息走非流式 `/chat` 正常 | **Blocker** | 正确性 | R7 新登记 |
+| [U68](devlog/R7.md#u68) | 运行中的 server 用的是**启动时**的 `llmTimeoutMs`（`LLMRouter` 构造函数里读一次就缓存）：改成 1000 后 server 侧照样跑满 6s 成功，CLI 新进程则如期 timeout；`originAllowlist` 同构 | 中 | 正确性 | R7 新登记（U15 同族，另一个键） |
+| [U69](devlog/R7.md#u69) | γ-2 的中文英译调用走裸 `new LLMRouter()`，**绕过记账层**：四条中文检索式跑完，四个项目的 `usage.jsonl` 一行都没有 | 中 | 记账 | R7 新登记 |
+| [U70](devlog/R7.md#u70) | 设置项写空值被 422 拒绝，nextStep 说「要恢复默认请用 DELETE」，但 DELETE 只在 `/api/settings/general/:key` 存在，`/network/:key` 等面板是 404 | 低 | 契约一致性 | R7 新登记 |
 
 ### 方法缺陷
 
