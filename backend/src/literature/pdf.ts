@@ -258,9 +258,15 @@ export class PdfDownloader {
 
     // ② α-4 第二跳：全部直链失败 → 按 DOI 问一次 Unpaywall（免 key，但必须带真邮箱）。
     const fromUnpaywall = await this.unpaywallCandidate(paper, attempts);
-    if (fromUnpaywall && !seen.has(fromUnpaywall.url)) {
-      const saved = await tryOne(fromUnpaywall, false);
-      if (saved) return saved;
+    if (fromUnpaywall) {
+      // R7 U64：Unpaywall 回的 url_for_pdf 常与已经 403 / not_a_pdf 的直链逐字节相同——同一 URL 不再敲第二次，留痕。
+      const alreadyTried = attempts.some((a) => a.url === fromUnpaywall.url) || seen.has(fromUnpaywall.url);
+      if (alreadyTried) {
+        attempts.push({ url: fromUnpaywall.url, status: null, outcome: "skipped: unpaywall 给的直链与已失败的候选相同" });
+      } else {
+        const saved = await tryOne(fromUnpaywall, false);
+        if (saved) return saved;
+      }
     }
 
     return this.fail(paper, lastReason, lastMessage, attempts);

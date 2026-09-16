@@ -5,6 +5,23 @@
 
 ---
 
+## [0.10.0-alpha.2] — 2026-09-16
+
+**R7 修复窗口**（R7 报告 `docs/devlog/R7.md`：DONE 九条 2 过 / 2 半过 / 4 不过 / 1 不适用；T1 5/8 · T2 3/8 · T3 0/8 · T4 4/8 · T5 六条 P0 全过；U59–U70）。
+
+### 如实交代
+- 两条 Blocker（U66 规划被 600 上限吃光退默认计划、U67 `/stream` 正文全空）都是 alpha.1 收口把 `STAGE_MAX_TOKENS` 接到 plan/summarize、而本机默认模型 glm-5.3-flash 不在思考型名单里造成的——**收口自己引入的回归**。
+- 修法不再靠名单：router 对「带上限却拿到空正文 / 输出恰好顶满上限」的模型在进程内学为思考型并不带上限重试一次；名单同时补 glm-5.3-flash / deepseek-v4-flash。代价：这两个模型上 α-3 的省 token 不成立（U60 的 8/10 轮顶满 1200 也由此消失）。
+- S1 直答路径（U59）本版补上：规划器可回 `{"direct": …}`，一次调用直接作答；chat P50 ≤20s 要 A9 复测。
+- 未做：U68（运行中 server 的 `llmTimeoutMs`/`originAllowlist` 是构造期快照）、U70（422 nextStep 指向不存在的 DELETE）、U61（quick 档 prescreen 比它省下的综述还贵）、U65（`lit pdf` 不打印 attempts）→ V182–V185。
+
+### 修复
+- U66：`limits.ts` 的承诺兑现——plan 解析失败重试一次（更严提示、不带上限）再退默认计划，且留痕；U67：summarize `ok:true` 但空正文当失败（review 不 approved，用户看到说明而不是空白）。
+- U69：`lit search` 的中文英译调用走 `usageTrackingLlm`（此前裸 router，零台账、绕过预算闸）。
+- U64：Unpaywall 给的 `url_for_pdf` 与已失败直链相同 → 不再敲第二次，attempts 留 `skipped`。
+- U62/U63：`measure-chat --pipeline` 加 `--limit` / `--max-read`，标题不再写死「R6 基线」。
+- 门禁 `tests/unit/r7_window.test.ts` 9 条；阴性对照 3 条实跑变红。
+
 ## [0.10.0-alpha.1] — 2026-09-16
 
 **主题：回复速度 + 流式可见 + 文献流程补完。** 五条 lane 合入（`docs/devlog/W10-1-closeout.md`；各 lane 细节 `W10-{alpha,beta,gamma,delta,epsilon}.md`；基线 `W10-0-baseline.md`）。

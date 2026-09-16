@@ -5,7 +5,7 @@ import { failure, type ProviderAdapter } from "./providers/types";
 import type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities } from "./types";
 import { guardLlmCall } from "./watchdog";
 import { retryDelayMs } from "./provider_error";
-import { MODELS_BY_PROVIDER, UnknownModelError, assertKnownModel, isReasoningModel } from "./providers/registry";
+import { MODELS_BY_PROVIDER, UnknownModelError, assertKnownModel, isReasoningModel, markReasoningModel } from "./providers/registry";
 
 export type { CallOptions, ChatMessage, LlmResponse, ProviderCapabilities, ToolCall, ToolSpec, Usage } from "./types";
 
@@ -200,8 +200,9 @@ export class LLMRouter {
     const model = rawOptions.model ?? DEFAULT_MODEL;
     // α-3（v0.10 实测）：思考型模型会把输出预算花在推理 token 上——maxTokens 设小换来的是
     // **空输出**（outputTokens 打满上限、content 为空），不是短输出。名单真源在 providers/registry.ts。
-    const options: CallOptions =
+    let options: CallOptions =
       rawOptions.maxTokens !== undefined && isReasoningModel(model) ? { ...rawOptions, maxTokens: undefined } : rawOptions;
+    let capRetried = false;
 
     let entry: ReturnType<LLMRouter["resolve"]>;
     try {
@@ -261,6 +262,19 @@ export class LLMRouter {
           fetchImpl: this.fetchImpl,
         }),
       );
+      // R7 U66/U67：带上限的调用拿到空正文，或输出恰好顶满上限（思考段吃光预算 / 正文被截断）——
+      // 这不是模型答完了，是上限设错了对象。学习该模型为思考型，本次不带上限重试一次。
+      // 流式且已经吐过正文（非空）的不重试：前端已按 revision 1 渲染，重来会拼两稿。
+      if (response.ok && !capRetried && options.maxTokens !== undefined) {
+        const empty = response.content.trim() === "";
+        const hitCap = response.usage.outputTokens >= options.maxTokens;
+        if (empty || (hitCap && !options.onDelta)) {
+          markReasoningModel(model);
+          options = { ...options, maxTokens: undefined };
+          capRetried = true;
+          continue;
+        }
+      }
       if (response.ok || !response.error.retryable || attempt >= maxRetries) return response;
       // α-2（v0.9）：有 Retry-After 时按 provider 给的时间表走；否则指数退避 + 抖动（V137 本体不动）。
       const delay = retryDelayMs({ error: response.error, attempt, baseDelayMs: this.retryBaseDelayMs, maxDelayMs: RETRY_MAX_DELAY_MS });

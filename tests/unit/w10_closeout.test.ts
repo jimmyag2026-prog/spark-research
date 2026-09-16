@@ -62,11 +62,12 @@ function orchWith(llm: ScriptLlm, slug: string, sessionId: string) {
 }
 
 describe("收口 · α-3 推理模型不发 max_tokens（router 层根治）", () => {
-  test("名单：kimi-k2.6（含 provider 前缀）与 deepseek-reasoner 是思考型；glm-5.3-flash 不是", () => {
+  test("名单：kimi-k2.6（含 provider 前缀）与 deepseek-reasoner 是思考型；kimi-k2 不是（glm-5.3-flash 自 R7 U66 起入单）", () => {
     expect(isReasoningModel("moonshotai/kimi-k2.6")).toBe(true);
     expect(isReasoningModel("kimi-k2.6")).toBe(true);
     expect(isReasoningModel("deepseek-reasoner")).toBe(true);
-    expect(isReasoningModel("z-ai/glm-5.3-flash")).toBe(false);
+    expect(isReasoningModel("kimi-k2")).toBe(false);
+    expect(isReasoningModel("z-ai/glm-5.3-flash")).toBe(true);
   });
 
   test("接线：同一个 router，思考型模型的请求体没有 max_tokens，非思考型带上", async () => {
@@ -75,9 +76,9 @@ describe("收口 · α-3 推理模型不发 max_tokens（router 层根治）", (
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
-    const router = new LLMRouter({ OPENROUTER_API_KEY: "test-key" }, { fetchImpl });
+    const router = new LLMRouter({ OPENROUTER_API_KEY: "test-key", KIMI_API_KEY: "test-key-2" }, { fetchImpl });
     await router.call([{ role: "user", content: "hi" }], { model: "moonshotai/kimi-k2.6", maxTokens: 300 });
-    await router.call([{ role: "user", content: "hi" }], { model: "z-ai/glm-5.3-flash", maxTokens: 300 });
+    await router.call([{ role: "user", content: "hi" }], { model: "kimi-k2", maxTokens: 300 });
     expect(bodies).toHaveLength(2);
     expect(bodies[0]!.max_tokens).toBeUndefined();
     expect(bodies[1]!.max_tokens).toBe(300);

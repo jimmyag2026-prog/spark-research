@@ -54,11 +54,27 @@ export interface ModelPricing {
  * 长期应给 ProviderCapabilities 加一位 `reasoningTokens`；短期按名单，与下面的单价表放在一起维护。
  * 匹配按去掉 provider 前缀后的模型名（`moonshotai/kimi-k2.6` 与 `kimi-k2.6` 同一条）。
  */
-export const REASONING_MODELS: ReadonlySet<string> = new Set(["kimi-k2.6", "kimi-k3", "deepseek-reasoner", "deepseek-v4-pro"]);
+export const REASONING_MODELS: ReadonlySet<string> = new Set([
+  "kimi-k2.6", "kimi-k3", "deepseek-reasoner", "deepseek-v4-pro",
+  // R7 U66/U67（2026-09-16）：这两个是本机默认模型，plan 在 600 上限下 5/5 次空正文或截断 JSON。
+  "glm-5.3-flash", "deepseek-v4-flash",
+]);
+/**
+ * R7 U66 的教训：硬名单永远滞后于模型发布。router 在「设了 maxTokens、正文却空 / 输出恰好顶满上限」
+ * 时把该模型**在本进程内**记为思考型（后续调用不再带上限），并重试一次不带上限。
+ */
+const learnedReasoning = new Set<string>();
+export function markReasoningModel(model: string): void {
+  learnedReasoning.add(model);
+}
+/** 测试用：清掉进程内学到的名单。 */
+export function resetLearnedReasoningModels(): void {
+  learnedReasoning.clear();
+}
 
 export function isReasoningModel(model: string): boolean {
   const bare = model.includes("/") ? model.slice(model.lastIndexOf("/") + 1) : model;
-  return REASONING_MODELS.has(model) || REASONING_MODELS.has(bare);
+  return REASONING_MODELS.has(model) || REASONING_MODELS.has(bare) || learnedReasoning.has(model) || learnedReasoning.has(bare);
 }
 
 export const PRICING: Readonly<Record<string, Readonly<Record<string, ModelPricing>>>> = {
