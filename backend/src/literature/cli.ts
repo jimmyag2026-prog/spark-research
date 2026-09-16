@@ -428,8 +428,20 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
     if (deps.searcher) return deps.searcher;
     const credentials = deps.credentials ?? new CredentialStore({ root: deps.root });
     let rawSink: RawSink | undefined;
+    // R7 U69：中文检索式的英译调用也要过台账（此前裸 `new LLMRouter()`，四个项目零台账、绕过预算闸）。
+    let translateLlm: Pick<LLMRouter, "call"> = deps.llm ?? new LLMRouter();
     try {
-      rawSink = openProjectResolved(manager, flagString(flags.project)).raw();
+      const p = openProjectResolved(manager, flagString(flags.project));
+      rawSink = p.raw();
+      translateLlm = usageTrackingLlm({
+        llm: translateLlm,
+        store: new UsageStore(join(p.paths.root, "usage.jsonl")),
+        command: "lit-search",
+        configOptions: { root: deps.root },
+        rawSink,
+        project: p.slug,
+        sessionId: flagString(flags.session) ?? null,
+      });
     } catch {
       rawSink = undefined;
     }
@@ -440,7 +452,7 @@ export async function runLitCommand(args: string[], deps: LitCliDeps = {}): Prom
         // γ-2（U58）：中文查询的英译器。**懒构造** LLMRouter：只有真的遇到中文查询时
         // prepareQuery 才会调这个闭包，纯英文查询一次都不碰它——否则每条 `lit search`
         // 都要为一件它不做的事付一个 router 的构造成本。
-        translate: (q) => llmQueryTranslator(deps.llm ?? new LLMRouter(), model)(q),
+        translate: (q) => llmQueryTranslator(translateLlm, model)(q),
       },
     );
   };

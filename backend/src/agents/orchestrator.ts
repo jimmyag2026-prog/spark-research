@@ -160,6 +160,25 @@ export interface OrchestrationFailure {
  * 连接器任务在坏网络上逐个超时，SSE 只剩 ping、非流式 chat 挂到 255s 被掐——
  * 没有模型就不可能有真答案，第一次失败就该把 errorKind 交给用户。
  */
+/** S1（v0.10）：规划器判定无需任何工具，直接给出答案——用异常穿过 plan() 的返回类型。 */
+class DirectAnswer extends Error {
+  constructor(readonly answer: string) {
+    super("direct answer");
+  }
+}
+
+/** 识别 `{"direct": "..."}`；不是这个形状（含任务数组）一律 null。 */
+function parseDirectAnswer(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{")) return null;
+  try {
+    const obj = JSON.parse(trimmed) as { direct?: unknown };
+    return typeof obj.direct === "string" && obj.direct.trim() !== "" ? obj.direct : null;
+  } catch {
+    return null;
+  }
+}
+
 class PlanCallFailedError extends Error {
   constructor(readonly kind: OrchestrationFailure["kind"], message: string) {
     super(message);
@@ -702,6 +721,22 @@ export class OrchestratorAgent {
     try {
       plan = await this.plan(sessionId, userMessage, skills, skillContext);
     } catch (error) {
+      if (error instanceof DirectAnswer) {
+        // S1：一次调用直接给答案；不执行、不 summarize、不 review（没有产出可审）。
+        progress.planned(0);
+        options.onDelta?.(error.answer);
+        this.record(sessionId, "orchestrator", "done", "S1 direct answer; nothing executed");
+        return {
+          sessionId,
+          projectSlug: project?.slug ?? null,
+          skills,
+          plan: [],
+          execution: [],
+          summary: error.answer,
+          review: { approved: true, findings: [] } as ReviewResult,
+          reviewRounds: 0,
+        };
+      }
       if (!(error instanceof PlanCallFailedError)) throw error;
       // U12 / U29：规划调用失败——整轮到此为止。不跑默认计划、不再调 summarize，
       // 直接给结构化失败；review 不能 approved（没有任何产出可批）。
@@ -863,6 +898,9 @@ export class OrchestratorAgent {
           // U57：综述已经由技能产出（artifact），再排一个 analysis「综合」任务只会拿到空结果。
           `and its output ALREADY CONTAINS the synthesized review as an artifact — do NOT add a separate "analysis" synthesis task after it. ` +
           `Use "connector" only for non-literature databases (proteins, genes, compounds). No markdown, no prose, only JSON. ` +
+          // S1（v0.10，R7 U59）：直答路径。寒暄 / 常识问答 / 不需要任何工具的问题不再走 plan→execute→summarize 三段。
+          `IF the request needs NO tool, connector, skill, code or file at all (greeting, small talk, a factual or conceptual question you can answer from knowledge), ` +
+          `reply INSTEAD with exactly one JSON object {"direct":"<your complete answer, in the user's language, markdown allowed>"} and nothing else. ` +
           // V171：步骤间的落盘约定。没有这句，模型只能按常识去 /workspace 找上一步的产物。
           `Every connector task's full JSON result is saved to ${join(this.workspaceRoot, sessionId)}/<taskId>.json ` +
           `(absolute path). A "code" task that consumes earlier connector results MUST open exactly those files by absolute path; ` +
@@ -888,13 +926,33 @@ export class OrchestratorAgent {
     // ——它不是"多余的重复检查"，是 TypeScript 窄化到 `res.error` 存在这条分支的
     // 唯一入口，删了它类型都过不了，且控制流上仍然必须走这条分支才能不把（如今恒为
     // 空串的）`res.content` 当成计划文本喂给 parsePlan()。
+    const direct = parseDirectAnswer(res.ok ? res.content : "");
+    if (direct !== null) {
+      this.record(sessionId, "orchestrator", "direct-answer", `S1：规划器判定无需工具，直答 ${direct.length} 字符`);
+      throw new DirectAnswer(direct);
+    }
     if (!res.ok) {
       this.record(sessionId, "orchestrator", "plan-llm-failed", `planning LLM call failed: ${res.error.message}`);
       // U12 / A8 U29：调用失败（闸拒、上游连不上、鉴权…）一律到此为止，不退默认计划。
       // 只有「模型答了但不是合法计划」才退 defaultPlan()（下一行）。
       throw new PlanCallFailedError(res.error.kind === "budget" ? "budget" : "llm", res.error.message);
     }
-    return this.parsePlan(res.content) ?? this.defaultPlan();
+    const parsed = this.parsePlan(res.content);
+    if (parsed) return parsed;
+    // R7 U66 / limits.ts 的承诺：解析失败**重试一次**（更严的提示、不带上限），仍失败才退默认计划，且留痕。
+    this.record(sessionId, "orchestrator", "plan-unparsable", `规划输出不是合法任务数组（${res.content.length} 字符），重试一次`);
+    const retry = await this.llmFor(sessionId).call(
+      [...messages, { role: "assistant", content: res.content }, { role: "user", content: "That was not a valid JSON array of tasks. Reply with ONLY the JSON array (or the {\"direct\":...} object), no prose." }],
+      { model: configuredModel(LLMRouter.DEFAULT_MODEL) },
+    );
+    if (retry.ok) {
+      const direct2 = parseDirectAnswer(retry.content);
+      if (direct2 !== null) throw new DirectAnswer(direct2);
+      const parsed2 = this.parsePlan(retry.content);
+      if (parsed2) return parsed2;
+    }
+    this.record(sessionId, "orchestrator", "plan-default", "重试后仍无法解析，退默认计划（explore and analyze）");
+    return this.defaultPlan();
   }
 
   private parsePlan(content: string): PlannedTask[] | null {
@@ -1230,6 +1288,15 @@ export class OrchestratorAgent {
       return {
         text: "[orchestrator] LLM 调用失败，未能生成结果摘要（这是调用失败，不是模型产出）。请检查 LLM 配置（API key / 网络）后重试。",
         failure: { kind: "llm", message: res.error.message },
+      };
+    }
+    // R7 U67：ok:true 但正文为空（思考型模型把上限吃光 / 上游回了空串）不许当成结论返回，
+    // 否则网页端拿到空回答且全程零报错。当成失败，review 不得 approved。
+    if (res.content.trim() === "") {
+      this.record(sessionId, "orchestrator", "summarize-empty", `模型返回空正文（outputTokens=${res.usage.outputTokens}）`);
+      return {
+        text: "[orchestrator] 模型返回了空正文，未能生成结果摘要（这是模型输出异常，不是配置错误）。请重试；若反复出现，换一个模型或把该模型登记为思考型。",
+        failure: { kind: "llm", message: "empty summarize output" },
       };
     }
     return { text: res.content };
