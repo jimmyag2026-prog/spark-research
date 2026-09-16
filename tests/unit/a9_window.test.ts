@@ -120,3 +120,17 @@ describe("U72 · chat 把 depth 透给文献流程", () => {
     expect(prompts[0]).toContain('"depth":"quick"');
   });
 });
+
+describe("v0.10.0 · 预筛被上限截掉的不写成「剔除」", () => {
+  test("10 篇全 3 分、maxRead 4 → digest 里是「未入选（3 分，超出留取上限 4）」而不是「剔除（3 分）」", async () => {
+    const project = pm.create("cap", { name: "x" });
+    const llm = pipelineLlm(project);
+    const r = await runLiteraturePipeline(
+      { llm: llm as never, project, sessionId: "s", searcher: fakeSearcher(10), downloadPdf: async () => ({ ok: false }) },
+      { mode: "review", depth: "quick", queries: ["rsi"], topic: "RSI", topK: 4 },
+    );
+    expect(r.prescreen.kept).toBe(4);
+    expect(r.digest).toContain("未入选（3 分，超出留取上限 4）");
+    expect(r.digest).not.toContain("剔除（3 分）");
+  });
+});

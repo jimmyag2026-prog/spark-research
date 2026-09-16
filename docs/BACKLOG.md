@@ -281,6 +281,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V186 | `doctor` 默认只探 4321，另一端口的同版本实例一个字不报（A9 U74） | δ-2 做了 `--port` 与 config `serverPort`；但 U2 的现场正是「不知道有别的实例在跑」。修：扫本机监听端口里响应 `/api/health` 且 service=spark-research 的全部实例。去向：v0.10.x |
 | V187 | `data export --for-sharing` → import → report 永远 diff ≠ 0（A9 U75） | AD-16 让文献库不出门 → 报告缺「附录 B」；判据表那行字面口径不可达，应改成「全量导出 diff=0；--for-sharing 只比对非文献段」。去向：任务书修订（R6_A8 §A8） |
 | V188 | 科学工具面板把 `searchSources` 标 `editable:true`，但 `PUT /api/settings/scientific-tools/searchSources` 404（A9 U76） | 真写路径 `PUT /api/settings/sources {ids}`，前缀和 body 形状都不同。修：面板项标 editable:false 并给 nextStep 指向真路径，或做转发。去向：v0.10.x |
+| V189 | 预筛 top-K 在同分（大量 3 分）时无二级排序，留谁全凭模型输出顺序（v0.10.0 发布前复现：81 篇 → 留 8，几十篇 3 分被截） | 修：同分按被引 / 年份 / 命中源数二级排序；或 3 分全留交给 maxRead。去向：v0.10.x |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 

@@ -1,6 +1,6 @@
 # Spark Research
 
-> 面向科研人群的开源科研工作台（v0.10.0-alpha.3，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
+> 面向科研人群的开源科研工作台（v0.10.0，Apache-2.0）。用自然语言驱动一个可审计的研究代理，完成「文献调研 → 思路共探 → 创新性核验 → 实验（干/湿）→ 全流程记录 → 结论评审 → 报告」的完整循环。本地优先、模型无关、每一步都留下可溯源的证据链。
 
 核心主张：**你的研究项目是一等公民，每一步思考和实验都留下可审计的证据链。** 与同类工具的三个差异：project-centric（不是 session-centric）、全流程 Research Record（思路/决策/观察/结论都进同一张证据图）、干湿实验闭环。
 
@@ -2629,6 +2629,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 | V186 | `doctor` 默认只探 4321，另一端口的同版本实例一个字不报（A9 U74） | δ-2 做了 `--port` 与 config `serverPort`；但 U2 的现场正是「不知道有别的实例在跑」。修：扫本机监听端口里响应 `/api/health` 且 service=spark-research 的全部实例。去向：v0.10.x |
 | V187 | `data export --for-sharing` → import → report 永远 diff ≠ 0（A9 U75） | AD-16 让文献库不出门 → 报告缺「附录 B」；判据表那行字面口径不可达，应改成「全量导出 diff=0；--for-sharing 只比对非文献段」。去向：任务书修订（R6_A8 §A8） |
 | V188 | 科学工具面板把 `searchSources` 标 `editable:true`，但 `PUT /api/settings/scientific-tools/searchSources` 404（A9 U76） | 真写路径 `PUT /api/settings/sources {ids}`，前缀和 body 形状都不同。修：面板项标 editable:false 并给 nextStep 指向真路径，或做转发。去向：v0.10.x |
+| V189 | 预筛 top-K 在同分（大量 3 分）时无二级排序，留谁全凭模型输出顺序（v0.10.0 发布前复现：81 篇 → 留 8，几十篇 3 分被截） | 修：同分按被引 / 年份 / 命中源数二级排序；或 3 分全留交给 maxRead。去向：v0.10.x |
 
 ## 待定（等外部输入 / 用户拍板）—— 已并入 §post-v0.3
 
@@ -2650,6 +2651,26 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
 ---
+
+## [0.10.0] — 2026-09-16
+
+**主题：回复速度 + 流式可见 + 文献流程补完。** 汇总 alpha.1（五 lane 收口）、alpha.2（R7 修复窗口）、alpha.3（A9 修复窗口）；各段细节见下方三个 alpha 段与 `docs/devlog/W10-1-closeout.md` `R7.md` `A9.md`。
+
+### 如实交代（先说没做到的）
+- **DONE 九条：7 过、2 未达**——「同一批 8 篇 OA PDF ≥ 5」实得 3/8（失败全是出版社 403），「T3 脑机接口召回 ≥ 2/8」仍 0/8（γ-2 的中文英译层跑了但没抬起召回）。两条留 v0.10.x（BACKLOG V181 等）。
+- 一句话 chat 的提速主要来自 **S1 直答路径**（20/20 轮单次调用，P50 35.1s → 4.4s），不是 α-3 的 maxTokens——本机默认模型是思考型，router 对它们不发上限（否则空输出）。需要工具的请求仍是 plan → execute → summarize，用户视角首条论文标题落地 24–49s。
+- 文献请求默认 deep 档（~2–3 min：真下载、真精读卡、卡片逐张流式）；只要概览时规划器选 quick（~1 min）。
+- 预筛 top-K 同分无二级排序（V189）；`doctor` 默认只探 4321（V186）。
+
+### 与 v0.9.1 相比
+- 速度：直答路径、两档综述 + 预筛、精读并行 3、思考型模型自动识别（`REASONING_MODELS` + 进程内学习）。
+- 流式：`partial`（papers / search_source / card）、`delta.target/revision`、`progress.etaMs`、断开即取消、同步 `/chat` 超时改 202。
+- 文献质量：中文英译双查 + 相关性地板、`searchLanguage`、零摘要不精读、检索源面板四态、上游 200-带错显式表、chat 可执行技能 2 → 5。
+- 运维：`project archive --pattern`、`doctor` 多实例、`/api/health.frontendBuilt`、`readConcurrency` / `chatSyncMaxMs` 配置项。
+- 前端：阶段条 + 实时日志 + 分区流式正文 + 停止、422 行内显示、令牌计数实时、文献列表关键词与行内下载。
+
+### 验收
+R7（`docs/devlog/R7.md`，U59–U70）与 A9（`docs/devlog/A9.md`，U71–U76）两次零上下文验收；A8 判据表 10/10；Blocker 四条（U66 U67 U71 U72）全部修掉并经主会话独立复现。套件：unit 2858 · e2e 60 · concurrency/timeout 37 · integration 8 · sdk 69 · lab 26。
 
 ## [0.10.0-alpha.3] — 2026-09-16
 

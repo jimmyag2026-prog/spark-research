@@ -497,7 +497,12 @@ function renderDigest(r: LiteraturePipelineResult, collected: LibraryPaper[]): s
   // 预筛剔掉了什么必须写出来：静默丢文献是最难被发现的错误之一。
   if (r.prescreen.candidates > 0 || r.prescreen.enabled) {
     tail.push(`  ${r.prescreen.note}`);
-    for (const d of r.prescreen.dropped.slice(0, 3)) tail.push(`   × 剔除（${d.score ?? "?"} 分）：${d.title.slice(0, 70)}`);
+    // v0.10.0 发布前复现：81 篇里几十篇都是 3 分，被 topK 上限截掉的也写成「剔除（3 分）」，
+    // 总结模型据此质疑预筛。达到阈值（prescreen 默认 minScore=2）却没入选的 = 「未入选（超出上限）」，不是剔除。
+    for (const d of r.prescreen.dropped.slice(0, 3)) {
+      const capCut = d.score !== null && d.score >= 2;
+      tail.push(capCut ? `   · 未入选（${d.score} 分，超出留取上限 ${r.prescreen.kept}）：${d.title.slice(0, 70)}` : `   × 剔除（${d.score ?? "?"} 分）：${d.title.slice(0, 70)}`);
+    }
   }
   if (r.downloads.length > 0) tail.push(`  PDF：${r.downloads.filter((d) => d.ok).length}/${r.downloads.length} 篇下载成功`);
   if (r.cards.length > 0) tail.push(`  精读卡：${r.cards.length} 张（${r.cards.filter((c) => c.basis === "fulltext").length} 张基于全文，其余基于摘要）`);
