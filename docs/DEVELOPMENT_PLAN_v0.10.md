@@ -89,7 +89,7 @@ W10-0 → 五 lane 并行（α 先出 S9 让 β 有东西可流）→ 收口 `in
 - [x] V172：技能盘点表入库，chat 可执行技能 ≥ 5 个——A9 在 chat 里逐个真执行 5 个
 - [x] 验收产物归档，工作台默认不再打开验收项目——R7/A9 收尾各归档一批，指针 spark0915
 - [x] R7 与 A9 的 P0/Blocker 全部关闭，且每条经主会话独立复现——U66/U67（alpha.2）A9 复核关；U71/U72（alpha.3）主会话在 alpha.3 真 server 上复现关
-- [ ] CI 对 v0.10.0 tag 的结论 = success（tag 推上后补勾）
+- [x] CI 对 v0.10.0 tag 的结论 = success（release.yml run 35052011541 success，3 个 assets）
 
 ## 七、不做
 换 message loop 架构 · 一次接完 13 个技能 · 引入新前端框架 · 再做上游对比。
