@@ -893,7 +893,9 @@ export class OrchestratorAgent {
           `"skill"=run a skill (params.skill). ` +
           // V172：文献类需求走真流程，别再手搓 connector。关键词拆解（①）在这里发生。
           `FOR ANY LITERATURE NEED (find papers / survey / review / recent progress / compare countries), emit ONE skill task instead of connector tasks: ` +
-          `{"kind":"skill","params":{"skill":"literature-review","queries":["<3-6 decomposed keyword queries in English>"],"topic":"<one line>","limit":15,"maxRead":8}} ` +
+          `{"kind":"skill","params":{"skill":"literature-review","queries":["<3-6 decomposed keyword queries in English>"],"topic":"<one line>","limit":15,"depth":"deep","maxRead":8}} ` +
+          `("depth":"quick" = one-call overview from abstracts, ~1 min, no PDFs/reading cards — use it ONLY when the user asks for a quick/brief overview; ` +
+          `"depth":"deep" = download PDFs → per-paper reading cards → review, ~2-3 min — use it when the user wants a review/综述/精读/full texts or does not say). ` +
           `("literature-search" if the user only wants a candidate list). It runs search → library → PDF → reading cards → review with citation checks, ` +
           // U57：综述已经由技能产出（artifact），再排一个 analysis「综合」任务只会拿到空结果。
           `and its output ALREADY CONTAINS the synthesized review as an artifact — do NOT add a separate "analysis" synthesis task after it. ` +
@@ -1180,6 +1182,11 @@ export class OrchestratorAgent {
                 topic: typeof task.params?.topic === "string" ? task.params.topic : undefined,
                 limit: typeof task.params?.limit === "number" ? task.params.limit : undefined,
                 maxRead: typeof task.params?.maxRead === "number" ? task.params.maxRead : undefined,
+                // A9 U72：depth 此前根本没透传 → 恒 quick，规划器写的 maxRead 是死参数。
+                // 规划器显式给 depth 就用它；没给但给了 maxRead（想读几篇）= deep；都没给 = quick。
+                depth: task.params?.depth === "deep" || task.params?.depth === "quick"
+                  ? task.params.depth
+                  : typeof task.params?.maxRead === "number" && task.params.maxRead > 0 ? "deep" : "quick",
               },
             );
             const savedTo = join(this.workspaceRoot, sessionId, `${task.id}.json`);

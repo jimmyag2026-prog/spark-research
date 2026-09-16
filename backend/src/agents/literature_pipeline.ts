@@ -143,7 +143,8 @@ export async function runLiteraturePipeline(
   const queries = options.queries.map((q) => q.trim()).filter(Boolean);
   const failures: string[] = [];
   const depth: LiteratureDepth = options.depth ?? "quick";
-  const topK = options.topK ?? 8;
+  // A9 U73：预筛在 maxRead 上游——想精读 8 篇就不能先砍到 4 篇；topK 不给时取 max(8, maxRead)。
+  const topK = options.topK ?? Math.max(8, options.maxRead ?? 0);
   // 「本次到底打了几次模型」只能数出来，不能算出来：重试、fail-open、两档不同路径
   // 都会改变次数。这里把 llm 包一层计数器，**所有**下游（预筛/精读/综述）共用它。
   let llmCalls = 0;
@@ -475,8 +476,15 @@ function quickEntries(papers: LibraryPaper[], library: LibraryStore): AbstractEn
   return out;
 }
 
+const DIGEST_MAX_CHARS = 1500;
+
 function renderDigest(r: LiteraturePipelineResult, collected: LibraryPaper[]): string {
-  const lines: string[] = [];
+  // A9 U71（= U57 换了个上限）：结尾 slice(0, 1500) 会把最要紧的「综述：artifact …」切掉——
+  // 5–6 条查询 × 8 个源的状态行先吃光预算，总结模型据此告诉用户「综述无法交付」。
+  // 改法：预筛 / PDF / 精读卡 / 综述 / 失败 这几行**永远保留**，只对检索明细与样例截断。
+  const head: string[] = [];
+  const tail: string[] = [];
+  const lines = head;
   lines.push(`文献流程（${r.mode} · ${r.depth} 档）：${r.queries.length} 条查询 → 命中 ${collected.length} 篇（新入库 ${r.added}，合并 ${r.merged}），库内共 ${r.library} 篇`);
   for (const s of r.searches) {
     const bySrc = s.sources.map((x) => `${x.source}:${x.outcome}${x.count !== undefined ? `(${x.count})` : ""}`).join(" ");
@@ -488,12 +496,16 @@ function renderDigest(r: LiteraturePipelineResult, collected: LibraryPaper[]): s
   }
   // 预筛剔掉了什么必须写出来：静默丢文献是最难被发现的错误之一。
   if (r.prescreen.candidates > 0 || r.prescreen.enabled) {
-    lines.push(`  ${r.prescreen.note}`);
-    for (const d of r.prescreen.dropped.slice(0, 5)) lines.push(`   × 剔除（${d.score ?? "?"} 分）：${d.title.slice(0, 70)}`);
+    tail.push(`  ${r.prescreen.note}`);
+    for (const d of r.prescreen.dropped.slice(0, 3)) tail.push(`   × 剔除（${d.score ?? "?"} 分）：${d.title.slice(0, 70)}`);
   }
-  if (r.downloads.length > 0) lines.push(`  PDF：${r.downloads.filter((d) => d.ok).length}/${r.downloads.length} 篇下载成功`);
-  if (r.cards.length > 0) lines.push(`  精读卡：${r.cards.length} 张（${r.cards.filter((c) => c.basis === "fulltext").length} 张基于全文，其余基于摘要）`);
-  if (r.review) lines.push(`  综述：artifact ${r.review.artifactId ?? "（未入库）"} · 引用 ${r.review.citedKeys} 条 · 库外引用 ${r.review.unknownKeys} 条 · 核验未解析 ${r.review.gap.unresolved ?? 0}`);
-  if (r.failures.length > 0) lines.push(`  失败/缺口（${r.failures.length}）：${r.failures.slice(0, 4).join("；")}`);
-  return lines.join("\n").slice(0, 1500);
+  if (r.downloads.length > 0) tail.push(`  PDF：${r.downloads.filter((d) => d.ok).length}/${r.downloads.length} 篇下载成功`);
+  if (r.cards.length > 0) tail.push(`  精读卡：${r.cards.length} 张（${r.cards.filter((c) => c.basis === "fulltext").length} 张基于全文，其余基于摘要）`);
+  if (r.review) tail.push(`  综述：artifact ${r.review.artifactId ?? "（未入库）"} · 引用 ${r.review.citedKeys} 条 · 库外引用 ${r.review.unknownKeys} 条 · 核验未解析 ${r.review.gap.unresolved ?? 0}`);
+  if (r.failures.length > 0) tail.push(`  失败/缺口（${r.failures.length}）：${r.failures.slice(0, 4).join("；")}`);
+  const tailText = tail.join("\n");
+  const headBudget = Math.max(200, DIGEST_MAX_CHARS - tailText.length - 1);
+  let headText = head.join("\n");
+  if (headText.length > headBudget) headText = `${headText.slice(0, headBudget - 12)}…（检索明细已截断）`;
+  return tailText ? `${headText}\n${tailText}` : headText;
 }

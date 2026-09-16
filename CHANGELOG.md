@@ -5,6 +5,20 @@
 
 ---
 
+## [0.10.0-alpha.3] — 2026-09-16
+
+**A9 修复窗口**（A9 报告 `docs/devlog/A9.md`：U66/U67 复核已关；A8 判据表 10 项全过 0 Blocker；chat 20 轮 P50 **4.4s**（R7 35.1s，−87%，20/20 轮单次调用）；quick 61.5s；deep 131.6s；U71–U76）。
+
+### 如实交代
+- U71（Blocker）与 alpha.1 修掉的 U57 是同一形状换了个上限：quick 档 digest 结尾 `slice(0,1500)` 把「综述：artifact …」切掉，总结模型据此告诉用户「综述无法交付」——综述其实已生成并流出去了。本版把预筛 / PDF / 精读卡 / 综述 / 失败五行改为永远保留，只截检索明细。
+- U72（高）：chat 从未把 `depth` 透给文献流程 → 恒 quick，规划器写的 `maxRead` 是死参数，`partial(card)` 从结构上不可能出现。本版透传；规划提示写明两档取舍（用户要综述/精读/全文或没说 = deep；只要快速概览 = quick），没给 depth 但给了 maxRead 按 deep。**代价：默认文献请求从 ~1 min 回到 ~2–3 min**，换来真下载、真精读卡、真流式卡片。
+- OA PDF 3/8（R7 1/8）仍未达 5/8，失败全是出版社 403，本版不动。T3 复跑 A9 未派，仍 0/8（R7）。
+- 未做：U74 `doctor` 默认只探 4321、U75 `--for-sharing` 往返 diff 必非 0（方法学）、U76 面板 `searchSources` editable 与写路径对不上 → V186–V188。
+
+### 修复
+- U71 digest 尾部保留；U72 depth 透传 + 规划提示；U73 预筛 topK ≥ maxRead（`--limit 8 --max-read 8` 真读 8 篇）。
+- 门禁 `tests/unit/a9_window.test.ts` 6 条；阴性对照 2 条实跑变红。
+
 ## [0.10.0-alpha.2] — 2026-09-16
 
 **R7 修复窗口**（R7 报告 `docs/devlog/R7.md`：DONE 九条 2 过 / 2 半过 / 4 不过 / 1 不适用；T1 5/8 · T2 3/8 · T3 0/8 · T4 4/8 · T5 六条 P0 全过；U59–U70）。
