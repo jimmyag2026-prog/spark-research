@@ -5,6 +5,26 @@
 
 ---
 
+## [0.10.0] — 2026-09-16
+
+**主题：回复速度 + 流式可见 + 文献流程补完。** 汇总 alpha.1（五 lane 收口）、alpha.2（R7 修复窗口）、alpha.3（A9 修复窗口）；各段细节见下方三个 alpha 段与 `docs/devlog/W10-1-closeout.md` `R7.md` `A9.md`。
+
+### 如实交代（先说没做到的）
+- **DONE 九条：7 过、2 未达**——「同一批 8 篇 OA PDF ≥ 5」实得 3/8（失败全是出版社 403），「T3 脑机接口召回 ≥ 2/8」仍 0/8（γ-2 的中文英译层跑了但没抬起召回）。两条留 v0.10.x（BACKLOG V181 等）。
+- 一句话 chat 的提速主要来自 **S1 直答路径**（20/20 轮单次调用，P50 35.1s → 4.4s），不是 α-3 的 maxTokens——本机默认模型是思考型，router 对它们不发上限（否则空输出）。需要工具的请求仍是 plan → execute → summarize，用户视角首条论文标题落地 24–49s。
+- 文献请求默认 deep 档（~2–3 min：真下载、真精读卡、卡片逐张流式）；只要概览时规划器选 quick（~1 min）。
+- 预筛 top-K 同分无二级排序（V189）；`doctor` 默认只探 4321（V186）。
+
+### 与 v0.9.1 相比
+- 速度：直答路径、两档综述 + 预筛、精读并行 3、思考型模型自动识别（`REASONING_MODELS` + 进程内学习）。
+- 流式：`partial`（papers / search_source / card）、`delta.target/revision`、`progress.etaMs`、断开即取消、同步 `/chat` 超时改 202。
+- 文献质量：中文英译双查 + 相关性地板、`searchLanguage`、零摘要不精读、检索源面板四态、上游 200-带错显式表、chat 可执行技能 2 → 5。
+- 运维：`project archive --pattern`、`doctor` 多实例、`/api/health.frontendBuilt`、`readConcurrency` / `chatSyncMaxMs` 配置项。
+- 前端：阶段条 + 实时日志 + 分区流式正文 + 停止、422 行内显示、令牌计数实时、文献列表关键词与行内下载。
+
+### 验收
+R7（`docs/devlog/R7.md`，U59–U70）与 A9（`docs/devlog/A9.md`，U71–U76）两次零上下文验收；A8 判据表 10/10；Blocker 四条（U66 U67 U71 U72）全部修掉并经主会话独立复现。套件：unit 2858 · e2e 60 · concurrency/timeout 37 · integration 8 · sdk 69 · lab 26。
+
 ## [0.10.0-alpha.3] — 2026-09-16
 
 **A9 修复窗口**（A9 报告 `docs/devlog/A9.md`：U66/U67 复核已关；A8 判据表 10 项全过 0 Blocker；chat 20 轮 P50 **4.4s**（R7 35.1s，−87%，20/20 轮单次调用）；quick 61.5s；deep 131.6s；U71–U76）。
