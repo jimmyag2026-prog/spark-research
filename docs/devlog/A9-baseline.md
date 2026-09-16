@@ -110,3 +110,36 @@ server 0.10.0-alpha.2 · 消息「用三句话说明什么是蛋白质的二级�
 ```json
 {"ts":"2026-09-16T02:00:34.522Z","command":"chat","provider":"openrouter","model":"z-ai/glm-5.3-flash","ok":true,"inputTokens":1318,"outputTokens":103,"costUsd":0.0001314252}
 ```
+# 文献流程基线 · 2026-09-16T02:18:27.670Z
+
+server 无关（进程内）· deep 档 · 1 查询 · limit 8 · maxRead 8 · ok=true
+
+| 阶段 | 耗时 |
+|---|---:|
+| search | 8.0s |
+| prescreen | 20.5s |
+| download | 8.7s |
+| read（4 卡）| 58.3s |
+| review | 36.1s |
+| **total** | **131.6s** |
+
+PDF 2/4 · 失败/缺口 2
+- 源 arxiv（「repetitive strain injury office workers prevention」）失败：timeout: arxiv 在 8000ms 内未返回（已按 timeout 记，其它源照常返回）
+- 源 biorxiv（「repetitive strain injury office workers prevention」）失败：timeout: biorxiv 在 8000ms 内未返回（已按 timeout 记，其它源照常返回）
+
+# 文献流程基线 · 2026-09-16T02:25:27.301Z
+
+server 无关（进程内）· quick 档 · 1 查询 · limit 6 · maxRead 3 · ok=true
+
+| 阶段 | 耗时 |
+|---|---:|
+| search | 8.0s |
+| prescreen | 11.3s |
+| download | 0.0s |
+| read（0 卡）| 0.0s |
+| review | 42.2s |
+| **total** | **61.5s** |
+
+PDF 0/0 · 失败/缺口 1
+- 源 biorxiv（「repetitive strain injury office workers prevention」）失败：timeout: biorxiv 在 8000ms 内未返回（已按 timeout 记，其它源照常返回）
+

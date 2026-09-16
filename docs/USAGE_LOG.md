@@ -15,7 +15,7 @@
 > **没有证据的条目会在复核时被打回**；不确定的标「待核实」，核实完再改写，
 > 并把最初错误的猜测留在条目里——本文已经有两处这样的留痕（U4、U5）。
 >
-> 最后更新：2026-09-16（R7 零上下文验收：新增 U59–U70，正文在 `devlog/R7.md`）；2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
+> 最后更新：2026-09-16（A9 第八次零上下文验收：新增 U71–U76，正文在 `devlog/A9.md`；U66/U67 两条 Blocker 已复核关闭）；2026-09-16（R7 零上下文验收：新增 U59–U70，正文在 `devlog/R7.md`）；2026-09-16 凌晨（本地使用窗口第三批：U47 补登、U54–U56；U41 U42 U51 状态措辞校正）；2026-09-16（v0.9.1 本地使用窗口：新增 U44 U45 U46；U38 U39 U40 U44 U45 U46 已修并带门禁，U41 U42 U43 → V171–V173，残余 → V174 V175 V176）；2026-09-14
 
 ---
 
@@ -93,6 +93,12 @@
 | [U68](devlog/R7.md#u68) | 运行中的 server 用的是**启动时**的 `llmTimeoutMs`（`LLMRouter` 构造函数里读一次就缓存）：改成 1000 后 server 侧照样跑满 6s 成功，CLI 新进程则如期 timeout；`originAllowlist` 同构 | 中 | 正确性 | R7 新登记（U15 同族，另一个键） |
 | [U69](devlog/R7.md#u69) | γ-2 的中文英译调用走裸 `new LLMRouter()`，**绕过记账层**：四条中文检索式跑完，四个项目的 `usage.jsonl` 一行都没有 | 中 | 记账 | R7 新登记 |
 | [U70](devlog/R7.md#u70) | 设置项写空值被 422 拒绝，nextStep 说「要恢复默认请用 DELETE」，但 DELETE 只在 `/api/settings/general/:key` 存在，`/network/:key` 等面板是 404 | 低 | 契约一致性 | R7 新登记 |
+| [U71](devlog/A9.md#u71) | **quick 档 digest 被 `slice(0,1500)` 截断，「综述：artifact …」那行掉了** → 总结阶段看不到综述，如实告诉用户「小综述无法交付」，而综述已经生成、已落盘、已逐块流给前端 | **Blocker** | 正确性 | A9 新登记（U57 同形，换了一个上限） |
+| [U72](devlog/A9.md#u72) | chat 路径组装 pipeline options 时**不传 `depth`** → 恒走 quick 档：规划器认真写的 `maxRead: 8` 是死参数，永不下载、永不建精读卡，`partial(card)` 从 chat 结构上不可能出现 | **高** | 功能缺失 | A9 新登记（DONE 第 2 条「每卡一条 partial」在产品路径上不可满足） |
+| [U73](devlog/A9.md#u73) | prescreen 在 `maxRead` 上游：`--limit 8 --max-read 8` 实际只精读 4 篇（预筛 8→4），「8 篇 deep ≤3min」这个 DONE 口径仍不可判 | 中 | 可测量性 | A9 新登记（U62 只修了旋钮，没修口径） |
+| [U74](devlog/A9.md#u74) | `doctor` 默认只探 4321：另一端口上跑着的同版本实例一个字都不报，要显式 `--port` 才看得见——而 U2 的现场正是「不知道有别的实例在跑」 | 中 | 运维 | A9 新登记（U2 残余） |
+| [U75](devlog/A9.md#u75) | `data export --for-sharing` → import → report 永远 diff ≠ 0（AD-16 让文献库不出门 → 报告缺「附录 B」整节）；全量导出那条往返 diff = 0 | 低 | 判据口径 | A9 新登记（判据表那行字面不可达，非缺陷） |
+| [U76](devlog/A9.md#u76) | 科学工具面板的 `searchSources` 标 `editable:true`，但 `PUT /api/settings/scientific-tools/searchSources` 是 404；真写路径是 `PUT /api/settings/sources`，body 形状也从 `{value}` 变成 `{ids}` | 低 | 契约一致性 | A9 新登记 |
 
 ### 方法缺陷
 
