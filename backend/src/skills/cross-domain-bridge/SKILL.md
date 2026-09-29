@@ -105,6 +105,14 @@ supporting / contradicting 全 inferred；openQuestions = 廉价伪证方案。n
 - ❌ 把 references 里的自由文本当成真实引用塞进综述。要引就先 `lit search` 入库拿 `[@key]`
 - ❌ 为了凑领域数让模型编冷门学科——去重后不够数会报错，报错就减 `--fields`
 
+## Hermes 版（同一套判据，子代理盲写）
+
+`hermes/` 子目录是给 Hermes Agent 用的移植：`hermes/SKILL.md` 把五阶段写成主模型操作手册，盲写与评委走
+`delegate_task` 并行子代理（天然互不可见），审计与 Elo 由 `hermes/scripts/bridge_tools.py`（零依赖 Python）
+确定性执行。安装：`bash hermes/sync-to-hermes.sh`（rsync 真实拷贝到 `~/.hermes/skills/research/cross-domain-bridge/`，
+Hermes 不跟 symlink）。用法：在 Hermes 里发 `--cross-domain-bridge <问题>`。真实运行记录见
+`docs/devlog/CDB-hermes-smoke-2026-09-29.md`。两版差别：Hermes 版没有 Idea 卡与 novelty-check，产出是一条对话回复。
+
 ## 验证方式（AD-5）
 
 - 单测：`tests/unit/bridge.test.ts`——jargon 门、提案 schema、审计四条硬规则 + 两条软规则、Elo 锦标赛

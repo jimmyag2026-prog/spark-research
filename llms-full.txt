@@ -2659,6 +2659,7 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 - **技能 `cross-domain-bridge`（跨领域桥接）**：把研究问题剥离领域术语写成结构签名 → 唤醒研究过同一结构的其他领域 → 每个领域独立盲写迁移提案（带承重映射表）→ 确定性审计（承重映射 ≥2 / 常规骨架 ≥2 / 一处非典型注入 / 伪证可排期，Uzzi 2013 比例门）→ 两两 Elo 锦标赛 → 可选落成 Idea 卡（全 inferred，`unchecked`）。设计依据与现成 skill 调研见 `backend/src/skills/cross-domain-bridge/SKILL.md`；历史跨领域突破回测清单与可迁移方法目录在 `references/`。
 - CLI `spark-research idea bridge -m "<问题>" [--terms a,b] [--dead-end x]... [--source-field 领域] [--fields N] [--save] [--out 文件] [--json]`。
 - chat 编排层可直接执行该技能（`skill_runners.ts` 分发表 3 → 4）；报告落 artifact。
+- **Hermes 版**（`backend/src/skills/cross-domain-bridge/hermes/`）：同一套判据移植为 Hermes skill，盲写与评委用 `delegate_task` 并行子代理，审计与 Elo 由零依赖 Python 脚本执行；`sync-to-hermes.sh` 一键安装；真实运行记录 `docs/devlog/CDB-hermes-smoke-2026-09-29.md`。
 
 ### 如实交代
 - 技能不查文献库，references 是自由文本；产出必须先过 `novelty-check` 才能当真。
@@ -4348,6 +4349,14 @@ supporting / contradicting 全 inferred；openQuestions = 廉价伪证方案。n
 - ❌ 把 Elo 第一名直接当结论写进报告——它没过 novelty-check，也没做伪证
 - ❌ 把 references 里的自由文本当成真实引用塞进综述。要引就先 `lit search` 入库拿 `[@key]`
 - ❌ 为了凑领域数让模型编冷门学科——去重后不够数会报错，报错就减 `--fields`
+
+## Hermes 版（同一套判据，子代理盲写）
+
+`hermes/` 子目录是给 Hermes Agent 用的移植：`hermes/SKILL.md` 把五阶段写成主模型操作手册，盲写与评委走
+`delegate_task` 并行子代理（天然互不可见），审计与 Elo 由 `hermes/scripts/bridge_tools.py`（零依赖 Python）
+确定性执行。安装：`bash hermes/sync-to-hermes.sh`（rsync 真实拷贝到 `~/.hermes/skills/research/cross-domain-bridge/`，
+Hermes 不跟 symlink）。用法：在 Hermes 里发 `--cross-domain-bridge <问题>`。真实运行记录见
+`docs/devlog/CDB-hermes-smoke-2026-09-29.md`。两版差别：Hermes 版没有 Idea 卡与 novelty-check，产出是一条对话回复。
 
 ## 验证方式（AD-5）
 
