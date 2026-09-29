@@ -11,6 +11,7 @@
 - **技能 `cross-domain-bridge`（跨领域桥接）**：把研究问题剥离领域术语写成结构签名 → 唤醒研究过同一结构的其他领域 → 每个领域独立盲写迁移提案（带承重映射表）→ 确定性审计（承重映射 ≥2 / 常规骨架 ≥2 / 一处非典型注入 / 伪证可排期，Uzzi 2013 比例门）→ 两两 Elo 锦标赛 → 可选落成 Idea 卡（全 inferred，`unchecked`）。设计依据与现成 skill 调研见 `backend/src/skills/cross-domain-bridge/SKILL.md`；历史跨领域突破回测清单与可迁移方法目录在 `references/`。
 - CLI `spark-research idea bridge -m "<问题>" [--terms a,b] [--dead-end x]... [--source-field 领域] [--fields N] [--save] [--out 文件] [--json]`。
 - chat 编排层可直接执行该技能（`skill_runners.ts` 分发表 3 → 4）；报告落 artifact。
+- **Hermes 版**（`backend/src/skills/cross-domain-bridge/hermes/`）：同一套判据移植为 Hermes skill，盲写与评委用 `delegate_task` 并行子代理，审计与 Elo 由零依赖 Python 脚本执行；`sync-to-hermes.sh` 一键安装；真实运行记录 `docs/devlog/CDB-hermes-smoke-2026-09-29.md`。
 
 ### 如实交代
 - 技能不查文献库，references 是自由文本；产出必须先过 `novelty-check` 才能当真。
