@@ -116,9 +116,10 @@ spark-research mcp    # stdio 传输
 
 - opentrons_simulate / mock_devices
 
-### 技能（13）
+### 技能（14）
 
 - **cobrapy**（域 B）：敲掉这个基因还能不能长 / 跑一下 FBA / 厌氧条件下代谢会怎么变 / 代谢通量分析
+- **cross-domain-bridge**（域 A）：别的领域有没有现成解法 / 从其他学科找思路 / 跨领域 / 这个问题在别的领域叫什么 / 帮我找类比 / 有没有同构的问题
 - **dry-experiment**（域 B）：先在计算机上验一遍 / 跑一个 MD 算例 / 设计一个仿真 / 实验跑挂了能不能续跑
 - **idea-coexplore**（域 A）：我有个想法 / 帮我挑毛病 / 这个方向值不值得做 / 陪我想清楚这个假设
 - **library-curation**（域 A）：把这篇加进文献库 / 整理文献库 / 导出 BibTeX / 标记已读 / 给这批论文打标签

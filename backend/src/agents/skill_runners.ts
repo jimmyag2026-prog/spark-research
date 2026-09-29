@@ -23,6 +23,7 @@ import { llmQueryTranslator } from "../literature/prepare_query";
 import { reportFor } from "../report/cli";
 import { IdeaStore } from "../ideation/store";
 import { NoveltyChecker } from "../ideation/novelty";
+import { BridgeSession, bridgeToIdeaCard, renderBridgeReport } from "../ideation/bridge";
 import { ConnectorRegistry } from "../connectors/registry";
 import { CredentialStore } from "../daemon/credentials";
 import type { LLMRouter } from "../llm/router";
@@ -221,6 +222,78 @@ const noveltyCheck: SkillRunner = async (ctx, params) => {
   }
 };
 
+// ── cross-domain-bridge ──────────────────────────────────────────────────
+//
+// 五阶段管线全在 `ideation/bridge.ts`（签名 → 唤醒 → 盲写 → 审计 → 锦标赛），零 connector
+// 依赖，只吃 LLM。这里只做三件事：取参、跑、把报告落成 artifact + 前 3 名落 Idea 卡（可选）。
+// `problem` 缺失时不许自己编一个问题去跑——那会产出一份煞有介事却无的放矢的报告。
+const crossDomainBridge: SkillRunner = async (ctx, params) => {
+  const problem = str(params, "problem") ?? str(params, "statement") ?? str(params, "message");
+  if (!problem) {
+    return {
+      ok: false,
+      digest:
+        "cross-domain-bridge：缺少问题陈述（params.problem）。下一步：把用户想解的问题用一两句话写进 problem，" +
+        "并尽量补 domainTerms（领域术语，签名里不许出现）与 deadEnds（已知死路）。",
+    };
+  }
+  const session = new BridgeSession({
+    llm: ctx.llm,
+    model: ctx.model,
+    projectContext: ctx.project.meta.description || undefined,
+  });
+  const report = await session.run(
+    {
+      statement: problem,
+      domainTerms: strList(params, "domainTerms"),
+      deadEnds: strList(params, "deadEnds"),
+      sourceField: str(params, "sourceField"),
+    },
+    { fields: num(params, "fields"), note: ctx.note },
+  );
+
+  const markdown = renderBridgeReport(report);
+  const fileName = `cross-domain-bridge-${ctx.sessionId}.md`;
+  const path = join(ctx.project.paths.artifactsDir, fileName);
+  let artifactId: string | null = null;
+  try {
+    const { writeFileSync } = await import("node:fs");
+    writeFileSync(path, markdown);
+    artifactId = ctx.project.artifacts().save(path, "", [], { sessionId: ctx.sessionId }, ctx.project.slug).id;
+  } catch (e) {
+    ctx.note?.(`桥接报告落盘失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  let saved = 0;
+  if (params.save === true && report.ranked.length > 0) {
+    const library = new LibraryStore(ctx.project.paths.libraryDb, { records: ctx.project.records() });
+    try {
+      const store = new IdeaStore(ctx.project.records(), library);
+      for (const r of report.ranked.slice(0, 3)) {
+        store.create(bridgeToIdeaCard(r), { sessionId: ctx.sessionId, model: report.model });
+        saved += 1;
+      }
+    } finally {
+      library.close();
+    }
+  }
+
+  const top = report.ranked.slice(0, 3).map(
+    (r) => `  #${r.rank} ${r.proposal.field}（Elo ${Math.round(r.rating)}）：${r.proposal.statement.slice(0, 90)}`,
+  );
+  return {
+    ok: report.ranked.length > 0,
+    digest: [
+      `cross-domain-bridge：唤醒 ${report.fields.length} 个领域 · 通过审计 ${report.ranked.length} · 否决 ${report.rejected.length} · 未产出 ${report.failedFields.length}`,
+      `  签名对象：${report.signature.objects.slice(0, 4).join("；")}`,
+      ...top,
+      `  artifact ${artifactId ?? "（未入库）"} · ${path}${saved > 0 ? ` · 已落 ${saved} 张 Idea 卡（unchecked）` : ""}`,
+      "  一切为 inferred；下一步：对前几名跑 novelty-check，或先做它自己写的廉价伪证。",
+    ].join("\n").slice(0, 1500),
+    ...(artifactId ? { artifacts: [{ id: artifactId, label: "跨领域桥接报告" }] } : {}),
+  };
+};
+
 /**
  * 分发表。**唯一真源**——盘点表里「已接」那几行与这张表必须对得上。
  *
@@ -232,6 +305,7 @@ export const SKILL_RUNNERS: Record<string, SkillRunner> = {
   "paper-download": paperDownload,
   "research-report": researchReport,
   "novelty-check": noveltyCheck,
+  "cross-domain-bridge": crossDomainBridge,
 };
 
 /** 编排层的唯一入口。表里没有 → `handled: false`，调用方退回「加载说明书」。 */

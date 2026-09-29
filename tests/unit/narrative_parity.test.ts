@@ -230,6 +230,9 @@ const SKILL_ENTRYPOINTS: Record<string, SkillEntrypoints> = {
   // W5-3 β：C3 三件套复用 dry-experiment 的入口（`exp` CLI + exp_design/exp_run MCP），
   // 它们是 SimulationPlatform 的新实现，不是新的命令组（§1.4.3 checklist 第 8 条）。
   cobrapy: { cli: ["exp"], mcp: ["exp_design", "exp_run"] },
+  // v0.11：CLI `spark-research idea bridge` + chat 编排层 `skill_runners.ts` 直接执行。
+  // MCP 暂无对应工具（与 paper-download 同理：CLI 一条已满足「至少一条」）。
+  "cross-domain-bridge": { cli: ["idea"] },
   "dry-experiment": { cli: ["exp"], mcp: ["exp_design", "exp_run", "exp_list"] },
   "idea-coexplore": { cli: ["idea"], mcp: ["idea_coexplore"] },
   "library-curation": { cli: ["lit"], mcp: ["lit_add", "lit_list"] },

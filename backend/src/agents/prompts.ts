@@ -19,6 +19,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import bridgeTxt from "./prompt/bridge.txt" with { type: "text" };
 import coexploreTxt from "./prompt/coexplore.txt" with { type: "text" };
 import coreTxt from "./prompt/core.txt" with { type: "text" };
 import executeTxt from "./prompt/execute.txt" with { type: "text" };
@@ -34,6 +35,7 @@ import reviewerTxt from "./prompt/reviewer.txt" with { type: "text" };
  * `tests/unit/embedded_assets.test.ts` 有一条断言把两边钉死。
  */
 export const EMBEDDED_PROMPTS: Readonly<Record<string, string>> = Object.freeze({
+  "bridge.txt": bridgeTxt,
   "coexplore.txt": coexploreTxt,
   "core.txt": coreTxt,
   "execute.txt": executeTxt,
