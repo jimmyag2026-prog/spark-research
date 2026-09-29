@@ -106,6 +106,18 @@ describe("① 结构签名 · jargon 门是确定性的", () => {
     expect(jargonHits("AI-based approach", ["AI"])).toEqual([]);
   });
 
+  test("dynamics / objective 写成字符串数组也收（deepseek-v4-flash 冒烟实测形态），合并成一句", () => {
+    const r = validateStructureSignature(
+      { ...SIGNATURE, dynamics: ["训练时权重收敛", "换一个符号则整行重排"], objective: ["排序质量", "不许用位置级标注"] },
+      { domainTerms: CARD.domainTerms },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.fields!.dynamics).toBe("训练时权重收敛；换一个符号则整行重排");
+    expect(r.fields!.objective).toContain("；");
+    // 空数组仍然算缺失
+    expect(validateStructureSignature({ ...SIGNATURE, dynamics: [] }).ok).toBe(false);
+  });
+
   test("对象少于 2 / 缺 dynamics → 不合格", () => {
     const r = validateStructureSignature({ ...SIGNATURE, objects: ["只有一个"], dynamics: "" });
     expect(r.ok).toBe(false);

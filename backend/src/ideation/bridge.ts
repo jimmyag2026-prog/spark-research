@@ -94,6 +94,20 @@ function str(value: unknown, field: string, errors: string[], required = true): 
   return value.trim();
 }
 
+// 字符串或字符串数组都收（数组用「；」合并）。冒烟实测：deepseek-v4-flash 会把 dynamics /
+// objective 写成多条数组——内容完全合格，只因形态被打回等于把一份好签名扔掉。
+function strOrJoined(value: unknown, field: string, errors: string[]): string {
+  if (Array.isArray(value)) {
+    const items = value.map((v) => (typeof v === "string" ? v.trim() : "")).filter((v) => v.length > 0);
+    if (items.length === 0) {
+      errors.push(`字段 '${field}' 缺失或为空`);
+      return "";
+    }
+    return items.join("；");
+  }
+  return str(value, field, errors);
+}
+
 /** 术语命中判据：不区分大小写的子串。≤2 个字符的术语太容易误伤（"AI"、"PD"），跳过。 */
 export function jargonHits(text: string, domainTerms: readonly string[]): string[] {
   const haystack = text.toLowerCase();
@@ -113,9 +127,9 @@ export function validateStructureSignature(
   const fields: StructureSignature = {
     objects: strList(r.objects, "objects", errors, 2),
     relations: strList(r.relations, "relations", errors, 1),
-    dynamics: str(r.dynamics, "dynamics", errors),
+    dynamics: strOrJoined(r.dynamics, "dynamics", errors),
     constraints: strList(r.constraints, "constraints", errors, 0),
-    objective: str(r.objective, "objective", errors),
+    objective: strOrJoined(r.objective, "objective", errors),
     observables: strList(r.observables, "observables", errors, 1),
   };
   // jargon 门：签名的意义就是让别的领域能读懂。带着原领域术语的签名等于没翻译。
@@ -247,12 +261,12 @@ export function validateBridgeProposal(raw: unknown): Validation<BridgeProposal>
   if (!literatureAge) errors.push(`字段 'literatureAge' 必须是 ${LITERATURE_AGES.join(" / ")}`);
   const fields: BridgeProposal = {
     field: str(r.field, "field", errors),
-    mechanism: str(r.mechanism, "mechanism", errors),
-    statement: str(r.statement, "statement", errors),
+    mechanism: strOrJoined(r.mechanism, "mechanism", errors),
+    statement: strOrJoined(r.statement, "statement", errors),
     mapping,
     conventionalSkeleton: strList(r.conventionalSkeleton, "conventionalSkeleton", errors, 0),
     atypicalInjection: str(r.atypicalInjection, "atypicalInjection", errors),
-    cheapFalsification: str(r.cheapFalsification, "cheapFalsification", errors),
+    cheapFalsification: strOrJoined(r.cheapFalsification, "cheapFalsification", errors),
     literatureAge: literatureAge ?? "mixed",
     references: strList(r.references, "references", errors, 0),
   };
