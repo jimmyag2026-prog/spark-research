@@ -57,3 +57,4 @@ frontmatter 复杂到需要真 YAML 解析器时，说明它已经不适合当�
 | scanpy | B | v0.5 W5-3 落地（`dry-experiment` 的仿真平台形态） |
 | pydeseq2 | B | v0.5 W5-3 落地（同上） |
 | cobrapy | B | v0.5 W5-3 落地（同上） |
+| cross-domain-bridge | A | v0.11 落地（结构签名 → 唤醒领域 → 盲写 → 确定性审计 → Elo 锦标赛；chat 可执行） |

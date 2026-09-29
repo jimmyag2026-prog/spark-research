@@ -14,6 +14,7 @@ import { ProjectManager, ProjectError, type Project, openProjectResolved } from 
 import type { CitationJudge } from "../reviewer/rules";
 import { runCliTask } from "../cli/progress";
 import type { TaskRegistry } from "../server/tasks";
+import { BridgeSession, bridgeToIdeaCard, renderBridgeReport } from "./bridge";
 import { CoExploreError, CoExploreSession } from "./coexplore";
 import { renderIdeaCard, type NoveltyStatus, type StoredIdeaCard } from "./models";
 import { NoveltyChecker } from "./novelty";
@@ -26,6 +27,9 @@ export const IDEA_HELP = `用法:
   spark-research idea new [-m "你的思路"] [--session id] [--budget-usd N] [--allow-unpriced] [--model m] [--project slug] [--json]
                                                   Co-explore 共探 → 产出 Idea 卡入思路库
                                                   不带 -m 时进入多轮交互（/card 定卡，exit 退出）
+  spark-research idea bridge -m "研究问题" [--terms a,b] [--dead-end "x"]... [--source-field 领域] [--fields N] [--save] [--out 文件] [--budget-usd N] [--allow-unpriced] [--model m] [--project slug] [--json]
+                                                  跨领域桥接：结构签名 → 唤醒其他领域 → 盲写提案 → 审计 → 锦标赛
+                                                  --save 把前 3 名落成 Idea 卡（全 inferred，unchecked）
   spark-research idea list [--status unchecked|checked-novel|checked-incremental|checked-overlap] [--json]
                                                   列出思路库
   spark-research idea check <record-id> [--sources a,b] [--per-source N] [--budget-usd N] [--allow-unpriced] [--model m] [--project slug] [--out 文件] [--json]
@@ -149,6 +153,10 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
   const manager = deps.manager ?? new ProjectManager(deps.root);
   const [sub, ...rest] = args;
   const { positional, flags } = parseFlags(rest);
+  // `--dead-end` 可重复（parseFlags 对重复 flag 是后者覆盖前者）——死路通常不止一条，单独收集。
+  const deadEndFlags = rest
+    .map((arg, i) => (arg === "--dead-end" && rest[i + 1] && !rest[i + 1]!.startsWith("--") ? rest[i + 1]!.trim() : ""))
+    .filter(Boolean);
   // G-1（v0.6）：与 literature/cli.ts 同一条模型解析链（--model > 注入 > defaultModel
   // 配置 > 内部默认）。解析逻辑在 config 层的 configuredDefaultModel 单点实现，
   // 两个 CLI 只是消费——不留第二份手写副本（V46 形状）。
@@ -288,6 +296,95 @@ export async function runIdeaCommand(args: string[], deps: IdeaCliDeps = {}): Pr
         library.close();
         project.close();
         return 0;
+      }
+
+      case "bridge": {
+        const message = flagString(flags.message);
+        if (!message) {
+          err('idea bridge 需要 -m "研究问题"（非交互；问题写成一两句话，允许含术语）');
+          return 1;
+        }
+        const { project, library } = openProject(manager, flagString(flags.project));
+        const budget = parseBudgetUsd(flags["budget-usd"], err);
+        if (!budget.ok) {
+          library.close();
+          project.close();
+          return 1;
+        }
+        const fieldsRaw = flagString(flags.fields);
+        const fields = fieldsRaw ? Number(fieldsRaw) : undefined;
+        if (fieldsRaw && (!Number.isInteger(fields) || fields! < 2)) {
+          err(`--fields 必须是 ≥2 的整数（现在 '${fieldsRaw}'）`);
+          library.close();
+          project.close();
+          return 1;
+        }
+        const session = new BridgeSession({
+          llm: usageTrackingLlm({
+            llm: deps.llm ?? new LLMRouter(),
+            store: new UsageStore(join(project.paths.root, "usage.jsonl")),
+            command: "idea-bridge",
+            budgetUsd: budget.value,
+            allowUnpriced: flags["allow-unpriced"] === true,
+            configOptions: { root: deps.root },
+            rawSink: project.raw(),
+            project: project.slug,
+          }),
+          model,
+          projectContext: project.meta.description || undefined,
+        });
+        const card = {
+          statement: message,
+          domainTerms: (flagString(flags.terms) ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+          deadEnds: deadEndFlags,
+          sourceField: flagString(flags["source-field"]),
+        };
+        if (card.domainTerms.length === 0) {
+          err("⚠️  未声明领域术语（--terms）：签名的 jargon 门形同虚设，唤醒出来的多半是同域近邻。");
+        }
+        const sessionId = flagString(flags.session) ?? `bridge_${Date.now()}`;
+        const task = await runCliTask({
+          kind: "idea-bridge",
+          label: `跨领域桥接：${message.slice(0, 40)}`,
+          project: project.slug,
+          root: project.paths.root,
+          registry: deps.taskRegistry,
+          out,
+          quiet: flags.json === true,
+          run: () => session.run(card, { fields, note: flags.json === true ? undefined : (m) => err(`  · ${m}`) }),
+        });
+        const report = task.value;
+        if (!report) {
+          const e = task.snapshot.error;
+          err(`❌ ${e?.message ?? "跨领域桥接任务异常终止"}（状态已落盘，spark-research lit tasks 可查）`);
+          err("下一步：");
+          err("  · 签名阶段反复失败 → 术语表太宽（--terms 里有太泛的词，如「模型」），删几个再试");
+          err("  · 提案阶段全部失败 → 减 --fields，或换一个更强的 --model");
+          err("  · 模型调用失败 → spark-research auth / spark-research doctor");
+          library.close();
+          project.close();
+          return 1;
+        }
+        const saved: string[] = [];
+        if (flags.save === true) {
+          const store = new IdeaStore(project.records(), library);
+          for (const r of report.ranked.slice(0, 3)) {
+            saved.push(store.create(bridgeToIdeaCard(r), { sessionId, model: report.model }).recordId);
+          }
+        }
+        const markdown = renderBridgeReport(report);
+        const outPath = flagString(flags.out);
+        if (outPath) writeFileSync(outPath, markdown);
+        if (flags.json === true) {
+          out(JSON.stringify({ report, savedRecordIds: saved }, null, 2));
+        } else {
+          out(markdown);
+          if (saved.length > 0) out(`\n✅ 前 ${saved.length} 名已落 Idea 卡（unchecked）：${saved.map((id) => id.slice(0, 8)).join(", ")}——先 idea check 再当真`);
+          if (outPath) out(`报告已写入 ${outPath}`);
+        }
+        library.close();
+        project.close();
+        return report.ranked.length > 0 ? 0 : 1;
       }
 
       case "list": {

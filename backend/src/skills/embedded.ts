@@ -16,6 +16,7 @@
 // 它与磁盘上的目录集合逐字一致，新增或删除技能而忘了改这里，测试立刻变红。
 
 import CobraPyMd from "./cobrapy/SKILL.md" with { type: "text" };
+import CrossDomainBridgeMd from "./cross-domain-bridge/SKILL.md" with { type: "text" };
 import DryExperimentMd from "./dry-experiment/SKILL.md" with { type: "text" };
 import IdeaCoexploreMd from "./idea-coexplore/SKILL.md" with { type: "text" };
 import LibraryCurationMd from "./library-curation/SKILL.md" with { type: "text" };
@@ -32,6 +33,7 @@ import WetProtocolMd from "./wet-protocol/SKILL.md" with { type: "text" };
 /** 技能名 → SKILL.md 原文。键集合与 backend/src/skills 下各技能目录的 SKILL.md 一致。 */
 export const EMBEDDED_SKILLS: Readonly<Record<string, string>> = {
   cobrapy: CobraPyMd,
+  "cross-domain-bridge": CrossDomainBridgeMd,
   "dry-experiment": DryExperimentMd,
   "idea-coexplore": IdeaCoexploreMd,
   "library-curation": LibraryCurationMd,

@@ -74,7 +74,7 @@ const HELP = `Spark Research v${pkg.version}
   spark-research auth        配置 API Key
   spark-research project     项目管理（new / list / open / archive）
   spark-research lit         文献域（search / add / list / pdf / read / review / export / sources）
-  spark-research idea        思路库（new / list / check —— Co-explore + Novelty check）
+  spark-research idea        思路库（new / bridge / list / check —— Co-explore + 跨领域桥接 + Novelty check）
   spark-research usage       LLM 用量台账（按项目：调用/tokens/已知花费下界/按命令与模型归因）
   spark-research exp         干实验闭环（new / run / status / list / platforms）
   spark-research protein <query>  蛋白结构调研（UniProt → RCSB PDB → AlphaFold）

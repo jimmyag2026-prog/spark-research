@@ -31,8 +31,8 @@ const ctxFor = (slug: string) => {
 };
 
 describe("γ-4 ① 注册表与盘点表对得上", () => {
-  test("本轮接的就是这 3 个，一个不多一个不少", () => {
-    expect(Object.keys(SKILL_RUNNERS).sort()).toEqual(["novelty-check", "paper-download", "research-report"]);
+  test("γ-4 接的 3 个 + v0.11 的 cross-domain-bridge，一个不多一个不少", () => {
+    expect(Object.keys(SKILL_RUNNERS).sort()).toEqual(["cross-domain-bridge", "novelty-check", "paper-download", "research-report"]);
   });
 
   test("表里没有的技能 → handled=false（没接的 10 个行为逐字节不变）", async () => {

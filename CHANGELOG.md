@@ -5,6 +5,18 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+- **技能 `cross-domain-bridge`（跨领域桥接）**：把研究问题剥离领域术语写成结构签名 → 唤醒研究过同一结构的其他领域 → 每个领域独立盲写迁移提案（带承重映射表）→ 确定性审计（承重映射 ≥2 / 常规骨架 ≥2 / 一处非典型注入 / 伪证可排期，Uzzi 2013 比例门）→ 两两 Elo 锦标赛 → 可选落成 Idea 卡（全 inferred，`unchecked`）。设计依据与现成 skill 调研见 `backend/src/skills/cross-domain-bridge/SKILL.md`；历史跨领域突破回测清单与可迁移方法目录在 `references/`。
+- CLI `spark-research idea bridge -m "<问题>" [--terms a,b] [--dead-end x]... [--source-field 领域] [--fields N] [--save] [--out 文件] [--json]`。
+- chat 编排层可直接执行该技能（`skill_runners.ts` 分发表 3 → 4）；报告落 artifact。
+
+### 如实交代
+- 技能不查文献库，references 是自由文本；产出必须先过 `novelty-check` 才能当真。
+- 没有历史回测数据：`references/historical_bridges.md` 只是基准清单，命中率待测。
+- 技能数 13 → 14；`llms.txt` / `llms-full.txt` 已重新生成。
+
 ## [0.10.0] — 2026-09-16
 
 **主题：回复速度 + 流式可见 + 文献流程补完。** 汇总 alpha.1（五 lane 收口）、alpha.2（R7 修复窗口）、alpha.3（A9 修复窗口）；各段细节见下方三个 alpha 段与 `docs/devlog/W10-1-closeout.md` `R7.md` `A9.md`。
