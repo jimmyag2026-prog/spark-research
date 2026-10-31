@@ -1,4 +1,5 @@
 import { configuredLlmTimeoutMs } from "../config";
+import { buildToolNameMap, decodeResponse, encodeMessages, encodeTools } from "./tool_names";
 import { anthropicAdapter } from "./providers/anthropic";
 import { OpenAiCompatAdapter } from "./providers/openai_compat";
 import { failure, type ProviderAdapter } from "./providers/types";
@@ -249,11 +250,13 @@ export class LLMRouter {
         capabilities: entry.adapter.capabilities(model),
         defaultIdleTimeoutMs: this.timeoutMs,
       });
-      const response = await guard.run((guarded) =>
+      // 外部工具名（`mcp:<扩展>:<工具>`）不合 provider 的函数名规则：只在线上编码、回来解码。
+      const names = buildToolNameMap(options.tools);
+      const response = decodeResponse(await guard.run((guarded) =>
         entry.adapter.call({
           model: entry.wireModel(model),
-          messages,
-          options: guarded,
+          messages: encodeMessages(messages, names),
+          options: { ...guarded, tools: encodeTools(guarded.tools, names) },
           // 本地端点允许空 key（很多本地服务不校验）；其它 provider 走到这里时
           // resolve() 已经保证 env[envKey] 有值，`?? ""` 只对本地端点生效。
           apiKey: this.env[entry.envKey] ?? "",
@@ -261,7 +264,7 @@ export class LLMRouter {
           timeoutMs: guarded.timeoutMs ?? this.timeoutMs,
           fetchImpl: this.fetchImpl,
         }),
-      );
+      ), names);
       // R7 U66/U67：带上限的调用拿到空正文，或输出恰好顶满上限（思考段吃光预算 / 正文被截断）——
       // 这不是模型答完了，是上限设错了对象。学习该模型为思考型，本次不带上限重试一次。
       // 流式且已经吐过正文（非空）的不重试：前端已按 revision 1 渲染，重来会拼两稿。

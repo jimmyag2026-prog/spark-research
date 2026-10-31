@@ -408,9 +408,19 @@ describe("loadExtension · kind=mcp_client", () => {
 
 // ── §8 ext verify（mcp_client_verify.ts） ───────────────────────────────────
 
+/**
+ * V74：恢复 preload 设的临时数据目录，而不是 delete——delete 之后，同一个 bun 进程里
+ * 后面所有测试都落到用户真实的 ~/.spark-research（CI 上按文件顺序时才暴露）。
+ */
+function restoreDataDir(previous: string | undefined): void {
+  if (previous === undefined) delete process.env.SPARK_RESEARCH_DATA_DIR;
+  else process.env.SPARK_RESEARCH_DATA_DIR = previous;
+}
+
 describe("ext verify · kind=mcp_client", () => {
   test("正向：mcp.json 校验通过 + 能连接发现工具 + 声明的 verifySample 往返成功 + 执行记录确实落盘", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const dir = extensionDir("verify-good", { root });
@@ -426,12 +436,13 @@ describe("ext verify · kind=mcp_client", () => {
       expect(result.checks.some((c) => c.name.includes("verifySample") && c.ok)).toBe(true);
       expect(result.checks.some((c) => c.name.includes("执行记录确实落盘") && c.ok)).toBe(true);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 
   test("未声明 verifySample：跳过往返检查，如实标注，不计入失败", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const dir = extensionDir("verify-no-sample", { root });
@@ -442,12 +453,13 @@ describe("ext verify · kind=mcp_client", () => {
       expect(result.ok).toBe(true);
       expect(result.checks.some((c) => c.name.includes("跳过"))).toBe(true);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 
   test("外部 server 连不上：verify 失败，报出原因，不抛异常", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const dir = extensionDir("verify-dead", { root });
@@ -458,7 +470,7 @@ describe("ext verify · kind=mcp_client", () => {
       expect(result.ok).toBe(false);
       expect(result.checks.some((c) => c.name.includes("发现工具") && !c.ok)).toBe(true);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 });
@@ -530,6 +542,7 @@ describe("listExtensionCapabilities · mcp_client", () => {
 describe("runExtCommand · ext add-mcp", () => {
   test("正向：写入 extension.json + mcp.json，--trust 后发现工具，退出码 0", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const code = await runExtCommand(["add-mcp", "cli-good", "--cmd", `${process.execPath} ${GOOD_SERVER}`, "--trust"]);
@@ -541,12 +554,13 @@ describe("runExtCommand · ext add-mcp", () => {
       expect(cache?.ok).toBe(true);
       expect(cache?.tools.length).toBeGreaterThan(0);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 
   test("不带 --trust：写文件但不发现，退出码非 0", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const code = await runExtCommand(["add-mcp", "cli-untrusted", "--cmd", `${process.execPath} ${GOOD_SERVER}`]);
@@ -555,12 +569,13 @@ describe("runExtCommand · ext add-mcp", () => {
       expect(existsSync(join(dir, "extension.json"))).toBe(true);
       expect(readMcpDiscoveryCache(dir)).toBeNull();
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 
   test("外部 server 连不上：仍然返回（不抛异常），退出码非 0，发现缓存记录失败", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       const code = await runExtCommand(["add-mcp", "cli-dead", "--cmd", `${process.execPath} ${DEAD_ON_ARRIVAL}`, "--trust"]);
@@ -569,12 +584,13 @@ describe("runExtCommand · ext add-mcp", () => {
       const cache = readMcpDiscoveryCache(dir);
       expect(cache?.ok).toBe(false);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 
   test("--credential 映射被正确解析进 mcp.json 与 extension.json.requires.credentials", async () => {
     const root = freshRoot();
+    const previousDataDir = process.env.SPARK_RESEARCH_DATA_DIR;
     process.env.SPARK_RESEARCH_DATA_DIR = root;
     try {
       await runExtCommand([
@@ -592,7 +608,7 @@ describe("runExtCommand · ext add-mcp", () => {
       const extJson = JSON.parse(readFileSync(join(dir, "extension.json"), "utf8"));
       expect(extJson.requires.credentials).toEqual(["paidsource"]);
     } finally {
-      delete process.env.SPARK_RESEARCH_DATA_DIR;
+      restoreDataDir(previousDataDir);
     }
   });
 });

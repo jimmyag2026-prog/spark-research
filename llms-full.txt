@@ -2655,6 +2655,17 @@ $ ./dist/spark-research lit sources     → 正常（纯 TS，不读资产）
 
 ## [Unreleased]
 
+### 修复
+- **外部 MCP 工具真正能被 agent 用上**（接入 Provena 时在真实运行里发现，三处串联缺口）：
+  ① 研究循环路径没把外部工具的 spec 交给子代理的模型（只进了 grants）；
+  ② `chat`/`/session` 的规划器提示里没有已连接的外部工具，规划器判定「工具不存在」、不派子代理；
+  ③ `mcp:<扩展>:<工具>` 原样发给 provider，DeepSeek/OpenAI 兼容端点以 HTTP 400 拒绝（函数名只许 `^[a-zA-Z0-9_-]+$`）——
+  现在只在线上编码（`mcp__<扩展>__<工具>`）、回来解码，内部授权/审计/证据图始终只见原名。
+  各带一条回归测试，均做过阴性对照。
+- **V74 测试隔离泄漏**：`tests/unit/mcp_client.test.ts` 的 7 个用例结束时 `delete` 了 `SPARK_RESEARCH_DATA_DIR`
+  而不是恢复 preload 的临时目录——同一 bun 进程里之后的测试全部落到真实 `~/.spark-research`。
+  main 上一直是绿的，只因文件顺序恰好让隔离门禁先跑；本 PR 新增测试改变了顺序才在 CI 暴露。隔离门禁失败时现在会报出路径与 env。
+
 ### 新增
 - **技能 `cross-domain-bridge`（跨领域桥接）**：把研究问题剥离领域术语写成结构签名 → 唤醒研究过同一结构的其他领域 → 每个领域独立盲写迁移提案（带承重映射表）→ 确定性审计（承重映射 ≥2 / 常规骨架 ≥2 / 一处非典型注入 / 伪证可排期，Uzzi 2013 比例门）→ 两两 Elo 锦标赛 → 可选落成 Idea 卡（全 inferred，`unchecked`）。设计依据与现成 skill 调研见 `backend/src/skills/cross-domain-bridge/SKILL.md`；历史跨领域突破回测清单与可迁移方法目录在 `references/`。
 - CLI `spark-research idea bridge -m "<问题>" [--terms a,b] [--dead-end x]... [--source-field 领域] [--fields N] [--save] [--out 文件] [--json]`。

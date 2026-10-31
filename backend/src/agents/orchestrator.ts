@@ -13,6 +13,7 @@ import type { ExecutionRecord } from "../artifacts/models";
 import { ReviewerAgent } from "../reviewer/agent";
 import type { ReviewResult } from "../reviewer/rules";
 import { LLMRouter, type CallOptions, type ChatMessage } from "../llm/router";
+import type { ToolSpec } from "../llm/types";
 import {
   buildSubAgentSpec,
   runSubAgent,
@@ -719,7 +720,7 @@ export class OrchestratorAgent {
     progress.planStarted();
     let plan: PlannedTask[];
     try {
-      plan = await this.plan(sessionId, userMessage, skills, skillContext);
+      plan = await this.plan(sessionId, userMessage, skills, skillContext, external.registry?.specs());
     } catch (error) {
       if (error instanceof DirectAnswer) {
         // S1：一次调用直接给答案；不执行、不 summarize、不 review（没有产出可审）。
@@ -873,8 +874,20 @@ export class OrchestratorAgent {
     userMessage: string,
     skills: string[],
     skillContext: Record<string, string>,
+    externalSpecs?: ToolSpec[],
   ): Promise<PlannedTask[]> {
     const context = skills.map((s) => `- ${s}: ${skillContext[s]}`).join("\n");
+    // 收口(W5-3) 的第三处：规划器自己也得知道这一轮连上了哪些外部 MCP 工具。
+    // 子代理那边 spec 已经喂了，但规划器的清单里没有它们，就会判定「工具不存在」、
+    // 根本不派子代理——真实现场（provena 接入）就是这么被拒的。
+    const externalInventory =
+      externalSpecs && externalSpecs.length > 0
+        ? `External MCP tools connected this session (the user installed and --trust'ed them). ` +
+          `Use them by emitting {"kind":"subagent","params":{"subagent":"execute"}} tasks whose ` +
+          `description names the exact tool:\n` +
+          externalSpecs.map((t) => `  ${t.name}: ${t.description.slice(0, 160)}`).join("\n") +
+          "\n\n"
+        : "";
     const messages: ChatMessage[] = [
       { role: "system", content: `${this.corePrompt}\n\n${this.researchPrompt}` },
       {
@@ -884,6 +897,7 @@ export class OrchestratorAgent {
           // U47：真实能力清单。没有它，规划器只能照着连接器描述里的字眼猜工具名
           // （真实现场：猜出 `pubmed.esearch`），并把 placeholder 死源排进计划。
           `${renderConnectorInventory()}\n\n` +
+          externalInventory +
           `Define a research_contract and reply with ONLY a JSON array of tasks. ` +
           `Each task: {"id","kind","description","params"}. ` +
           `"kind" MUST be one of: ${TASK_KINDS.join(",")}. ` +
@@ -1591,7 +1605,14 @@ export class OrchestratorAgent {
     const execute: RoundExecutor = async (plan) => {
       const outcomes: RoundOutcome[] = [];
       for (const item of plan) {
-        const deps: SubAgentDeps = { llm: this.subAgentLlm(sessionId), runner, parentBudget: sessionBudget };
+        // 收口(W5-3) 的另一半：研究循环这条路径同样要把外部工具的 spec 喂给模型——
+        // 否则外部工具名进了 grants、runner 也能路由，模型却从没被告知它们存在。
+        const deps: SubAgentDeps = {
+          llm: this.subAgentLlm(sessionId),
+          runner,
+          parentBudget: sessionBudget,
+          externalSpecs: external.registry?.specs(),
+        };
         const spec = buildSubAgentSpec(item.subagentType);
         const overrides =
           externalGrants.length > 0 && !spec.readOnly ? { grants: [...spec.grants, ...externalGrants] } : undefined;

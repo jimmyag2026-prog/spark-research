@@ -910,6 +910,41 @@ describe("OrchestratorAgent · V45：agent 运行时的外部 MCP 生命周期",
       );
   }
 
+  test("研究循环路径：外部工具的 spec 真的提供给了子代理的模型（不只是进了 grants）", async () => {
+    await installFixtureMcpExtension("v45-specs");
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-specs", { name: "specs", description: "" });
+    manager.bindSession("sess_specs", project.slug);
+    const offered: string[][] = [];
+    const llm: Pick<LLMRouter, "call" | "listModels" | "capabilitiesFor"> = {
+      call: async (_messages, modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL) => {
+        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+        if (options.tools) {
+          offered.push(options.tools.map((t) => t.name));
+          return toolTextResponse("explore 子代理：本轮结束");
+        }
+        return toolTextResponse(JSON.stringify([{ id: "s1", subagent: "explore", task: "看看有什么工具" }]));
+      },
+      listModels: mockLlm.listModels,
+      capabilitiesFor: () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
+    };
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, {
+      llm,
+      projects: manager,
+      externalMcp: new ExternalMcpRuntime({ pathOptions: { root: tmp } }),
+    });
+    await orch.runResearchLoop("sess_specs", "看看外部工具", {
+      contract: neverDoneContract,
+      noProgressThreshold: 1,
+      maxRounds: 2,
+    });
+    // 阴性对照：修复前这里只有内置工具名——模型从没被告知 mcp:v45-specs:echo 存在
+    expect(offered.length).toBeGreaterThan(0);
+    expect(offered.some((names) => names.includes("mcp:v45-specs:echo"))).toBe(true);
+    expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy(); // 不污染 V74 隔离
+  });
+
   test(
     "端到端：发现 → 连接子进程 → 注册 → recordSink 绑到本 project → 子代理真的调到外部工具 → 收尾；" +
       "且 external_tool_call 不算进展，停止条件照常触发",
@@ -1131,5 +1166,35 @@ describe("OrchestratorAgent · V45：agent 运行时的外部 MCP 生命周期",
     const observations = externalToolCallRecords(project);
     expect(observations.length).toBeGreaterThanOrEqual(1);
     expect((observations[0]!.metadata as unknown as ExternalToolCallObservationMetadata).tool).toBe("echo");
+  }, 60_000);
+
+  test("processRequest：规划器的提示里列出了这一轮连上的外部工具（否则它判定工具不存在）", async () => {
+    await installFixtureMcpExtension("v45-plan");
+    const manager = new ProjectManager(tmp);
+    const project = manager.create("v45-plan", { name: "plan", description: "" });
+    manager.bindSession("sess_v45_plan", project.slug);
+    const plannerPrompts: string[] = [];
+    const llm: Pick<LLMRouter, "call" | "listModels" | "capabilitiesFor"> = {
+      call: async (messages, modelOrOptions: string | CallOptions = LLMRouter.DEFAULT_MODEL) => {
+        const options: CallOptions = typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
+        if (options.tools) return toolTextResponse("子代理收工");
+        const text = messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n");
+        if (text.includes("JSON array of tasks")) plannerPrompts.push(text);
+        return toolTextResponse(JSON.stringify([{ id: "t1", kind: "analysis", description: "x", params: {} }]));
+      },
+      listModels: mockLlm.listModels,
+      capabilitiesFor: () => ({ toolCalling: true, jsonMode: true, streaming: true, usageReported: true }),
+    };
+    const daemon = new SparkResearchDaemon({ projects: manager });
+    const orch = new OrchestratorAgent(daemon, {
+      llm,
+      projects: manager,
+      externalMcp: new ExternalMcpRuntime({ pathOptions: { root: tmp } }),
+    });
+    await orch.processRequest("用外部工具记一下", "sess_v45_plan");
+    // 阴性对照：修复前规划器的提示里没有任何 mcp: 名字
+    expect(plannerPrompts.length).toBeGreaterThan(0);
+    expect(plannerPrompts[0]).toContain("mcp:v45-plan:echo");
+    expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy(); // 不污染 V74 隔离
   }, 60_000);
 });

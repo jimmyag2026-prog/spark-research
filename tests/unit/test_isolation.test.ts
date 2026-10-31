@@ -12,7 +12,10 @@ describe("测试数据目录隔离（tests/preload.ts）", () => {
     const real = resolve(join(homedir(), ".spark-research"));
     for (const p of [dataDir(), globalRawRoot(), apiCallStorePath()]) {
       const r = resolve(p);
-      expect(r === real || r.startsWith(`${real}/`)).toBe(false);
+      // 失败时说清是哪条路径、当时的 env 是什么——顺序相关的污染只有这样才查得到
+      if (r === real || r.startsWith(`${real}/`)) {
+        throw new Error(`${r} 落在真实目录里；SPARK_RESEARCH_DATA_DIR=${process.env.SPARK_RESEARCH_DATA_DIR}`);
+      }
     }
     expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy();
   });
