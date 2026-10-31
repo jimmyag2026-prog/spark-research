@@ -45,6 +45,7 @@ describe("provider 函数名约束：外部工具名线上编码、回来解码"
     expect(JSON.stringify(body.messages)).not.toContain("mcp:provena");  // 历史消息也编码了
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.toolCalls[0]!.name).toBe("mcp:provena:preregister");
+    expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy(); // 不污染 V74 隔离
   });
 
   test("编码不撞名", () => {

@@ -942,6 +942,7 @@ describe("OrchestratorAgent · V45：agent 运行时的外部 MCP 生命周期",
     // 阴性对照：修复前这里只有内置工具名——模型从没被告知 mcp:v45-specs:echo 存在
     expect(offered.length).toBeGreaterThan(0);
     expect(offered.some((names) => names.includes("mcp:v45-specs:echo"))).toBe(true);
+    expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy(); // 不污染 V74 隔离
   });
 
   test(
@@ -1194,5 +1195,6 @@ describe("OrchestratorAgent · V45：agent 运行时的外部 MCP 生命周期",
     // 阴性对照：修复前规划器的提示里没有任何 mcp: 名字
     expect(plannerPrompts.length).toBeGreaterThan(0);
     expect(plannerPrompts[0]).toContain("mcp:v45-plan:echo");
+    expect(process.env.SPARK_RESEARCH_DATA_DIR).toBeTruthy(); // 不污染 V74 隔离
   }, 60_000);
 });
