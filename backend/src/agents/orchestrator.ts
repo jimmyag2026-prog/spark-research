@@ -1,4 +1,5 @@
 import { searchPayloadProblem } from "../connectors/base";
+import { ProvenaMirror } from "../extensions/provena_mirror";
 import { renderConnectorInventory } from "../connectors/registry";
 import { configuredSubAgentModel } from "../config";
 import { runLiteraturePipeline, type LiteraturePipelineMode } from "./literature_pipeline";
@@ -425,6 +426,17 @@ export class OrchestratorAgent {
   // 一轮 agent 运行（= 一个 attachment 句柄）对应一个带外部工具的 runner。用 WeakMap
   // 而不是实例字段：句柄被丢掉后条目自动消失，且并发的两轮各查各的，互不干扰。
   private readonly runnerByAttachment = new WeakMap<ExternalMcpAttachment, Promise<McpToolRunner>>();
+  // 每轮一个：装了 provena 扩展时，子代理的每次工具调用自动记进 Provena 账本
+  private readonly mirrorByAttachment = new WeakMap<ExternalMcpAttachment, ProvenaMirror>();
+
+  private mirrorFor(external: ExternalMcpAttachment): ProvenaMirror {
+    let mirror = this.mirrorByAttachment.get(external);
+    if (!mirror) {
+      mirror = new ProvenaMirror(external);
+      this.mirrorByAttachment.set(external, mirror);
+    }
+    return mirror;
+  }
 
   constructor(daemon: SparkResearchDaemon, deps: OrchestratorDeps = {}) {
     this.daemon = daemon;
@@ -703,6 +715,8 @@ export class OrchestratorAgent {
       return await this.processRequestWithTools(userMessage, sessionId, project, external, options);
     } finally {
       // 收尾（含中途抛异常的路径）：本轮开的子进程全部收掉，不留孤儿进程。
+      // 先把镜像到 Provena 的记账落完，再关外部子进程（否则最后几条会丢）
+      await this.mirrorFor(external).flush();
       await external.close();
     }
   }
@@ -762,7 +776,9 @@ export class OrchestratorAgent {
 
     const execution: ExecutionOutcome[] = [];
     for (const task of plan) {
-      execution.push(await this.executeTask(sessionId, task, external, progress, options));
+      const outcome = await this.executeTask(sessionId, task, external, progress, options);
+      this.mirrorFor(external).recordTask(task, outcome);
+      execution.push(outcome);
       progress.taskCompleted(task);
     }
 
@@ -785,7 +801,9 @@ export class OrchestratorAgent {
       const fixes = this.planCorrections(review);
       progress.repairing(fixes.length);
       for (const fix of fixes) {
-        execution.push(await this.executeTask(sessionId, fix, external, progress, options));
+        const fixed = await this.executeTask(sessionId, fix, external, progress, options);
+        this.mirrorFor(external).recordTask(fix, fixed);
+        execution.push(fixed);
         progress.taskCompleted(fix);
       }
       // 多轮修正场景下 onDelta 会依次收到每一轮 summarize() 的增量，不只是最终一轮——
@@ -1112,6 +1130,7 @@ export class OrchestratorAgent {
               llm: this.subAgentLlm(sessionId),
               runner,
               externalSpecs: external?.registry?.specs(),
+              ...(external ? { auditSink: this.mirrorFor(external).sink } : {}),
             });
             this.record(
               sessionId,
@@ -1543,6 +1562,8 @@ export class OrchestratorAgent {
     try {
       return await this.runResearchLoopWithProject(sessionId, goal, project, external, options);
     } finally {
+      // 先把镜像到 Provena 的记账落完，再关外部子进程（否则最后几条会丢）
+      await this.mirrorFor(external).flush();
       await external.close();
     }
   }
@@ -1612,6 +1633,7 @@ export class OrchestratorAgent {
           runner,
           parentBudget: sessionBudget,
           externalSpecs: external.registry?.specs(),
+          auditSink: this.mirrorFor(external).sink,
         };
         const spec = buildSubAgentSpec(item.subagentType);
         const overrides =
