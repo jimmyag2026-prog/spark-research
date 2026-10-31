@@ -68,6 +68,13 @@ export class ProvenaMirror {
   /** 等所有镜像调用落完（在外部子进程关闭之前调用）。 */
   async flush(): Promise<{ recorded: number; failed: number }> {
     await Promise.allSettled([...this.pending]);
+    if (this.recorded > 0 && !this.pushed) {
+      // hub receipts give the recorded steps a trusted time; without a hub this just fails
+      this.pushed = true;
+      await this.external!.registry!.call(`mcp:${PROVENA_EXTENSION}:push`, {}).catch(() => undefined);
+    }
     return { recorded: this.recorded, failed: this.failed };
   }
+
+  private pushed = false;
 }

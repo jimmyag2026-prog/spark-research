@@ -28,7 +28,8 @@ describe("ProvenaMirror：子代理的每次工具调用自动记进 Provena", (
     mirror.sink(entry("lit_search", true, "not_granted"));
     const done = await mirror.flush();
     expect(done).toEqual({ recorded: 2, failed: 0 });
-    expect(calls.map((c) => c.name)).toEqual(["mcp:provena:record_step", "mcp:provena:record_step"]);
+    expect(calls.map((c) => c.name)).toEqual(["mcp:provena:record_step", "mcp:provena:record_step",
+      "mcp:provena:push"]);                                   // one push at the end of the round
     expect(calls[0]!.args.tool).toBe("lit_search");
     expect(calls[1]!.args.exit_code).toBe(1);
   });
