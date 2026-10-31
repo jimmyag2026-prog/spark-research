@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+### 新增
+- **自动记进 Provena 账本**：装了名为 `provena` 的 mcp_client 扩展（`provena mcp`）时，编排层每个执行完的任务
+  （skill / connector / code / analysis / subagent）和子代理的每次工具调用（成败都记）都自动镜像成 Provena 的一个
+  step（工具名、参数摘要、成败；输出截断后进密封 trace）——不再依赖模型记得调用 `record_step`。
+  Provena 自己的工具与被拒绝的调用不镜像；没装扩展时与之前逐字节同行为（`extensions/provena_mirror.ts`）。
+
 ### 修复
 - **外部 MCP 工具真正能被 agent 用上**（接入 Provena 时在真实运行里发现，三处串联缺口）：
   ① 研究循环路径没把外部工具的 spec 交给子代理的模型（只进了 grants）；
