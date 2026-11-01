@@ -1,5 +1,73 @@
 # Spark Research
 
+**An open-source, project-centric research agent that leaves an auditable evidence trail from literature search to experiment record.**
+
+Spark Research is a research workbench for scientists. You drive it in natural language and it walks a research question through the full loop — literature search → idea co-exploration → experiment → data recording → novelty check → conclusion review → report. Three design bets set it apart ([docs/DESIGN.md](docs/DESIGN.md) §3): the **project**, not the chat session, is the root of persistence, so the literature library, ideas, experiments, observations, conclusions and artifacts all hang off one project in a queryable evidence graph (`records.db`) and every conclusion can be traced back to the run that produced it; **every step is recorded**, not just code artifacts — ideas, decisions, observations and conclusions go into the same graph, which doubles as an electronic lab notebook; and in the **dry/wet loop** nothing in the physical world is approved automatically — a wet-lab protocol passes a safety gate (necessary, not sufficient) and then stops at `awaiting_approval` until a **named human** approves a specific protocol hash (AD-6). Wherever a model's judgement feeds a downstream action, a zero-IO deterministic layer constrains it (AD-8). Everything is local-first: state lives on disk under `~/.spark-research/`, model keys are bring-your-own, and no credential ever enters the kernel, env or prompt (AD-2).
+
+English readers: this page is the overview. The hands-on guides below are currently written in Chinese; `spark-research --help`, `spark-research capabilities` and [llms.txt](llms.txt) describe every command and MCP tool.
+
+## Status
+
+- **Current release: v0.10.0** (2026-09-16, [CHANGELOG.md](CHANGELOG.md)). Test suites at that release: unit 2858 · e2e 60 · concurrency/timeout 37 · integration 8 · sdk 69 · lab 26 — LLM and network calls in tests are always fakes or recorded replays; no CI path hits a real model or external API.
+- **Unreleased on `main`:** every finished orchestrator task and every sub-agent tool call is mirrored into a Provena ledger when the `provena` extension is installed (see *Provena integration* below); a `cross-domain-bridge` skill (`spark-research idea bridge`).
+- **Not yet, stated plainly** (each item is the project's own caveat, from the CHANGELOG and the install guides):
+  - **Remote compute:** the `local` target works end to end; the **Modal adapter has a contract and a record/replay layer but no live gateway** — `doctor` and `compute targets` report it `unavailable`, and a token alone does not make it run (CHANGELOG v0.5.0 / v0.6.0; `backend/src/compute/adapters/modal_gateway.ts`). SSH is an explicit placeholder slot.
+  - **Wet lab stops at the simulator:** protocols compile to Opentrons Python Protocol API v2, pass the safety gate and human approval, and run on the official Opentrons simulator. **No real device is connected** (BACKLOG V6) because safety-gate coverage is still partial: `concentration_limit` / `biosafety` only fire when the reagent and its concentration appear in the same clause, and a reagent outside the finite vocabulary is *invisible* to `chemical_compatibility`, not "compatible".
+  - **v0.10.0 acceptance: 7 of 9 DONE criteria met.** Open-access PDF retrieval reached 3/8 of a target ≥5 (publisher 403s); the T3 brain-computer-interface recall benchmark is still 0/8.
+  - **Literature search ranking is weak** (English benchmark recall 3/8–5/8; add key papers by DOI with `lit add`). bioRxiv "search" is a recent-N + client-side scoring simulation, not a real search — not found ≠ does not exist.
+  - **Single binary:** `server` starts but ships no web frontend; `new skill|connector|platform` is explicitly refused outside a source checkout.
+  - **npm package not yet published** (`npx spark-research` is prepared but not live).
+
+## Quick start
+
+All three install paths are described in [readme_for_human.md](readme_for_human.md) §1 and [docs/INSTALL.md](docs/INSTALL.md):
+
+| Path | Command | Prerequisite |
+|---|---|---|
+| **Single binary** (recommended) | download the executable for your platform from GitHub Releases | none |
+| Source | `git clone` → `bun install` → `bun backend/src/index.ts` | [Bun](https://bun.sh) ≥ 1.2 |
+| npm | `npx spark-research` (**not yet published**; fields are in place) | Bun |
+
+The persistence layer uses `bun:sqlite`, `Bun.spawn` and `Bun.serve`, so the source and npm paths need Bun — Node alone will not run it. Python-side capabilities (OpenMM, Opentrons simulator, scanpy, pydeseq2, cobrapy, rdkit) are optional and installed separately; `doctor` tells you what is missing and the exact command to install it.
+
+```bash
+spark-research doctor        # what is missing and how to fix it, with copy-pasteable commands
+spark-research auth          # LLM key (bring your own; OpenRouter recommended) → ~/.spark-research/config.json, 0600
+```
+
+First three commands of a research thread (full ten-minute walkthrough in readme_for_human.md §3):
+
+```bash
+spark-research project new my-topic --desc "one-line research question"
+spark-research lit search "your query" --add --project my-topic     # multi-source search, dedupe, add to library
+spark-research lit pdf --all --project my-topic                     # fetch open-access PDFs
+```
+
+Then `lit read --all`, `lit review`, `idea new` / `idea check`, `report export`, `usage` — always with `--project <slug>` (several terminals or agents share one data directory) and `--budget-usd <N>` on anything that calls a model. `spark-research server` opens the web workbench at http://127.0.0.1:4321.
+
+## Integrating from an agent
+
+Three integration surfaces ([readme_for_agent.md](readme_for_agent.md)): an **MCP server** (`spark-research mcp`, 30 tools; configure as `{ "mcpServers": { "spark-research": { "command": "spark-research", "args": ["mcp"] } } }`), the CLI with `--json` on every query command, and the HTTP API behind `spark-research server`. Eight actions are deliberately **withheld** from MCP — `lab_approve` / `lab_reject` / `lab_simulate` / `conclusion_review` / `project_archive` / `compute_approve` / `compute_run` / `compute_release` — anything that spends money or touches the physical world stays a human command; `capabilities` states the reason for each and the command the human should run.
+
+### Provena integration
+
+When a Provena ledger is installed as an `mcp_client` extension named `provena` (`provena mcp`), `ProvenaMirror` (`backend/src/extensions/provena_mirror.ts`) records every completed orchestrator task (skill / connector / code / analysis / sub-agent) and every sub-agent tool call — success or failure — as a Provena step: tool name, argument summary, exit status, with truncated output going into the sealed trace. Recording no longer depends on the model remembering to call `record_step`. Provena's own tools and denied calls are not mirrored; without the extension the behaviour is byte-for-byte unchanged (CHANGELOG, *Unreleased*).
+
+## Documentation
+
+- [readme_for_human.md](readme_for_human.md) — hands-on user guide: install, keys, a full ten-minute topic, honest limits, cost reference
+- [readme_for_agent.md](readme_for_agent.md) — integration guide for AI agents: surfaces, five disciplines, output contracts, known boundaries
+- [llms.txt](llms.txt) / [llms-full.txt](llms-full.txt) — machine-readable index and full text for external LLMs (generated by `bun run gen:llms`, CI-checked)
+- [docs/DESIGN.md](docs/DESIGN.md) — product design: positioning, the three bets, functional domains, architecture decisions
+- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) — phases, verification and exit criteria
+- [docs/BACKLOG.md](docs/BACKLOG.md) — the single register of open items and known gaps
+- [docs/INSTALL.md](docs/INSTALL.md) · [docs/EXTENDING.md](docs/EXTENDING.md) · [CHANGELOG.md](CHANGELOG.md)
+- Community page: **https://sparkscience.xyz/research-agent/**
+
+---
+
+## 中文
+
 **面向科研人群的开源科研工作台。** 用自然语言驱动一个可审计的研究代理，走完
 「文献调研 → 思路共探 → 实验验证 → 数据记录 → 创新性核验 → 结论评审 → 报告」的完整循环，
 全过程本地优先、证据可溯源。
